@@ -1825,14 +1825,96 @@ def draw_stove_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
       draw.line((x + handle_dir * 11, pan_y, x + handle_dir * 23, pan_y - 5), fill=rgba(0x2E363A), width=4)
       draw.line((x + handle_dir * 12, pan_y - 1, x + handle_dir * 21, pan_y - 5), fill=rgba(0x7F8A8E), width=1)
 
-  panel_a = (front_a[0], front_a[1] + 20)
-  panel_b = (front_b[0], front_b[1] + 20)
-  draw.line((panel_a[0] + 10, panel_a[1], panel_b[0] - 10, panel_b[1]), fill=rgba(0x1F2A2E), width=2)
-  for index in range(max(2, burners)):
-    t = (index + 1) / (max(2, burners) + 1)
+  # === Back-of-top vent slits ============================================
+  vent_a = lerp_point(back_a, front_a, 0.1)
+  vent_b = lerp_point(back_b, front_b, 0.1)
+  for vent_ratio in (0.3, 0.5, 0.7):
+    sa = lerp_point(back_a, back_b, vent_ratio - 0.04)
+    sb = lerp_point(back_a, back_b, vent_ratio + 0.04)
+    va = lerp_point(sa, lerp_point(vent_a, vent_b, vent_ratio - 0.04), 0.5)
+    vb = lerp_point(sb, lerp_point(vent_a, vent_b, vent_ratio + 0.04), 0.5)
+    draw.line((va[0], va[1], vb[0], vb[1]), fill=rgba(0x121A1F, 200), width=2)
+
+  # === Front-face controls panel + oven door ============================
+  # Control band sits immediately below the cooking strip on the front face.
+  # Oven door sits below the control band, filling the rest of the front face.
+  is_premium = item.tier >= 4
+  knob_color = 0xC7A24A if is_premium else 0xD7B56A
+  trim_color = 0xC9D2D7 if is_premium else 0x6A767B
+
+  # Chrome/brass trim line along the top edge of the front face (tier marker).
+  draw.line((front_a[0] + 4, front_a[1] + 2, front_b[0] - 4, front_b[1] + 2),
+            fill=rgba(trim_color, 230), width=2)
+
+  panel_y_offset = 18
+  panel_a = (front_a[0], front_a[1] + panel_y_offset)
+  panel_b = (front_b[0], front_b[1] + panel_y_offset)
+  # Separator line above the control band
+  draw.line((panel_a[0] + 8, panel_a[1] - 4, panel_b[0] - 8, panel_b[1] - 4),
+            fill=rgba(0x1F2A2E), width=1)
+
+  # Knobs — larger and more visible than before.
+  knob_count = max(2, burners)
+  for index in range(knob_count):
+    t = (index + 1) / (knob_count + 1)
     x = panel_a[0] + (panel_b[0] - panel_a[0]) * t
     y = panel_a[1] + (panel_b[1] - panel_a[1]) * t
-    draw.ellipse((x - 3, y + 5, x + 3, y + 11), fill=rgba(0xD7B56A))
+    # Knob base (dark recessed ring)
+    draw.ellipse((x - 5, y + 2, x + 5, y + 12), fill=rgba(0x141B1F, 220))
+    # Knob body (brass/chrome)
+    draw.ellipse((x - 4, y + 3, x + 4, y + 11), fill=rgba(knob_color), outline=rgba(shade(knob_color, -38), 220), width=1)
+    # Knob indicator notch (small line showing rotation)
+    draw.line((x, y + 5, x, y + 8), fill=rgba(shade(knob_color, -55), 230), width=1)
+
+  # Oven door — fills the bottom half of the front face.
+  door_top_a = lerp_point(front_a, bottom[3], 0.5)
+  door_top_b = lerp_point(front_b, bottom[2], 0.5)
+  door_bot_a = lerp_point(front_a, bottom[3], 0.92)
+  door_bot_b = lerp_point(front_b, bottom[2], 0.92)
+  # Door inset 8% from each side so the cabinet shell still shows.
+  door_left_a = lerp_point(door_top_a, door_top_b, 0.08)
+  door_right_a = lerp_point(door_top_a, door_top_b, 0.92)
+  door_left_b = lerp_point(door_bot_a, door_bot_b, 0.08)
+  door_right_b = lerp_point(door_bot_a, door_bot_b, 0.92)
+  # Door body: slightly darker than stove, surrounded by chrome bezel so
+  # the door silhouette reads clearly against the dark stove shell.
+  draw_polygon(draw, [door_left_a, door_right_a, door_right_b, door_left_b],
+               shade(item.color, -28), trim_color, 1)
+  # Chrome bezel — explicit bright top edge for visibility
+  draw.line([door_left_a, door_right_a], fill=rgba(trim_color, 245), width=2)
+  draw.line([door_left_b, door_right_b], fill=rgba(shade(trim_color, -35), 200), width=1)
+
+  # Glass window in the door — narrower band across the middle, brighter so
+  # it reads as a real window even at game zoom.
+  glass_top_left = lerp_point(door_left_a, door_left_b, 0.22)
+  glass_top_right = lerp_point(door_right_a, door_right_b, 0.22)
+  glass_bot_left = lerp_point(door_left_a, door_left_b, 0.68)
+  glass_bot_right = lerp_point(door_right_a, door_right_b, 0.68)
+  glass_pad_l = lerp_point(glass_top_left, glass_top_right, 0.1)
+  glass_pad_r = lerp_point(glass_top_left, glass_top_right, 0.9)
+  glass_pad_l_b = lerp_point(glass_bot_left, glass_bot_right, 0.1)
+  glass_pad_r_b = lerp_point(glass_bot_left, glass_bot_right, 0.9)
+  # Dark glass body with chrome frame
+  draw_polygon(draw, [glass_pad_l, glass_pad_r, glass_pad_r_b, glass_pad_l_b],
+               0x3C4248, trim_color, 1)
+  # Warm interior glow (oven light) — brighter and fills more of the window
+  glow_top = lerp_point(glass_pad_l, glass_pad_l_b, 0.35)
+  glow_top_r = lerp_point(glass_pad_r, glass_pad_r_b, 0.35)
+  glow_bot = lerp_point(glass_pad_l, glass_pad_l_b, 0.75)
+  glow_bot_r = lerp_point(glass_pad_r, glass_pad_r_b, 0.75)
+  draw_polygon(draw, [glow_top, glow_top_r, glow_bot_r, glow_bot],
+               0xC68337, None, 0)
+  # Highlight reflection at the top of the glass
+  draw.line((glass_pad_l[0] + 2, glass_pad_l[1] + 1, glass_pad_r[0] - 2, glass_pad_r[1] + 1),
+            fill=rgba(0xFFFFFF, 130), width=1)
+  # Door handle — horizontal bar near top of door.
+  handle_l = lerp_point(door_left_a, door_left_b, 0.1)
+  handle_r = lerp_point(door_right_a, door_right_b, 0.1)
+  hl = lerp_point(handle_l, handle_r, 0.18)
+  hr = lerp_point(handle_l, handle_r, 0.82)
+  draw.line((hl[0], hl[1], hr[0], hr[1]), fill=rgba(trim_color, 240), width=3)
+  draw.line((hl[0], hl[1] + 1, hr[0], hr[1] + 1), fill=rgba(shade(trim_color, -50), 200), width=1)
+
   return image
 
 
@@ -1888,18 +1970,132 @@ def draw_counter_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
     b = point_in_quad(front_face, u, 0.88)
     draw.line((a[0], a[1], b[0], b[1]), fill=rgba(shade(item.color, -72), 92), width=1)
 
-  if is_sink or is_dishwasher:
+  if is_sink:
+    # Tier-graded fixtures: copper sinks get warm copper, premium tiers get chrome,
+    # everything else gets steel.
+    is_copper = "copper" in item.id
+    is_premium_sink = item.tier >= 3
+    faucet_color = 0xC8814A if is_copper else (0xC9D2D7 if is_premium_sink else 0x8A969D)
+    faucet_dark = shade(faucet_color, -45)
+    basin_color = 0xF4F1EA if "porcelain" in item.id else (0xE3EDEE if is_premium_sink else 0xCFE7E9)
+    water_color = 0xB5D8DC if is_copper else 0x9DC6CA
+
     basin_w = 54 if item.width >= 2 else 42
-    draw.ellipse((cx - basin_w / 2, cy - 13, cx + basin_w / 2, cy + 11), fill=rgba(0xCFE7E9), outline=rgba(0x687780), width=2)
-    draw.ellipse((cx - basin_w / 2 + 7, cy - 8, cx + basin_w / 2 - 7, cy + 6), fill=rgba(0x9DC6CA, 150))
-    draw.arc((cx - 13, cy - 20, cx + 13, cy - 1), 205, 345, fill=rgba(0x697A80), width=3)
-    draw.ellipse((cx + 12, cy - 9, cx + 18, cy - 3), fill=rgba(0x697A80))
-    if is_dishwasher:
-      draw_face_panel(draw, front_face, 0.18, 0.82, 0.2, 0.9, 0xC2CAD0, 0x65747D, 245)
-      handle = point_in_quad(front_face, 0.5, 0.34)
-      draw.line((handle[0] - 18, handle[1], handle[0] + 18, handle[1]), fill=rgba(0x7A8790), width=3)
-      light = point_in_quad(front_face, 0.76, 0.52)
-      draw.ellipse((light[0] - 3, light[1] - 3, light[0] + 3, light[1] + 3), fill=rgba(0x7FC37D))
+    basin_h = 24
+    basin_box = (cx - basin_w / 2, cy - 13, cx + basin_w / 2, cy + basin_h / 2 - 1)
+    # Basin rim (raised lip catching the light)
+    draw.ellipse((basin_box[0] - 2, basin_box[1] - 1, basin_box[2] + 2, basin_box[3] + 1),
+                 fill=rgba(shade(basin_color, -22), 235), outline=rgba(faucet_dark, 220), width=1)
+    # Basin interior
+    draw.ellipse(basin_box, fill=rgba(basin_color), outline=rgba(0x687780), width=2)
+    # Water highlight (lighter inner ellipse, top-left lit)
+    draw.ellipse((cx - basin_w / 2 + 6, cy - 8, cx + basin_w / 2 - 10, cy + 2),
+                 fill=rgba(water_color, 170))
+    # Crescent specular highlight near the top edge of the water
+    draw.arc((cx - basin_w / 2 + 8, cy - 11, cx - basin_w / 2 + 28, cy - 4),
+             200, 340, fill=rgba(0xFFFFFF, 175), width=1)
+    # Drain at the bottom of the basin
+    draw.ellipse((cx - 3, cy + 4, cx + 3, cy + 8), fill=rgba(0x2A3438, 220), outline=rgba(faucet_dark, 200), width=1)
+    draw.line((cx - 2, cy + 5, cx + 2, cy + 7), fill=rgba(0x141B1F, 240), width=1)
+
+    # Faucet base mount (sits on the back rim of the basin)
+    mount_cx = cx
+    mount_cy = cy - 14
+    draw.ellipse((mount_cx - 5, mount_cy - 2, mount_cx + 5, mount_cy + 3),
+                 fill=rgba(faucet_color), outline=rgba(faucet_dark, 230), width=1)
+    # Faucet spout — curved arc rising up and forward
+    draw.arc((cx - 12, cy - 24, cx + 14, cy - 4), 205, 345,
+             fill=rgba(faucet_color), width=3)
+    draw.arc((cx - 12, cy - 23, cx + 14, cy - 5), 205, 345,
+             fill=rgba(shade(faucet_color, 28), 175), width=1)
+    # Spout tip
+    draw.ellipse((cx + 12, cy - 10, cx + 18, cy - 4),
+                 fill=rgba(faucet_color), outline=rgba(faucet_dark, 220), width=1)
+    # Two control handles (hot/cold) flanking the mount
+    for side in (-1, 1):
+      hx = mount_cx + side * 10
+      hy = mount_cy + 1
+      # Handle base
+      draw.ellipse((hx - 2.5, hy - 1.5, hx + 2.5, hy + 2),
+                   fill=rgba(faucet_color), outline=rgba(faucet_dark, 230), width=1)
+      # Handle lever (small horizontal tab)
+      draw.line((hx - 4, hy + 2, hx + 4, hy + 2),
+                fill=rgba(faucet_color), width=2)
+      # Hot/cold indicator dot
+      indicator = 0xC44747 if side > 0 else 0x4A8FCC
+      draw.point((hx, hy), fill=rgba(indicator, 220))
+    return image
+
+  if is_dishwasher:
+    # Dishwashers don't have an open basin — closed top with vent slits, distinct
+    # front door panel with control band + status LEDs + recessed pull handle.
+    is_premium_dw = item.tier >= 3
+    panel_color = 0xD4DBE0 if is_premium_dw else 0xC2CAD0
+    panel_dark = shade(panel_color, -38)
+    door_color = shade(panel_color, -14)
+    led_active = 0x7FC37D
+    led_idle = 0xC78A4A
+
+    # Closed top: vent slits running back-to-front near the back edge.
+    for vent_ratio in (0.32, 0.5, 0.68):
+      va = point_in_quad(top_overhang, vent_ratio - 0.04, 0.12)
+      vb = point_in_quad(top_overhang, vent_ratio + 0.04, 0.12)
+      draw.line((va[0], va[1], vb[0], vb[1]), fill=rgba(0x4C5860, 200), width=2)
+    # Subtle steam puff above the top (only for steam-style high tiers)
+    if "steam" in item.id or item.tier >= 4:
+      steam_x = cx
+      steam_y = cy - 18
+      for offset in (-4, 0, 4):
+        draw.ellipse((steam_x + offset - 3, steam_y - 2, steam_x + offset + 3, steam_y + 2),
+                     fill=rgba(0xE8EFF2, 130))
+
+    # Big door panel covering most of the front face (top-22% to bottom-96%).
+    door_quad = [
+      point_in_quad(front_face, 0.06, 0.22),
+      point_in_quad(front_face, 0.94, 0.22),
+      point_in_quad(front_face, 0.94, 0.96),
+      point_in_quad(front_face, 0.06, 0.96),
+    ]
+    draw_polygon(draw, door_quad, door_color, panel_dark, 2)
+    # Inner glossy bevel
+    inner_door = [
+      point_in_quad(front_face, 0.1, 0.26),
+      point_in_quad(front_face, 0.9, 0.26),
+      point_in_quad(front_face, 0.9, 0.92),
+      point_in_quad(front_face, 0.1, 0.92),
+    ]
+    draw.line(inner_door + [inner_door[0]], fill=rgba(shade(door_color, 28), 160), width=1)
+    # Recessed horizontal pull handle near the top of the door.
+    handle_l = point_in_quad(front_face, 0.22, 0.32)
+    handle_r = point_in_quad(front_face, 0.78, 0.32)
+    draw.line((handle_l[0], handle_l[1] + 1, handle_r[0], handle_r[1] + 1),
+              fill=rgba(panel_dark, 230), width=4)
+    draw.line((handle_l[0], handle_l[1], handle_r[0], handle_r[1]),
+              fill=rgba(panel_color, 255), width=2)
+    draw.line((handle_l[0], handle_l[1] - 1, handle_r[0], handle_r[1] - 1),
+              fill=rgba(shade(panel_color, 42), 200), width=1)
+
+    # Control panel band along the top of the front face (above the door).
+    control_l = point_in_quad(front_face, 0.08, 0.12)
+    control_r = point_in_quad(front_face, 0.92, 0.12)
+    control_l_b = point_in_quad(front_face, 0.08, 0.22)
+    control_r_b = point_in_quad(front_face, 0.92, 0.22)
+    draw_polygon(draw, [control_l, control_r, control_r_b, control_l_b],
+                 0x2C353A, 0x141B1F, 1)
+    # 3 status LEDs spaced across the control band, plus a brand plate.
+    for index, color in enumerate((led_active, led_idle, led_idle)):
+      t = (index + 1) / 4.5
+      px = control_l[0] + (control_r[0] - control_l[0]) * t
+      py = control_l[1] + (control_r_b[1] - control_l[1]) * 0.5
+      draw.ellipse((px - 2, py - 1.5, px + 2, py + 1.5),
+                   fill=rgba(color, 240), outline=rgba(0x080C0E, 220), width=1)
+    # Rectangular brand plate at the right
+    plate_l = point_in_quad(front_face, 0.78, 0.14)
+    plate_r = point_in_quad(front_face, 0.9, 0.14)
+    plate_l_b = point_in_quad(front_face, 0.78, 0.2)
+    plate_r_b = point_in_quad(front_face, 0.9, 0.2)
+    draw_polygon(draw, [plate_l, plate_r, plate_r_b, plate_l_b],
+                 panel_color, panel_dark, 1)
     return image
 
   if is_espresso:
