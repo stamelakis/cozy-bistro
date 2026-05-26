@@ -3725,6 +3725,101 @@ def make_furniture_atlas() -> None:
   packer.save(ASSET_DIR)
 
 
+# === LPC (Liberated Pixel Cup) character spritesheet integration ============
+#
+# LPC sheets are 832x1344 PNGs with a fixed layout: rows are animations
+# (spell-cast / thrust / walk / slash / shoot / hurt), each row contains a
+# direction's frames. We only use the walk-cycle rows since those have
+# proper standing + walking poses for all 4 facings.
+#
+# If a sheet exists at src/assets/lpc_characters/{role}/v{N}.png it overrides
+# the procedural draw_character_v3 output for that (role, variant) — any
+# missing files fall back to procedural. This lets the user incrementally
+# replace characters without all-or-nothing migration.
+#
+# Action mapping (we don't have all the source poses LPC supports, so several
+# actions reuse the standing frame and prop overlays go on top):
+#   idle, sit, carry, serve, clean, cook-1, cook-2  → walk frame 0 (standing)
+#   walk-1                                          → walk frame 4 (mid-step)
+#   walk-2                                          → walk frame 6 (mid-step)
+
+LPC_CHAR_DIR = ROOT / "src" / "assets" / "lpc_characters"
+LPC_FRAME_W = 64
+LPC_FRAME_H = 64
+# Y-offsets (in 64px row units) within the LPC sheet for the walk-cycle block.
+LPC_WALK_ROW = {"up": 8, "left": 9, "down": 10, "right": 11}
+# Column within the walk row for each of our action labels.
+LPC_FRAME_COL = {
+  "idle": 0,
+  "walk-1": 4,
+  "walk-2": 6,
+  "sit": 0,
+  "carry": 0,
+  "serve": 0,
+  "clean": 0,
+  "cook-1": 0,
+  "cook-2": 0,
+}
+
+
+def try_load_lpc_character(role: str, action: str, facing: str, variant: int) -> Image.Image | None:
+  """Return an LPC-derived sprite if a per-(role, variant) sheet exists, else None."""
+  sheet_path = LPC_CHAR_DIR / role / f"v{variant}.png"
+  if not sheet_path.exists():
+    return None
+  sheet = Image.open(sheet_path).convert("RGBA")
+
+  row = LPC_WALK_ROW[facing]
+  col = LPC_FRAME_COL.get(action, 0)
+  frame = sheet.crop((
+    col * LPC_FRAME_W,
+    row * LPC_FRAME_H,
+    (col + 1) * LPC_FRAME_W,
+    (row + 1) * LPC_FRAME_H,
+  ))
+
+  # Place into a canvas matching the procedural draw_character_v3 dimensions
+  # so downstream consumers (atlas packer, visualAssets origins) don't need
+  # to know about the source pipeline.
+  canvas_w = round(96 * 1.2)
+  canvas_h = round(136 * 1.2)
+  canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+  draw = ImageDraw.Draw(canvas)
+
+  # Contact shadow at the feet — same neutral-shadow helper the procedural
+  # renderer uses, so the lighting language stays consistent across sources.
+  draw_neutral_shadow(draw, canvas_w / 2, canvas_h - 8, 30, 8)
+
+  # Center horizontally, anchor feet near the bottom.
+  paste_x = (canvas_w - frame.width) // 2
+  paste_y = canvas_h - frame.height - 10
+  canvas.paste(frame, (paste_x, paste_y), frame)
+
+  # Action-specific prop overlays. The LPC body is standing; we add the
+  # plate/rag/etc. on top so the action still reads.
+  if action in ("carry", "serve", "clean"):
+    plate_cx = canvas_w // 2 + 14
+    plate_cy = canvas_h - 50
+    # Plate
+    draw.ellipse((plate_cx - 11, plate_cy - 5, plate_cx + 12, plate_cy + 6),
+                 fill=rgba(0xFFF9EC), outline=rgba(0x8B7764), width=1)
+    # Inner rim shadow
+    draw.ellipse((plate_cx - 9, plate_cy - 3, plate_cx + 10, plate_cy + 4),
+                 outline=rgba(0xC4B690, 165), width=1)
+    if action == "clean":
+      draw.ellipse((plate_cx - 5, plate_cy - 1, plate_cx + 3, plate_cy + 3),
+                   fill=rgba(0xB9A884), outline=rgba(0x7D6B56), width=1)
+      draw.line((plate_cx + 4, plate_cy + 3, plate_cx + 10, plate_cy + 5),
+                fill=rgba(0x7D6B56), width=1)
+    else:
+      draw.ellipse((plate_cx - 4, plate_cy - 2, plate_cx + 4, plate_cy + 4),
+                   fill=rgba(0x6DA05E), outline=rgba(0x416542), width=1)
+      draw.ellipse((plate_cx + 2, plate_cy - 3, plate_cx + 9, plate_cy + 2),
+                   fill=rgba(0xE7B95A), outline=rgba(0xA47636), width=1)
+
+  return canvas
+
+
 def make_character_atlas() -> None:
   packer = AtlasPacker("characters.png")
   roles = ("guest", "waiter", "chef", "errand")
@@ -3735,12 +3830,22 @@ def make_character_atlas() -> None:
     "chef": ("idle", "walk-1", "walk-2", "cook-1", "cook-2"),
     "errand": ("idle", "walk-1", "walk-2", "carry"),
   }
+  lpc_count = 0
+  pillow_count = 0
   for role in roles:
     for action in role_actions[role]:
       for facing in facings:
         for variant in range(CHARACTER_VARIANT_COUNT):
-          packer.add(f"{role}-{action}-{facing}-v{variant}", draw_character_v3(role, action, facing, variant))
+          sprite = try_load_lpc_character(role, action, facing, variant)
+          if sprite is None:
+            sprite = draw_character_v3(role, action, facing, variant)
+            pillow_count += 1
+          else:
+            lpc_count += 1
+          packer.add(f"{role}-{action}-{facing}-v{variant}", sprite)
   packer.save(ASSET_DIR)
+  if lpc_count > 0:
+    print(f"  characters: {lpc_count} from LPC sheets, {pillow_count} from procedural")
 
 
 def make_environment_atlas() -> None:
