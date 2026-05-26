@@ -6,14 +6,18 @@ Working names considered: **Couple Cafe**, **Tiny Table**, and **Cozy Bistro**. 
 
 ## Current MVP
 
-This first deliverable implements Stage 1 and a testable slice of Stage 2:
+This prototype now implements Stage 1, a testable slice of Stage 2, and an early visual operations loop:
 
 - Vite + TypeScript + Phaser 3 web game setup
-- Top-down restaurant room with a grid
+- Top-down restaurant building with a visible facade, front door, dining room, and kitchen zone
 - Mouse-based furniture placement
 - Furniture movement and removal modes
 - Furniture costs money
 - Decoration score and attractiveness update as furniture changes
+- Hireable chef and waiter staff
+- Customers visually enter through the door, sit, order, eat, pay, and leave
+- Staff visually cook, serve, collect payments, and clean tables
+- Menu, recipe, order queue, and pantry panels
 - Basic localStorage save for money, day, reputation, unlocked recipes, and furniture placement
 - Data-driven furniture and recipe definitions
 - System classes ready for cooking, customers, economy, reputation, day cycle, and saves
@@ -37,6 +41,11 @@ http://127.0.0.1:5173
 - Click the restaurant grid to place it.
 - Use **Move** mode to select placed furniture, then click a new valid grid cell.
 - Use **Remove** mode to sell furniture back for a partial refund.
+- Hire a chef and waiter from **Restaurant Ops** to start the automated service loop.
+- Buy ingredients when the pantry runs low.
+- Use **Cook** mode to invite a test guest immediately.
+- Use **New Game** to reset a broken save and restart with a basic crew, pantry, and starter layout.
+- Use **Starter Grant** if your money drops below the amount needed to recover.
 - Press `S` or click **Save** to save locally.
 - Press `Esc` to clear the current selection.
 

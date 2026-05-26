@@ -1,0 +1,33 @@
+export const graphicsTheme = {
+  ink: "#3b2a21",
+  inkSoft: "#6b4b39",
+  paper: "#fff8e8",
+  panel: "#f4d9a4",
+  panelLight: "#fff3d4",
+  panelStroke: "#d3b676",
+  warmWall: "#fff9ec",
+  wood: "#9b704e",
+  woodDark: "#5b4033",
+  accentGreen: "#5f8a61",
+  accentBlue: "#2f5c78",
+  accentRed: "#9b2638",
+  shadow: "#3f2d24",
+  bubbleFill: "rgba(255,248,232,0.92)",
+  bubbleStroke: "#8f6a4f",
+  bubbleText: "#3b2a21",
+} as const;
+
+export const graphicsPalette = {
+  outline: 0x5b4033,
+  softOutline: 0x8f6a4f,
+  warmHighlight: 0xfff8e8,
+  warmWall: 0xfff9ec,
+  contactShadow: 0x3f2d24,
+  waiterBlue: 0x2f5c78,
+  waiterVest: 0x20394d,
+  chefWhite: 0xfff8ec,
+  apronCream: 0xf4e6ce,
+  plantLeaf: 0x6da05e,
+  plantLeafDark: 0x416542,
+  foodPlate: 0xfff9ec,
+} as const;

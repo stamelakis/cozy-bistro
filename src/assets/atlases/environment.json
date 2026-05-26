@@ -1,0 +1,135 @@
+{
+  "frames": {
+    "wall-back": {
+      "frame": {
+        "x": 3,
+        "y": 3,
+        "w": 180,
+        "h": 88
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 180,
+        "h": 88
+      },
+      "sourceSize": {
+        "w": 180,
+        "h": 88
+      }
+    },
+    "wall-side": {
+      "frame": {
+        "x": 186,
+        "y": 3,
+        "w": 90,
+        "h": 132
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 90,
+        "h": 132
+      },
+      "sourceSize": {
+        "w": 90,
+        "h": 132
+      }
+    },
+    "wall-corner": {
+      "frame": {
+        "x": 279,
+        "y": 3,
+        "w": 118,
+        "h": 132
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 118,
+        "h": 132
+      },
+      "sourceSize": {
+        "w": 118,
+        "h": 132
+      }
+    },
+    "entrance-door": {
+      "frame": {
+        "x": 400,
+        "y": 3,
+        "w": 96,
+        "h": 116
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 96,
+        "h": 116
+      },
+      "sourceSize": {
+        "w": 96,
+        "h": 116
+      }
+    },
+    "locked-grass": {
+      "frame": {
+        "x": 499,
+        "y": 3,
+        "w": 70,
+        "h": 44
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 70,
+        "h": 44
+      },
+      "sourceSize": {
+        "w": 70,
+        "h": 44
+      }
+    },
+    "expansion-sign": {
+      "frame": {
+        "x": 572,
+        "y": 3,
+        "w": 174,
+        "h": 106
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 174,
+        "h": 106
+      },
+      "sourceSize": {
+        "w": 174,
+        "h": 106
+      }
+    }
+  },
+  "meta": {
+    "app": "cozy-bistro-atlas-generator",
+    "version": "1.0",
+    "image": "environment.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 4096,
+      "h": 138
+    },
+    "scale": "1"
+  }
+}
