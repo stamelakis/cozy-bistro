@@ -3725,6 +3725,94 @@ def make_furniture_atlas() -> None:
   packer.save(ASSET_DIR)
 
 
+# === AI-generated character image integration ===============================
+#
+# Higher-priority source than LPC. The user generates illustrations with an
+# AI image tool (ChatGPT / DALL-E / Stable Diffusion / Midjourney etc.) and
+# drops them in src/assets/ai_characters/. Each PNG is a full-body character
+# illustration; the loader resizes and centers it into our standard canvas
+# with a contact shadow and (for carry / serve / clean) a prop overlay.
+#
+# File resolution priority for (role, action, facing, variant):
+#   1. ai_characters/{role}-v{variant}-{facing}.png   ← most specific
+#   2. ai_characters/{role}-v{variant}.png            ← variant default
+#   3. ai_characters/{role}-{facing}.png              ← role + facing
+#   4. ai_characters/{role}.png                       ← role default
+#   (else fall through to LPC, then procedural)
+#
+# Action poses (sit / carry / cook / etc.) reuse the same illustration as
+# idle — AI generation can't keep a character consistent across separate
+# generations, so faking the action with props on top of one canonical image
+# is more reliable than chasing per-action images.
+
+AI_CHAR_DIR = ROOT / "src" / "assets" / "ai_characters"
+
+
+def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> Image.Image | None:
+  """Return an AI-illustration-based sprite if a matching file exists, else None."""
+  candidates = [
+    AI_CHAR_DIR / f"{role}-v{variant}-{facing}.png",
+    AI_CHAR_DIR / f"{role}-v{variant}.png",
+    AI_CHAR_DIR / f"{role}-{facing}.png",
+    AI_CHAR_DIR / f"{role}.png",
+  ]
+  source = None
+  for path in candidates:
+    if path.exists():
+      source = Image.open(path).convert("RGBA")
+      break
+  if source is None:
+    return None
+
+  canvas_w = round(96 * 1.2)
+  canvas_h = round(136 * 1.2)
+  canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+  draw = ImageDraw.Draw(canvas)
+
+  # Trim transparent margins from the source so the character anchors at its
+  # actual feet, not an arbitrary canvas edge.
+  bbox = source.getbbox()
+  if bbox:
+    source = source.crop(bbox)
+
+  # Resize preserving aspect, fit into the canvas height minus shadow space.
+  target_h = canvas_h - 22
+  aspect = source.width / source.height
+  target_w = int(target_h * aspect)
+  # If the character is wider than the canvas (e.g. user uploaded a turnaround
+  # sheet of all 4 facings in one image), scale by width instead.
+  if target_w > canvas_w - 4:
+    target_w = canvas_w - 4
+    target_h = int(target_w / aspect)
+  resized = source.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+  draw_neutral_shadow(draw, canvas_w / 2, canvas_h - 6, 32, 9)
+  paste_x = (canvas_w - target_w) // 2
+  paste_y = canvas_h - target_h - 12
+  canvas.paste(resized, (paste_x, paste_y), resized)
+
+  # Prop overlay for actions that need something in the character's hand.
+  # We don't know exactly where the AI character's hand is, so we approximate
+  # at the right side of the sprite at chest height.
+  if action in ("carry", "serve", "clean"):
+    plate_cx = canvas_w // 2 + 22
+    plate_cy = paste_y + int(target_h * 0.4)
+    draw.ellipse((plate_cx - 11, plate_cy - 5, plate_cx + 12, plate_cy + 6),
+                 fill=rgba(0xFFF9EC), outline=rgba(0x8B7764), width=1)
+    draw.ellipse((plate_cx - 9, plate_cy - 3, plate_cx + 10, plate_cy + 4),
+                 outline=rgba(0xC4B690, 165), width=1)
+    if action == "clean":
+      draw.ellipse((plate_cx - 5, plate_cy - 1, plate_cx + 3, plate_cy + 3),
+                   fill=rgba(0xB9A884), outline=rgba(0x7D6B56), width=1)
+    else:
+      draw.ellipse((plate_cx - 4, plate_cy - 2, plate_cx + 4, plate_cy + 4),
+                   fill=rgba(0x6DA05E), outline=rgba(0x416542), width=1)
+      draw.ellipse((plate_cx + 2, plate_cy - 3, plate_cx + 9, plate_cy + 2),
+                   fill=rgba(0xE7B95A), outline=rgba(0xA47636), width=1)
+
+  return canvas
+
+
 # === LPC (Liberated Pixel Cup) character spritesheet integration ============
 #
 # LPC sheets are 832x1344 PNGs with a fixed layout: rows are animations
@@ -3830,22 +3918,27 @@ def make_character_atlas() -> None:
     "chef": ("idle", "walk-1", "walk-2", "cook-1", "cook-2"),
     "errand": ("idle", "walk-1", "walk-2", "carry"),
   }
+  ai_count = 0
   lpc_count = 0
   pillow_count = 0
   for role in roles:
     for action in role_actions[role]:
       for facing in facings:
         for variant in range(CHARACTER_VARIANT_COUNT):
-          sprite = try_load_lpc_character(role, action, facing, variant)
-          if sprite is None:
-            sprite = draw_character_v3(role, action, facing, variant)
-            pillow_count += 1
+          sprite = try_load_ai_character(role, action, facing, variant)
+          if sprite is not None:
+            ai_count += 1
           else:
-            lpc_count += 1
+            sprite = try_load_lpc_character(role, action, facing, variant)
+            if sprite is not None:
+              lpc_count += 1
+            else:
+              sprite = draw_character_v3(role, action, facing, variant)
+              pillow_count += 1
           packer.add(f"{role}-{action}-{facing}-v{variant}", sprite)
   packer.save(ASSET_DIR)
-  if lpc_count > 0:
-    print(f"  characters: {lpc_count} from LPC sheets, {pillow_count} from procedural")
+  if ai_count + lpc_count > 0:
+    print(f"  characters: {ai_count} from AI images, {lpc_count} from LPC sheets, {pillow_count} from procedural")
 
 
 def make_environment_atlas() -> None:
