@@ -8,7 +8,7 @@ export const errandHireCost = 65;
 export const chefFireCost = 18;
 export const waiterFireCost = 14;
 export const errandFireCost = 12;
-export const defaultPayrollPerStaffPerMinute = 1;
+export const defaultPayrollPerStaffPerMinute = 0;
 
 /** A payroll tick result describes what the scene should charge and how to bookkeep. */
 export interface SalaryTickResult {

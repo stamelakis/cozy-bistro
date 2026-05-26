@@ -50,7 +50,7 @@ const pedestrianSpawnMinMs = 900;
 const pedestrianSpawnMaxMs = 2100;
 const maxPavementTrash = 30;
 const trashRecycleReward = 2;
-const defaultTrashDropChance = 0.12;
+const defaultTrashDropChance = 0.05;
 const offlineTrashDropMs = 3 * 60 * 1000;
 
 type InteractionMode = "build" | "move" | "remove" | "seat" | "cook";
@@ -332,8 +332,8 @@ const paymentSeconds = 0.75;
 const cleaningSeconds = 0.8;
 const manualDishwashingSeconds = 2.8;
 const dishwasherSeconds = 2.2;
-const defaultBaseDailyRent = 2000;
-const defaultRentPerExpansion = 1000;
+const defaultBaseDailyRent = 0;
+const defaultRentPerExpansion = 0;
 const starterExpansionLevel = 0;
 const legacyExpansionLevel = 2;
 const maxExpansionLevel = 8;
@@ -639,6 +639,7 @@ export class GameScene extends Phaser.Scene {
       // Starter team for a brand-new game.
       this.staffSystem.addStaff("chef");
       this.staffSystem.addStaff("waiter");
+      this.staffSystem.addStaff("errand");
     }
     this.dirtySeatUids = new Set(save?.dirtySeatUids ?? []);
     this.dirtyDishCount = save?.dirtyDishCount ?? 0;
@@ -2506,7 +2507,7 @@ export class GameScene extends Phaser.Scene {
     const currentPrice = this.getRecipeSellPrice(recipe);
     const currentProfit = this.getRecipeProfit(recipe);
     const currentAppeal = this.getRecipeSatisfactionEffect(recipe);
-    const nextProfit = this.getStarterRecipeProfit() * nextLevel;
+    const nextProfit = this.getRecipeProfit(recipe, nextLevel);
     const nextPrice = this.getRecipeIngredientCost(recipe) + nextProfit;
     const nextAppeal = recipe.satisfactionEffect + (nextLevel - 1) * 2;
 
@@ -3480,8 +3481,16 @@ export class GameScene extends Phaser.Scene {
     return getRecipeLuxuryTier(recipe);
   }
 
-  private getRecipeProfit(recipe: RecipeDefinition): number {
-    return this.getStarterRecipeProfit() * this.getRecipeUpgradeLevel(recipe);
+  /**
+   * Profit per dish. Tier acts as a +$1-per-tier bonus to the per-level profit base,
+   * so the tier advantage compounds with upgrade level: a tier-N recipe earns
+   * `(starterProfit + (N - 1)) * upgradeLevel`. At level 1 each tier is $1 ahead of
+   * the previous; at level 10 each tier is $10 ahead.
+   */
+  private getRecipeProfit(recipe: RecipeDefinition, levelOverride?: number): number {
+    const level = levelOverride ?? this.getRecipeUpgradeLevel(recipe);
+    const tierBonus = getRecipeLuxuryTier(recipe) - 1;
+    return (this.getStarterRecipeProfit() + tierBonus) * level;
   }
 
   private getRecipeSellPrice(recipe: RecipeDefinition): number {
