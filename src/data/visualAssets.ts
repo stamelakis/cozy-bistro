@@ -4,7 +4,15 @@ import furnitureAtlas from "../assets/atlases/furniture.json";
 export type VisualAtlasKey = "furniture" | "characters" | "environment" | "ui-icons";
 export type CharacterVisualRole = "guest" | "waiter" | "chef" | "errand";
 export type CharacterVisualAction = "idle" | "walk" | "sit" | "carry" | "serve" | "clean" | "cook";
-export type CharacterVisualFacing = "down" | "up" | "left" | "right";
+export type CharacterVisualFacing =
+  | "down"
+  | "up"
+  | "left"
+  | "right"
+  | "down-right"
+  | "down-left"
+  | "up-right"
+  | "up-left";
 export type VisualHeightClass = "floor" | "low" | "seat" | "table" | "counter" | "tall" | "wall";
 
 export const characterVariantCount = 10;

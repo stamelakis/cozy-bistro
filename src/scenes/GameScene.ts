@@ -72,7 +72,15 @@ type BuildSubTab =
   | "doors"
   | "walls"
   | "flooring";
-type PersonFacing = "down" | "up" | "left" | "right";
+type PersonFacing =
+  | "down"
+  | "up"
+  | "left"
+  | "right"
+  | "down-right"
+  | "down-left"
+  | "up-right"
+  | "up-left";
 type MapViewMode = "inside" | "street";
 
 type ScrollbarTarget = "build" | "recipe" | "ingredient" | "inNeed" | "pantry" | "stock";
@@ -12423,11 +12431,29 @@ export class GameScene extends Phaser.Scene {
   }
 
   private getFacingForVector(dx: number, dy: number): PersonFacing {
-    if (Math.abs(dx) > Math.abs(dy)) {
+    // 8-way octant split based on angle. A movement vector close to a
+    // cardinal axis (|dx| >> |dy| or vice versa) yields the cardinal facing;
+    // a roughly diagonal vector yields one of the four diagonal facings.
+    // Threshold of 2.414 (tan(67.5°)) keeps the cardinal "wedge" 45° wide,
+    // matching standard 8-direction sprite intervals.
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    if (ax < 0.0001 && ay < 0.0001) {
+      return "down";
+    }
+    const diagonalThreshold = 2.414;
+    const horizontalCardinal = ax > ay * diagonalThreshold;
+    const verticalCardinal = ay > ax * diagonalThreshold;
+    if (horizontalCardinal) {
       return dx >= 0 ? "right" : "left";
     }
-
-    return dy >= 0 ? "down" : "up";
+    if (verticalCardinal) {
+      return dy >= 0 ? "down" : "up";
+    }
+    if (dy >= 0) {
+      return dx >= 0 ? "down-right" : "down-left";
+    }
+    return dx >= 0 ? "up-right" : "up-left";
   }
 
   private getTravelDuration(

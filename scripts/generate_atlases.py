@@ -3750,12 +3750,28 @@ AI_CHAR_DIR = ROOT / "src" / "assets" / "ai_characters"
 
 def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> Image.Image | None:
   """Return an AI-illustration-based sprite if a matching file exists, else None."""
+  # For diagonal facings, fall back to the matching cardinal if the
+  # diagonal sprite doesn't exist for this role/variant. That way a
+  # character with only 4 cardinal sprites still renders something
+  # plausible when the game asks for a diagonal facing.
+  diagonal_to_cardinal = {
+    "down-right": "down",
+    "down-left": "down",
+    "up-right": "up",
+    "up-left": "up",
+  }
+  cardinal = diagonal_to_cardinal.get(facing)
   candidates = [
     AI_CHAR_DIR / f"{role}-v{variant}-{facing}.png",
     AI_CHAR_DIR / f"{role}-v{variant}.png",
     AI_CHAR_DIR / f"{role}-{facing}.png",
-    AI_CHAR_DIR / f"{role}.png",
   ]
+  if cardinal:
+    # Cardinal fallback comes before role-default so the character at least
+    # faces the correct general direction.
+    candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{cardinal}.png")
+    candidates.append(AI_CHAR_DIR / f"{role}-{cardinal}.png")
+  candidates.append(AI_CHAR_DIR / f"{role}.png")
   source = None
   for path in candidates:
     if path.exists():
@@ -3911,7 +3927,10 @@ def try_load_lpc_character(role: str, action: str, facing: str, variant: int) ->
 def make_character_atlas() -> None:
   packer = AtlasPacker("characters.png")
   roles = ("guest", "waiter", "chef", "errand")
-  facings = ("down", "up", "left", "right")
+  facings = (
+    "down", "up", "left", "right",
+    "down-right", "down-left", "up-right", "up-left",
+  )
   role_actions = {
     "guest": ("idle", "walk-1", "walk-2", "sit"),
     "waiter": ("idle", "walk-1", "walk-2", "carry", "serve", "clean"),
