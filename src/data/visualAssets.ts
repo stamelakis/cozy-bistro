@@ -15,7 +15,7 @@ export type CharacterVisualFacing =
   | "up-left";
 export type VisualHeightClass = "floor" | "low" | "seat" | "table" | "counter" | "tall" | "wall";
 
-export const characterVariantCount = 10;
+export const characterVariantCount = 6;
 
 export interface SpriteAnchor {
   x: number;
@@ -135,7 +135,7 @@ export function getCharacterSpriteFrame(
     frame: `${role}-${frameAction}-${facing}-v${normalizedVariant}`,
     origin: { x: 0.5, y: 1 },
     xOffset: 0,
-    yOffset: seated ? 8 : 8,
-    scale: seated ? 0.55 : 0.61,
+    yOffset: seated ? 6 : 6,
+    scale: seated ? 0.38 : 0.42,
   };
 }
