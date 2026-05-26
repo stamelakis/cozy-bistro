@@ -877,6 +877,17 @@ def draw_floor_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
 
 
 def draw_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  if item.id == "crate-table":
+    return draw_crate_table_sprite(item, rotation)
+  if item.id == "two-top-table":
+    return draw_two_top_table_sprite(item, rotation)
+  if item.id == "round-table":
+    return draw_round_table_sprite(item, rotation)
+  if item.id == "square-table":
+    return draw_square_table_sprite(item, rotation)
+  if item.id == "painted-table":
+    return draw_painted_table_sprite(item, rotation)
+
   w_cells, h_cells = rotated_size(item, rotation)
   drop = min(15, 9 + item.tier)
   table_height = 31 + item.tier * 2
@@ -891,7 +902,7 @@ def draw_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
   bounds_w = max(x for x, _ in top) - min(x for x, _ in top)
   bounds_h = max(y for _, y in top) - min(y for _, y in top)
   draw_neutral_shadow(draw, floor_center[0] + 7, floor_center[1] + 11, image.size[0] * 0.46, 12)
-  round_like = ("round" in item.id or "crate" in item.id) and item.width == item.height
+  round_like = ("round" in item.id) and item.width == item.height
 
   leg_color = 0x4D3428 if "marble" not in item.id else 0x5C5149
   if round_like:
@@ -968,6 +979,477 @@ def draw_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
   return image
 
 
+# === Tier-1 table specializations ============================================
+#
+# These dedicated drawers replace the generic draw_table_sprite path for the
+# two tier-1 tables. They establish the art-direction vocabulary the rest of
+# the furniture upgrade will follow: visible material character (planks, grain,
+# brass), strong silhouette, hand-painted accent stripes, consistent contact
+# shadow + top-left light direction.
+
+
+# Crate Table palette
+CRATE_PLANK_TOP = 0xA88060      # warm reclaimed-wood top plank
+CRATE_PLANK_HIGHLIGHT = 0xC79A78  # sun-bleached crest along plank edges
+CRATE_BODY = 0x7C5938           # darker side faces (in shadow)
+CRATE_BODY_DEEP = 0x5C402A      # right-side face (deepest shadow)
+CRATE_SEAM = 0x2F1F15           # near-black plank gap
+CRATE_STAMP = 0x3A4E78          # faded indigo brand mark
+CRATE_NAIL = 0x3A2A1F           # nail/dot color
+
+
+def draw_crate_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  """Repurposed wooden crate used as a small 2-seat table.
+
+  Box-with-visible-sides rendering instead of a pedestal: a 1x1 crate sits
+  on the floor with its top, left face, and right face visible. The top
+  shows 3 plank seams perpendicular to the long axis; the side faces show
+  horizontal slat lines and a faded brand stamp.
+  """
+  drop = 18  # tall enough to read as a box, not a flat tile
+  table_height = 26  # crate top is lower than a true table — it's a stool-table
+  image, draw, floor, base_y = sprite_canvas_for(item, rotation, table_height + drop + 18, 54)
+  origin = floor[0]
+  floor_center = polygon_center(floor)
+  # The crate fills its 1x1 tile with a small margin so it doesn't look pinched.
+  margin = 0.12
+  top = local_floor_quad(origin, margin, margin, 1 - margin, 1 - margin, table_height)
+  bottom = [(x, y + drop) for x, y in top]
+  draw_neutral_shadow(draw, floor_center[0] + 6, floor_center[1] + 10, image.size[0] * 0.42, 11)
+
+  # Side faces: front (top[3]-top[2] edge → forward in iso) and right.
+  front_face = [top[3], top[2], bottom[2], bottom[3]]
+  right_face = [top[2], top[1], bottom[1], bottom[2]]
+  draw_polygon(draw, right_face, CRATE_BODY_DEEP, CRATE_SEAM, 1)
+  draw_polygon(draw, front_face, CRATE_BODY, CRATE_SEAM, 1)
+  # Top: plank base, then plank seams across it.
+  draw_polygon(draw, top, CRATE_PLANK_TOP, CRATE_SEAM, 1)
+
+  # Plank seams on the top — run parallel to the front edge (top[2]-top[3]).
+  # 3 planks → 2 seams at 1/3 and 2/3 of the way back.
+  for ratio in (0.34, 0.67):
+    a = lerp_tuple(top[0], top[3], ratio)
+    b = lerp_tuple(top[1], top[2], ratio)
+    # Dark seam
+    draw.line((a[0], a[1], b[0], b[1]), fill=rgba(CRATE_SEAM, 220), width=2)
+    # Highlight crest just above seam
+    ah = lerp_tuple(top[0], top[3], ratio - 0.04)
+    bh = lerp_tuple(top[1], top[2], ratio - 0.04)
+    draw.line((ah[0] + 1, ah[1], bh[0] - 1, bh[1]), fill=rgba(CRATE_PLANK_HIGHLIGHT, 100), width=1)
+
+  # Top edge bevel (lighter rim catching the light)
+  bevel = inset_points(top, 0.06)
+  draw.line(bevel + [bevel[0]], fill=rgba(CRATE_PLANK_HIGHLIGHT, 130), width=1)
+
+  # Slat boards on the visible side faces — two horizontal lines each face
+  for face in (front_face, right_face):
+    for v_ratio in (0.32, 0.68):
+      a = lerp_tuple(face[0], face[3], v_ratio)
+      b = lerp_tuple(face[1], face[2], v_ratio)
+      draw.line((a[0] + 2, a[1], b[0] - 2, b[1]), fill=rgba(CRATE_SEAM, 165), width=1)
+      # Subtle highlight one px above each slat
+      draw.line((a[0] + 2, a[1] - 1, b[0] - 2, b[1] - 1), fill=rgba(CRATE_PLANK_HIGHLIGHT, 65), width=1)
+
+  # Nail dots on the corners of each plank board (front face)
+  for v_ratio in (0.18, 0.82):
+    for u_ratio in (0.12, 0.88):
+      px = lerp_tuple(lerp_tuple(front_face[0], front_face[1], u_ratio),
+                     lerp_tuple(front_face[3], front_face[2], u_ratio), v_ratio)
+      draw.ellipse((px[0] - 1, px[1] - 1, px[0] + 1, px[1] + 1), fill=rgba(CRATE_NAIL, 200))
+
+  # Faded brand stamp on the front face — three short horizontal strokes suggesting "CRATE"
+  stamp_center = lerp_tuple(lerp_tuple(front_face[0], front_face[1], 0.5),
+                            lerp_tuple(front_face[3], front_face[2], 0.5), 0.5)
+  for off, length in ((-3, 6), (1, 5), (5, 7)):
+    draw.line(
+      (stamp_center[0] - length, stamp_center[1] + off,
+       stamp_center[0] + length, stamp_center[1] + off),
+      fill=rgba(CRATE_STAMP, 110),
+      width=1,
+    )
+
+  # Plate settings — same call as the generic table path.
+  setting_points = get_table_service_points(top, item)
+  for marker_x, marker_y, variant in setting_points:
+    draw_food_setting(draw, marker_x, marker_y, 0.72, variant)
+  set_sprite_metadata_points(image, "tableServicePx", [(x, y) for x, y, _variant in setting_points])
+  return image
+
+
+# Two-Top Table palette
+TWO_TOP_WOOD = 0xC48458         # light cafe wood top
+TWO_TOP_GRAIN_DARK = 0x7C5031   # dark grain lines
+TWO_TOP_GRAIN_LIGHT = 0xE3B888  # warm grain highlight
+TWO_TOP_BRASS = 0xC79658        # brass trim around the top edge
+TWO_TOP_BRASS_DARK = 0x8C683B   # shadowed underside of brass
+TWO_TOP_LEG = 0x5B4033          # walnut leg
+TWO_TOP_LEG_SHADOW = 0x3E2A1D
+TWO_TOP_LINEN = 0xF8EFE2        # cream linen runner
+TWO_TOP_LINEN_SHADOW = 0xDDCBAA
+TWO_TOP_RUNNER_STRIPE = 0x2F5C78  # indigo stripe (matches waiterBlue)
+
+
+def draw_two_top_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  """Small cafe two-top: light wood, brass-trimmed edge, cream linen runner."""
+  w_cells, h_cells = rotated_size(item, rotation)
+  drop = 11
+  table_height = 33
+  image, draw, floor, base_y = sprite_canvas_for(item, rotation, table_height + drop + 18, 54)
+  origin = floor[0]
+  floor_center = polygon_center(floor)
+  margin_u = 0.16
+  margin_v = 0.18 if h_cells > 1 else 0.16
+  top = local_floor_quad(origin, margin_u, margin_v, w_cells - margin_u, h_cells - margin_v, table_height)
+  cx, cy = polygon_center(top)
+  draw_neutral_shadow(draw, floor_center[0] + 7, floor_center[1] + 10, image.size[0] * 0.48, 11)
+
+  # Solid tapered legs at the 4 corners (slightly inset).
+  leg_inset_u = margin_u + 0.06
+  leg_inset_v = margin_v + 0.06
+  for u, v, alpha in (
+    (leg_inset_u, leg_inset_v, 195),
+    (w_cells - leg_inset_u, leg_inset_v, 210),
+    (leg_inset_u, h_cells - leg_inset_v, 240),
+    (w_cells - leg_inset_u, h_cells - leg_inset_v, 250),
+  ):
+    foot = project_from_floor_origin(origin, u, v, 0)
+    leg_top = project_from_floor_origin(origin, u, v, table_height - drop + 2)
+    draw_projected_leg(draw, leg_top, foot, TWO_TOP_LEG, 4.4, alpha)
+    # Brass foot cap
+    draw.ellipse((foot[0] - 4, foot[1] - 1, foot[0] + 4, foot[1] + 3), fill=rgba(TWO_TOP_BRASS, 190))
+
+  # Top + side faces using the standard projected prism.
+  draw_projected_prism(draw, top, drop, TWO_TOP_WOOD)
+
+  # Wood grain on the top — long lines along the long axis (the v direction).
+  for u_ratio in (0.18, 0.32, 0.48, 0.62, 0.78):
+    a = point_in_quad(top, u_ratio, 0.1)
+    b = point_in_quad(top, u_ratio + 0.02, 0.9)
+    draw.line((a[0], a[1], b[0], b[1]), fill=rgba(TWO_TOP_GRAIN_DARK, 70), width=1)
+  for u_ratio in (0.26, 0.54, 0.72):
+    a = point_in_quad(top, u_ratio, 0.2)
+    b = point_in_quad(top, u_ratio + 0.015, 0.82)
+    draw.line((a[0] + 1, a[1], b[0], b[1]), fill=rgba(TWO_TOP_GRAIN_LIGHT, 95), width=1)
+  # Two knot ovals for character
+  for u, v in ((0.4, 0.32), (0.62, 0.7)):
+    kx, ky = point_in_quad(top, u, v)
+    draw.ellipse((kx - 3, ky - 1.4, kx + 3, ky + 1.4), outline=rgba(TWO_TOP_GRAIN_DARK, 90), width=1)
+
+  # Brass trim around the top edge — two-line bevel
+  bevel_outer = inset_points(top, 0.04)
+  bevel_inner = inset_points(top, 0.09)
+  draw.line(bevel_outer + [bevel_outer[0]], fill=rgba(TWO_TOP_BRASS, 215), width=2)
+  draw.line(bevel_inner + [bevel_inner[0]], fill=rgba(TWO_TOP_BRASS_DARK, 130), width=1)
+
+  # Linen runner across the LONG axis (between the two seats).
+  # The two-top is 1 wide × 2 long; runner covers ~the middle in the v direction.
+  # Use quad-relative coords: runner spans u=0.18..0.82, v=0.32..0.68.
+  runner = [
+    point_in_quad(top, 0.18, 0.34),
+    point_in_quad(top, 0.82, 0.34),
+    point_in_quad(top, 0.82, 0.66),
+    point_in_quad(top, 0.18, 0.66),
+  ]
+  # Shadow strip just below the runner — gives it a sense of weight.
+  shadow_quad = [(x, y + 1.5) for x, y in runner]
+  draw_polygon(draw, shadow_quad, TWO_TOP_LINEN_SHADOW, TWO_TOP_LINEN_SHADOW, 0)
+  draw_polygon(draw, runner, TWO_TOP_LINEN, 0xC6B59B, 1)
+  # Indigo stripe along the runner long axis (two thin stripes inset from the edges).
+  stripe_a_start = lerp_tuple(runner[0], runner[3], 0.18)
+  stripe_a_end = lerp_tuple(runner[1], runner[2], 0.18)
+  stripe_b_start = lerp_tuple(runner[0], runner[3], 0.82)
+  stripe_b_end = lerp_tuple(runner[1], runner[2], 0.82)
+  draw.line((stripe_a_start[0] + 3, stripe_a_start[1], stripe_a_end[0] - 3, stripe_a_end[1]),
+            fill=rgba(TWO_TOP_RUNNER_STRIPE, 175), width=1)
+  draw.line((stripe_b_start[0] + 3, stripe_b_start[1], stripe_b_end[0] - 3, stripe_b_end[1]),
+            fill=rgba(TWO_TOP_RUNNER_STRIPE, 175), width=1)
+
+  # Plates at the standard service points.
+  setting_points = get_table_service_points(top, item)
+  for marker_x, marker_y, variant in setting_points:
+    draw_food_setting(draw, marker_x, marker_y, 0.74, variant)
+  set_sprite_metadata_points(image, "tableServicePx", [(x, y) for x, y, _variant in setting_points])
+  return image
+
+
+# === Tier-2 table specializations ============================================
+#
+# Tier-2 tables introduce: brass-trimmed top edges, full linen cloth coverage,
+# small centerpiece detail, and (for painted) a chalk-paint finish in a
+# distinct hue. Same lighting / contact-shadow / palette pattern as tier-1.
+
+
+# Round Table palette
+ROUND_WOOD = 0xB8774F           # warm brown body wood
+ROUND_WOOD_DARK = 0x73482E      # pedestal in shadow
+ROUND_BRASS = 0xC79658          # pedestal cap + bevel trim
+ROUND_BRASS_DARK = 0x8C683B
+ROUND_CLOTH = 0xF7E9D6          # cream linen
+ROUND_CLOTH_SHADOW = 0xD9C9A7
+ROUND_CLOTH_STRIPE = 0x89AFA1   # soft sage stripe
+ROUND_CENTERPIECE = 0xC9826C    # terracotta sugar-shaker
+ROUND_CENTERPIECE_LID = 0xD7B188
+
+
+def draw_round_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  """Round cafe table on a brass-capped pedestal with a full cream linen cloth."""
+  w_cells, h_cells = rotated_size(item, rotation)
+  drop = 12
+  table_height = 33
+  image, draw, floor, base_y = sprite_canvas_for(item, rotation, table_height + drop + 18, 54)
+  origin = floor[0]
+  floor_center = polygon_center(floor)
+  margin = 0.18
+  top = local_floor_quad(origin, margin, margin, w_cells - margin, h_cells - margin, table_height)
+  cx, cy = polygon_center(top)
+  bounds_w = max(x for x, _ in top) - min(x for x, _ in top)
+  bounds_h = max(y for _, y in top) - min(y for _, y in top)
+  draw_neutral_shadow(draw, floor_center[0] + 8, floor_center[1] + 12, image.size[0] * 0.5, 13)
+
+  # Pedestal column: dark wood, brass cap at top, foot disc on floor.
+  pedestal_top = project_from_floor_origin(origin, w_cells / 2, h_cells / 2, table_height - drop * 0.4)
+  pedestal_foot = project_from_floor_origin(origin, w_cells / 2, h_cells / 2, 0)
+  draw.rounded_rectangle(
+    (pedestal_top[0] - 7, pedestal_top[1], pedestal_top[0] + 7, pedestal_foot[1] + 2),
+    radius=5,
+    fill=rgba(ROUND_WOOD_DARK),
+    outline=rgba(0x3F2D24, 200),
+    width=1,
+  )
+  # Brass cap just under the top
+  draw.rounded_rectangle(
+    (pedestal_top[0] - 8, pedestal_top[1] - 1, pedestal_top[0] + 8, pedestal_top[1] + 4),
+    radius=2,
+    fill=rgba(ROUND_BRASS, 230),
+    outline=rgba(ROUND_BRASS_DARK, 180),
+    width=1,
+  )
+  # Foot disc on the floor
+  draw.ellipse(
+    (pedestal_foot[0] - 22, pedestal_foot[1] - 4, pedestal_foot[0] + 22, pedestal_foot[1] + 7),
+    fill=rgba(0x3F2D24, 175),
+  )
+  draw.ellipse(
+    (pedestal_foot[0] - 17, pedestal_foot[1] - 6, pedestal_foot[0] + 17, pedestal_foot[1] + 4),
+    fill=rgba(ROUND_WOOD_DARK),
+    outline=rgba(0x2C1E15, 200),
+    width=1,
+  )
+
+  # Oval top prism (wood disc, will be mostly hidden by cloth).
+  oval_w = min(bounds_w * 0.82, bounds_h * 2.1)
+  oval_h = min(bounds_h * 0.82, bounds_w * 0.52)
+  draw_iso_oval_prism(draw, cx, cy, oval_w, oval_h, drop, ROUND_WOOD)
+  # Brass rim around the top of the wood disc (just under the cloth)
+  draw.ellipse(
+    (cx - oval_w / 2 + 1, cy - oval_h / 2 + 1, cx + oval_w / 2 - 1, cy + oval_h / 2 - 1),
+    outline=rgba(ROUND_BRASS, 200), width=2,
+  )
+
+  # Full linen cloth covering the top (slightly larger than the wood disc so it drapes).
+  cloth_w = oval_w * 1.08
+  cloth_h = oval_h * 1.06
+  # Shadow under the cloth's far edge
+  draw.ellipse(
+    (cx - cloth_w / 2, cy - cloth_h / 2 + drop * 0.18, cx + cloth_w / 2, cy + cloth_h / 2 + drop * 0.18),
+    fill=rgba(ROUND_CLOTH_SHADOW, 225),
+    outline=rgba(0xC6B59B, 190), width=1,
+  )
+  # Main cloth surface
+  draw.ellipse(
+    (cx - cloth_w / 2, cy - cloth_h / 2, cx + cloth_w / 2, cy + cloth_h / 2),
+    fill=rgba(ROUND_CLOTH),
+    outline=rgba(0xC6B59B), width=2,
+  )
+  # Sage decorative ring
+  draw.ellipse(
+    (cx - cloth_w * 0.28, cy - cloth_h * 0.22, cx + cloth_w * 0.28, cy + cloth_h * 0.22),
+    outline=rgba(ROUND_CLOTH_STRIPE, 175), width=2,
+  )
+  # Drape folds along the edge
+  for offset in (-0.28, 0, 0.28):
+    draw.arc(
+      (cx - cloth_w * 0.42 + offset * cloth_w * 0.55, cy - cloth_h * 0.2,
+       cx - cloth_w * 0.18 + offset * cloth_w * 0.55, cy + cloth_h * 0.42),
+      40, 150, fill=rgba(ROUND_CLOTH_STRIPE, 95), width=1,
+    )
+
+  # Centerpiece: small terracotta sugar shaker just off-center
+  jar_x, jar_y = cx + 2, cy - 4
+  draw.rounded_rectangle((jar_x - 3, jar_y - 5, jar_x + 3, jar_y + 3), radius=1,
+                         fill=rgba(ROUND_CENTERPIECE), outline=rgba(0x6B3D2E, 200), width=1)
+  draw.rectangle((jar_x - 2, jar_y - 6, jar_x + 2, jar_y - 5), fill=rgba(ROUND_CENTERPIECE_LID))
+  # Tiny perforations on the lid
+  for dx in (-1, 1):
+    draw.point((jar_x + dx, jar_y - 6), fill=rgba(0x6B3D2E, 220))
+
+  # Plate settings at the standard service points.
+  setting_points = get_table_service_points(top, item)
+  for marker_x, marker_y, variant in setting_points:
+    draw_food_setting(draw, marker_x, marker_y, 0.62, variant)
+  set_sprite_metadata_points(image, "tableServicePx", [(x, y) for x, y, _variant in setting_points])
+  return image
+
+
+# Square Table palette
+SQUARE_WOOD = 0xA96F4C
+SQUARE_GRAIN_DARK = 0x6E4327
+SQUARE_GRAIN_LIGHT = 0xD49B6E
+SQUARE_BRASS = 0xC79658
+SQUARE_BRASS_DARK = 0x8C683B
+SQUARE_LEG = 0x5B4033
+SQUARE_LEG_DARK = 0x3E2A1D
+SQUARE_CLOTH = 0xF4E6CE         # warm beige linen
+SQUARE_CLOTH_SHADOW = 0xCFB996
+SQUARE_CLOTH_BORDER = 0x89AFA1  # sage trim
+
+
+def draw_square_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  """Square 4-leg dining table with grain, brass trim, and a beige linen cloth."""
+  w_cells, h_cells = rotated_size(item, rotation)
+  drop = 13
+  table_height = 35
+  image, draw, floor, base_y = sprite_canvas_for(item, rotation, table_height + drop + 18, 54)
+  origin = floor[0]
+  floor_center = polygon_center(floor)
+  margin = 0.18
+  top = local_floor_quad(origin, margin, margin, w_cells - margin, h_cells - margin, table_height)
+  cx, cy = polygon_center(top)
+  draw_neutral_shadow(draw, floor_center[0] + 8, floor_center[1] + 12, image.size[0] * 0.5, 13)
+
+  # Solid tapered legs at the 4 corners with brass foot caps.
+  leg_inset = margin + 0.05
+  for u, v, alpha in (
+    (leg_inset, leg_inset, 190),
+    (w_cells - leg_inset, leg_inset, 205),
+    (leg_inset, h_cells - leg_inset, 240),
+    (w_cells - leg_inset, h_cells - leg_inset, 252),
+  ):
+    foot = project_from_floor_origin(origin, u, v, 0)
+    leg_top = project_from_floor_origin(origin, u, v, table_height - drop + 2)
+    draw_projected_leg(draw, leg_top, foot, SQUARE_LEG, 5.0, alpha)
+    draw.ellipse((foot[0] - 5, foot[1] - 1, foot[0] + 5, foot[1] + 4), fill=rgba(SQUARE_BRASS, 200))
+
+  # Top prism with brass trim.
+  draw_projected_prism(draw, top, drop, SQUARE_WOOD)
+  bevel_outer = inset_points(top, 0.05)
+  bevel_inner = inset_points(top, 0.1)
+  draw.line(bevel_outer + [bevel_outer[0]], fill=rgba(SQUARE_BRASS, 220), width=2)
+  draw.line(bevel_inner + [bevel_inner[0]], fill=rgba(SQUARE_BRASS_DARK, 130), width=1)
+
+  # Wood grain visible around the cloth edges.
+  for u_ratio in (0.16, 0.28, 0.5, 0.72, 0.84):
+    a = point_in_quad(top, u_ratio, 0.08)
+    b = point_in_quad(top, u_ratio + 0.02, 0.92)
+    draw.line((a[0], a[1], b[0], b[1]), fill=rgba(SQUARE_GRAIN_DARK, 60), width=1)
+  for u, v in ((0.32, 0.32), (0.66, 0.7)):
+    kx, ky = point_in_quad(top, u, v)
+    draw.ellipse((kx - 3, ky - 1.4, kx + 3, ky + 1.4), outline=rgba(SQUARE_GRAIN_DARK, 80), width=1)
+
+  # Square cloth dropped over the center (smaller than the top so wood shows around).
+  cloth = [
+    point_in_quad(top, 0.18, 0.22),
+    point_in_quad(top, 0.82, 0.22),
+    point_in_quad(top, 0.82, 0.78),
+    point_in_quad(top, 0.18, 0.78),
+  ]
+  shadow = [(x + 1, y + 1.5) for x, y in cloth]
+  draw_polygon(draw, shadow, SQUARE_CLOTH_SHADOW, SQUARE_CLOTH_SHADOW, 0)
+  draw_polygon(draw, cloth, SQUARE_CLOTH, 0xC6B59B, 1)
+  # Sage trim near the cloth border
+  trim_outer = [
+    lerp_tuple(cloth[0], cloth[2], 0.08),
+    lerp_tuple(cloth[1], cloth[3], 0.08),
+    lerp_tuple(cloth[2], cloth[0], 0.08),
+    lerp_tuple(cloth[3], cloth[1], 0.08),
+  ]
+  draw.line(trim_outer + [trim_outer[0]], fill=rgba(SQUARE_CLOTH_BORDER, 150), width=1)
+
+  # Plate settings
+  setting_points = get_table_service_points(top, item)
+  for marker_x, marker_y, variant in setting_points:
+    draw_food_setting(draw, marker_x, marker_y, 0.66, variant)
+  set_sprite_metadata_points(image, "tableServicePx", [(x, y) for x, y, _variant in setting_points])
+  return image
+
+
+# Painted Table palette
+PAINTED_BODY = 0x9CB0AD         # sage chalk-paint base
+PAINTED_BODY_DARK = 0x6B7E7C    # shadow side
+PAINTED_HIGHLIGHT = 0xD3DEDA    # painted highlight (top-left lit)
+PAINTED_STRIPE = 0xFFF1C6       # cream painted stripes (existing motif)
+PAINTED_TRIM = 0xC79658         # warm brass hardware
+PAINTED_LEG = 0x6B7E7C
+PAINTED_FLORAL = 0xD47A76       # tiny rose accent
+PAINTED_FLORAL_LEAF = 0x6DA05E
+
+
+def draw_painted_table_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
+  """Painted 4-leg square dining table — sage chalk-paint finish with cream stripes."""
+  w_cells, h_cells = rotated_size(item, rotation)
+  drop = 13
+  table_height = 35
+  image, draw, floor, base_y = sprite_canvas_for(item, rotation, table_height + drop + 18, 54)
+  origin = floor[0]
+  floor_center = polygon_center(floor)
+  margin = 0.18
+  top = local_floor_quad(origin, margin, margin, w_cells - margin, h_cells - margin, table_height)
+  cx, cy = polygon_center(top)
+  draw_neutral_shadow(draw, floor_center[0] + 8, floor_center[1] + 12, image.size[0] * 0.5, 13)
+
+  # Painted legs in matching sage.
+  leg_inset = margin + 0.05
+  for u, v, alpha in (
+    (leg_inset, leg_inset, 195),
+    (w_cells - leg_inset, leg_inset, 210),
+    (leg_inset, h_cells - leg_inset, 240),
+    (w_cells - leg_inset, h_cells - leg_inset, 252),
+  ):
+    foot = project_from_floor_origin(origin, u, v, 0)
+    leg_top = project_from_floor_origin(origin, u, v, table_height - drop + 2)
+    draw_projected_leg(draw, leg_top, foot, PAINTED_LEG, 4.6, alpha)
+    draw.ellipse((foot[0] - 4, foot[1] - 1, foot[0] + 4, foot[1] + 3), fill=rgba(PAINTED_TRIM, 195))
+
+  # Top prism in painted sage.
+  draw_projected_prism(draw, top, drop, PAINTED_BODY)
+  # Painted finish: chalky brush streaks (very light, sparse).
+  for u_ratio in (0.2, 0.4, 0.6, 0.8):
+    a = point_in_quad(top, u_ratio, 0.12)
+    b = point_in_quad(top, u_ratio + 0.015, 0.88)
+    draw.line((a[0], a[1], b[0], b[1]), fill=rgba(PAINTED_HIGHLIGHT, 55), width=1)
+  for u in (0.3, 0.7):
+    a = point_in_quad(top, u, 0.2)
+    b = point_in_quad(top, u + 0.02, 0.8)
+    draw.line((a[0] + 1, a[1], b[0] - 1, b[1]), fill=rgba(PAINTED_BODY_DARK, 70), width=1)
+
+  # Brass-trimmed bevel.
+  bevel_outer = inset_points(top, 0.05)
+  bevel_inner = inset_points(top, 0.1)
+  draw.line(bevel_outer + [bevel_outer[0]], fill=rgba(PAINTED_TRIM, 220), width=2)
+  draw.line(bevel_inner + [bevel_inner[0]], fill=rgba(0x8C683B, 130), width=1)
+
+  # Three cream painted accent stripes across the top (the signature motif).
+  for ratio in (0.3, 0.5, 0.7):
+    a = lerp_tuple(top[3], top[0], ratio)
+    b = lerp_tuple(top[2], top[1], ratio)
+    draw.line((a[0] + 6, a[1], b[0] - 6, b[1]), fill=rgba(PAINTED_STRIPE, 165), width=2)
+
+  # Tiny floral motif near one corner — three pink dots + two green leaves
+  flx, fly = point_in_quad(top, 0.78, 0.32)
+  for dx, dy in ((0, 0), (2, -1), (-2, 1)):
+    draw.ellipse((flx + dx - 1.6, fly + dy - 1.6, flx + dx + 1.6, fly + dy + 1.6),
+                 fill=rgba(PAINTED_FLORAL, 220))
+  draw.ellipse((flx - 4, fly + 0, flx - 1, fly + 2), fill=rgba(PAINTED_FLORAL_LEAF, 200))
+  draw.ellipse((flx + 1, fly + 2, flx + 4, fly + 4), fill=rgba(PAINTED_FLORAL_LEAF, 200))
+
+  # Plate settings
+  setting_points = get_table_service_points(top, item)
+  for marker_x, marker_y, variant in setting_points:
+    draw_food_setting(draw, marker_x, marker_y, 0.66, variant)
+  set_sprite_metadata_points(image, "tableServicePx", [(x, y) for x, y, _variant in setting_points])
+  return image
+
+
 def draw_chair_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
   if item.id == "bench-seat":
     return draw_bench_sprite(item, rotation)
@@ -1015,13 +1497,124 @@ def draw_chair_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
   back_is_camera_side = back_center[1] > front_center[1]
 
   def draw_back_panel() -> None:
-    panel_color = shade(item.color, 5)
-    draw_panel_with_thickness(draw, left, right, back_h, panel_color, 0x5B4033, (4, -5))
     left_top = (left[0], left[1] - back_h)
     right_top = (right[0], right[1] - back_h)
     post_color = shade(item.color, -36)
-    rail_color = item.color
     highlight = shade(item.color, 48)
+    chair_id = item.id
+
+    # --- Wooden chair: open slat-back (no solid panel) ----------------------
+    if chair_id == "wooden-chair":
+      # Posts on both sides
+      draw.line((left[0], left[1], left_top[0], left_top[1]), fill=rgba(post_color), width=4)
+      draw.line((right[0], right[1], right_top[0], right_top[1]), fill=rgba(post_color), width=4)
+      # Top rail connecting the post tops
+      draw.line((left_top[0] + 1, left_top[1] + 4, right_top[0] - 1, right_top[1] + 4),
+                fill=rgba(item.color), width=4)
+      draw.line((left_top[0] + 2, left_top[1] + 7, right_top[0] - 2, right_top[1] + 7),
+                fill=rgba(highlight, 170), width=1)
+      # 3 vertical slats inside the frame
+      for ratio in (0.28, 0.5, 0.72):
+        top_p = lerp_tuple(left_top, right_top, ratio)
+        bottom_p = lerp_tuple(left, right, ratio)
+        draw.line((top_p[0], top_p[1] + 6, bottom_p[0], bottom_p[1] - 2),
+                  fill=rgba(post_color, 230), width=2)
+        draw.line((top_p[0] + 1, top_p[1] + 7, bottom_p[0] + 1, bottom_p[1] - 3),
+                  fill=rgba(highlight, 120), width=1)
+      return
+
+    # --- Cafe chair: Thonet-style rounded top + cross-rail -------------------
+    if chair_id == "cafe-chair":
+      # Posts curve very subtly inward at the top — render as two segments with a bend.
+      bend_l = (left_top[0] + 3, left_top[1] + 4)
+      bend_r = (right_top[0] - 3, right_top[1] + 4)
+      draw.line((left[0], left[1], bend_l[0], bend_l[1]), fill=rgba(post_color), width=4)
+      draw.line((right[0], right[1], bend_r[0], bend_r[1]), fill=rgba(post_color), width=4)
+      # Curved top arch (the Thonet signature)
+      arch_box = (
+        min(bend_l[0], bend_r[0]) - 2,
+        min(bend_l[1], bend_r[1]) - 8,
+        max(bend_l[0], bend_r[0]) + 2,
+        min(bend_l[1], bend_r[1]) + 8,
+      )
+      draw.arc(arch_box, 200, 340, fill=rgba(item.color), width=4)
+      draw.arc((arch_box[0], arch_box[1] + 1, arch_box[2], arch_box[3] + 1),
+               210, 330, fill=rgba(highlight, 175), width=2)
+      # Single horizontal cross-rail at ~55% height
+      cross_l = lerp_tuple(left_top, left, 0.5)
+      cross_r = lerp_tuple(right_top, right, 0.5)
+      draw.line((cross_l[0] + 1, cross_l[1], cross_r[0] - 1, cross_r[1]),
+                fill=rgba(item.color), width=3)
+      draw.line((cross_l[0] + 2, cross_l[1] + 2, cross_r[0] - 2, cross_r[1] + 2),
+                fill=rgba(shade(item.color, -28), 150), width=1)
+      return
+
+    # --- Padded chair: rounded soft back with tufting ------------------------
+    if chair_id == "padded-chair":
+      panel_color = shade(item.color, 10)
+      cushion_highlight = shade(item.color, 38)
+      # Posts behind the cushion (visible at sides)
+      draw.line((left[0], left[1], left_top[0], left_top[1]), fill=rgba(post_color, 200), width=3)
+      draw.line((right[0], right[1], right_top[0], right_top[1]), fill=rgba(post_color, 200), width=3)
+      # Soft rounded cushion panel
+      cushion = [
+        (left[0] - 1, left[1]),
+        (right[0] + 1, right[1]),
+        (right_top[0] + 1, right_top[1] + 6),
+        (left_top[0] - 1, left_top[1] + 6),
+      ]
+      draw_polygon(draw, cushion, panel_color, 0x5B4033, 1)
+      # Rounded top crown
+      crown_box = (
+        left_top[0] - 1,
+        left_top[1] - 4,
+        right_top[0] + 1,
+        left_top[1] + 10,
+      )
+      draw.chord(crown_box, 200, 340, fill=rgba(panel_color), outline=rgba(0x5B4033, 200), width=1)
+      # Top highlight
+      draw.arc((crown_box[0] + 2, crown_box[1] + 2, crown_box[2] - 2, crown_box[3] - 4),
+               215, 325, fill=rgba(cushion_highlight, 200), width=2)
+      # 3 tufting buttons
+      for ratio in (0.3, 0.5, 0.7):
+        bx, by = lerp_tuple(left_top, right_top, ratio)
+        bx += 0  # straight horizontal
+        by += 13
+        draw.ellipse((bx - 1.6, by - 1.6, bx + 1.6, by + 1.6),
+                     fill=rgba(shade(item.color, -34), 180))
+      return
+
+    # --- Woven chair: oval rattan back with cross-hatch weave ----------------
+    if chair_id == "woven-chair":
+      # Posts (faint, behind the oval)
+      draw.line((left[0], left[1], left_top[0], left_top[1]), fill=rgba(post_color, 175), width=3)
+      draw.line((right[0], right[1], right_top[0], right_top[1]), fill=rgba(post_color, 175), width=3)
+      # Oval back panel
+      mid_y = (left_top[1] + left[1]) / 2
+      oval_top = mid_y - back_h * 0.55
+      oval_bottom = mid_y + back_h * 0.18
+      oval_box = (left[0] - 2, oval_top, right[0] + 2, oval_bottom)
+      draw.ellipse(oval_box, fill=rgba(item.color), outline=rgba(0x5B4033, 200), width=1)
+      # Cross-hatch weave: 4 lines each direction
+      ox1, oy1, ox2, oy2 = oval_box
+      ow = ox2 - ox1
+      oh = oy2 - oy1
+      for r in (0.22, 0.4, 0.58, 0.76):
+        # Lines descending left-to-right
+        draw.line((ox1 + 2, oy1 + oh * r, ox2 - 2, oy1 + oh * (r + 0.18)),
+                  fill=rgba(shade(item.color, -28), 130), width=1)
+        # Lines descending right-to-left
+        draw.line((ox2 - 2, oy1 + oh * r, ox1 + 2, oy1 + oh * (r + 0.18)),
+                  fill=rgba(shade(item.color, 35), 110), width=1)
+      # Highlight at top of oval
+      draw.arc((ox1 + 2, oy1 + 1, ox2 - 2, oy1 + oh * 0.6),
+               210, 330, fill=rgba(shade(item.color, 56), 200), width=1)
+      return
+
+    # --- Default + folding-chair: slatted thick panel ------------------------
+    panel_color = shade(item.color, 5)
+    rail_color = item.color
+    draw_panel_with_thickness(draw, left, right, back_h, panel_color, 0x5B4033, (4, -5))
     draw.line((left[0], left[1], left_top[0], left_top[1]), fill=rgba(post_color), width=4)
     draw.line((right[0], right[1], right_top[0], right_top[1]), fill=rgba(post_color), width=4)
     draw.line((left_top[0] + 4, left_top[1] + 8, right_top[0] - 4, right_top[1] + 8), fill=rgba(highlight, 160), width=2)
@@ -1037,20 +1630,16 @@ def draw_chair_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
       top_p = lerp_tuple(left_top, right_top, ratio)
       bottom_p = lerp_tuple(low_l, low_r, ratio)
       draw.line((top_p[0], top_p[1] + 4, bottom_p[0], bottom_p[1] - 3), fill=rgba(highlight), width=2)
-    if "folding" in item.id or item.tier <= 1:
+    if "folding" in chair_id or item.tier <= 1:
       draw.line((left_top[0] + 3, left_top[1] + 10, right[0] - 2, right[1] - 7), fill=rgba(shade(item.color, -42), 130), width=2)
       draw.line((right_top[0] - 3, right_top[1] + 10, left[0] + 2, left[1] - 7), fill=rgba(shade(item.color, -42), 130), width=2)
-    if "woven" in item.id:
-      for ratio in (0.3, 0.5, 0.7):
-        a = lerp_tuple(left_top, left, ratio)
-        b = lerp_tuple(right_top, right, ratio)
-        draw.line((a[0], a[1], b[0], b[1]), fill=rgba(0xF1D69A, 125), width=1)
 
   if not back_is_camera_side:
     draw_back_panel()
 
   draw_projected_prism(draw, top, seat_drop, shade(item.color, 12))
-  if item.tier >= 4:
+  # Padded chair shows a visible cushion on top of the seat (lower-tier version of tufted).
+  if item.tier >= 4 or item.id == "padded-chair":
     cushion_top = inset_points(top, 0.16)
     draw_polygon(draw, cushion_top, shade(item.color, 22), shade(item.color, -32), 1)
   seat_w = max(24, abs(top[1][0] - top[3][0]) * 0.46)
