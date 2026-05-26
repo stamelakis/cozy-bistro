@@ -3173,32 +3173,38 @@ def draw_character_v2(role: str, action: str, facing: str, variant = 0) -> Image
 
 
 def draw_character_v3(role: str, action: str, facing: str, variant = 0) -> Image.Image:
+  """Cozy-bistro character sprite — Stardew-inspired warm style.
+
+  Goals over the previous version:
+  - Smaller head (~1/6 of total height), bigger torso/legs, longer limbs.
+  - Defined shoulder slope so the body reads as 3D, not a rectangle.
+  - Articulated arms separated from torso, visible at every facing.
+  - Per-role uniform identity: waiter vest+bowtie+collar, chef double-breasted
+    toque, errand half-apron+flat-cap, guest variety.
+  - Hair silhouette variety across the 10 variants (short / mid / bun / cap).
+  - Real walk cycle with leg lift + arm swing.
+  - Cleaner face features within the 3-pixel-eye constraint.
+
+  Canvas size, frame naming, action vocabulary, variant count, and atlas slot
+  layout are intentionally unchanged from the prior version so saves and atlas
+  consumers don't need to migrate.
+  """
   logical_w = 96
   logical_h = 136
   scale = 1.2
   image = Image.new("RGBA", (round(logical_w * scale), round(logical_h * scale)), (0, 0, 0, 0))
   draw = ImageDraw.Draw(image)
-  cx = logical_w / 2
-  base_y = 124
-  seated = action == "sit"
-  carry = action in ("carry", "serve", "clean")
-  cook = action.startswith("cook")
-  walk_step = -1 if action.endswith("-1") else 1 if action.endswith("-2") else 0
-  cook_step = -1 if action == "cook-1" else 1 if action == "cook-2" else 0
-  side = facing in ("left", "right")
-  back = facing == "up"
-  direction = -1 if facing == "left" else 1
 
-  def sp(value: float) -> float:
+  def sp(value):
     return value * scale
 
-  def box(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float, float, float]:
+  def box(x1, y1, x2, y2):
     return (sp(x1), sp(y1), sp(x2), sp(y2))
 
-  def pts(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+  def pts(points):
     return [(sp(x), sp(y)) for x, y in points]
 
-  def rounded(x1: float, y1: float, x2: float, y2: float, radius: float, fill: int, outline: int | None = None, width = 1, alpha = 255) -> None:
+  def rounded(x1, y1, x2, y2, radius, fill, outline = None, width = 1, alpha = 255):
     draw.rounded_rectangle(
       box(x1, y1, x2, y2),
       radius=max(1, round(radius * scale)),
@@ -3207,7 +3213,7 @@ def draw_character_v3(role: str, action: str, facing: str, variant = 0) -> Image
       width=max(1, round(width * scale)),
     )
 
-  def ellipse(x1: float, y1: float, x2: float, y2: float, fill: int, outline: int | None = None, width = 1, alpha = 255) -> None:
+  def ellipse(x1, y1, x2, y2, fill, outline = None, width = 1, alpha = 255):
     draw.ellipse(
       box(x1, y1, x2, y2),
       fill=rgba(fill, alpha),
@@ -3215,311 +3221,501 @@ def draw_character_v3(role: str, action: str, facing: str, variant = 0) -> Image
       width=max(1, round(width * scale)),
     )
 
-  def poly(points: list[tuple[float, float]], fill: int, outline: int | None = None, width = 1, alpha = 255) -> None:
+  def poly(points, fill, outline = None, width = 1, alpha = 255):
     draw.polygon(pts(points), fill=rgba(fill, alpha))
     if outline is not None:
-      draw.line(pts(points + [points[0]]), fill=rgba(outline, min(235, alpha)), width=max(1, round(width * scale)), joint="curve")
+      draw.line(
+        pts(points + [points[0]]),
+        fill=rgba(outline, min(235, alpha)),
+        width=max(1, round(width * scale)),
+        joint="curve",
+      )
 
-  def line(points: list[tuple[float, float]], fill: int, width = 1, alpha = 255) -> None:
+  def line(points, fill, width = 1, alpha = 255):
     draw.line(pts(points), fill=rgba(fill, alpha), width=max(1, round(width * scale)), joint="curve")
 
-  def tapered_limb(
-    start: tuple[float, float],
-    end: tuple[float, float],
-    start_width: float,
-    end_width: float,
-    color: int,
-    outline: int = 0x2F2926,
-    alpha = 255,
-  ) -> None:
+  def arc(x1, y1, x2, y2, start, end, fill, width = 1, alpha = 255):
+    draw.arc(box(x1, y1, x2, y2), start, end, fill=rgba(fill, alpha), width=max(1, round(width * scale)))
+
+  def tapered_limb(start, end, start_w, end_w, color, outline = 0x2F2926, alpha = 255):
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = max(0.001, math.sqrt(dx * dx + dy * dy))
     nx = -dy / length
     ny = dx / length
-    points = [
-      (start[0] + nx * start_width / 2, start[1] + ny * start_width / 2),
-      (start[0] - nx * start_width / 2, start[1] - ny * start_width / 2),
-      (end[0] - nx * end_width / 2, end[1] - ny * end_width / 2),
-      (end[0] + nx * end_width / 2, end[1] + ny * end_width / 2),
-    ]
-    poly(points, color, outline, 0.8, alpha)
-    highlight = shade(color, 24)
-    line(
-      [
-        (start[0] + nx * start_width * 0.18, start[1] + ny * start_width * 0.18),
-        (end[0] + nx * end_width * 0.12, end[1] + ny * end_width * 0.12),
-      ],
-      highlight,
-      0.7,
-      125,
-    )
+    poly([
+      (start[0] + nx * start_w / 2, start[1] + ny * start_w / 2),
+      (start[0] - nx * start_w / 2, start[1] - ny * start_w / 2),
+      (end[0] - nx * end_w / 2, end[1] - ny * end_w / 2),
+      (end[0] + nx * end_w / 2, end[1] + ny * end_w / 2),
+    ], color, outline, 0.8, alpha)
+    line([
+      (start[0] + nx * start_w * 0.18, start[1] + ny * start_w * 0.18),
+      (end[0] + nx * end_w * 0.12, end[1] + ny * end_w * 0.12),
+    ], shade(color, 26), 0.7, 120)
 
-  def shoe(x: float, y: float, facing_dir: int, front = True) -> None:
-    fill = 0x211D1B if front else 0x332A25
-    if facing_dir == 0:
-      rounded(x - 7, y - 2.8, x + 8, y + 4.2, 3.5, fill, 0x1A1513, 0.8)
-      ellipse(x - 5, y - 3.4, x + 8, y + 0.8, shade(fill, 16), None, 1, 120)
+  def shoe(x, y, dir_, near):
+    fill = 0x1F1714 if near else 0x2A2220
+    rounded(x - 5.5, y - 2.2, x + 6, y + 3.4, 3, fill, 0x0F0A08, 0.8)
+    if dir_ != 0:
+      ellipse(x + dir_ * 0.5, y - 2.6, x + dir_ * 8, y + 1.6, shade(fill, 22), None, 1, 140)
     else:
-      rounded(x - 6, y - 2.5, x + 8, y + 4.2, 3.2, fill, 0x1A1513, 0.8)
-      ellipse(x + facing_dir * 1, y - 3, x + facing_dir * 10, y + 3.4, shade(fill, 14), None, 1, 130)
+      ellipse(x - 4, y - 2.6, x + 5, y - 0.4, shade(fill, 22), None, 1, 130)
 
-  skin_palette = COZY_SKINS
-  hair_palette = COZY_HAIR
-  guest_shirts = COZY_GUEST_SHIRTS
-  waiter_shirts = COZY_WAITER_SHIRTS
-  chef_shirts = COZY_CHEF_SHIRTS
-  errand_shirts = COZY_ERRAND_SHIRTS
-  role_shirts = {"guest": guest_shirts, "waiter": waiter_shirts, "chef": chef_shirts, "errand": errand_shirts}
-  role_pants = {
-    "guest": COZY_GUEST_PANTS,
-    "waiter": COZY_WAITER_PANTS,
-    "chef": COZY_CHEF_PANTS,
-    "errand": COZY_ERRAND_PANTS,
-  }
-  tie_palette = (0xB12C40, 0xB76B35, 0x2E5A73, 0x7F3A5C, 0x94792D, 0x942E36, 0x465F95, 0x765032, 0x35756D, 0x894875)
+  # === Setup ===
+  cx = logical_w / 2
+  side = facing in ("left", "right")
+  back = facing == "up"
+  front = facing == "down"
+  direction = -1 if facing == "left" else 1
+  seated = action == "sit"
+  carry = action in ("carry", "serve", "clean")
+  cook = action.startswith("cook")
+  walk_step = -1 if action == "walk-1" else 1 if action == "walk-2" else 0
+  cook_step = -1 if action == "cook-1" else 1 if action == "cook-2" else 0
+
+  # === Palette ===
   variant = variant % CHARACTER_VARIANT_COUNT
-  skin = skin_palette[variant]
-  hair = 0xFFFFFF if role == "chef" else hair_palette[variant]
-  shirt = role_shirts[role][variant]
-  pants = role_pants[role][variant]
-  tie = tie_palette[variant]
+  skin = COZY_SKINS[variant]
+  hair_palette = COZY_HAIR
+
+  if role == "chef":
+    hair = hair_palette[variant]
+    shirt = 0xFFF8EC
+    shirt_shadow = 0xE6E2D2
+    pants = COZY_CHEF_PANTS[variant]
+    accent = 0x2F5C78
+  elif role == "waiter":
+    hair = hair_palette[variant]
+    shirt = 0x29333E
+    shirt_shadow = 0x161D24
+    pants = COZY_WAITER_PANTS[variant]
+    accent = 0xB12C40
+  elif role == "errand":
+    hair = hair_palette[variant]
+    shirt = COZY_ERRAND_SHIRTS[variant]
+    shirt_shadow = shade(shirt, -32)
+    pants = COZY_ERRAND_PANTS[variant]
+    accent = 0xD7B56A
+  else:  # guest
+    hair = hair_palette[variant]
+    shirt = COZY_GUEST_SHIRTS[variant]
+    shirt_shadow = shade(shirt, -32)
+    pants = COZY_GUEST_PANTS[variant]
+    accent = (0xB12C40, 0xB76B35, 0x2E5A73, 0x7F3A5C, 0x94792D, 0x942E36, 0x465F95, 0x765032, 0x35756D, 0x894875)[variant]
+
+  pants_dark = shade(pants, -22)
+  pants_light = shade(pants, 10)
+
+  # Per-variant cosmetic variety
+  hair_styles = (0, 1, 0, 2, 1, 3, 0, 1, 2, 3)  # 0=short, 1=mid swept, 2=bun, 3=flat-cap
+  hair_style = hair_styles[variant]
   glasses = variant in (2, 6, 8)
-  moustache = variant == 5 and role != "chef"
-  eye = 0x211916 if variant not in (3, 7) else 0x315D77
-  lip = (0x9A554D, 0xA66250, 0x884D44, 0xA95F73, 0x814E3D, 0x9E5D52, 0x74463C, 0xAD6D5B, 0x96574C, 0x80463B)[variant]
+  mustache = variant == 5 and role != "chef"
+  eye = 0x1F1410 if variant not in (3, 7) else 0x315D77
+  lip = (0x8C4A40, 0x9E5D49, 0x7A463A, 0xA56178, 0x744433, 0x965450, 0x68403A, 0xA86A57, 0x88514A, 0x753F36)[variant]
+  brow = shade(hair, -22)
 
-  body_y = 61 if seated else 48
-  body_h = 30 if seated else 39
-  hip_y = body_y + body_h - (5 if seated else 3)
-  head_y = body_y - (14 if seated else 17)
-  body_x = cx + (direction * 4 if side else 0)
-  body_w = 28 if seated else 31
-  if side:
-    body_w = 25 if seated else 27
+  # === Proportions (smaller head, longer legs) ===
+  base_y = 124
+  # Head center
+  head_y = 30 if seated else 26
+  head_radius_x = 11
+  head_radius_y = 12
+  neck_y = head_y + head_radius_y - 1
+  # Body
+  body_y = neck_y + 2
+  body_h = 28 if seated else 36
+  body_w_front = 24 if not side else 19
+  body_w_side = 18
+  body_w = body_w_side if side else body_w_front
+  body_x = cx + (direction * 2 if side else 0)
+  head_x = cx + (direction * 3 if side else 0)
+  shoulder_y = body_y + 3
+  hip_y = body_y + body_h - 3
 
-  draw_neutral_shadow(draw, sp(cx + (direction * 3 if side else 2)), sp(base_y + 1), sp(39 if seated else 43), sp(9 if seated else 11))
+  # === 1. Contact shadow ===
+  draw_neutral_shadow(
+    draw,
+    sp(cx + (direction * 2 if side else 1)),
+    sp(base_y + 1),
+    sp(35 if seated else 38),
+    sp(8 if seated else 10),
+  )
 
-  # Legs are real tapered shapes with knees and shoes, not thin robot lines.
+  # === 2. Legs ===
   if seated:
-    knee_y = 105
-    foot_y = 123
+    knee_y = 102
+    foot_y = 122
     if side:
-      near_knee = (cx + direction * 15, knee_y - 1)
-      far_knee = (cx + direction * 8, knee_y + 1)
+      near_knee = (cx + direction * 13, knee_y - 1)
+      far_knee = (cx + direction * 6, knee_y + 1)
       near_foot = (near_knee[0] + direction * 2, foot_y)
       far_foot = (far_knee[0] + direction * 1, foot_y + 1)
-      tapered_limb((body_x + direction * 4, hip_y), far_knee, 8, 7, shade(pants, -21))
-      tapered_limb(far_knee, far_foot, 7, 5.4, shade(pants, -10))
-      tapered_limb((body_x + direction * 8, hip_y - 1), near_knee, 9, 7.5, pants)
-      tapered_limb(near_knee, near_foot, 7.5, 5.6, shade(pants, 9))
+      tapered_limb((body_x + direction * 3, hip_y), far_knee, 7, 6, pants_dark)
+      tapered_limb(far_knee, far_foot, 6, 5, shade(pants_dark, 8))
+      tapered_limb((body_x + direction * 7, hip_y - 1), near_knee, 8, 6.5, pants)
+      tapered_limb(near_knee, near_foot, 6.5, 5.2, pants_light)
       shoe(far_foot[0], far_foot[1], direction, False)
       shoe(near_foot[0], near_foot[1], direction, True)
     else:
-      spread = 6 if facing == "up" else 7
+      spread = 6
       left_knee = (cx - spread, knee_y)
       right_knee = (cx + spread, knee_y + 1)
       left_foot = (cx - spread - 1, foot_y)
       right_foot = (cx + spread + 1, foot_y)
-      tapered_limb((cx - 5, hip_y), left_knee, 8, 6.8, shade(pants, -18))
-      tapered_limb(left_knee, left_foot, 6.8, 5.2, shade(pants, -8))
-      tapered_limb((cx + 5, hip_y), right_knee, 8, 6.8, pants)
-      tapered_limb(right_knee, right_foot, 6.8, 5.2, shade(pants, 8))
+      tapered_limb((cx - 5, hip_y), left_knee, 7, 6, pants_dark)
+      tapered_limb(left_knee, left_foot, 6, 5, shade(pants, -8))
+      tapered_limb((cx + 5, hip_y), right_knee, 7, 6, pants)
+      tapered_limb(right_knee, right_foot, 6, 5, pants_light)
       shoe(left_foot[0], left_foot[1], 0, False)
       shoe(right_foot[0], right_foot[1], 0, True)
   else:
     stride = walk_step
+    lift = 3 * abs(stride)  # vertical lift on the moving foot
     if side:
-      near_foot = (cx + direction * (12 + stride * 5), base_y - 2)
-      far_foot = (cx - direction * (9 - stride * 5), base_y - 3)
-      tapered_limb((body_x + direction * 3, hip_y), far_foot, 8, 5.5, shade(pants, -22))
-      tapered_limb((body_x - direction * 3, hip_y), near_foot, 9, 5.8, pants)
+      # Side-facing walk: near (front-of-screen) foot vs far (behind) foot.
+      # `stride` shifts the near foot forward, lift raises whichever just stepped.
+      near_x = cx + direction * (8 + stride * 6)
+      far_x = cx - direction * (5 - stride * 6)
+      near_foot = (near_x, base_y - 2 - (lift if stride > 0 else 0))
+      far_foot = (far_x, base_y - 3 - (lift if stride < 0 else 0))
+      tapered_limb((body_x + direction * 2, hip_y), far_foot, 7, 5, pants_dark)
+      tapered_limb((body_x - direction * 2, hip_y), near_foot, 8, 5.5, pants)
       shoe(far_foot[0], far_foot[1], -direction, False)
       shoe(near_foot[0], near_foot[1], direction, True)
     else:
       depth_stride = stride * (1 if facing == "down" else -1)
-      left_foot = (cx - 7, base_y - 3 - depth_stride * 5)
-      right_foot = (cx + 7, base_y - 2 + depth_stride * 5)
-      tapered_limb((cx - 5, hip_y), left_foot, 8, 5.5, shade(pants, -18))
-      tapered_limb((cx + 5, hip_y), right_foot, 9, 5.8, pants)
+      left_foot = (cx - 6, base_y - 3 - (lift if depth_stride < 0 else 0))
+      right_foot = (cx + 6, base_y - 2 - (lift if depth_stride > 0 else 0))
+      tapered_limb((cx - 4, hip_y), left_foot, 7, 5.2, pants_dark)
+      tapered_limb((cx + 4, hip_y), right_foot, 8, 5.5, pants)
       shoe(left_foot[0], left_foot[1], 0, depth_stride > 0)
       shoe(right_foot[0], right_foot[1], 0, depth_stride <= 0)
 
-  torso_front = shirt
-  torso_side = shade(shirt, -32)
-  if role == "chef":
-    torso_front = 0xFFF8EC
-    torso_side = 0xE4E1D7
-  elif role == "waiter":
-    torso_front = 0x2F5C78
-    torso_side = 0x20394D
-
-  shoulder_y = body_y + 7
-  far_arm_end = (body_x - body_w / 2 - (4 if not side else direction * 7), body_y + (24 if seated else 32))
-  near_arm_end = (body_x + body_w / 2 + (4 if not side else direction * 7), body_y + (23 if seated else 32))
+  # === 3. Far arm (drawn before torso so it tucks behind) ===
+  # Arm swing on walk: opposite phase from stride (left arm forward when right leg forward)
+  arm_swing = -walk_step * 3
   if side:
-    far_arm_end = (body_x - direction * 9, body_y + (24 if seated else 31))
-    near_arm_end = (body_x + direction * 12, body_y + (23 if seated else 31))
+    far_arm_end = (body_x - direction * 9, body_y + 28 - arm_swing)
+  else:
+    far_arm_end = (body_x - body_w / 2 - 4, body_y + 28 - arm_swing)
 
   if cook:
-    far_arm_end = (body_x - 13 + cook_step * 2, body_y + 22)
-    near_arm_end = (body_x + 13 - cook_step * 2, body_y + 21)
-  tapered_limb((body_x - body_w / 2 + 2, shoulder_y), far_arm_end, 5.5, 4.5, shade(skin, -12), 0x5D4032)
+    far_arm_end = (body_x - 12 + cook_step * 2, body_y + 20)
 
-  # Torso has a front face and shaded side face so the character reads 2.5D.
-  poly(
-    [
-      (body_x - body_w / 2, body_y + 2),
-      (body_x + body_w / 2 - 3, body_y),
-      (body_x + body_w / 2 + 6, body_y + body_h - 5),
-      (body_x - body_w / 2 + 5, body_y + body_h),
-    ],
-    torso_side,
-    0x3F3029,
-    0.9,
-  )
-  rounded(body_x - body_w / 2, body_y, body_x + body_w / 2, body_y + body_h, 9, torso_front, 0x3F3029, 1.1)
-  poly(
-    [
-      (body_x - body_w / 2 + 3, body_y + 4),
-      (body_x + body_w / 2 - 7, body_y + 2),
-      (body_x + body_w / 2 - 4, body_y + body_h - 5),
-      (body_x - body_w / 2 + 6, body_y + body_h - 3),
-    ],
-    shade(torso_front, 15),
-    None,
-    1,
-    180,
-  )
+  # Far shoulder origin
+  far_shoulder = (body_x - body_w / 2 + 2, shoulder_y)
+  tapered_limb(far_shoulder, far_arm_end, 5, 4.2, shirt_shadow, 0x3F3029)
+  # Far hand (small skin oval at the end)
+  ellipse(far_arm_end[0] - 2.5, far_arm_end[1] - 2.5, far_arm_end[0] + 2.5, far_arm_end[1] + 2.5,
+          skin, 0x3F3029, 0.7)
 
+  # === 4. Torso (back face + front face + highlight) ===
+  # Side face — darker slab catching the bottom-right shadow
+  poly([
+    (body_x - body_w / 2, body_y + 3),
+    (body_x + body_w / 2 - 2, body_y + 1),
+    (body_x + body_w / 2 + 4, body_y + body_h - 4),
+    (body_x - body_w / 2 + 4, body_y + body_h),
+  ], shirt_shadow, 0x3F3029, 0.9)
+  # Front face — main shirt
+  rounded(body_x - body_w / 2, body_y, body_x + body_w / 2, body_y + body_h, 7, shirt, 0x3F3029, 1.1)
+  # Shoulder slope — diagonal highlight from neck to shoulder
+  line([(body_x - body_w / 2 + 4, body_y + 2), (body_x - body_w / 2 + 1, body_y + 8)],
+       shade(shirt, 35), 1.2, 175)
+  line([(body_x + body_w / 2 - 4, body_y + 2), (body_x + body_w / 2 - 1, body_y + 8)],
+       shade(shirt, 35), 1.2, 175)
+  # Top-left highlight along the torso front
+  poly([
+    (body_x - body_w / 2 + 3, body_y + 4),
+    (body_x + body_w / 2 - 6, body_y + 2),
+    (body_x + body_w / 2 - 4, body_y + body_h - 6),
+    (body_x - body_w / 2 + 5, body_y + body_h - 4),
+  ], shade(shirt, 18), None, 1, 130)
+
+  # === 5. Per-role uniform overlays ===
   if role == "waiter":
+    # Dark vest is already the shirt color. Add white collar, bow tie, apron line at waist.
     if not back:
-      poly([(body_x - 8, body_y + 5), (body_x + 8, body_y + 5), (body_x, body_y + 17)], 0xF4E6CE)
-      poly([(body_x - 4, body_y + 13), (body_x + 4, body_y + 13), (body_x + 1, body_y + min(body_h - 2, 31)), (body_x - 2, body_y + min(body_h - 2, 31))], tie, shade(tie, -25), 0.7)
-    rounded(body_x - 11, body_y + body_h - 8, body_x + 11, body_y + body_h - 4, 2, 0xF4E6CE, None, 1, 145)
+      # White shirt collar peeking out from under the vest
+      poly([
+        (body_x - 6, body_y + 4),
+        (body_x + 6, body_y + 4),
+        (body_x + 3, body_y + 9),
+        (body_x - 3, body_y + 9),
+      ], 0xF6EDDC, 0xB2A18A, 0.7)
+      poly([
+        (body_x - 3, body_y + 9),
+        (body_x + 3, body_y + 9),
+        (body_x, body_y + 14),
+      ], 0xF6EDDC, 0xB2A18A, 0.7)
+      # Bow tie at the throat
+      poly([(body_x - 5, body_y + 8), (body_x + 5, body_y + 8),
+            (body_x + 3, body_y + 11), (body_x - 3, body_y + 11)], accent, shade(accent, -28), 0.7)
+      ellipse(body_x - 1.4, body_y + 8.6, body_x + 1.4, body_y + 10.4, shade(accent, -18))
+    # Vest V-opening lapel hint
+    if not back:
+      line([(body_x - 6, body_y + 13), (body_x, body_y + 22), (body_x + 6, body_y + 13)],
+           shade(shirt, -38), 1, 200)
+    # White apron at the waist — narrow horizontal band
+    rounded(body_x - body_w / 2 + 3, body_y + body_h - 9, body_x + body_w / 2 - 3, body_y + body_h - 3,
+            2, 0xF6EDDC, 0xB2A18A, 0.7)
   elif role == "chef":
-    rounded(body_x - 10, body_y + 8, body_x + 10, body_y + body_h - 1, 4, 0xFFFFFF, 0xD8D8D8, 0.8)
-    line([(body_x, body_y + 9), (body_x, body_y + body_h - 4)], 0xD8D8D8, 0.9)
-    for button_y in (body_y + 14, body_y + 21, body_y + 28):
-      ellipse(body_x - 3, button_y - 1.2, body_x - 0.6, button_y + 1.2, 0xCAD0CE)
-      ellipse(body_x + 3, button_y - 1.2, body_x + 5.4, button_y + 1.2, 0xCAD0CE)
+    # Double-breasted jacket: two button columns on the front
+    if not back:
+      for button_y in (body_y + 12, body_y + 19, body_y + 26):
+        ellipse(body_x - 4, button_y - 1.5, body_x - 1.4, button_y + 1.5, 0xCFC7B6, 0x6E6557, 0.6)
+        ellipse(body_x + 1.4, button_y - 1.5, body_x + 4, button_y + 1.5, 0xCFC7B6, 0x6E6557, 0.6)
+      # Neckerchief — colored triangle at the throat
+      poly([(body_x - 7, body_y + 7), (body_x + 7, body_y + 7),
+            (body_x, body_y + 15)], accent, shade(accent, -28), 0.7)
+      # Knot dot
+      ellipse(body_x - 1.4, body_y + 7.6, body_x + 1.4, body_y + 9.6, shade(accent, -25))
   elif role == "errand":
-    line([(body_x - 12, body_y + 9), (body_x + 10, body_y + 25)], 0xC9B06F, 3, 150)
-    rounded(body_x + 7, body_y + 21, body_x + 20, body_y + 34, 3, 0xB58B54, 0x5B4033, 0.8)
-  elif variant in (1, 4, 7, 9):
-    line([(body_x - 10, body_y + 11), (body_x + 8, body_y + 27)], shade(shirt, -45), 1.4, 130)
+    # Half-apron from the waist down, with shoulder strap visible on the front
+    if not back:
+      # Strap diagonal across the chest
+      line([(body_x - 8, body_y + 7), (body_x + 7, body_y + 18)], accent, 2, 220)
+      # Half-apron rectangle on the lower torso
+      poly([
+        (body_x - body_w / 2 + 1, body_y + body_h - 15),
+        (body_x + body_w / 2 - 1, body_y + body_h - 15),
+        (body_x + body_w / 2, body_y + body_h),
+        (body_x - body_w / 2, body_y + body_h),
+      ], 0xE7D9B5, 0x8B7656, 0.7)
+      # Apron pocket
+      rounded(body_x - 5, body_y + body_h - 8, body_x + 5, body_y + body_h - 3, 1.5,
+              shade(0xE7D9B5, -18), 0x8B7656, 0.6)
   elif role == "guest":
-    collar = shade(shirt, 42)
-    line([(body_x - 7, body_y + 8), (body_x, body_y + 14), (body_x + 7, body_y + 8)], collar, 1.4, 150)
-
-  if role == "guest":
+    # Guest variety: collar/scarf/cardigan trim based on variant
     if variant in (0, 3, 6):
-      line([(body_x - 11, body_y + body_h - 9), (body_x + 11, body_y + body_h - 8)], shade(shirt, -44), 1.6, 130)
-      rounded(body_x - 3, body_y + body_h - 10, body_x + 3, body_y + body_h - 5, 1.5, 0xD7B46A, None, 1, 150)
-    if variant in (2, 8):
-      rounded(body_x - body_w / 2 + 2, body_y + 3, body_x + body_w / 2 - 2, body_y + 13, 4, shade(shirt, 26), None, 1, 115)
-    if variant in (5, 9):
-      line([(body_x - body_w / 2 + 4, body_y + 5), (body_x + body_w / 2 - 5, body_y + body_h - 6)], shade(shirt, -34), 1.2, 105)
+      # Cardigan with center buttons
+      line([(body_x, body_y + 6), (body_x, body_y + body_h - 5)], shade(shirt, -38), 1, 175)
+      for button_y in (body_y + 14, body_y + 20, body_y + 26):
+        ellipse(body_x - 1.4, button_y - 1.2, body_x + 1.4, button_y + 1.2, accent)
+    elif variant in (1, 4, 7):
+      # Scarf wrapped at the neck
+      if not back:
+        rounded(body_x - 9, body_y + 4, body_x + 9, body_y + 10, 3, accent, shade(accent, -28), 0.6)
+        line([(body_x + 3, body_y + 8), (body_x + 6, body_y + 18)], accent, 2, 200)
+    elif variant in (2, 5, 8):
+      # V-neck sweater with collar
+      if not back:
+        poly([(body_x - 7, body_y + 5), (body_x, body_y + 14), (body_x + 7, body_y + 5)],
+             shade(shirt, 30), shade(shirt, -28), 0.7)
+    elif variant in (9,):
+      # Striped shirt
+      if not back:
+        for sy in (body_y + 13, body_y + 19, body_y + 25):
+          line([(body_x - body_w / 2 + 3, sy), (body_x + body_w / 2 - 3, sy)],
+               shade(shirt, -30), 1, 140)
 
-  tapered_limb((body_x + body_w / 2 - 2, shoulder_y), near_arm_end, 5.8, 4.5, skin, 0x5D4032)
-  if carry:
-    plate_x = near_arm_end[0] + (direction * 10 if side else 12)
-    plate_y = near_arm_end[1] - 5
-    ellipse(plate_x - 11, plate_y - 5.5, plate_x + 12, plate_y + 7, 0xFFF9EC, 0x8B7764, 1)
-    if action == "clean":
-      ellipse(plate_x - 5, plate_y - 1.8, plate_x + 2, plate_y + 3.5, 0xB9A884, None, 1)
-      line([(plate_x + 4, plate_y + 3), (plate_x + 10, plate_y + 6)], 0x7D6B56, 1.1)
-    else:
-      ellipse(plate_x - 4, plate_y - 2.5, plate_x + 7, plate_y + 5.4, 0x6DA05E)
-      ellipse(plate_x + 3, plate_y - 4.5, plate_x + 10, plate_y + 2.4, 0xE7B95A)
-
-  # Head and hair: hair is built around the scalp only, then the face is drawn
-  # cleanly on top so features do not disappear under bangs.
-  head_x = cx + (direction * 5 if side else 0)
-  if seated and side:
-    head_x += direction * 1.5
-  neck_y = body_y - 2
-  rounded(head_x - 5, neck_y - 5, head_x + 5, neck_y + 5, 4, shade(skin, -9), None, 1)
-
-  if role != "chef":
-    if variant in (1, 7):
-      ellipse(head_x - 20, head_y - 5, head_x - 11, head_y + 7, hair, shade(hair, -18), 0.8)
-      ellipse(head_x + 11, head_y - 5, head_x + 20, head_y + 7, hair, shade(hair, -18), 0.8)
-    if variant == 3:
-      ellipse(head_x - 18, head_y - 18, head_x + 8, head_y + 5, hair)
-      ellipse(head_x + 6, head_y - 16, head_x + 21, head_y - 2, shade(hair, -8))
-    elif variant == 4:
-      ellipse(head_x - 17, head_y - 18, head_x + 17, head_y + 7, hair)
-    elif variant == 8:
-      rounded(head_x - 17, head_y - 17, head_x + 17, head_y + 1, 9, hair)
-    else:
-      ellipse(head_x - 17, head_y - 18, head_x + 17, head_y + 8, hair)
-
+  # === 6. Near arm + hand + carry ===
   if side:
-    face = [
-      (head_x - direction * 10, head_y - 12),
-      (head_x + direction * 11, head_y - 13),
-      (head_x + direction * 15, head_y - 2),
-      (head_x + direction * 11, head_y + 12),
-      (head_x - direction * 4, head_y + 15),
-      (head_x - direction * 12, head_y + 6),
+    near_arm_end = (body_x + direction * 11, body_y + 28 + arm_swing)
+  else:
+    near_arm_end = (body_x + body_w / 2 + 4, body_y + 28 + arm_swing)
+
+  if cook:
+    near_arm_end = (body_x + 12 - cook_step * 2, body_y + 19)
+  if carry:
+    # Hand held forward to support the plate
+    if side:
+      near_arm_end = (body_x + direction * 13, body_y + 19)
+    else:
+      near_arm_end = (body_x + body_w / 2 + 6, body_y + 18)
+
+  near_shoulder = (body_x + body_w / 2 - 2, shoulder_y)
+  tapered_limb(near_shoulder, near_arm_end, 5.2, 4.3, shirt, 0x3F3029)
+  # Near hand
+  ellipse(near_arm_end[0] - 2.7, near_arm_end[1] - 2.7, near_arm_end[0] + 2.7, near_arm_end[1] + 2.7,
+          skin, 0x3F3029, 0.7)
+
+  if carry:
+    plate_x = near_arm_end[0] + (direction * 7 if side else 6)
+    plate_y = near_arm_end[1] - 4
+    # Plate
+    ellipse(plate_x - 11, plate_y - 5, plate_x + 12, plate_y + 6, 0xFFF9EC, 0x8B7764, 1)
+    # Inner rim shadow
+    ellipse(plate_x - 9, plate_y - 3, plate_x + 10, plate_y + 4, 0xF7EAD0, None, 1, 200)
+    if action == "clean":
+      # Rag + soap
+      ellipse(plate_x - 5, plate_y - 1.8, plate_x + 3, plate_y + 3.2, 0xB9A884, 0x7D6B56, 0.8)
+      line([(plate_x + 4, plate_y + 3), (plate_x + 10, plate_y + 5)], 0x7D6B56, 1.1)
+    else:
+      # Two food items on the plate
+      ellipse(plate_x - 4, plate_y - 2.5, plate_x + 4, plate_y + 4, 0x6DA05E, 0x416542, 0.7)
+      ellipse(plate_x + 2, plate_y - 3.5, plate_x + 9, plate_y + 2.5, 0xE7B95A, 0xA47636, 0.7)
+
+  # === 7. Neck ===
+  rounded(head_x - 4, neck_y - 4, head_x + 4, neck_y + 2, 3, shade(skin, -14), None, 1)
+
+  # === 8. Hair (back layer for sides/up) ===
+  # The back of the head needs hair visible even when facing up.
+  if role != "chef":
+    if hair_style == 0:  # short
+      ellipse(head_x - head_radius_x - 1, head_y - head_radius_y - 1,
+              head_x + head_radius_x + 1, head_y + 2, hair, shade(hair, -22), 0.8)
+    elif hair_style == 1:  # mid swept
+      ellipse(head_x - head_radius_x - 2, head_y - head_radius_y - 2,
+              head_x + head_radius_x + 2, head_y + 4, hair, shade(hair, -22), 0.8)
+    elif hair_style == 2:  # bun (visible nub behind head)
+      ellipse(head_x - head_radius_x, head_y - head_radius_y - 1,
+              head_x + head_radius_x, head_y + 1, hair, shade(hair, -22), 0.8)
+      # Bun behind/above
+      ellipse(head_x - 5, head_y - head_radius_y - 6, head_x + 5, head_y - head_radius_y + 2,
+              hair, shade(hair, -22), 0.7)
+    elif hair_style == 3:  # flat cap (covers most of the hair)
+      # Just a sliver of hair shows under the cap brim
+      ellipse(head_x - head_radius_x + 1, head_y - 2,
+              head_x + head_radius_x - 1, head_y + 3, hair, shade(hair, -22), 0.6)
+
+  # === 9. Head shape ===
+  if side:
+    face_outline = [
+      (head_x - direction * 9, head_y - 10),
+      (head_x + direction * 10, head_y - 11),
+      (head_x + direction * 12, head_y - 1),
+      (head_x + direction * 9, head_y + 10),
+      (head_x - direction * 3, head_y + 12),
+      (head_x - direction * 10, head_y + 4),
     ]
-    poly(face, skin, 0x3F3029, 1)
+    poly(face_outline, skin, 0x3F3029, 1)
+    # Subtle cheek shadow
+    ellipse(head_x + direction * 4, head_y - 8, head_x + direction * 12, head_y + 8,
+            shade(skin, -16), None, 1, 70)
+    # Ear (small bump on the back side)
+    ellipse(head_x - direction * 9, head_y - 1, head_x - direction * 6, head_y + 4,
+            shade(skin, -12), 0x8E5F43, 0.5, 200)
   else:
-    rounded(head_x - 14, head_y - 14, head_x + 14, head_y + 14, 11, skin, 0x3F3029, 1)
-    poly([(head_x - 10, head_y + 4), (head_x + 10, head_y + 4), (head_x + 6, head_y + 15), (head_x - 6, head_y + 15)], skin, 0x3F3029, 0.8)
-  ellipse(head_x + 4, head_y - 10, head_x + 15, head_y + 11, shade(skin, -16), None, 1, 72)
-  ellipse(head_x - 9, head_y - 9, head_x - 2, head_y - 4, 0xFFFFFF, None, 1, 55)
-  ellipse(head_x - 15, head_y - 1, head_x - 11, head_y + 5, shade(skin, -8), 0x8E5F43, 0.6, 190)
-  ellipse(head_x + 11, head_y - 1, head_x + 15, head_y + 5, shade(skin, -14), 0x8E5F43, 0.6, 190)
+    rounded(head_x - head_radius_x, head_y - head_radius_y, head_x + head_radius_x, head_y + head_radius_y,
+            9, skin, 0x3F3029, 1)
+    # Chin shadow
+    poly([(head_x - 8, head_y + 3), (head_x + 8, head_y + 3),
+          (head_x + 5, head_y + 12), (head_x - 5, head_y + 12)], skin, 0x3F3029, 0.8)
+    # Cheek shadows (top-left lit)
+    ellipse(head_x + 3, head_y - 7, head_x + head_radius_x, head_y + 9,
+            shade(skin, -16), None, 1, 70)
+    # Ears poking out the sides
+    ellipse(head_x - head_radius_x - 1, head_y - 1, head_x - head_radius_x + 2, head_y + 5,
+            shade(skin, -8), 0x8E5F43, 0.5, 180)
+    ellipse(head_x + head_radius_x - 2, head_y - 1, head_x + head_radius_x + 1, head_y + 5,
+            shade(skin, -14), 0x8E5F43, 0.5, 180)
+    # Highlight on forehead (top-left)
+    ellipse(head_x - 7, head_y - 8, head_x - 2, head_y - 4, 0xFFFFFF, None, 1, 55)
 
+  # === 10. Hair front + chef toque ===
   if role == "chef":
-    for ox, oy, radius in ((-10, -14, 7.5), (0, -20, 8.8), (10, -14, 7.5), (0, -12, 8)):
-      ellipse(head_x + ox - radius, head_y + oy - radius, head_x + ox + radius, head_y + oy + radius, 0xFFFFFF, 0xD8D8D8, 0.7)
-    rounded(head_x - 13, head_y - 15, head_x + 13, head_y - 5, 4, 0xFFFFFF, 0xD8D8D8, 0.8)
+    # Chef's toque — taller mushroom-shaped puff
+    # Three puff lobes on top + a band around the head
+    for ox, oy, rad in ((-7, -14, 6), (0, -19, 7), (7, -14, 6), (0, -11, 6.5)):
+      ellipse(head_x + ox - rad, head_y + oy - rad, head_x + ox + rad, head_y + oy + rad,
+              0xFFFFFF, 0xD2CCBE, 0.6)
+    # Headband at the brim
+    rounded(head_x - head_radius_x - 1, head_y - head_radius_y - 1,
+            head_x + head_radius_x + 1, head_y - head_radius_y + 3, 2,
+            0xFFFFFF, 0xC9C3B5, 0.7)
+  elif hair_style == 3:
+    # Flat cap — brim + crown
+    rounded(head_x - head_radius_x - 1, head_y - head_radius_y, head_x + head_radius_x + 1,
+            head_y - head_radius_y + 6, 3, accent, shade(accent, -32), 0.8)
+    # Brim extension (sticks out forward)
+    if not back:
+      poly([(head_x - head_radius_x - 1, head_y - head_radius_y + 3),
+            (head_x + head_radius_x + 1, head_y - head_radius_y + 3),
+            (head_x + head_radius_x + 3, head_y - head_radius_y + 6),
+            (head_x - head_radius_x - 3, head_y - head_radius_y + 6)],
+           shade(accent, -22), shade(accent, -38), 0.6)
   elif not back:
-    rounded(head_x - 14, head_y - 15, head_x + 14, head_y - 7, 4, shade(hair, -8), None, 1, 230)
-    if variant in (0, 2, 5, 6):
-      line([(head_x - 12, head_y - 6), (head_x + 10, head_y - 10)], shade(hair, 22), 2, 185)
-    elif variant == 4:
-      line([(head_x - 12, head_y - 4), (head_x + 9, head_y - 12)], shade(hair, 20), 2)
+    # Hair top + bangs based on style
+    if hair_style == 0:  # short — small crown of hair
+      rounded(head_x - head_radius_x, head_y - head_radius_y - 1, head_x + head_radius_x,
+              head_y - head_radius_y + 5, 3, shade(hair, -8), shade(hair, -28), 0.8)
+      # A few bang strands
+      line([(head_x - 7, head_y - 6), (head_x - 3, head_y - 9)], shade(hair, 18), 1.5, 190)
+      line([(head_x - 1, head_y - 8), (head_x + 5, head_y - 5)], shade(hair, 18), 1.5, 190)
+    elif hair_style == 1:  # mid swept — bangs across the forehead
+      rounded(head_x - head_radius_x, head_y - head_radius_y - 1, head_x + head_radius_x,
+              head_y - head_radius_y + 6, 4, shade(hair, -8), shade(hair, -28), 0.8)
+      # Swept bang going across
+      line([(head_x - 9, head_y - 4), (head_x + 8, head_y - 9)], shade(hair, 16), 2, 200)
+      line([(head_x - 8, head_y - 6), (head_x + 4, head_y - 9)], shade(hair, 26), 1.4, 170)
+    elif hair_style == 2:  # bun — sleek pulled back
+      rounded(head_x - head_radius_x, head_y - head_radius_y - 1, head_x + head_radius_x,
+              head_y - head_radius_y + 4, 4, shade(hair, -8), shade(hair, -28), 0.8)
+      # Center part line
+      line([(head_x, head_y - 9), (head_x, head_y - 5)], shade(hair, -20), 1, 180)
   else:
-    rounded(head_x - 14, head_y - 14, head_x + 14, head_y + 8, 10, shade(hair, -10), None, 1, 245)
+    # Back-facing — show full hair from behind
+    if role != "chef" and hair_style != 3:
+      rounded(head_x - head_radius_x, head_y - head_radius_y, head_x + head_radius_x,
+              head_y + 6, 9, shade(hair, -10), shade(hair, -28), 0.7)
+      if hair_style == 2:
+        # Bun visible from behind
+        ellipse(head_x - 5, head_y - 14, head_x + 5, head_y - 4, hair, shade(hair, -22), 0.7)
 
+  # === 11. Face features (only if facing forward or side) ===
   if not back:
     if side:
-      eye_x = head_x + direction * 6.7
-      ellipse(eye_x - 3, head_y - 3.8, eye_x + 3.2, head_y + 2.2, 0xFFF6E8)
-      ellipse(eye_x - 1.2, head_y - 2.3, eye_x + 2.2, head_y + 1.6, eye)
-      ellipse(eye_x, head_y - 1.8, eye_x + 0.9, head_y - 0.9, 0xFFFFFF, None, 1, 170)
+      # Single visible eye + brow + nose + mouth on the camera-side
+      eye_x = head_x + direction * 5.5
+      eye_y = head_y - 2.5
+      # White
+      ellipse(eye_x - 2.5, eye_y - 1.8, eye_x + 2.8, eye_y + 1.8, 0xFFF6E8, 0x6E5040, 0.5)
+      # Iris
+      ellipse(eye_x - 1.2, eye_y - 1.2, eye_x + 2.0, eye_y + 1.5, eye)
+      # Pupil highlight
+      ellipse(eye_x, eye_y - 0.6, eye_x + 0.8, eye_y + 0.2, 0xFFFFFF, None, 1, 200)
+      # Eyebrow above
+      line([(eye_x - 3, eye_y - 3.5), (eye_x + 2.5, eye_y - 3.8)], brow, 1.3, 200)
       if glasses:
-        draw.ellipse(box(eye_x - 4.5, head_y - 5.2, eye_x + 4.5, head_y + 3.8), outline=rgba(0x2B2B2B), width=max(1, round(1.2 * scale)))
-      poly([(head_x + direction * 9, head_y + 1), (head_x + direction * 13, head_y + 3.2), (head_x + direction * 8.4, head_y + 4.5)], shade(skin, -20), 0xA26A52, 0.45)
-      if moustache:
-        line([(head_x + direction * 3, head_y + 6), (head_x + direction * 12, head_y + 6.5)], shade(hair, -12), 1.6)
-      line([(head_x + direction * 6, head_y + 8), (head_x + direction * 11, head_y + 8.4)], lip, 1.2)
+        arc(eye_x - 4, eye_y - 3, eye_x + 4, eye_y + 3, 0, 360, 0x2B2B2B, 1.1)
+      # Nose
+      poly([(head_x + direction * 7, head_y + 1),
+            (head_x + direction * 10, head_y + 3),
+            (head_x + direction * 7, head_y + 5)],
+           shade(skin, -22), 0xA26A52, 0.4)
+      if mustache:
+        line([(head_x + direction * 3, head_y + 6), (head_x + direction * 11, head_y + 6.5)],
+             shade(hair, -12), 1.6, 230)
+      # Mouth
+      line([(head_x + direction * 5, head_y + 8), (head_x + direction * 10, head_y + 8.5)],
+           lip, 1.2, 220)
     else:
-      eye_y = head_y - 2.8 + (variant % 2) * 0.4
-      for ex in (-6.5, 6.5):
-        ellipse(head_x + ex - 3.2, eye_y - 1.8, head_x + ex + 3.2, eye_y + 3.5, 0xFFF6E8)
-        ellipse(head_x + ex - 1.3, eye_y - 0.8, head_x + ex + 1.8, eye_y + 2.6, eye)
-        ellipse(head_x + ex - 0.2, eye_y - 0.3, head_x + ex + 0.8, eye_y + 0.7, 0xFFFFFF, None, 1, 160)
+      # Two eyes, brows, nose, mouth, cheeks
+      eye_y = head_y - 1.5
+      for ex, lit in ((-5, True), (5, False)):
+        # White
+        ellipse(head_x + ex - 2.5, eye_y - 1.8, head_x + ex + 2.5, eye_y + 1.8, 0xFFF6E8, 0x6E5040, 0.5)
+        # Iris
+        ellipse(head_x + ex - 1.4, eye_y - 1.2, head_x + ex + 1.6, eye_y + 1.5, eye)
+        # Pupil highlight (top-left of each eye)
+        ellipse(head_x + ex - 0.2, eye_y - 0.7, head_x + ex + 0.6, eye_y + 0.1, 0xFFFFFF, None, 1, 200)
+      # Eyebrows
+      line([(head_x - 8, eye_y - 3.5), (head_x - 2, eye_y - 4.3)], brow, 1.3, 220)
+      line([(head_x + 2, eye_y - 4.3), (head_x + 8, eye_y - 3.5)], brow, 1.3, 220)
       if glasses:
-        draw.ellipse(box(head_x - 10.5, eye_y - 3, head_x - 1, eye_y + 6), outline=rgba(0x2B2B2B), width=max(1, round(1.1 * scale)))
-        draw.ellipse(box(head_x + 1, eye_y - 3, head_x + 10.5, eye_y + 6), outline=rgba(0x2B2B2B), width=max(1, round(1.1 * scale)))
-        line([(head_x - 1, eye_y + 2), (head_x + 1, eye_y + 2)], 0x2B2B2B, 0.8)
-      line([(head_x - 9, eye_y - 3.1), (head_x - 2, eye_y - 4.2)], shade(hair, -24), 0.9, 165)
-      line([(head_x + 2, eye_y - 4.2), (head_x + 9, eye_y - 3.1)], shade(hair, -24), 0.9, 165)
-      poly([(head_x - 1.4, head_y + 1), (head_x + 2.2, head_y + 4.8), (head_x - 1.8, head_y + 5.5)], shade(skin, -18), 0xA26A52, 0.45)
-      if moustache:
-        draw.arc(box(head_x - 8, head_y + 3, head_x + 1, head_y + 9), 200, 350, fill=rgba(shade(hair, -12)), width=max(1, round(1.5 * scale)))
-        draw.arc(box(head_x - 1, head_y + 3, head_x + 8, head_y + 9), 190, 340, fill=rgba(shade(hair, -12)), width=max(1, round(1.5 * scale)))
-      draw.arc(box(head_x - 5, head_y + 3.5, head_x + 5, head_y + 10), 15, 165, fill=rgba(lip), width=max(1, round(1.1 * scale)))
-      ellipse(head_x - 11, head_y + 2, head_x - 7, head_y + 6, 0xEAA48D, None, 1, 85)
-      ellipse(head_x + 7, head_y + 2, head_x + 11, head_y + 6, 0xEAA48D, None, 1, 70)
+        arc(head_x - 8.5, eye_y - 3, head_x - 1, eye_y + 3.5, 0, 360, 0x2B2B2B, 1)
+        arc(head_x + 1, eye_y - 3, head_x + 8.5, eye_y + 3.5, 0, 360, 0x2B2B2B, 1)
+        line([(head_x - 1, eye_y + 0.5), (head_x + 1, eye_y + 0.5)], 0x2B2B2B, 0.8)
+      # Nose — small triangle just below eye line
+      poly([(head_x - 1.2, head_y + 1), (head_x + 1.8, head_y + 4.4), (head_x - 1.5, head_y + 5)],
+           shade(skin, -18), 0xA26A52, 0.4)
+      if mustache:
+        arc(head_x - 7, head_y + 3, head_x + 1, head_y + 9, 200, 350, shade(hair, -12), 1.5)
+        arc(head_x - 1, head_y + 3, head_x + 7, head_y + 9, 190, 340, shade(hair, -12), 1.5)
+      # Mouth — small smile arc; role/variant adds subtle variation
+      mouth_w = 4 if role == "chef" else 5
+      mouth_curve_start = 15 if role == "guest" else 25  # less smile for staff = more focused
+      mouth_curve_end = 165 if role == "guest" else 155
+      arc(head_x - mouth_w, head_y + 4, head_x + mouth_w, head_y + 10,
+          mouth_curve_start, mouth_curve_end, lip, 1.2, 230)
+      # Cheek blush
+      ellipse(head_x - 9, head_y + 2, head_x - 6, head_y + 5, 0xEAA48D, None, 1, 90)
+      ellipse(head_x + 6, head_y + 2, head_x + 9, head_y + 5, 0xEAA48D, None, 1, 75)
 
   return image
-
 
 def make_furniture_atlas() -> None:
   packer = AtlasPacker("furniture.png")
