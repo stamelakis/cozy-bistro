@@ -1964,6 +1964,9 @@ def draw_counter_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
   is_host = "host" in item.id
   is_espresso = "espresso" in item.id
   is_prep = "prep" in item.id
+  is_service = item.id == "service-counter"
+  is_wooden = item.id == "wooden-counter"
+  is_marble = item.id == "marble-counter"
 
   for u in (0.16, 0.31, 0.46, 0.61, 0.76, 0.91):
     a = point_in_quad(front_face, u, 0.12)
@@ -2221,6 +2224,198 @@ def draw_counter_sprite(item: FurnitureItem, rotation: int) -> Image.Image:
     for offset, color in ((19, 0x6EA66B), (31, 0xC25F45), (41, 0xE0BE72)):
       draw.ellipse((cx + offset - 6, cy - 5, cx + offset + 6, cy + 7), fill=rgba(color), outline=rgba(0x416542), width=1)
     draw.line((cx - 33, cy + 6, cx + 14, cy + 11), fill=rgba(0x8B6038), width=2)
+    return image
+
+  if is_service:
+    # Service counter: three plates being plated for waiters to pick up,
+    # a chrome call bell on one end, an order ticket clipped to a rail
+    # behind, and a small garnish bowl.
+    rail_a = point_in_quad(top_overhang, 0.1, 0.18)
+    rail_b = point_in_quad(top_overhang, 0.9, 0.18)
+    draw.line((rail_a[0], rail_a[1], rail_b[0], rail_b[1]),
+              fill=rgba(0xC9D2D7), width=3)
+    # Order ticket clipped to the rail
+    ticket = [
+      point_in_quad(top_overhang, 0.34, 0.13),
+      point_in_quad(top_overhang, 0.5, 0.16),
+      point_in_quad(top_overhang, 0.48, 0.32),
+      point_in_quad(top_overhang, 0.32, 0.29),
+    ]
+    draw_polygon(draw, ticket, 0xFFF8E8, 0xB99F7C, 1)
+    for v in (0.36, 0.5, 0.64):
+      a = point_in_quad(ticket, 0.16, v)
+      b = point_in_quad(ticket, 0.82, v)
+      draw.line((a[0], a[1], b[0], b[1]), fill=rgba(0xC7B799), width=1)
+    # Clip dot on the rail
+    clip = point_in_quad(top_overhang, 0.42, 0.15)
+    draw.ellipse((clip[0] - 1.5, clip[1] - 1.5, clip[0] + 1.5, clip[1] + 1.5),
+                 fill=rgba(0x6A767B))
+
+    # Three plates being prepared
+    plate_positions = ((cx - 26, cy - 2), (cx - 8, cy + 1), (cx + 12, cy + 4))
+    for px, py in plate_positions:
+      # Plate
+      draw.ellipse((px - 9, py - 5, px + 9, py + 4),
+                   fill=rgba(0xFFF5E3), outline=rgba(0xB99F7C), width=1)
+      # Inner rim shadow
+      draw.ellipse((px - 7, py - 3, px + 7, py + 3),
+                   outline=rgba(0xC8AA7A, 165), width=1)
+      # Food blob (warm protein color)
+      draw.ellipse((px - 5, py - 2, px + 4, py + 2),
+                   fill=rgba(0xC9826C, 220), outline=rgba(0x7A3C2D, 200), width=1)
+      # Green garnish sprig
+      draw.line((px + 2, py - 2, px + 5, py - 5),
+                fill=rgba(0x6DA05E, 220), width=1)
+      draw.line((px + 3, py - 1, px + 6, py - 4),
+                fill=rgba(0x416542, 200), width=1)
+
+    # Chrome call bell on the right end
+    bell_cx = cx + 36
+    bell_cy = cy + 2
+    # Dome
+    draw.ellipse((bell_cx - 7, bell_cy - 8, bell_cx + 7, bell_cy + 1),
+                 fill=rgba(0xC9D2D7), outline=rgba(0x6A767B), width=1)
+    draw.ellipse((bell_cx - 7, bell_cy - 1, bell_cx + 7, bell_cy + 4),
+                 fill=rgba(0x8A969D), outline=rgba(0x4D585F), width=1)
+    # Top button
+    draw.ellipse((bell_cx - 2, bell_cy - 11, bell_cx + 2, bell_cy - 7),
+                 fill=rgba(0xC9D2D7), outline=rgba(0x4D585F), width=1)
+    # Bell base ring
+    draw.ellipse((bell_cx - 9, bell_cy + 2, bell_cx + 9, bell_cy + 6),
+                 fill=rgba(0x4D585F))
+    return image
+
+  if is_wooden:
+    # Butcher-block counter (tier 1) — thick wood top with plank seams,
+    # knife block, pepper grinder, small cutting board with herbs.
+    # Plank seams on the top overhang
+    for ratio in (0.32, 0.62):
+      a = lerp_tuple(top_overhang[0], top_overhang[3], ratio)
+      b = lerp_tuple(top_overhang[1], top_overhang[2], ratio)
+      draw.line((a[0] + 2, a[1], b[0] - 2, b[1]),
+                fill=rgba(shade(item.color, -45), 200), width=2)
+      ah = lerp_tuple(top_overhang[0], top_overhang[3], ratio - 0.03)
+      bh = lerp_tuple(top_overhang[1], top_overhang[2], ratio - 0.03)
+      draw.line((ah[0] + 3, ah[1], bh[0] - 3, bh[1]),
+                fill=rgba(shade(item.color, 32), 110), width=1)
+
+    # Cutting board with herbs (left side)
+    board = [
+      (cx - 32, cy - 5),
+      (cx - 6, cy - 1),
+      (cx - 12, cy + 10),
+      (cx - 38, cy + 6),
+    ]
+    draw_polygon(draw, board, 0xE5B774, 0x8B6038, 1)
+    # Knife cut groove
+    draw.line((cx - 28, cy + 1, cx - 14, cy + 3), fill=rgba(0xB48047, 150), width=1)
+    # Herbs (small green dots scattered)
+    for dx, dy in ((-22, 1), (-18, 4), (-25, 4), (-15, 2)):
+      draw.ellipse((cx + dx - 2, cy + dy - 1, cx + dx + 2, cy + dy + 1),
+                   fill=rgba(0x6DA05E, 220))
+
+    # Knife block (right of center) — dark wood block with 3 knife handles
+    block_x = cx + 6
+    block_y = cy
+    block = [
+      (block_x - 6, block_y - 6),
+      (block_x + 10, block_y - 3),
+      (block_x + 7, block_y + 8),
+      (block_x - 9, block_y + 5),
+    ]
+    draw_polygon(draw, block, 0x3A2A1F, 0x1F140E, 1)
+    # Knife handles sticking up
+    for offset, handle_color in ((-3, 0x6B3D2E), (2, 0x8C5530), (7, 0x6B3D2E)):
+      draw.rectangle((block_x + offset - 1, block_y - 12, block_x + offset + 1, block_y - 4),
+                     fill=rgba(handle_color), outline=rgba(0x1F140E, 200))
+
+    # Pepper grinder (cylinder, far right)
+    grinder_x = cx + 28
+    grinder_y = cy - 2
+    # Body
+    draw.ellipse((grinder_x - 4, grinder_y, grinder_x + 4, grinder_y + 4),
+                 fill=rgba(0x5B4033))
+    draw.rectangle((grinder_x - 4, grinder_y - 10, grinder_x + 4, grinder_y + 2),
+                   fill=rgba(0x6E4D3D), outline=rgba(0x2C1E15, 200))
+    draw.ellipse((grinder_x - 4, grinder_y - 11, grinder_x + 4, grinder_y - 8),
+                 fill=rgba(0xC9D2D7), outline=rgba(0x4D585F))
+    # Wood grain ring on body
+    draw.line((grinder_x - 3, grinder_y - 4, grinder_x + 3, grinder_y - 4),
+              fill=rgba(0x3A2A1F, 180), width=1)
+
+    # Small jar with herbs sprig (far right behind grinder)
+    jar_x = cx + 38
+    jar_y = cy + 2
+    draw.rectangle((jar_x - 3, jar_y - 4, jar_x + 3, jar_y + 4),
+                   fill=rgba(0xE8EFF2, 200), outline=rgba(0x6E8790))
+    draw.line((jar_x, jar_y - 4, jar_x - 2, jar_y - 9),
+              fill=rgba(0x6DA05E), width=1)
+    draw.line((jar_x + 1, jar_y - 4, jar_x + 3, jar_y - 8),
+              fill=rgba(0x6DA05E), width=1)
+    return image
+
+  if is_marble:
+    # Marble counter (tier 4 premium) — visible veining on the top, polished
+    # gloss highlight, small premium items: olive oil cruet, herb sprig in
+    # ceramic dish, small white plate.
+    # Marble veining — faint curved lines on the top overhang
+    for vein_path, alpha in (
+      (((0.12, 0.28), (0.34, 0.42), (0.58, 0.36), (0.86, 0.5)), 90),
+      (((0.18, 0.62), (0.42, 0.7), (0.68, 0.62), (0.92, 0.78)), 70),
+      (((0.05, 0.45), (0.24, 0.5), (0.4, 0.46)), 60),
+    ):
+      pts = [point_in_quad(top_overhang, u, v) for u, v in vein_path]
+      for i in range(len(pts) - 1):
+        draw.line((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]),
+                  fill=rgba(0x8A8275, alpha), width=1)
+    # Polished gloss highlight — a sweeping arc near the top of the slab
+    gloss_a = point_in_quad(top_overhang, 0.16, 0.18)
+    gloss_b = point_in_quad(top_overhang, 0.72, 0.22)
+    draw.line((gloss_a[0], gloss_a[1] + 1, gloss_b[0], gloss_b[1] + 1),
+              fill=rgba(0xFFFFFF, 175), width=2)
+
+    # Brass trim line along the top edge of the front face (premium marker)
+    draw.line((front_face[0][0] + 4, front_face[0][1] + 1,
+               front_face[1][0] - 4, front_face[1][1] + 1),
+              fill=rgba(0xC79658, 220), width=2)
+
+    # Olive oil cruet (center-left): tall glass bottle with brass pour spout
+    cruet_x = cx - 22
+    cruet_y = cy - 3
+    # Bottle body (greenish-tinted glass)
+    draw.rectangle((cruet_x - 3, cruet_y - 4, cruet_x + 3, cruet_y + 6),
+                   fill=rgba(0x9DB89A, 230), outline=rgba(0x4D6850))
+    # Neck
+    draw.rectangle((cruet_x - 1, cruet_y - 9, cruet_x + 1, cruet_y - 4),
+                   fill=rgba(0x9DB89A, 230), outline=rgba(0x4D6850))
+    # Brass pour spout
+    draw.line((cruet_x, cruet_y - 9, cruet_x + 4, cruet_y - 12),
+              fill=rgba(0xC79658), width=2)
+    # Oil level highlight
+    draw.line((cruet_x - 2, cruet_y, cruet_x + 2, cruet_y),
+              fill=rgba(0xF5DD8C, 220), width=1)
+
+    # Small ceramic dish with herb sprig (center)
+    draw.ellipse((cx - 4, cy + 1, cx + 8, cy + 8),
+                 fill=rgba(0xF7F1E4), outline=rgba(0x9B7650))
+    # Herb sprig poking out
+    draw.line((cx + 2, cy + 3, cx - 2, cy - 5),
+              fill=rgba(0x6DA05E, 230), width=1)
+    draw.line((cx + 2, cy + 3, cx + 5, cy - 4),
+              fill=rgba(0x6DA05E, 230), width=1)
+    draw.line((cx + 2, cy + 3, cx, cy - 7),
+              fill=rgba(0x416542, 200), width=1)
+
+    # Small white plate on the right with garnish
+    plate_x = cx + 22
+    plate_y = cy + 2
+    draw.ellipse((plate_x - 10, plate_y - 4, plate_x + 10, plate_y + 5),
+                 fill=rgba(0xFFFFFF), outline=rgba(0x9B8A6F), width=1)
+    draw.ellipse((plate_x - 7, plate_y - 2, plate_x + 7, plate_y + 3),
+                 outline=rgba(0xC4B690, 175), width=1)
+    # Tiny food dot
+    draw.ellipse((plate_x - 2, plate_y - 1, plate_x + 2, plate_y + 1),
+                 fill=rgba(0xC9826C, 200))
     return image
 
   shelf_a = point_in_quad(top_overhang, 0.13, 0.24)
