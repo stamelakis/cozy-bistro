@@ -47,6 +47,9 @@ export const INGREDIENT_UNIT_COST = 2;
 const STOCK_TARGET = 8;
 /** Auto-shop runs this often (seconds). */
 const AUTOSHOP_INTERVAL = 4;
+/** Max units bought per ingredient per auto-shop tick. Higher = faster
+ * recovery from a depleted pantry but bigger spending spikes. */
+const AUTOSHOP_BATCH_PER_INGREDIENT = 3;
 /** Each recipe-upgrade level multiplies sellPrice by 1 + this. */
 const UPGRADE_PRICE_BONUS_PER_LEVEL = 0.30;
 /** Each recipe-upgrade level adds this much to satisfactionEffect. */
@@ -178,11 +181,24 @@ export class Game {
       this.autoShopClock = 0;
       const pantry = this.cooking.getPantryRaw();
       let purchased = false;
-      for (const stock of pantry) {
-        if (stock.quantity >= STOCK_TARGET) continue;
-        if (!this.economy.spendMoney(INGREDIENT_UNIT_COST, "ingredients")) break;
-        stock.quantity += 1;
-        purchased = true;
+      // Smart batched order: each ingredient buys up to BATCH_PER_INGREDIENT
+      // units toward STOCK_TARGET in a single tick. Sort by which is most
+      // depleted first so a near-empty critical ingredient gets serviced
+      // before a barely-low one.
+      const needs = pantry
+        .map((stock, idx) => ({ stock, deficit: STOCK_TARGET - stock.quantity, idx }))
+        .filter((n) => n.deficit > 0)
+        .sort((a, b) => b.deficit - a.deficit);
+      for (const need of needs) {
+        const units = Math.min(AUTOSHOP_BATCH_PER_INGREDIENT, need.deficit);
+        let bought = 0;
+        for (let i = 0; i < units; i += 1) {
+          if (!this.economy.spendMoney(INGREDIENT_UNIT_COST, "ingredients")) break;
+          need.stock.quantity += 1;
+          bought += 1;
+        }
+        if (bought > 0) purchased = true;
+        if (bought < units) break; // out of money — stop scanning
       }
       if (purchased && this.onAutoShop) this.onAutoShop();
     }
