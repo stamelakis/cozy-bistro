@@ -143,7 +143,7 @@ export function getCharacterSpriteFrame(
     // which has been hard to derive analytically because the atlas-resampling
     // step and the chair sprite's anchor convention introduce factors my
     // math kept missing.
-    yOffset: seated ? 42 : 6,
+    yOffset: seated ? 10 : 6,
     // Seated AI art is drawn full-height (head to feet on floor) so at the
     // standing scale the character towers over the chair. Shrink seated
     // sprites so the seated silhouette is roughly chair-sized.
