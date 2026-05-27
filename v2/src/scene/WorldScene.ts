@@ -127,5 +127,41 @@ export class WorldScene {
         console.error(`Failed to load ${def.id} (${def.modelPath})`, err);
       }
     }));
+
+    await this.populateCharacters();
+  }
+
+  /** Drop one of every TripoSR-generated character into the scene so we can
+   * eyeball quality + proportions. Real placement (waiters at counter,
+   * guests at tables, etc.) happens in the gameplay-port phase. */
+  private async populateCharacters(): Promise<void> {
+    const characters: { id: string; x: number; z: number }[] = [
+      { id: "chef",     x: -1.5, z: -3 },
+      { id: "waiter",   x:  1.5, z: -3 },
+      { id: "errand",   x:  3.5, z: -3 },
+
+      { id: "guest-v0", x: -4,   z:  3 },
+      { id: "guest-v1", x: -2.5, z:  3 },
+      { id: "guest-v2", x: -1,   z:  3 },
+      { id: "guest-v3", x:  0.5, z:  3 },
+      { id: "guest-v4", x:  2,   z:  3 },
+      { id: "guest-v5", x:  3.5, z:  3 },
+      { id: "guest-v6", x:  5,   z:  3 },
+    ];
+
+    // TripoSR output is normalised — characters come out roughly 1 unit tall.
+    // Scale up so they're human-height (1.7m) relative to the chairs/tables.
+    const TRIPO_SCALE = 1.7;
+
+    await Promise.all(characters.map(async (c) => {
+      try {
+        const model = await this.loader.load(`assets/characters/${c.id}.glb`);
+        model.scale.setScalar(TRIPO_SCALE);
+        model.position.set(c.x, 0, c.z);
+        this.threeScene.add(model);
+      } catch (err) {
+        console.warn(`Character ${c.id} unavailable (will fall back to placeholder later):`, err);
+      }
+    }));
   }
 }
