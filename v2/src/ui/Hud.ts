@@ -78,6 +78,7 @@ export class Hud {
     this.addRow("served", "Served today: —");
     this.addRow("lost", "Lost today: —");
     this.addRow("daytime", "Day ends in: —");
+    this.addRow("dishes", "Dirty dishes: —");
     this.addSpeedControls();
     this.addOpenCloseButton();
     this.addLedgerButton();
@@ -317,6 +318,9 @@ export class Hud {
     const mins = Math.floor(remaining / 60);
     const secs = String(remaining % 60).padStart(2, "0");
     this.fields.daytime.textContent = `Day ends in: ${mins}:${secs}`;
+    const dishes = this.game.getDirtyDishCount();
+    this.fields.dishes.textContent = `Dirty dishes: ${dishes}`;
+    this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#fff5dc";
     const open = this.spawner.isOpen();
     this.fields.openclose.textContent = open ? "OPEN — click to close" : "CLOSED — click to open";
     (this.fields.openclose as HTMLButtonElement).style.background = open

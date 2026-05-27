@@ -96,6 +96,7 @@ export class SaveSystem {
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
       themeId: this.game.getCurrentTheme().id,
+      dirtyDishCount: this.game.getDirtyDishCount(),
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };

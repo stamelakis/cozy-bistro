@@ -537,9 +537,16 @@ export class GuestSpawner {
   private finalizeVisit(g: ActiveGuest): void {
     this.game.customers.recordServed(1);
     const avgSat = g.order.length > 0 ? g.totalSatisfaction / g.order.length : 4;
-    const base = clamp(2 + avgSat / 2, 1, 5);
+    let base = clamp(2 + avgSat / 2, 1, 5);
+    // Penalty for a visibly dirty restaurant — drops the base rating by
+    // 1 star so even an otherwise-good meal can drift to 3 stars.
+    if (this.game.isDishPileOverwhelming()) {
+      base = Math.max(1, base - 1);
+    }
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
+    // Each course they ate becomes a dirty dish in the wash queue.
+    this.game.addDirtyDish(g.orderIndex);
     // Food critics swing the rating average harder. Record their rating
     // three times — same direction, triple weight on overall reputation.
     const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;

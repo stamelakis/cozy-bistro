@@ -17,6 +17,11 @@ const MAX_LUXURY_TIER: LuxuryTier = 5;
 const EXPANSION_BASE_COST = 500;
 const EXPANSION_GROWTH = 3;
 
+/** Seconds between automatic dish-wash ticks (one dish processed per tick). */
+const DISH_WASH_INTERVAL = 3;
+/** Above this pile, guests visibly notice and rate the restaurant lower. */
+const DIRTY_PILE_PENALTY_THRESHOLD = 8;
+
 /** Snapshot of a day's results, captured the instant the day ends and
  * before any daily counters are reset. */
 export interface DayEndSummary {
@@ -73,6 +78,11 @@ export class Game {
   private boostRemaining = 0;
   /** Currently applied interior theme id. */
   private themeId: string = RESTAURANT_THEMES[0].id;
+  /** Pile of dirty plates waiting to be washed. Each guest that finishes
+   * a meal leaves one. Auto-decremented at DISH_WASH_INTERVAL. */
+  private dirtyDishCount = 0;
+  /** Accumulator for the auto-wash tick. */
+  private dishWashClock = 0;
   /** Optional callback fired when the theme changes — Engine wires
    * this to WorldScene.setTheme so the world recolors. */
   onThemeChanged?: (theme: RestaurantTheme) => void;
@@ -178,6 +188,16 @@ export class Game {
     if (this.boostRemaining > 0) {
       this.boostRemaining = Math.max(0, this.boostRemaining - dt);
     }
+    // Wash dirty dishes one at a time at a steady interval.
+    if (this.dirtyDishCount > 0) {
+      this.dishWashClock += dt;
+      if (this.dishWashClock >= DISH_WASH_INTERVAL) {
+        this.dishWashClock = 0;
+        this.dirtyDishCount -= 1;
+      }
+    } else {
+      this.dishWashClock = 0;
+    }
     // Achievement predicates only check once per second internally.
     this.achievements.update(dt, this);
   }
@@ -206,6 +226,9 @@ export class Game {
     }
     if (typeof save.themeId === "string") {
       this.themeId = save.themeId;
+    }
+    if (typeof save.dirtyDishCount === "number") {
+      this.dirtyDishCount = Math.max(0, save.dirtyDishCount);
     }
   }
 
@@ -261,6 +284,22 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  // === Dirty-dish pile ===
+
+  getDirtyDishCount(): number { return this.dirtyDishCount; }
+
+  /** Called by GuestSpawner when a guest finishes their meal and leaves —
+   * each plate they ate gets queued for washing. */
+  addDirtyDish(count = 1): void {
+    this.dirtyDishCount += count;
+  }
+
+  /** True when the pile is large enough that newly-rolled guest ratings
+   * should be penalized for a noticeably dirty restaurant. */
+  isDishPileOverwhelming(): boolean {
+    return this.dirtyDishCount > DIRTY_PILE_PENALTY_THRESHOLD;
   }
 
   // === Interior themes (wall + floor color presets) ===
