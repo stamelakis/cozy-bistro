@@ -2095,23 +2095,29 @@ export class GameScene extends Phaser.Scene {
   }
 
   private frameRestaurantMap(): void {
-    const bounds = this.getIsoBounds(this.getVisibleExpansionCells());
+    // Include the rotated street/sidewalk area in the bounds we frame so the
+    // camera leaves room for pedestrians at any view rotation. Without this
+    // we use room-only bounds, and after 90/180 rotation the logical-south
+    // edge (which holds the street) lands outside the framed viewport.
+    const cellPoints = this.getVisibleExpansionCells().flatMap((cell) => this.grid.getCellDiamond(cell));
+    const streetEdgePoints = this.getStreetEdgeSamplePoints();
+    const allPoints = cellPoints.concat(streetEdgePoints);
+    const bounds = this.getPointBounds(allPoints);
     const fitPaddingX = 220;
-    const fitPaddingTop = 120;
-    const fitPaddingBottom = 260;
+    const fitPaddingY = 190;
     const worldWidth = bounds.maxX - bounds.minX;
     const worldHeight = (bounds.maxY - bounds.minY) * restaurantCameraYScale;
     const zoom = Phaser.Math.Clamp(
       Math.min(
         mapViewport.width / Math.max(1, worldWidth + fitPaddingX),
-        mapViewport.height / Math.max(1, worldHeight + fitPaddingTop + fitPaddingBottom),
+        mapViewport.height / Math.max(1, worldHeight + fitPaddingY * 2),
       ),
       restaurantZoomMin,
       0.62,
     );
     const worldCenter = new Phaser.Math.Vector2(
       (bounds.minX + bounds.maxX) / 2,
-      (bounds.minY - fitPaddingTop + bounds.maxY + fitPaddingBottom) / 2,
+      (bounds.minY + bounds.maxY) / 2,
     );
     const viewCenter = new Phaser.Math.Vector2(mapViewport.x + mapViewport.width / 2, mapViewport.y + mapViewport.height / 2);
 
@@ -2124,6 +2130,10 @@ export class GameScene extends Phaser.Scene {
 
   private getIsoBounds(cells: GridPosition[]): { minX: number; minY: number; maxX: number; maxY: number } {
     const points = cells.flatMap((cell) => this.grid.getCellDiamond(cell));
+    return this.getPointBounds(points);
+  }
+
+  private getPointBounds(points: Phaser.Math.Vector2[]): { minX: number; minY: number; maxX: number; maxY: number } {
     if (points.length === 0) {
       return { minX: 0, minY: 0, maxX: this.grid.tileSize, maxY: this.grid.tileHeight };
     }
@@ -2134,6 +2144,49 @@ export class GameScene extends Phaser.Scene {
       maxX: Math.max(...points.map((point) => point.x)),
       maxY: Math.max(...points.map((point) => point.y)),
     };
+  }
+
+  private getStreetEdgeSamplePoints(): Phaser.Math.Vector2[] {
+    // Returns sample points covering the entire street + pedestrian sidewalk
+    // strip on whichever side the logical-south boundary maps to under the
+    // current view rotation. Used by the framing math so the camera leaves
+    // room for the street and any pedestrians walking along it, regardless of
+    // view rotation. Pedestrians spawn at extended route ends 120px past the
+    // boundary endpoints, so we also include those extended positions.
+    const bounds = this.getUnlockedExpansionBounds();
+    const frontRun: BoundaryRun = {
+      side: "south",
+      fixed: bounds.maxY,
+      start: bounds.minX - 3,
+      end: bounds.maxX + 2,
+    };
+    const { a, b } = this.getVisualBoundaryRunEndpoints(frontRun, roomShellOutsetPixels + 8);
+    const outward = this.getBoundaryOutwardOffset(frontRun, 1);
+    if (outward.lengthSq() === 0) {
+      return [];
+    }
+    const along = b.clone().subtract(a);
+    if (along.lengthSq() === 0) {
+      return [];
+    }
+
+    // Match drawExteriorStreetScene's roadOuter (206) plus a margin so the
+    // outer edge of the road has breathing room around it.
+    const roadOuter = 206;
+    const margin = 40;
+    const outOffset = outward.clone().scale(roadOuter + margin);
+    const alongUnit = along.clone().normalize();
+    const routeExtension = alongUnit.clone().scale(140);
+
+    // Sample the four "outer corners" of the road + sidewalk strip: each
+    // boundary endpoint pushed outward, extended along the street, in both
+    // directions. Covers the full visible span of pedestrian motion.
+    return [
+      a.clone().add(outOffset).subtract(routeExtension),
+      a.clone().subtract(routeExtension),
+      b.clone().add(outOffset).add(routeExtension),
+      b.clone().add(routeExtension),
+    ];
   }
 
   private applyRestaurantCameraTransform(worldCenter: Phaser.Math.Vector2, viewCenter: Phaser.Math.Vector2): void {
