@@ -131,16 +131,19 @@ export function getCharacterSpriteFrame(
   const normalizedVariant = ((Math.floor(variant) % characterVariantCount) + characterVariantCount) % characterVariantCount;
   const seated = action === "sit";
   // For seated sprites, anchor the sprite at the BUTT (not the feet) so the
-  // butt lands at the chair seat point automatically. Butt is at ~55% from
+  // butt lands at the chair seat point automatically. Butt is at ~65% from
   // the top of the seated AI art (head -> torso -> hips/butt -> bent legs ->
   // feet). For standing sprites, anchor at feet (origin y = 1) as usual.
-  const originY = seated ? 0.55 : 1;
+  const originY = seated ? 0.65 : 1;
+  // For seated, no extra yOffset — the origin-at-butt convention puts the
+  // butt at container.y (= chair seat point) directly.
+  const yOffset = seated ? 0 : 6;
   return {
     atlas: "characters",
     frame: `${role}-${frameAction}-${facing}-v${normalizedVariant}`,
     origin: { x: 0.5, y: originY },
     xOffset: 0,
-    yOffset: 6,
+    yOffset,
     // Seated AI art is drawn full-height (head to feet on floor) so at the
     // standing scale the character towers over the chair. Shrink seated
     // sprites so the seated silhouette is roughly chair-sized.
