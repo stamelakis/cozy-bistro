@@ -320,6 +320,12 @@ export class Engine {
     // Stove flame mirrors chef working state. Drive it before scene.update
     // so the flame's flicker animation runs this frame.
     this.scene.setStoveFlame(this.router?.isAnyChefCooking() ?? false);
+    // Day/night lighting follows the in-game day timer.
+    const day = this.scene.applyDayNight(this.game.day.getDayProgress());
+    this.renderer.setClearColor(day.skyColor);
+    if (this.scene.threeScene.fog instanceof THREE.Fog) {
+      this.scene.threeScene.fog.color.setHex(day.skyColor);
+    }
     this.scene.update(dt);
     // Camera + floating text + saver use real time so the camera still
     // responds to input while paused and we don't double-save under fast-forward.

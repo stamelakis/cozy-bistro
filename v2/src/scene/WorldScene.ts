@@ -4,6 +4,16 @@ import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
 
+/** Linearly interpolate between two RGB integers by t in [0,1]. */
+function mixColors(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+
 /**
  * The 3D world. A minimal demo restaurant: floor, walls, and a few pieces
  * of Kenney furniture placed at fixed positions so we can verify the GLTF
@@ -90,25 +100,64 @@ export class WorldScene {
     this.stoveFlameLight = light;
   }
 
+  /** Exposed for Engine to drive the day-night cycle each frame. */
+  ambientLight!: THREE.AmbientLight;
+  sunLight!: THREE.DirectionalLight;
+  fillLight!: THREE.DirectionalLight;
+
   private addLighting(): void {
-    this.threeScene.add(new THREE.AmbientLight(0xfff1d6, 0.55));
+    this.ambientLight = new THREE.AmbientLight(0xfff1d6, 0.55);
+    this.threeScene.add(this.ambientLight);
 
-    const sun = new THREE.DirectionalLight(0xffeac2, 1.1);
-    sun.position.set(8, 14, 6);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -20;
-    sun.shadow.camera.right = 20;
-    sun.shadow.camera.top = 20;
-    sun.shadow.camera.bottom = -20;
-    sun.shadow.camera.near = 0.5;
-    sun.shadow.camera.far = 60;
-    sun.shadow.bias = -0.0005;
-    this.threeScene.add(sun);
+    this.sunLight = new THREE.DirectionalLight(0xffeac2, 1.1);
+    this.sunLight.position.set(8, 14, 6);
+    this.sunLight.castShadow = true;
+    this.sunLight.shadow.mapSize.set(2048, 2048);
+    this.sunLight.shadow.camera.left = -20;
+    this.sunLight.shadow.camera.right = 20;
+    this.sunLight.shadow.camera.top = 20;
+    this.sunLight.shadow.camera.bottom = -20;
+    this.sunLight.shadow.camera.near = 0.5;
+    this.sunLight.shadow.camera.far = 60;
+    this.sunLight.shadow.bias = -0.0005;
+    this.threeScene.add(this.sunLight);
 
-    const fill = new THREE.DirectionalLight(0xb8c8e0, 0.25);
-    fill.position.set(-6, 10, -4);
-    this.threeScene.add(fill);
+    this.fillLight = new THREE.DirectionalLight(0xb8c8e0, 0.25);
+    this.fillLight.position.set(-6, 10, -4);
+    this.threeScene.add(this.fillLight);
+  }
+
+  /** Drive lighting + sky tint by time of day. progress is 0..1 from
+   * dawn through dusk into night. Engine ticks this every frame. */
+  applyDayNight(progress: number): { skyColor: number } {
+    // Sun follows an arc: low/warm at dawn (0) and dusk (1), high/bright at noon (0.5).
+    const noonish = 1 - Math.abs(progress - 0.5) * 2; // 0 at edges, 1 at noon
+    // Sun intensity peaks at noon, drops to ~0.15 at edges; dives to ~0 at night.
+    const sunIntensity = progress < 0.92
+      ? 0.15 + noonish * 1.1
+      : Math.max(0, 0.15 - (progress - 0.92) * 1.8);
+    this.sunLight.intensity = sunIntensity;
+    // Sun color: warm orange at low elevation, white at high.
+    const sunColor = mixColors(0xffa860, 0xfff4d8, noonish);
+    this.sunLight.color.setHex(sunColor);
+    // Ambient: cool at night, warm during day.
+    if (progress < 0.92) {
+      this.ambientLight.color.setHex(mixColors(0xffd6a8, 0xfff1d6, noonish));
+      this.ambientLight.intensity = 0.35 + noonish * 0.4;
+    } else {
+      // Night: low blue ambient
+      this.ambientLight.color.setHex(0x5a6a8a);
+      this.ambientLight.intensity = 0.25;
+    }
+    // Fill (sky bounce) — cooler at noon, warmer at edges.
+    this.fillLight.intensity = 0.18 + noonish * 0.15;
+    // Sky color (engine sets renderer clear color from this).
+    let skyColor: number;
+    if (progress < 0.1) skyColor = mixColors(0xf7c08a, 0xd8c4a3, progress / 0.1); // dawn → day
+    else if (progress < 0.85) skyColor = 0xd8c4a3; // day
+    else if (progress < 0.95) skyColor = mixColors(0xd8c4a3, 0xb27a52, (progress - 0.85) / 0.1); // day → dusk
+    else skyColor = mixColors(0xb27a52, 0x1f2a48, (progress - 0.95) / 0.05); // dusk → night
+    return { skyColor };
   }
 
   private addBuilding(): void {

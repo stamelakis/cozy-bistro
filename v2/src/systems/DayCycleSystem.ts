@@ -48,6 +48,13 @@ export class DayCycleSystem {
     return Math.max(0, this.dayLengthSeconds - this.elapsedSeconds);
   }
 
+  /** Day progress in [0, 1]. 0 = just rolled over (dawn), 0.5 = noon,
+   * 1 = day ending (dusk into night). Engine uses this to drive the
+   * sun-color / ambient-light day-night cycle. */
+  getDayProgress(): number {
+    return Math.max(0, Math.min(1, this.elapsedSeconds / this.dayLengthSeconds));
+  }
+
   setDayNumber(dayNumber: number): void {
     this.dayNumber = dayNumber;
   }
