@@ -1,5 +1,10 @@
 import type { Game } from "../game/Game";
-import type { GuestSpawner } from "../game/GuestSpawner";
+
+/** Minimal shape the HUD needs from the spawner — kept narrow so it can
+ * be either a real GuestSpawner or a stub during loading. */
+interface SpawnerLike {
+  getActiveGuestCount(): number;
+}
 
 /**
  * Minimal HTML overlay for the 3D game: shows money, rating, day, time
@@ -10,10 +15,10 @@ import type { GuestSpawner } from "../game/GuestSpawner";
 export class Hud {
   private readonly root: HTMLElement;
   private readonly game: Game;
-  private readonly spawner: GuestSpawner;
+  private readonly spawner: SpawnerLike;
   private readonly fields: Record<string, HTMLElement> = {};
 
-  constructor(parent: HTMLElement, game: Game, spawner: GuestSpawner) {
+  constructor(parent: HTMLElement, game: Game, spawner: SpawnerLike) {
     this.game = game;
     this.spawner = spawner;
     this.root = document.createElement("div");

@@ -14,9 +14,21 @@ import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from 
  */
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
-  private readonly loader = new ModelLoader();
+  readonly loader = new ModelLoader();
   readonly characterLoader = new CharacterLoader(this.loader);
   readonly animator = new CharacterAnimator();
+  /** Exposed for StaffRouter to drive their state machines. Populated
+   * asynchronously during populateCharacters — may be undefined for the
+   * first frame or two while GLBs load. */
+  chefChar?: AnimatedCharacter;
+  waiterChar?: AnimatedCharacter;
+  /** World position of the stove and the plate-pickup spot. Used by the
+   * StaffRouter to send chef/waiter to the right places. */
+  readonly stovePos = new THREE.Vector2(0, -3.0);
+  readonly pickupPos = new THREE.Vector2(0.5, -2.8);
+  /** Resolves once the staff characters are loaded — so Engine can build
+   * the StaffRouter at the right moment. */
+  staffReady: Promise<void> = Promise.resolve();
 
   constructor() {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
@@ -140,10 +152,13 @@ export class WorldScene {
    * placed here. */
   private async populateCharacters(): Promise<void> {
     const staff: { id: string; x: number; z: number; facingY: number; action: CharacterAction }[] = [
-      { id: "chef",   x: -0.5, z: -3.4, facingY: 0,            action: "idle"  },
-      { id: "waiter", x:  1.5, z: -3.4, facingY: 0,            action: "idle"  },
-      { id: "errand", x:  3.5, z: -3.4, facingY: -Math.PI / 2, action: "carry" },
+      { id: "chef",   x: -0.5, z: -2.6, facingY: 0,            action: "idle"  },
+      { id: "waiter", x:  1.5, z: -2.6, facingY: 0,            action: "idle"  },
+      { id: "errand", x:  3.5, z: -2.6, facingY: -Math.PI / 2, action: "carry" },
     ];
+
+    let resolveStaffReady: () => void = () => {};
+    this.staffReady = new Promise((r) => { resolveStaffReady = r; });
 
     await Promise.all(staff.map(async (c) => {
       try {
@@ -158,9 +173,12 @@ export class WorldScene {
         };
         this.threeScene.add(model);
         this.animator.add(animated);
+        if (c.id === "chef") this.chefChar = animated;
+        if (c.id === "waiter") this.waiterChar = animated;
       } catch (err) {
         console.warn(`Character ${c.id} unavailable:`, err);
       }
     }));
+    resolveStaffReady();
   }
 }

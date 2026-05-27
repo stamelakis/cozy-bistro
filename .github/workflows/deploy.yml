@@ -26,8 +26,18 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+      # Build the 2D version (root) into dist/
       - run: npm ci
       - run: npm run build
+      # Build the 3D version (v2/) and copy it into dist/cozy-bistro-3d/
+      # so the same Pages artifact serves both:
+      #   /cozy-bistro/             -> 2D
+      #   /cozy-bistro/cozy-bistro-3d/ -> 3D
+      - run: npm ci --prefix v2
+      - run: npm run --prefix v2 build
+      - run: |
+          mkdir -p dist/cozy-bistro-3d
+          cp -r v2/dist/* dist/cozy-bistro-3d/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

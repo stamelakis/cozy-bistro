@@ -2,7 +2,10 @@ import * as THREE from "three";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
-import { pick, between } from "../data/util";
+import type { StaffRouter } from "./StaffRouter";
+import { recipes } from "../data/recipes";
+import type { RecipeDefinition } from "../data/types";
+import { pick, between, clamp } from "../data/util";
 
 /**
  * Drives the visible gameplay loop for guests:
@@ -36,8 +39,10 @@ interface ActiveGuest {
   target: THREE.Vector2;
   // Per-state timer (seconds).
   stateClock: number;
-  // The recipe they ordered (or null if not yet ordered).
-  recipeId: string | null;
+  // The recipe they ordered (null until seated long enough to order).
+  recipe: RecipeDefinition | null;
+  // The ticket id from the StaffRouter (null until ordered).
+  ticketId: string | null;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -62,7 +67,6 @@ const SEATS: { pos: THREE.Vector2; facingY: number }[] = [
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
 const TIME_TO_ORDER = 3.0;
-const TIME_TO_COOK = 6.0;
 const TIME_TO_EAT = 8.0;
 const SPAWN_INTERVAL_SECONDS = 6.0; // a new guest every N seconds if seats free
 
@@ -71,6 +75,7 @@ export class GuestSpawner {
   private readonly characterLoader: CharacterLoader;
   private readonly animator: CharacterAnimator;
   private readonly game: Game;
+  private readonly router: StaffRouter;
   private readonly guests: ActiveGuest[] = [];
   private occupiedSeats = new Set<number>();
   private spawnCooldown = 1.0;
@@ -81,11 +86,13 @@ export class GuestSpawner {
     characterLoader: CharacterLoader,
     animator: CharacterAnimator,
     game: Game,
+    router: StaffRouter,
   ) {
     this.scene = scene;
     this.characterLoader = characterLoader;
     this.animator = animator;
     this.game = game;
+    this.router = router;
   }
 
   /** Per-frame tick. Spawns guests, advances their state machines, moves
@@ -143,7 +150,8 @@ export class GuestSpawner {
         seatIndex,
         target: SEATS[seatIndex].pos.clone(),
         stateClock: 0,
-        recipeId: null,
+        recipe: null,
+        ticketId: null,
       });
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
@@ -175,19 +183,26 @@ export class GuestSpawner {
         break;
       }
       case "seated": {
-        // Brief moment to "look at menu" — then place order.
-        if (g.stateClock >= TIME_TO_ORDER) {
-          g.recipeId = this.pickRecipe();
+        // Brief moment to "look at menu" — then place order with the
+        // kitchen via the StaffRouter ticket queue.
+        if (g.stateClock >= TIME_TO_ORDER && g.recipe == null) {
+          g.recipe = this.pickRecipe();
+          if (g.recipe) {
+            g.ticketId = this.router.enqueueOrder(
+              g.id,
+              g.recipe.id,
+              SEATS[g.seatIndex].pos,
+              g.recipe.preparationTimeSeconds,
+            );
+          }
           g.state = "waitingForFood";
           g.stateClock = 0;
         }
         break;
       }
       case "waitingForFood": {
-        // For now: timer represents the chef cooking the plate + waiter
-        // walking it over. We'll replace this with real chef/waiter
-        // routing in the next pass.
-        if (g.stateClock >= TIME_TO_COOK) {
+        // Wait until the waiter delivers the plate.
+        if (this.router.popDeliveredFor(g.id)) {
           g.state = "eating";
           g.stateClock = 0;
         }
@@ -229,22 +244,26 @@ export class GuestSpawner {
     return Math.hypot(g.target.x - g.character.groundPos.x, g.target.y - g.character.groundPos.y);
   }
 
-  private pickRecipe(): string {
-    // Pick from currently-on-menu recipes; fall back to any unlocked.
+  private pickRecipe(): RecipeDefinition | null {
     const menu = this.game.cooking.getMenuRecipeIds();
-    if (menu.length > 0) return menu[between(0, menu.length - 1)];
-    return "toast"; // safe default — always unlocked
+    const onMenu = menu.length > 0
+      ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
+      : recipes.filter((r) => r.unlockedByDefault);
+    if (onMenu.length === 0) return null;
+    return onMenu[between(0, onMenu.length - 1)];
   }
 
   private collectPayment(g: ActiveGuest): void {
-    if (!g.recipeId) return;
-    // Look up the recipe price. For prototype, just give the player a
-    // flat reward per visit so the economy ticks visibly even before we
-    // wire real recipe lookups end-to-end.
-    const REWARD = 18; // matches the cheapest 2D recipe (Butter Toast)
-    this.game.economy.earnMoney(REWARD, "payment");
+    if (!g.recipe) return;
+    // Real recipe price (was a flat $18 placeholder before).
+    this.game.economy.earnMoney(g.recipe.sellPrice, "payment");
     this.game.customers.recordServed(1);
-    // Give a positive rating for now (real rating uses satisfaction math)
-    this.game.reputation.recordRating(4);
+
+    // Satisfaction-based rating: recipe.satisfactionEffect 4-7 = base of
+    // ~3-5 stars. Slight random jitter so each guest isn't identical.
+    const base = clamp(2 + g.recipe.satisfactionEffect / 2, 1, 5);
+    const jitter = (Math.random() - 0.5) * 0.8;
+    const rating = clamp(Math.round(base + jitter), 1, 5);
+    this.game.reputation.recordRating(rating);
   }
 }
