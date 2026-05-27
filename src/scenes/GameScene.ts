@@ -9780,6 +9780,13 @@ export class GameScene extends Phaser.Scene {
         }
         const a = people[i];
         const b = people[j];
+        // Seated guests are pinned to their chair seat by design. Pushing
+        // them around with personal space displaces them off the chair and
+        // exposes the seat marker next to them. Skip the adjustment when
+        // both parties are seated.
+        if (a.seated && b.seated) {
+          return;
+        }
         const baseRadius = a.seated && b.seated ? seatedPersonalSpaceRadius : standingPersonalSpaceRadius;
         const radius = baseRadius + (a.moving || b.moving ? 5 : 0);
         const dx = a.container.x - b.container.x;
