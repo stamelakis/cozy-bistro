@@ -30,6 +30,9 @@ export class BuildMenu {
   /** Snapped world position the preview is hovering over. */
   private readonly hoverCell = new THREE.Vector3();
   private hoverValid = false;
+  /** Rotation (radians around Y) applied to the preview/placed model.
+   * Press R while placing to rotate 90°. */
+  private rotationY = 0;
 
   constructor(
     parent: HTMLElement,
@@ -94,7 +97,7 @@ export class BuildMenu {
     }
 
     const hint = document.createElement("div");
-    hint.textContent = "Click an item, then click the floor to place. Esc to cancel.";
+    hint.textContent = "Click item → click floor to place. R = rotate. Esc = cancel.";
     Object.assign(hint.style, { marginTop: "8px", opacity: "0.65", fontSize: "11px" } as Partial<CSSStyleDeclaration>);
     root.appendChild(hint);
 
@@ -106,6 +109,10 @@ export class BuildMenu {
     this.canvas.addEventListener("click", this.onClick);
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this.cancelPlacing();
+      if ((e.key === "r" || e.key === "R") && this.preview) {
+        this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
+        this.preview.rotation.y = this.rotationY;
+      }
     });
   }
 
@@ -183,8 +190,10 @@ export class BuildMenu {
       return;
     }
     // Bake the preview into the scene: clone it as a solid model and add.
+    const rotY = this.rotationY;
     void this.loader.load(def.modelPath).then((solid) => {
       solid.position.copy(this.hoverCell);
+      solid.rotation.y = rotY;
       solid.scale.setScalar(def.scale);
       this.scene.add(solid);
     });

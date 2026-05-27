@@ -47,7 +47,32 @@ export class Hud {
     this.addRow("guests", "Guests: —");
     this.addRow("served", "Served today: —");
     this.addRow("lost", "Lost today: —");
+    this.addRow("daytime", "Day ends in: —");
     this.addOpenCloseButton();
+    this.addAdminGrantButton();
+  }
+
+  private addAdminGrantButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(120, 140, 200, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "[dev] +$500 starter grant";
+    btn.onclick = () => {
+      this.game.economy.earnMoney(500, "grant");
+      this.update();
+    };
+    this.root.appendChild(btn);
   }
 
   private addOpenCloseButton(): void {
@@ -97,6 +122,10 @@ export class Hud {
     this.fields.guests.textContent = `Guests in: ${guests}`;
     this.fields.served.textContent = `Served today: ${served}`;
     this.fields.lost.textContent = `Lost today: ${lost}`;
+    const remaining = Math.max(0, Math.ceil(this.game.day.getTimeRemainingSeconds()));
+    const mins = Math.floor(remaining / 60);
+    const secs = String(remaining % 60).padStart(2, "0");
+    this.fields.daytime.textContent = `Day ends in: ${mins}:${secs}`;
     const open = this.spawner.isOpen();
     this.fields.openclose.textContent = open ? "OPEN — click to close" : "CLOSED — click to open";
     (this.fields.openclose as HTMLButtonElement).style.background = open

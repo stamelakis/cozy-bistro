@@ -8,6 +8,7 @@ import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
 import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
+import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { SaveSystem } from "./SaveSystem";
 
@@ -26,6 +27,7 @@ export class Engine {
   readonly staffPanel: StaffPanel;
   readonly pantryPanel: PantryPanel;
   readonly menuPanel: MenuPanel;
+  readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
   private running = false;
@@ -64,6 +66,7 @@ export class Engine {
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
+    this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
 
@@ -77,6 +80,7 @@ export class Engine {
       }
       this.router = new StaffRouter(this.scene.chefChar, this.scene.waiterChar, this.scene.stovePos, this.scene.pickupPos);
       this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
+      this.spawner.floatingText = this.floatingText;
     });
 
     // Save on tab close.
@@ -148,6 +152,7 @@ export class Engine {
     this.spawner?.update(dt);
     this.scene.update(dt);
     this.camera.update(dt);
+    this.floatingText.update(dt);
     this.saver.update(dt);
 
     // HUD only needs ~5 Hz; updating every frame is wasteful DOM work.

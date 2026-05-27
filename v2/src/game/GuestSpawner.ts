@@ -3,6 +3,7 @@ import { CharacterLoader } from "../assets/CharacterLoader";
 import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
+import type { FloatingText } from "../ui/FloatingText";
 import { recipes } from "../data/recipes";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
@@ -96,6 +97,9 @@ export class GuestSpawner {
   /** Set false to stop new guests from arriving. Already-seated guests
    * finish their meal regardless. */
   restaurantOpen = true;
+
+  /** Optional: if provided, "+$N" / "-1★" labels pop above guests on key events. */
+  floatingText?: FloatingText;
 
   constructor(
     scene: THREE.Scene,
@@ -347,6 +351,7 @@ export class GuestSpawner {
   private markLostAndExit(g: ActiveGuest): void {
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
     g.character.action = "walk";
     g.target = EXIT_POSITION.clone();
     g.state = "walkingOut";
@@ -360,6 +365,8 @@ export class GuestSpawner {
     this.game.economy.earnMoney(recipe.sellPrice, "payment");
     g.totalPaid += recipe.sellPrice;
     g.totalSatisfaction += recipe.satisfactionEffect;
+    // Floating "+$N" above the guest.
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${recipe.sellPrice}`, "#a8e2a8");
   }
 
   /** End-of-visit: record one served + one averaged rating across courses. */
