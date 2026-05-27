@@ -130,12 +130,16 @@ export class ExpandPanel {
     const can = this.game.economy.canAfford(cost);
     this.buyBtn.disabled = !can;
     this.buyBtn.style.opacity = can ? "1" : "0.5";
+    // Each tier 2-4 also opens a new dining table (4 more seats).
+    const seatGain = nextTier >= 2 && nextTier <= 4 ? " · +4 seats" : "";
+    let recipeText: string;
     if (newRecipes.length === 0) {
-      this.unlocksEl.textContent = `Unlocks tier ${nextTier} polish (no new recipes this step).`;
+      recipeText = `tier ${nextTier} polish (no new recipes)`;
     } else if (newRecipes.length <= 3) {
-      this.unlocksEl.textContent = `Unlocks: ${newRecipes.join(", ")}`;
+      recipeText = newRecipes.join(", ");
     } else {
-      this.unlocksEl.textContent = `Unlocks: ${newRecipes.slice(0, 3).join(", ")} (+${newRecipes.length - 3} more)`;
+      recipeText = `${newRecipes.slice(0, 3).join(", ")} (+${newRecipes.length - 3} more)`;
     }
+    this.unlocksEl.textContent = `Unlocks: ${recipeText}${seatGain}`;
   }
 }

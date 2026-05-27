@@ -145,6 +145,20 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "pillow-blue",    name: "Blue Cushion",    category: "decoration",
     modelPath: "assets/kenney/pillowBlue.glb", scale: 1, size: { width: 1, depth: 1 }, cost: 10 },
 
+  // Procedurally-built wall art / signage (no GLB needed)
+  { id: "framed-art-warm", name: "Framed Art (Warm)", category: "decoration",
+    modelPath: "proc:framed-art-warm", scale: 1, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+  { id: "framed-art-cool", name: "Framed Art (Cool)", category: "decoration",
+    modelPath: "proc:framed-art-cool", scale: 1, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+  { id: "framed-art-mint", name: "Framed Art (Mint)", category: "decoration",
+    modelPath: "proc:framed-art-mint", scale: 1, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+  { id: "menu-board",      name: "Chalk Menu Board",  category: "decoration",
+    modelPath: "proc:menu-board", scale: 1, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 3 },
+  { id: "neon-sign",       name: "Neon OPEN Sign",    category: "decoration",
+    modelPath: "proc:neon-sign", scale: 1, size: { width: 1, depth: 1 }, cost: 85, style: 4, attractionBonus: 6 },
+  { id: "wine-wall",       name: "Wine Wall",         category: "decoration",
+    modelPath: "proc:wine-wall", scale: 1, size: { width: 1, depth: 1 }, cost: 140, style: 6, ratingBonus: 0.06, attractionBonus: 3 },
+
   // Decor & plants (attraction + style — what brings guests in)
   { id: "plant-small",    name: "Small Plant",     category: "plant",
     modelPath: "assets/kenney/plantSmall1.glb", scale: 1, size: { width: 1, depth: 1 }, cost: 12, attractionBonus: 1, style: 1 },

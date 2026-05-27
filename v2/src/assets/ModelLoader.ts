@@ -1,10 +1,14 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { PROC_BUILDERS } from "./ProcDecor";
 
 /**
  * Loads GLB models from `/assets/`. Caches by path so multiple instances of
  * the same model share a single load. Clones the scene graph per use so
  * consumers can position/transform without mutating the cached source.
+ *
+ * Special prefix: paths starting with "proc:" are not loaded from disk;
+ * they're built procedurally via ProcDecor (wall decorations, signage).
  */
 export class ModelLoader {
   private readonly loader = new GLTFLoader();
@@ -17,6 +21,13 @@ export class ModelLoader {
 
   /** Load a GLB and return a CLONE of its root scene. Safe to mutate. */
   async load(relPath: string): Promise<THREE.Group> {
+    // Procedurally generated meshes (no disk fetch).
+    if (relPath.startsWith("proc:")) {
+      const key = relPath.slice("proc:".length);
+      const builder = PROC_BUILDERS[key];
+      if (!builder) throw new Error(`Unknown procedural decor: ${key}`);
+      return builder();
+    }
     const cached = this.cache.get(relPath);
     if (cached) {
       const source = await cached;
