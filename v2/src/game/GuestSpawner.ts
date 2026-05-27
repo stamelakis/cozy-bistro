@@ -214,14 +214,24 @@ export class GuestSpawner {
         // kitchen via the StaffRouter ticket queue.
         if (g.stateClock >= TIME_TO_ORDER && g.recipe == null) {
           g.recipe = this.pickRecipe();
-          if (g.recipe) {
-            g.ticketId = this.router.enqueueOrder(
-              g.id,
-              g.recipe.id,
-              SEATS[g.seatIndex].pos,
-              g.recipe.preparationTimeSeconds,
-            );
+          if (g.recipe == null) {
+            // Nothing on menu — guest walks out unhappy.
+            this.markLostAndExit(g);
+            break;
           }
+          // Consume ingredients up front (mirror's the 2D version's
+          // pre-deduct behavior, so we don't double-promise stock).
+          if (!this.game.cooking.canFulfillRecipe(g.recipe)) {
+            this.markLostAndExit(g);
+            break;
+          }
+          this.game.cooking.consumeIngredients(g.recipe);
+          g.ticketId = this.router.enqueueOrder(
+            g.id,
+            g.recipe.id,
+            SEATS[g.seatIndex].pos,
+            g.recipe.preparationTimeSeconds,
+          );
           g.state = "waitingForFood";
           g.stateClock = 0;
         }
@@ -277,7 +287,25 @@ export class GuestSpawner {
       ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
       : recipes.filter((r) => r.unlockedByDefault);
     if (onMenu.length === 0) return null;
-    return onMenu[between(0, onMenu.length - 1)];
+
+    // CustomerSystem rolls a category expectation per arrival; honour it
+    // when at least one recipe in that category is on the menu, otherwise
+    // fall back to a random on-menu recipe.
+    const expectation = this.game.customers.rollCustomerExpectation();
+    const matching = onMenu.filter((r) => r.category === expectation.category);
+    const candidates = matching.length > 0 ? matching : onMenu;
+    return candidates[between(0, candidates.length - 1)];
+  }
+
+  /** Guest gives up (ran out of patience OR couldn't be served) — record
+   * the loss + dock the rating, then walk them out. */
+  private markLostAndExit(g: ActiveGuest): void {
+    this.game.customers.recordLost(1);
+    this.game.reputation.recordRating(1);
+    g.character.action = "walk";
+    g.target = EXIT_POSITION.clone();
+    g.state = "walkingOut";
+    g.stateClock = 0;
   }
 
   private collectPayment(g: ActiveGuest): void {

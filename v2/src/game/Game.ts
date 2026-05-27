@@ -4,12 +4,19 @@ import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem } from "../systems/StaffSystem";
-import type { SaveGameState } from "../data/types";
+import { recipes } from "../data/recipes";
+import type { IngredientStock, SaveGameState } from "../data/types";
 
 /** Money charged automatically per in-game day. */
 const DAILY_RENT = 40;
 /** Money charged per staff member per real minute. */
 const PAYROLL_PER_STAFF_PER_MINUTE = 6;
+/** Cost per unit of ingredient when auto-shopping. */
+export const INGREDIENT_UNIT_COST = 2;
+/** Auto-shop tries to keep each ingredient stocked at this level. */
+const STOCK_TARGET = 8;
+/** Auto-shop runs this often (seconds). */
+const AUTOSHOP_INTERVAL = 4;
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -23,6 +30,11 @@ export class Game {
   readonly customers: CustomerSystem;
   readonly day: DayCycleSystem;
   readonly staff: StaffSystem;
+
+  /** Auto-shop accumulator (seconds since last attempt). */
+  private autoShopClock = 0;
+  /** Set false to disable auto-shop (player will have to manage stock manually). */
+  autoShopEnabled = true;
 
   constructor(save?: SaveGameState) {
     this.economy = new EconomySystem();
@@ -40,6 +52,31 @@ export class Game {
       if (this.cooking.getMenuRecipeIds().length === 0) {
         this.cooking.addToMenu("toast");
       }
+    }
+    this.seedPantryIfEmpty();
+  }
+
+  /** Walk all known recipes once and ensure each unique ingredient has a
+   * pantry entry. Without this, addPantryStock is a no-op (because the
+   * pantry was empty), so the auto-shop has nothing to refill. */
+  private seedPantryIfEmpty(): void {
+    const pantry = this.cooking.getPantryRaw();
+    const known = new Set(pantry.map((s) => s.id));
+    const allIngredients = new Set<string>();
+    for (const r of recipes) for (const ing of r.ingredients) allIngredients.add(ing);
+    let added = false;
+    for (const ingredientId of allIngredients) {
+      if (!known.has(ingredientId)) {
+        // Slot in a fresh stock with a small starter quantity so the game
+        // is immediately playable on day one.
+        const stock: IngredientStock = { id: ingredientId, name: prettifyIngredientId(ingredientId), quantity: 4 };
+        pantry.push(stock);
+        added = true;
+      }
+    }
+    if (added) {
+      // CookingSystem holds the pantry array by reference, so push works.
+      // No further bookkeeping needed.
     }
   }
 
@@ -62,6 +99,19 @@ export class Game {
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
     }
+    // Auto-shop: refill any ingredient below STOCK_TARGET, 1 unit per tick
+    // (so a long shortage costs more money than a brief one and the player
+    // can react before going bankrupt).
+    this.autoShopClock += dt;
+    if (this.autoShopEnabled && this.autoShopClock >= AUTOSHOP_INTERVAL) {
+      this.autoShopClock = 0;
+      const pantry = this.cooking.getPantryRaw();
+      for (const stock of pantry) {
+        if (stock.quantity >= STOCK_TARGET) continue;
+        if (!this.economy.spendMoney(INGREDIENT_UNIT_COST, "ingredients")) break;
+        stock.quantity += 1;
+      }
+    }
   }
 
   hydrate(save: SaveGameState): void {
@@ -80,4 +130,9 @@ export class Game {
     this.customers.resetDailyTotals();
     this.day.rollOverDay();
   }
+}
+
+/** Turn "olive-oil" / "olive_oil" / "olive oil" into "Olive Oil". */
+function prettifyIngredientId(id: string): string {
+  return id.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
