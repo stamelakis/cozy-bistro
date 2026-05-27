@@ -7,6 +7,7 @@ import type { FloatingText } from "../ui/FloatingText";
 import { recipes } from "../data/recipes";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
+import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
 
 /**
  * Drives the visible gameplay loop for guests:
@@ -54,6 +55,9 @@ interface ActiveGuest {
   totalPaid: number;
   // Cumulative satisfaction across courses; final rating averages this.
   totalSatisfaction: number;
+  // Personality archetype rolled on spawn. Affects patience, order size,
+  // and tip multiplier.
+  archetype: CustomerArchetype;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -92,17 +96,19 @@ const PATIENCE_BASE_SECONDS = 35;
 const SEAT_CLEAN_SECONDS = 4.0;
 
 /** Per-state guest label for the status-bubble layer. Returns empty
- * string while walking in/out (the bubble layer hides empty labels). */
+ * string while walking in/out (the bubble layer hides empty labels).
+ * Prefixes the archetype emoji so the player can tell who's who. */
 function guestLabel(g: ActiveGuest): string {
+  const prefix = g.archetype.shortLabel;
   switch (g.state) {
     case "walkingIn":      return "";
-    case "seated":         return g.order.length === 0 ? "📋 ordering" : "⏳ waiting";
+    case "seated":         return g.order.length === 0 ? `${prefix} 📋` : `${prefix} ⏳`;
     case "waitingForFood": {
       // Show patience countdown so the player feels the urgency.
       const secs = Math.max(0, Math.ceil(g.patience));
-      return `⏳ ${secs}s`;
+      return `${prefix} ⏳ ${secs}s`;
     }
-    case "eating":         return "🍴 eating";
+    case "eating":         return `${prefix} 🍴`;
     case "walkingOut":     return "";
   }
 }
@@ -259,6 +265,7 @@ export class GuestSpawner {
       };
       this.animator.add(character);
 
+      const archetype = rollArchetype();
       this.guests.push({
         id,
         variantId,
@@ -270,9 +277,10 @@ export class GuestSpawner {
         order: [],
         orderIndex: 0,
         ticketId: null,
-        patience: PATIENCE_BASE_SECONDS,
+        patience: PATIENCE_BASE_SECONDS * archetype.patienceMultiplier,
         totalPaid: 0,
         totalSatisfaction: 0,
+        archetype,
       });
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
@@ -349,7 +357,7 @@ export class GuestSpawner {
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
         if (g.stateClock >= TIME_TO_ORDER && g.order.length === 0) {
-          g.order = this.buildOrder();
+          g.order = this.buildOrder(g.archetype);
           if (g.order.length === 0) {
             this.markLostAndExit(g);
             break;
@@ -376,7 +384,7 @@ export class GuestSpawner {
           if (g.orderIndex < g.order.length) {
             // Move to next course — go back to seated for a moment
             // (the guest considers what they ordered next, then waits).
-            g.patience = PATIENCE_BASE_SECONDS;
+            g.patience = PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
             this.beginNextCourse(g);
           } else {
             // Full order complete — leave a single averaged rating + walk out.
@@ -416,8 +424,9 @@ export class GuestSpawner {
 
   /** Pick a multi-course order (1-3 dishes) based on the guest's category
    * expectation. Tries to include an appetizer + main + dessert pattern when
-   * possible; falls back to whatever's on menu. */
-  private buildOrder(): RecipeDefinition[] {
+   * possible; falls back to whatever's on menu. The archetype's orderSizeBias
+   * shifts appetizer/dessert chances up (foodies, dates) or down (quick lunch). */
+  private buildOrder(archetype: CustomerArchetype): RecipeDefinition[] {
     const menu = this.game.cooking.getMenuRecipeIds();
     const onMenu = menu.length > 0
       ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
@@ -425,8 +434,9 @@ export class GuestSpawner {
     if (onMenu.length === 0) return [];
     const expectation = this.game.customers.rollCustomerExpectation();
     const order: RecipeDefinition[] = [];
-    // 60% chance of trying for an appetizer.
-    if (Math.random() < 0.6) {
+    // Bias-shifted appetizer chance: 0.4 for -1, 0.6 for 0, 0.8 for +1.
+    const appChance = 0.6 + archetype.orderSizeBias * 0.2;
+    if (Math.random() < appChance) {
       const apps = onMenu.filter((r) => r.category === "appetizer");
       if (apps.length > 0) order.push(apps[between(0, apps.length - 1)]);
     }
@@ -435,8 +445,9 @@ export class GuestSpawner {
     const mains = matching.length > 0 ? matching : onMenu.filter((r) => r.category === "main");
     const mainPool = mains.length > 0 ? mains : onMenu;
     order.push(mainPool[between(0, mainPool.length - 1)]);
-    // 35% chance of a dessert.
-    if (Math.random() < 0.35) {
+    // Dessert chance: 0.15 for -1, 0.35 for 0, 0.55 for +1.
+    const dessertChance = 0.35 + archetype.orderSizeBias * 0.2;
+    if (Math.random() < dessertChance) {
       const desserts = onMenu.filter((r) => r.category === "dessert");
       if (desserts.length > 0) order.push(desserts[between(0, desserts.length - 1)]);
     }
@@ -512,8 +523,11 @@ export class GuestSpawner {
     this.game.reputation.recordRating(rating);
 
     // Tip: 0% at 1-2 stars, 5% at 3, 15% at 4, 30% at 5. Round to whole dollars.
+    // Archetype tip multiplier swings generous guests up to +50% and grumps
+    // down to ~40% of what they would normally tip.
     const tipMultByRating: Record<number, number> = { 1: 0, 2: 0, 3: 0.05, 4: 0.15, 5: 0.30 };
-    const tip = Math.round(g.totalPaid * (tipMultByRating[rating] ?? 0));
+    const baseTipRate = tipMultByRating[rating] ?? 0;
+    const tip = Math.round(g.totalPaid * baseTipRate * g.archetype.tipMultiplier);
     if (tip > 0) {
       this.game.economy.earnMoney(tip, "payment");
     }
