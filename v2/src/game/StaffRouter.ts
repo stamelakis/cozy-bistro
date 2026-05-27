@@ -49,10 +49,29 @@ interface StaffActor {
   target: THREE.Vector2;
   /** Per-state timer. */
   clock: number;
+  /** Small plate mesh held above their hands while delivering. Created
+   * lazily on first delivery, then shown/hidden via .visible. */
+  heldPlate?: THREE.Mesh;
 }
 
 const WALK_SPEED = 2.2; // staff move faster than guests for visibility
 const ARRIVAL_THRESHOLD = 0.18;
+
+/** Shared geometry/material so all waiters reuse the same allocation. */
+let sharedPlateGeo: THREE.CylinderGeometry | undefined;
+let sharedPlateMat: THREE.MeshStandardMaterial | undefined;
+function makePlate(): THREE.Mesh {
+  if (!sharedPlateGeo) {
+    sharedPlateGeo = new THREE.CylinderGeometry(0.13, 0.13, 0.018, 14);
+    sharedPlateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
+  }
+  const plate = new THREE.Mesh(sharedPlateGeo, sharedPlateMat!);
+  // Sit roughly at chest height, slightly forward of body center.
+  plate.position.set(0, 1.0, 0.15);
+  plate.castShadow = true;
+  plate.visible = false;
+  return plate;
+}
 
 export class StaffRouter {
   /** Public queue: GuestSpawner enqueues, GuestSpawner polls for DELIVERED. */
@@ -169,6 +188,28 @@ export class StaffRouter {
   update(dt: number): void {
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
+    this.recoverStalledTickets(dt);
+  }
+
+  /** Re-queue tickets that are stuck in a transient state because the
+   * worker handling them was removed or wandered off. Without this a
+   * pool-shrink during a delivery could orphan a guest forever. */
+  private recoverStalledTickets(dt: number): void {
+    for (const t of this.tickets) {
+      t.clock += dt;
+      // Cooking should finish within cookSeconds + ~5s slop. If it's been
+      // way longer (no chef holding the assignment), boot it back to queued.
+      if (t.state === "cooking" && t.clock > t.cookSeconds + 12) {
+        const owner = this.chefs.find((c) => c.ticketId === t.id);
+        if (!owner) { t.state = "queued"; t.clock = 0; }
+      }
+      // Delivering should finish in a few seconds. If 15+ have passed and
+      // no waiter is on it, mark ready again for another waiter.
+      if (t.state === "delivering" && t.clock > 15) {
+        const owner = this.waiters.find((w) => w.ticketId === t.id);
+        if (!owner) { t.state = "ready"; t.clock = 0; }
+      }
+    }
   }
 
   // === Chef state machine ===
@@ -264,8 +305,14 @@ export class StaffRouter {
             break;
           }
           // Picked up the plate — now head to the seat. carry pose reads
-          // as holding something while walking.
+          // as holding something while walking. Mount + show the held-
+          // plate mesh so the player sees the food in transit.
           w.character.action = "carry";
+          if (!w.heldPlate) {
+            w.heldPlate = makePlate();
+            w.character.root.add(w.heldPlate);
+          }
+          w.heldPlate.visible = true;
           w.target = ticket.seatPos.clone();
           w.state = "working";
           w.clock = 0;
@@ -278,6 +325,9 @@ export class StaffRouter {
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (ticket) ticket.state = "delivered";
+          // Plate handed off — hide the held plate; the table-plate
+          // spawned by GuestSpawner takes over the visual.
+          if (w.heldPlate) w.heldPlate.visible = false;
           w.target = w.home.clone();
           w.state = "returningHome";
           w.character.action = "walk";
