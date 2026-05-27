@@ -69,6 +69,7 @@ CHARACTERS: list[tuple[str, str]] = [
     ("Customer 4 - Stylish Bohemian Artist - turnaround.png", "guest-v3"),
     ("Customer 5 - Office Worker - turnaround.png", "guest-v4"),
     ("Customer 6 -Elderly Woman - turnaround.png", "guest-v5"),
+    ("Customer 7 - female bohemian.png", "guest-v6"),
 ]
 
 
@@ -84,7 +85,9 @@ def extract_front_view(sheet_path: Path) -> bytes:
     # Top-left panel: 25% wide, ~50-60% tall (avoid labels at top and details
     # below the figure row). These bounds are intentionally generous — Meshy
     # tolerates extra background. We'll have the figure dominate the crop.
-    is_8_side = "8 sides" in sheet_path.name.lower()
+    # 8-side sheets are 4x2 grids (aspect ~1.33), 5-view sheets are single
+    # rows of figures + side text panel (aspect ~1.50).
+    is_8_side = "8 sides" in sheet_path.name.lower() or (w / h) <= 1.4
     if is_8_side:
         # 4x2 grid: crop top-left quarter, slightly inset.
         x1, y1, x2, y2 = int(w * 0.02), int(h * 0.05), int(w * 0.25), int(h * 0.50)
