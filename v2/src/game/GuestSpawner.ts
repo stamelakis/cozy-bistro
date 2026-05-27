@@ -91,6 +91,22 @@ const PATIENCE_BASE_SECONDS = 35;
  * new guest can sit. Adds a visible turnaround beat between meals. */
 const SEAT_CLEAN_SECONDS = 4.0;
 
+/** Per-state guest label for the status-bubble layer. Returns empty
+ * string while walking in/out (the bubble layer hides empty labels). */
+function guestLabel(g: ActiveGuest): string {
+  switch (g.state) {
+    case "walkingIn":      return "";
+    case "seated":         return g.order.length === 0 ? "📋 ordering" : "⏳ waiting";
+    case "waitingForFood": {
+      // Show patience countdown so the player feels the urgency.
+      const secs = Math.max(0, Math.ceil(g.patience));
+      return `⏳ ${secs}s`;
+    }
+    case "eating":         return "🍴 eating";
+    case "walkingOut":     return "";
+  }
+}
+
 /** Cheap color hash so different recipes look different on the plate
  * without us shipping per-recipe textures. */
 function recipeFoodColor(recipe: RecipeDefinition): number {
@@ -197,6 +213,17 @@ export class GuestSpawner {
 
   getActiveGuestCount(): number {
     return this.guests.length;
+  }
+
+  /** Snapshot used by the UI status-bubble layer. Returns one entry per
+   * guest with a label + a panic flag so the bubble can flash red. */
+  snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean }[] {
+    return this.guests.map((g) => ({
+      id: g.id,
+      character: g.character,
+      label: guestLabel(g),
+      panic: (g.state === "seated" || g.state === "waitingForFood") && g.patience < 12,
+    }));
   }
 
   /** Count of seats that are neither occupied nor in the dirty-cleanup window. */

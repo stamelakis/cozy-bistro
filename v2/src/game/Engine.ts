@@ -179,8 +179,8 @@ export class Engine {
     window.addEventListener("resize", this.handleResize);
   }
 
-  /** Build a fresh status-bubble list from the routers' current state.
-   * One entry per staff actor; empty label = no bubble that frame. */
+  /** Build a fresh status-bubble list from the routers' + spawner's
+   * current state. One entry per actor; empty label = no bubble. */
   private updateStatusBubbles(): void {
     const entries: StatusEntry[] = [];
     if (this.router) {
@@ -192,6 +192,19 @@ export class Engine {
     if (this.errand) {
       this.errand.snapshotStatus().forEach((s, i) => {
         entries.push({ key: `errand-${i}`, character: s.character, label: s.label, bg: "rgba(80, 50, 90, 0.85)" });
+      });
+    }
+    if (this.spawner) {
+      this.spawner.snapshotStatus().forEach((s) => {
+        entries.push({
+          key: `guest-${s.id}`,
+          character: s.character,
+          label: s.label,
+          // Red flash for guests about to leave angry; green for eating.
+          bg: s.panic
+            ? "rgba(160, 40, 40, 0.9)"
+            : (s.label.startsWith("🍴") ? "rgba(50, 110, 60, 0.85)" : undefined),
+        });
       });
     }
     this.statusBubbles.update(entries);
