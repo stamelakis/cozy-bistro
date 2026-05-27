@@ -82,26 +82,50 @@ export class BuildMenu {
     Object.assign(title.style, { fontSize: "14px", fontWeight: "600", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
     root.appendChild(title);
 
-    for (const def of furnitureCatalog) {
-      const btn = document.createElement("button");
-      btn.textContent = `${def.name} — $${def.cost}`;
-      Object.assign(btn.style, {
-        display: "block",
-        width: "100%",
-        margin: "0 0 4px 0",
-        padding: "6px 8px",
-        background: "rgba(255,245,220,0.08)",
-        color: "#fff5dc",
-        border: "1px solid rgba(255,245,220,0.18)",
-        borderRadius: "4px",
-        textAlign: "left",
-        cursor: "pointer",
-        fontSize: "12px",
+    // Group buttons by category so a longer catalog stays scannable.
+    const categoryOrder: FurnitureDef["category"][] = [
+      "table", "chair", "stove", "counter", "decoration", "plant", "lamp", "door",
+    ];
+    const categoryLabels: Record<FurnitureDef["category"], string> = {
+      table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
+      decoration: "Decor", plant: "Plants", lamp: "Lighting", door: "Doors",
+    };
+    for (const cat of categoryOrder) {
+      const items = furnitureCatalog.filter((d) => d.category === cat);
+      if (items.length === 0) continue;
+      const header = document.createElement("div");
+      header.textContent = categoryLabels[cat];
+      Object.assign(header.style, {
+        marginTop: "8px",
+        marginBottom: "3px",
+        fontSize: "11px",
+        fontWeight: "700",
+        opacity: "0.65",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
       } as Partial<CSSStyleDeclaration>);
-      btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
-      btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
-      btn.onclick = () => this.startPlacing(def);
-      root.appendChild(btn);
+      root.appendChild(header);
+      for (const def of items) {
+        const btn = document.createElement("button");
+        btn.textContent = `${def.name} — $${def.cost}`;
+        Object.assign(btn.style, {
+          display: "block",
+          width: "100%",
+          margin: "0 0 3px 0",
+          padding: "5px 8px",
+          background: "rgba(255,245,220,0.08)",
+          color: "#fff5dc",
+          border: "1px solid rgba(255,245,220,0.18)",
+          borderRadius: "4px",
+          textAlign: "left",
+          cursor: "pointer",
+          fontSize: "12px",
+        } as Partial<CSSStyleDeclaration>);
+        btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
+        btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
+        btn.onclick = () => this.startPlacing(def);
+        root.appendChild(btn);
+      }
     }
 
     const sellBtn = document.createElement("button");
