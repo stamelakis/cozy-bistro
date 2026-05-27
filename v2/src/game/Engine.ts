@@ -3,6 +3,7 @@ import { IsoCamera } from "../scene/IsoCamera";
 import { WorldScene } from "../scene/WorldScene";
 import { Game } from "./Game";
 import { GuestSpawner } from "./GuestSpawner";
+import { PedestrianSpawner } from "./PedestrianSpawner";
 import { Hud } from "../ui/Hud";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
@@ -31,6 +32,7 @@ export class Engine {
   spawner?: GuestSpawner;
   router?: StaffRouter;
   errand?: ErrandRouter;
+  pedestrians?: PedestrianSpawner;
   readonly registry: FurnitureRegistry;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
@@ -146,6 +148,7 @@ export class Engine {
       this.router = new StaffRouter(this.scene.chefChar, this.scene.waiterChar, this.scene.stovePos, this.scene.pickupPos);
       this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
       this.spawner.floatingText = this.floatingText;
+      this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       // Errand helper — runs to door + back whenever auto-shop fires.
       if (this.scene.errandChar) {
         this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
@@ -313,6 +316,7 @@ export class Engine {
     this.router?.update(dt);
     this.errand?.update(dt);
     this.spawner?.update(dt);
+    this.pedestrians?.update(dt);
     // Stove flame mirrors chef working state. Drive it before scene.update
     // so the flame's flicker animation runs this frame.
     this.scene.setStoveFlame(this.router?.isAnyChefCooking() ?? false);
