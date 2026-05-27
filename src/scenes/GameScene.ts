@@ -5251,10 +5251,11 @@ export class GameScene extends Phaser.Scene {
       }
       if (definition.category === "chair") {
         const seats = diningSeatsByChair.get(item.uid) ?? [];
-        const occupiedVisibleSeat = seats.find((seat) => !seat.disabled && occupiedSeatUids.has(seat.seatUid));
-        if (occupiedVisibleSeat) {
-          this.createSortedChairBackOverlay(context, occupiedVisibleSeat);
-        }
+        // Chair-back overlay was designed for the thin procedural character
+        // silhouette — drawing chair posts on top of them made the figure
+        // look "between" the posts. AI character sprites are fully rendered
+        // 3D figures, so overlaying chair posts on top reads as the chair
+        // back being IN FRONT of the seated guest. Skip the overlay.
         if (seats.length === 0) {
           this.drawChairSeatMarker(graphics, this.getChairSeatMarkerPoint(context), "unpaired");
         }
@@ -12509,6 +12510,18 @@ export class GameScene extends Phaser.Scene {
     return dx >= 0 ? "up-right" : "up-left";
   }
 
+  // Same as getFacingForVector but never returns a cardinal facing — used for
+  // seated characters where only diagonal AI sprites exist.
+  private getDiagonalFacingForVector(dx: number, dy: number): PersonFacing {
+    if (Math.abs(dx) < 0.0001 && Math.abs(dy) < 0.0001) {
+      return "down-right";
+    }
+    if (dy >= 0) {
+      return dx >= 0 ? "down-right" : "down-left";
+    }
+    return dx >= 0 ? "up-right" : "up-left";
+  }
+
   private getTravelDuration(
     container: Phaser.GameObjects.Container,
     target: Phaser.Math.Vector2,
@@ -13195,7 +13208,11 @@ export class GameScene extends Phaser.Scene {
         return Array.from({ length: seatsToCreate }, (_, seatIndex) => {
           const seat = this.getSeatPointOnChair(chair, chairDefinition, seatsToCreate, seatIndex, chairBackRotation);
           const serviceSpot = this.getServiceSpotForSeat(seat, tableCenter, furniture);
-          const facingToTable = this.getFacingForVector(tableCenter.x - seat.x, tableCenter.y - seat.y);
+          // Seated characters only have AI art for the 4 diagonal facings, so
+          // always pick a diagonal here even when the seat<->table vector is
+          // close to a cardinal axis. Picking a cardinal would force the AI
+          // loader to fall back to a wrong-direction diagonal sprite.
+          const facingToTable = this.getDiagonalFacingForVector(tableCenter.x - seat.x, tableCenter.y - seat.y);
           const disabledSeatIndexes = new Set(chair.disabledSeatIndexes ?? []);
 
           return {
