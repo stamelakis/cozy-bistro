@@ -5,7 +5,7 @@ import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem } from "../systems/StaffSystem";
 import { recipes } from "../data/recipes";
-import type { IngredientStock, SaveGameState } from "../data/types";
+import type { IngredientStock, RecipeDefinition, SaveGameState } from "../data/types";
 
 /** Money charged automatically per in-game day. */
 const DAILY_RENT = 40;
@@ -17,6 +17,10 @@ export const INGREDIENT_UNIT_COST = 2;
 const STOCK_TARGET = 8;
 /** Auto-shop runs this often (seconds). */
 const AUTOSHOP_INTERVAL = 4;
+/** Each recipe-upgrade level multiplies sellPrice by 1 + this. */
+const UPGRADE_PRICE_BONUS_PER_LEVEL = 0.30;
+/** Each recipe-upgrade level adds this much to satisfactionEffect. */
+const UPGRADE_SATISFACTION_PER_LEVEL = 1.5;
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -35,6 +39,10 @@ export class Game {
   private autoShopClock = 0;
   /** Set false to disable auto-shop (player will have to manage stock manually). */
   autoShopEnabled = true;
+  /** Optional callback fired once per auto-shop tick that actually bought
+   * something. Engine wires this to the ErrandRouter so the helper makes
+   * a visible door trip. Receiver should be cheap (queue, don't block). */
+  onAutoShop?: () => void;
 
   constructor(save?: SaveGameState) {
     this.economy = new EconomySystem();
@@ -106,11 +114,14 @@ export class Game {
     if (this.autoShopEnabled && this.autoShopClock >= AUTOSHOP_INTERVAL) {
       this.autoShopClock = 0;
       const pantry = this.cooking.getPantryRaw();
+      let purchased = false;
       for (const stock of pantry) {
         if (stock.quantity >= STOCK_TARGET) continue;
         if (!this.economy.spendMoney(INGREDIENT_UNIT_COST, "ingredients")) break;
         stock.quantity += 1;
+        purchased = true;
       }
+      if (purchased && this.onAutoShop) this.onAutoShop();
     }
   }
 
@@ -129,6 +140,26 @@ export class Game {
     this.economy.resetDailyTotals();
     this.customers.resetDailyTotals();
     this.day.rollOverDay();
+  }
+
+  // === Recipe upgrade math (used by GuestSpawner + UpgradePanel) ===
+
+  /** Sell price after upgrade level: +30% per level above 1. */
+  getEffectiveSellPrice(recipe: RecipeDefinition): number {
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    return Math.round(recipe.sellPrice * (1 + (level - 1) * UPGRADE_PRICE_BONUS_PER_LEVEL));
+  }
+
+  /** Satisfaction after upgrade level: +1.5 per level above 1. */
+  getEffectiveSatisfaction(recipe: RecipeDefinition): number {
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    return recipe.satisfactionEffect + (level - 1) * UPGRADE_SATISFACTION_PER_LEVEL;
+  }
+
+  /** Cost in money to take this recipe to next level. Grows quadratically. */
+  getRecipeUpgradeCost(recipe: RecipeDefinition): number {
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    return level * level * 30;
   }
 }
 

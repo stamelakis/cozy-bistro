@@ -8,8 +8,10 @@ import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
 import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
+import { UpgradePanel } from "../ui/UpgradePanel";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
+import { ErrandRouter } from "./ErrandRouter";
 import { SaveSystem } from "./SaveSystem";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
@@ -23,10 +25,12 @@ export class Engine {
   readonly game: Game;
   spawner?: GuestSpawner;
   router?: StaffRouter;
+  errand?: ErrandRouter;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
   readonly pantryPanel: PantryPanel;
   readonly menuPanel: MenuPanel;
+  readonly upgradePanel: UpgradePanel;
   readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
@@ -66,6 +70,7 @@ export class Engine {
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
+    this.upgradePanel = new UpgradePanel(container, this.game);
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
@@ -81,6 +86,11 @@ export class Engine {
       this.router = new StaffRouter(this.scene.chefChar, this.scene.waiterChar, this.scene.stovePos, this.scene.pickupPos);
       this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
       this.spawner.floatingText = this.floatingText;
+      // Errand helper — runs to door + back whenever auto-shop fires.
+      if (this.scene.errandChar) {
+        this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
+        this.game.onAutoShop = () => this.errand?.triggerRun();
+      }
     });
 
     // Save on tab close.
@@ -149,6 +159,7 @@ export class Engine {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.game.update(dt);
     this.router?.update(dt);
+    this.errand?.update(dt);
     this.spawner?.update(dt);
     this.scene.update(dt);
     this.camera.update(dt);
@@ -162,6 +173,7 @@ export class Engine {
       this.staffPanel.update();
       this.pantryPanel.update();
       this.menuPanel.update();
+      this.upgradePanel.update();
       this.hudAccumulator = 0;
     }
 

@@ -362,11 +362,14 @@ export class GuestSpawner {
   private creditCourse(g: ActiveGuest): void {
     const recipe = g.order[g.orderIndex];
     if (!recipe) return;
-    this.game.economy.earnMoney(recipe.sellPrice, "payment");
-    g.totalPaid += recipe.sellPrice;
-    g.totalSatisfaction += recipe.satisfactionEffect;
+    // Use upgrade-aware effective values (level 1 = base, +30%/+1.5 per level).
+    const price = this.game.getEffectiveSellPrice(recipe);
+    const satisfaction = this.game.getEffectiveSatisfaction(recipe);
+    this.game.economy.earnMoney(price, "payment");
+    g.totalPaid += price;
+    g.totalSatisfaction += satisfaction;
     // Floating "+$N" above the guest.
-    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${recipe.sellPrice}`, "#a8e2a8");
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${price}`, "#a8e2a8");
   }
 
   /** End-of-visit: record one served + one averaged rating across courses. */

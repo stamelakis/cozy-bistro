@@ -22,10 +22,13 @@ export class WorldScene {
    * first frame or two while GLBs load. */
   chefChar?: AnimatedCharacter;
   waiterChar?: AnimatedCharacter;
+  errandChar?: AnimatedCharacter;
   /** World position of the stove and the plate-pickup spot. Used by the
    * StaffRouter to send chef/waiter to the right places. */
   readonly stovePos = new THREE.Vector2(0, -3.0);
   readonly pickupPos = new THREE.Vector2(0.5, -2.8);
+  /** Where the errand helper walks to when fetching ingredients (front door). */
+  readonly doorPos = new THREE.Vector2(0, 5);
   /** Resolves once the staff characters are loaded — so Engine can build
    * the StaffRouter at the right moment. */
   staffReady: Promise<void> = Promise.resolve();
@@ -175,6 +178,7 @@ export class WorldScene {
         this.animator.add(animated);
         if (c.id === "chef") this.chefChar = animated;
         if (c.id === "waiter") this.waiterChar = animated;
+        if (c.id === "errand") this.errandChar = animated;
       } catch (err) {
         console.warn(`Character ${c.id} unavailable:`, err);
       }
