@@ -161,6 +161,8 @@ export interface SaveGameState {
   expansionLevel?: number;
   /** Per-day history snapshots (one per completed day). v2-specific. */
   dayHistory?: unknown[];
+  /** Unlocked achievement ids. v2-specific. */
+  achievements?: string[];
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

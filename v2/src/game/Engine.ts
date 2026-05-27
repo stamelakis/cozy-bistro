@@ -15,6 +15,7 @@ import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
+import { AchievementsModal } from "../ui/AchievementsModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { SfxPlayer } from "../ui/SfxPlayer";
@@ -47,6 +48,7 @@ export class Engine {
   readonly ledgerModal: LedgerModal;
   readonly helpModal: HelpModal;
   readonly statsModal: StatsModal;
+  readonly achievementsModal: AchievementsModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly sfx: SfxPlayer;
@@ -110,6 +112,7 @@ export class Engine {
       openLedger: () => this.ledgerModal.show(),
       openHelp: () => this.helpModal.show(),
       openStats: () => this.statsModal.show(),
+      openAchievements: () => this.achievementsModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
@@ -127,6 +130,13 @@ export class Engine {
     this.ledgerModal = new LedgerModal(container, this.game);
     this.helpModal = new HelpModal(container);
     this.statsModal = new StatsModal(container, this.game);
+    this.achievementsModal = new AchievementsModal(container, this.game);
+    // Pop a toast above the door whenever an achievement unlocks.
+    this.game.achievements.onUnlock = (a) => {
+      // Floating text and sound; player can open the AchievementsModal for details.
+      this.floatingText.pop(0, 5, `🏆 ${a.name}`, "#ffd986");
+      this.sfx.chime();
+    };
     // Auto-show the welcome modal on a brand-new visit.
     if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);

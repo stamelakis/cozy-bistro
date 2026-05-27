@@ -94,6 +94,7 @@ export class SaveSystem {
       // so a 2D save would round-trip cleanly.
       expansionLevel: this.game.getLuxuryTier() - 1,
       dayHistory: this.game.history.snapshot(),
+      achievements: this.game.achievements.snapshot(),
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };

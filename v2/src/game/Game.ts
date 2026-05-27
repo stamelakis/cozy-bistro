@@ -6,6 +6,7 @@ import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
+import { AchievementSystem } from "./AchievementSystem";
 import { recipes } from "../data/recipes";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -57,6 +58,7 @@ export class Game {
   readonly staff: StaffSystem;
   readonly weather: WeatherSystem;
   readonly history: DayHistory;
+  readonly achievements: AchievementSystem;
 
   /** Auto-shop accumulator (seconds since last attempt). */
   private autoShopClock = 0;
@@ -93,6 +95,7 @@ export class Game {
     this.staff = new StaffSystem();
     this.weather = new WeatherSystem();
     this.history = new DayHistory();
+    this.achievements = new AchievementSystem();
     if (save) this.hydrate(save);
     // Seed the cooking menu with one default recipe so guests have
     // something to order. (CookingSystem hydrate would handle this on
@@ -169,6 +172,8 @@ export class Game {
     if (this.boostRemaining > 0) {
       this.boostRemaining = Math.max(0, this.boostRemaining - dt);
     }
+    // Achievement predicates only check once per second internally.
+    this.achievements.update(dt, this);
   }
 
   hydrate(save: SaveGameState): void {
@@ -189,6 +194,9 @@ export class Game {
     // typed loosely in SaveGameState for cross-version compat.
     if (Array.isArray(save.dayHistory)) {
       this.history.hydrate(save.dayHistory as Parameters<typeof this.history.hydrate>[0]);
+    }
+    if (Array.isArray(save.achievements)) {
+      this.achievements.hydrate(save.achievements as string[]);
     }
   }
 
