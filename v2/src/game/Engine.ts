@@ -4,6 +4,7 @@ import { WorldScene } from "../scene/WorldScene";
 import { Game } from "./Game";
 import { GuestSpawner } from "./GuestSpawner";
 import { PedestrianSpawner } from "./PedestrianSpawner";
+import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
@@ -39,6 +40,7 @@ export class Engine {
   router?: StaffRouter;
   errand?: ErrandRouter;
   pedestrians?: PedestrianSpawner;
+  trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
@@ -183,6 +185,7 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
+      this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — runs to door + back whenever auto-shop fires.
       if (this.scene.errandChar) {
         this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
@@ -382,6 +385,7 @@ export class Engine {
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.pedestrians?.update(dt);
+    this.trash?.update(dt);
     // After all movement, run a personal-space pass so walking guests
     // + pedestrians don't stack on top of each other.
     if (dt > 0 && (this.spawner || this.pedestrians)) {
