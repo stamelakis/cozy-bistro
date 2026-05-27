@@ -93,6 +93,7 @@ export class SaveSystem {
       // playable tier was expansionLevel + 1. We persist in the same shape
       // so a 2D save would round-trip cleanly.
       expansionLevel: this.game.getLuxuryTier() - 1,
+      dayHistory: this.game.history.snapshot(),
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };

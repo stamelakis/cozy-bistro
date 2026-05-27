@@ -159,6 +159,8 @@ export interface SaveGameState {
   rentElapsedSeconds?: number;
   totalPlaySeconds?: number;
   expansionLevel?: number;
+  /** Per-day history snapshots (one per completed day). v2-specific. */
+  dayHistory?: unknown[];
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

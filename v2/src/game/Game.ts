@@ -5,6 +5,7 @@ import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
+import { DayHistory } from "./DayHistory";
 import { recipes } from "../data/recipes";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -55,6 +56,7 @@ export class Game {
   readonly day: DayCycleSystem;
   readonly staff: StaffSystem;
   readonly weather: WeatherSystem;
+  readonly history: DayHistory;
 
   /** Auto-shop accumulator (seconds since last attempt). */
   private autoShopClock = 0;
@@ -90,6 +92,7 @@ export class Game {
     this.day = new DayCycleSystem();
     this.staff = new StaffSystem();
     this.weather = new WeatherSystem();
+    this.history = new DayHistory();
     if (save) this.hydrate(save);
     // Seed the cooking menu with one default recipe so guests have
     // something to order. (CookingSystem hydrate would handle this on
@@ -182,24 +185,39 @@ export class Game {
     this.customers.hydrate(save);
     this.day.hydrate(save);
     this.staff.hydrate(save);
+    // Day history: store typed records but tolerate any shape since it's
+    // typed loosely in SaveGameState for cross-version compat.
+    if (Array.isArray(save.dayHistory)) {
+      this.history.hydrate(save.dayHistory as Parameters<typeof this.history.hydrate>[0]);
+    }
   }
 
   private rolloverDay(): void {
-    // Capture the day's totals BEFORE resetting them so the callback can
-    // show an accurate recap.
-    if (this.onDayEnded) {
-      const revenue = this.economy.getDailyRevenue();
-      const expenses = this.economy.getDailyExpenses();
-      this.onDayEnded({
-        dayNumber: this.day.getDayNumber(),
-        served: this.customers.getDailyServed(),
-        lost: this.customers.getDailyLost(),
-        revenue,
-        expenses,
-        net: revenue - expenses,
-        rating: this.reputation.getReputation(),
-      });
-    }
+    // Capture the day's totals BEFORE resetting them — used by both the
+    // day-end modal callback AND the persistent history.
+    const dayNumber = this.day.getDayNumber();
+    const revenue = this.economy.getDailyRevenue();
+    const expenses = this.economy.getDailyExpenses();
+    const served = this.customers.getDailyServed();
+    const lost = this.customers.getDailyLost();
+    const rating = this.reputation.getReputation();
+    const weather = this.weather.getCurrent();
+    this.history.push({
+      dayNumber,
+      served,
+      lost,
+      revenue,
+      expenses,
+      net: revenue - expenses,
+      rating,
+      weatherEmoji: weather.emoji,
+      weatherLabel: weather.label,
+    });
+    this.onDayEnded?.({
+      dayNumber, served, lost, revenue, expenses,
+      net: revenue - expenses,
+      rating,
+    });
     this.economy.resetDailyTotals();
     this.customers.resetDailyTotals();
     this.day.rollOverDay();

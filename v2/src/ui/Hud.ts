@@ -24,6 +24,7 @@ export interface TimeControl {
 export interface HudActions {
   openLedger: () => void;
   openHelp: () => void;
+  openStats: () => void;
   resetSave: () => void;
 }
 
@@ -75,6 +76,7 @@ export class Hud {
     this.addSpeedControls();
     this.addOpenCloseButton();
     this.addLedgerButton();
+    this.addStatsButton();
     this.addHelpButton();
     this.addAdminGrantButton();
     this.addResetButton();
@@ -97,6 +99,26 @@ export class Hud {
     } as Partial<CSSStyleDeclaration>);
     btn.textContent = "? How to play";
     btn.onclick = () => this.actions.openHelp();
+    this.root.appendChild(btn);
+  }
+
+  private addStatsButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(140, 180, 200, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "📊 Daily trends";
+    btn.onclick = () => this.actions.openStats();
     this.root.appendChild(btn);
   }
 

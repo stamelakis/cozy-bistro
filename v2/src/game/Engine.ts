@@ -14,6 +14,7 @@ import { ExpandPanel } from "../ui/ExpandPanel";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
+import { StatsModal } from "../ui/StatsModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { StaffRouter } from "./StaffRouter";
@@ -44,6 +45,7 @@ export class Engine {
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
   readonly helpModal: HelpModal;
+  readonly statsModal: StatsModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly saver: SaveSystem;
@@ -105,6 +107,7 @@ export class Engine {
     }, {
       openLedger: () => this.ledgerModal.show(),
       openHelp: () => this.helpModal.show(),
+      openStats: () => this.statsModal.show(),
       resetSave: () => this.resetSave(),
     });
     this.staffPanel = new StaffPanel(container, this.game);
@@ -116,6 +119,7 @@ export class Engine {
     this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
     this.ledgerModal = new LedgerModal(container, this.game);
     this.helpModal = new HelpModal(container);
+    this.statsModal = new StatsModal(container, this.game);
     // Auto-show the welcome modal on a brand-new visit.
     if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
