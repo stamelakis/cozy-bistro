@@ -39,13 +39,20 @@ interface ActiveGuest {
   target: THREE.Vector2;
   // Per-state timer (seconds).
   stateClock: number;
-  // The recipe they ordered (null until seated long enough to order).
-  recipe: RecipeDefinition | null;
-  // The ticket id from the StaffRouter (null until ordered).
+  // The list of dishes the guest wants. Multi-course orders deliver one
+  // at a time; the guest stays seated until the last is eaten.
+  order: RecipeDefinition[];
+  // Index of the dish currently being cooked/delivered/eaten.
+  orderIndex: number;
+  // The ticket id from the StaffRouter (null between courses).
   ticketId: string | null;
   // Seconds remaining before guest gives up and leaves angry. Counts down
-  // only while waiting (seated/waitingForFood). Resets on eating.
+  // only while waiting (seated/waitingForFood). Resets between courses.
   patience: number;
+  // Cumulative payment they'll leave (accumulates as each course is served).
+  totalPaid: number;
+  // Cumulative satisfaction across courses; final rating averages this.
+  totalSatisfaction: number;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -176,9 +183,12 @@ export class GuestSpawner {
         seatIndex,
         target: SEATS[seatIndex].pos.clone(),
         stateClock: 0,
-        recipe: null,
+        order: [],
+        orderIndex: 0,
         ticketId: null,
         patience: PATIENCE_BASE_SECONDS,
+        totalPaid: 0,
+        totalSatisfaction: 0,
       });
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
@@ -210,35 +220,20 @@ export class GuestSpawner {
         break;
       }
       case "seated": {
-        // Brief moment to "look at menu" — then place order with the
-        // kitchen via the StaffRouter ticket queue.
-        if (g.stateClock >= TIME_TO_ORDER && g.recipe == null) {
-          g.recipe = this.pickRecipe();
-          if (g.recipe == null) {
-            // Nothing on menu — guest walks out unhappy.
+        // Brief moment to "look at menu" — then build a multi-course
+        // order (1-3 dishes typically) and start the first course.
+        if (g.stateClock >= TIME_TO_ORDER && g.order.length === 0) {
+          g.order = this.buildOrder();
+          if (g.order.length === 0) {
             this.markLostAndExit(g);
             break;
           }
-          // Consume ingredients up front (mirror's the 2D version's
-          // pre-deduct behavior, so we don't double-promise stock).
-          if (!this.game.cooking.canFulfillRecipe(g.recipe)) {
-            this.markLostAndExit(g);
-            break;
-          }
-          this.game.cooking.consumeIngredients(g.recipe);
-          g.ticketId = this.router.enqueueOrder(
-            g.id,
-            g.recipe.id,
-            SEATS[g.seatIndex].pos,
-            g.recipe.preparationTimeSeconds,
-          );
-          g.state = "waitingForFood";
-          g.stateClock = 0;
+          this.beginNextCourse(g);
         }
         break;
       }
       case "waitingForFood": {
-        // Wait until the waiter delivers the plate.
+        // Wait until the waiter delivers the current course's plate.
         if (this.router.popDeliveredFor(g.id)) {
           g.state = "eating";
           g.stateClock = 0;
@@ -247,12 +242,22 @@ export class GuestSpawner {
       }
       case "eating": {
         if (g.stateClock >= TIME_TO_EAT) {
-          // Pay & leave.
-          this.collectPayment(g);
-          g.character.action = "walk";
-          g.target = EXIT_POSITION.clone();
-          g.state = "walkingOut";
-          g.stateClock = 0;
+          // Finished THIS course. Record payment + satisfaction.
+          this.creditCourse(g);
+          g.orderIndex += 1;
+          if (g.orderIndex < g.order.length) {
+            // Move to next course — go back to seated for a moment
+            // (the guest considers what they ordered next, then waits).
+            g.patience = PATIENCE_BASE_SECONDS;
+            this.beginNextCourse(g);
+          } else {
+            // Full order complete — leave a single averaged rating + walk out.
+            this.finalizeVisit(g);
+            g.character.action = "walk";
+            g.target = EXIT_POSITION.clone();
+            g.state = "walkingOut";
+            g.stateClock = 0;
+          }
         }
         break;
       }
@@ -281,21 +286,61 @@ export class GuestSpawner {
     return Math.hypot(g.target.x - g.character.groundPos.x, g.target.y - g.character.groundPos.y);
   }
 
-  private pickRecipe(): RecipeDefinition | null {
+  /** Pick a multi-course order (1-3 dishes) based on the guest's category
+   * expectation. Tries to include an appetizer + main + dessert pattern when
+   * possible; falls back to whatever's on menu. */
+  private buildOrder(): RecipeDefinition[] {
     const menu = this.game.cooking.getMenuRecipeIds();
     const onMenu = menu.length > 0
       ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
       : recipes.filter((r) => r.unlockedByDefault);
-    if (onMenu.length === 0) return null;
-
-    // CustomerSystem rolls a category expectation per arrival; honour it
-    // when at least one recipe in that category is on the menu, otherwise
-    // fall back to a random on-menu recipe.
+    if (onMenu.length === 0) return [];
     const expectation = this.game.customers.rollCustomerExpectation();
+    const order: RecipeDefinition[] = [];
+    // 60% chance of trying for an appetizer.
+    if (Math.random() < 0.6) {
+      const apps = onMenu.filter((r) => r.category === "appetizer");
+      if (apps.length > 0) order.push(apps[between(0, apps.length - 1)]);
+    }
+    // Always try for a main matching expectation (fallback: any main, then any).
     const matching = onMenu.filter((r) => r.category === expectation.category);
-    const candidates = matching.length > 0 ? matching : onMenu;
-    return candidates[between(0, candidates.length - 1)];
+    const mains = matching.length > 0 ? matching : onMenu.filter((r) => r.category === "main");
+    const mainPool = mains.length > 0 ? mains : onMenu;
+    order.push(mainPool[between(0, mainPool.length - 1)]);
+    // 35% chance of a dessert.
+    if (Math.random() < 0.35) {
+      const desserts = onMenu.filter((r) => r.category === "dessert");
+      if (desserts.length > 0) order.push(desserts[between(0, desserts.length - 1)]);
+    }
+    return order;
   }
+
+  /** Kick off the (next) course: consume ingredients + queue a ticket. */
+  private beginNextCourse(g: ActiveGuest): void {
+    const recipe = g.order[g.orderIndex];
+    if (!this.game.cooking.canFulfillRecipe(recipe)) {
+      // Pantry ran out mid-meal — just shorten the order so the guest
+      // pays for what they got and leaves rather than dragging on.
+      g.order = g.order.slice(0, g.orderIndex);
+      if (g.orderIndex === 0) {
+        this.markLostAndExit(g);
+      } else {
+        this.finalizeVisit(g);
+        g.character.action = "walk";
+        g.target = EXIT_POSITION.clone();
+        g.state = "walkingOut";
+        g.stateClock = 0;
+      }
+      return;
+    }
+    this.game.cooking.consumeIngredients(recipe);
+    g.ticketId = this.router.enqueueOrder(
+      g.id, recipe.id, SEATS[g.seatIndex].pos, recipe.preparationTimeSeconds,
+    );
+    g.state = "waitingForFood";
+    g.stateClock = 0;
+  }
+
 
   /** Guest gives up (ran out of patience OR couldn't be served) — record
    * the loss + dock the rating, then walk them out. */
@@ -308,15 +353,20 @@ export class GuestSpawner {
     g.stateClock = 0;
   }
 
-  private collectPayment(g: ActiveGuest): void {
-    if (!g.recipe) return;
-    // Real recipe price (was a flat $18 placeholder before).
-    this.game.economy.earnMoney(g.recipe.sellPrice, "payment");
-    this.game.customers.recordServed(1);
+  /** Bank money + satisfaction for a single completed course. */
+  private creditCourse(g: ActiveGuest): void {
+    const recipe = g.order[g.orderIndex];
+    if (!recipe) return;
+    this.game.economy.earnMoney(recipe.sellPrice, "payment");
+    g.totalPaid += recipe.sellPrice;
+    g.totalSatisfaction += recipe.satisfactionEffect;
+  }
 
-    // Satisfaction-based rating: recipe.satisfactionEffect 4-7 = base of
-    // ~3-5 stars. Slight random jitter so each guest isn't identical.
-    const base = clamp(2 + g.recipe.satisfactionEffect / 2, 1, 5);
+  /** End-of-visit: record one served + one averaged rating across courses. */
+  private finalizeVisit(g: ActiveGuest): void {
+    this.game.customers.recordServed(1);
+    const avgSat = g.order.length > 0 ? g.totalSatisfaction / g.order.length : 4;
+    const base = clamp(2 + avgSat / 2, 1, 5);
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
     this.game.reputation.recordRating(rating);
