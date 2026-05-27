@@ -3,3 +3,9 @@ dist/
 .vite/
 *.log
 .DS_Store
+.env
+.env.local
+# Generated character GLBs — committed once stable, but skip
+# regenerations to avoid noisy diffs while iterating.
+# (Remove this line if you want to commit GLBs.)
+public/assets/characters/*.glb
