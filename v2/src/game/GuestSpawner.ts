@@ -84,6 +84,10 @@ const SPAWN_INTERVAL_SECONDS = 6.0; // a new guest every N seconds if seats free
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
 const PATIENCE_BASE_SECONDS = 35;
 
+/** Seats stay dirty for this many seconds after a guest leaves before a
+ * new guest can sit. Adds a visible turnaround beat between meals. */
+const SEAT_CLEAN_SECONDS = 4.0;
+
 export class GuestSpawner {
   private readonly scene: THREE.Scene;
   private readonly characterLoader: CharacterLoader;
@@ -92,6 +96,11 @@ export class GuestSpawner {
   private readonly router: StaffRouter;
   private readonly guests: ActiveGuest[] = [];
   private occupiedSeats = new Set<number>();
+  /** seatIndex → wall-clock seconds when the seat becomes clean again. */
+  private dirtyUntil = new Map<number, number>();
+  /** Total elapsed seconds (matches Game.day.getTotalPlaySeconds vibe but
+   * we don't need to share it — used only for dirty-seat timing). */
+  private elapsed = 0;
   private spawnCooldown = 1.0;
   private nextGuestNum = 0;
   /** Set false to stop new guests from arriving. Already-seated guests
@@ -118,8 +127,16 @@ export class GuestSpawner {
   /** Per-frame tick. Spawns guests, advances their state machines, moves
    * characters toward their targets. */
   update(dt: number): void {
+    this.elapsed += dt;
     this.spawnCooldown -= dt;
-    if (this.restaurantOpen && this.spawnCooldown <= 0 && this.occupiedSeats.size < SEATS.length) {
+    // Expire dirty-seat timers — once a seat's cleanup window is up, it
+    // becomes available to the next guest.
+    if (this.dirtyUntil.size > 0) {
+      for (const [seatIdx, cleanAt] of this.dirtyUntil) {
+        if (cleanAt <= this.elapsed) this.dirtyUntil.delete(seatIdx);
+      }
+    }
+    if (this.restaurantOpen && this.spawnCooldown <= 0 && this.countAvailableSeats() > 0) {
       void this.spawnGuest();
       this.spawnCooldown = SPAWN_INTERVAL_SECONDS;
     }
@@ -155,11 +172,20 @@ export class GuestSpawner {
     return this.guests.length;
   }
 
+  /** Count of seats that are neither occupied nor in the dirty-cleanup window. */
+  private countAvailableSeats(): number {
+    let n = 0;
+    for (let i = 0; i < SEATS.length; i += 1) {
+      if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) n += 1;
+    }
+    return n;
+  }
+
   private async spawnGuest(): Promise<void> {
-    // Find a free seat.
+    // Find a free seat that isn't currently being cleaned.
     let seatIndex = -1;
     for (let i = 0; i < SEATS.length; i += 1) {
-      if (!this.occupiedSeats.has(i)) { seatIndex = i; break; }
+      if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) { seatIndex = i; break; }
     }
     if (seatIndex < 0) return;
     this.occupiedSeats.add(seatIndex);
@@ -205,6 +231,11 @@ export class GuestSpawner {
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
     this.occupiedSeats.delete(g.seatIndex);
+    // Seat needs cleanup before the next guest can use it. Pop a small
+    // marker above the seat to show the player why it's not taking guests.
+    this.dirtyUntil.set(g.seatIndex, this.elapsed + SEAT_CLEAN_SECONDS);
+    const seat = SEATS[g.seatIndex];
+    this.floatingText?.pop(seat.pos.x, seat.pos.y, "🧹 cleaning", "#f0c8a0");
     this.guests.splice(idx, 1);
   }
 
@@ -372,7 +403,13 @@ export class GuestSpawner {
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${price}`, "#a8e2a8");
   }
 
-  /** End-of-visit: record one served + one averaged rating across courses. */
+  /** End-of-visit: record one served + one averaged rating across courses.
+   *
+   * Also pays out a tip scaled to satisfaction (0% at 1★, up to 30% at 5★)
+   * and pops two floating labels above the guest: the star rating they left
+   * and the tip amount. These are the player's main "I made someone happy"
+   * feedback signal, so we want them very visible.
+   */
   private finalizeVisit(g: ActiveGuest): void {
     this.game.customers.recordServed(1);
     const avgSat = g.order.length > 0 ? g.totalSatisfaction / g.order.length : 4;
@@ -380,5 +417,23 @@ export class GuestSpawner {
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
     this.game.reputation.recordRating(rating);
+
+    // Tip: 0% at 1-2 stars, 5% at 3, 15% at 4, 30% at 5. Round to whole dollars.
+    const tipMultByRating: Record<number, number> = { 1: 0, 2: 0, 3: 0.05, 4: 0.15, 5: 0.30 };
+    const tip = Math.round(g.totalPaid * (tipMultByRating[rating] ?? 0));
+    if (tip > 0) {
+      this.game.economy.earnMoney(tip, "payment");
+    }
+
+    // Visible feedback: a star rating floats up above their seat as they leave.
+    const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
+    const ratingColor = rating >= 4 ? "#ffd966" : rating === 3 ? "#fff5dc" : "#ff9a9a";
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, stars, ratingColor);
+    if (tip > 0) {
+      // Stagger the tip label so it doesn't overlap the stars.
+      setTimeout(() => {
+        this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `tip +$${tip}`, "#a8e2a8");
+      }, 600);
+    }
   }
 }
