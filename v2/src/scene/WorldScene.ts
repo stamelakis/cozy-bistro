@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
 
 /**
  * The 3D world. A minimal demo restaurant: floor, walls, and a few pieces
@@ -15,6 +16,9 @@ export class WorldScene {
   readonly threeScene = new THREE.Scene();
   private readonly loader = new ModelLoader();
   private readonly characterLoader = new CharacterLoader(this.loader);
+  private readonly animator = new CharacterAnimator();
+  /** Demo state: a character that walks back and forth on a fixed path. */
+  private demoWalker?: { c: AnimatedCharacter; pathA: THREE.Vector2; pathB: THREE.Vector2; tElapsed: number };
 
   constructor() {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
@@ -23,8 +27,23 @@ export class WorldScene {
     void this.populateDemoRestaurant();
   }
 
-  update(_dt: number): void {
-    // Per-frame logic placeholder.
+  update(dt: number): void {
+    // Demo: bounce the waiter back and forth between two points.
+    if (this.demoWalker) {
+      const w = this.demoWalker;
+      w.tElapsed += dt;
+      const period = 6; // seconds for a full A→B→A loop
+      const phase = (w.tElapsed % period) / period; // 0..1
+      const t = phase < 0.5 ? phase * 2 : (1 - phase) * 2; // ping-pong 0..1..0
+      w.c.groundPos.x = THREE.MathUtils.lerp(w.pathA.x, w.pathB.x, t);
+      w.c.groundPos.y = THREE.MathUtils.lerp(w.pathA.y, w.pathB.y, t);
+      // Face the direction of motion (positive on A→B half, negative on return)
+      const dir = phase < 0.5 ? 1 : -1;
+      const dx = (w.pathB.x - w.pathA.x) * dir;
+      const dz = (w.pathB.y - w.pathA.y) * dir;
+      w.c.facingY = Math.atan2(dx, dz);
+    }
+    this.animator.update(dt);
   }
 
   private addLighting(): void {
@@ -133,36 +152,77 @@ export class WorldScene {
     await this.populateCharacters();
   }
 
-  /** Drop one of every TripoSR-generated character into the scene so we can
-   * eyeball quality + proportions. Real placement (waiters at counter,
-   * guests at tables, etc.) happens in the gameplay-port phase. */
+  /** Drop one of every TripoSR-generated character into the scene with
+   * representative animations so quality + animation feel are both
+   * immediately visible. */
   private async populateCharacters(): Promise<void> {
-    const characters: { id: string; x: number; z: number }[] = [
-      { id: "chef",     x: -1.5, z: -3 },
-      { id: "waiter",   x:  1.5, z: -3 },
-      { id: "errand",   x:  3.5, z: -3 },
+    // Position + action recipe for each character. Action drives the
+    // procedural animation: walk = bobbing+rotation, sit = lowered+tilted,
+    // carry = walk+pitched, idle = breathing+sway.
+    const characters: {
+      id: string;
+      x: number;
+      z: number;
+      facingY: number;
+      action: CharacterAction;
+    }[] = [
+      // Kitchen line: chef cooking (idle), errand carrying, waiter walking
+      { id: "chef",   x: -0.5, z: -3.4, facingY: 0,           action: "idle" },
+      { id: "errand", x:  3.5, z: -3.4, facingY: -Math.PI / 2, action: "carry" },
 
-      { id: "guest-v0", x: -4,   z:  3 },
-      { id: "guest-v1", x: -2.5, z:  3 },
-      { id: "guest-v2", x: -1,   z:  3 },
-      { id: "guest-v3", x:  0.5, z:  3 },
-      { id: "guest-v4", x:  2,   z:  3 },
-      { id: "guest-v5", x:  3.5, z:  3 },
-      { id: "guest-v6", x:  5,   z:  3 },
+      // Dining: guests seated around the two tables (4 seats each)
+      { id: "guest-v0", x: -2.9, z:  1.0, facingY:  Math.PI / 2, action: "sit" },
+      { id: "guest-v1", x: -1.1, z:  1.0, facingY: -Math.PI / 2, action: "sit" },
+      { id: "guest-v2", x: -2,   z:  0.1, facingY:  Math.PI,     action: "sit" },
+      { id: "guest-v3", x: -2,   z:  1.9, facingY:  0,           action: "sit" },
+
+      { id: "guest-v4", x:  1.1, z:  1.0, facingY:  Math.PI / 2, action: "sit" },
+      { id: "guest-v5", x:  2.9, z:  1.0, facingY: -Math.PI / 2, action: "sit" },
+      { id: "guest-v6", x:  2,   z:  0.1, facingY:  Math.PI,     action: "sit" },
     ];
 
     await Promise.all(characters.map(async (c) => {
       try {
-        // CharacterLoader handles: vertex-color material, normal compute,
-        // and lifting feet to y=0. We just position in the XZ plane.
         const model = await this.characterLoader.load(c.id);
-        model.position.x = c.x;
-        model.position.z = c.z;
-        // (model.position.y is set by liftFeetToOrigin in the loader)
+        const animated: AnimatedCharacter = {
+          root: model,
+          groundPos: new THREE.Vector2(c.x, c.z),
+          facingY: c.facingY,
+          action: c.action,
+          phase: Math.random() * 5,
+          // The Kenney chair seat sits ~0.5m above the floor. Sit-mode lowers
+          // the character to this height so they appear to sit on the chair.
+          seatHeight: 0.5,
+        };
         this.threeScene.add(model);
+        this.animator.add(animated);
       } catch (err) {
         console.warn(`Character ${c.id} unavailable:`, err);
       }
     }));
+
+    // The waiter walks back and forth between the kitchen line and the
+    // dining area so the walk animation is visible while the rest of the
+    // scene is static.
+    try {
+      const waiter = await this.characterLoader.load("waiter");
+      const animated: AnimatedCharacter = {
+        root: waiter,
+        groundPos: new THREE.Vector2(1.5, -3.4),
+        facingY: 0,
+        action: "walk",
+        phase: 0,
+      };
+      this.threeScene.add(waiter);
+      this.animator.add(animated);
+      this.demoWalker = {
+        c: animated,
+        pathA: new THREE.Vector2(1.5, -3.0),
+        pathB: new THREE.Vector2(1.5,  0.5),
+        tElapsed: 0,
+      };
+    } catch (err) {
+      console.warn("Waiter unavailable for walking demo:", err);
+    }
   }
 }

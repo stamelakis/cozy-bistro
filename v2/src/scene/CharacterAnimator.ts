@@ -1,0 +1,103 @@
+import * as THREE from "three";
+
+/**
+ * Procedural pseudo-animation for static (un-rigged) character meshes.
+ *
+ * Our TripoSR-generated characters are unrigged statues — no bones, no
+ * skeletal animation. So we fake "alive" with whole-body transforms:
+ *   - Idle:  subtle breathing scale + tiny azimuthal sway
+ *   - Walk:  vertical bob + facing the move direction + slight side lean
+ *   - Sit:   rotated forward at the hip + lowered Y onto a chair seat
+ *   - Carry: walk + small forward pitch
+ *
+ * This won't fool anyone up close but reads as "characters moving around
+ * the restaurant" at iso distance, which is what we need for prototyping
+ * gameplay. Real rigged animation is a polish-phase swap.
+ */
+export type CharacterAction = "idle" | "walk" | "sit" | "carry";
+
+export interface AnimatedCharacter {
+  root: THREE.Object3D;
+  /** Where the character's feet should be on the floor (xz). */
+  groundPos: THREE.Vector2;
+  /** Current facing in radians around Y (0 = facing +X, π/2 = facing +Z). */
+  facingY: number;
+  /** What it's doing right now. */
+  action: CharacterAction;
+  /** Phase offset (seconds) so multiple characters don't sync. */
+  phase: number;
+  /** Optional: seat Y offset when action = sit (chair seat above floor). */
+  seatHeight?: number;
+  // Internal: cached base scale so breathing oscillates around it.
+  _baseScale?: number;
+}
+
+export class CharacterAnimator {
+  private readonly characters: AnimatedCharacter[] = [];
+  private elapsed = 0;
+
+  add(c: AnimatedCharacter): void {
+    c._baseScale = c.root.scale.x; // assume uniform scale
+    c.phase = c.phase ?? Math.random() * 100;
+    this.characters.push(c);
+  }
+
+  remove(root: THREE.Object3D): void {
+    const i = this.characters.findIndex((c) => c.root === root);
+    if (i >= 0) this.characters.splice(i, 1);
+  }
+
+  update(dt: number): void {
+    this.elapsed += dt;
+    for (const c of this.characters) {
+      this.tickCharacter(c);
+    }
+  }
+
+  private tickCharacter(c: AnimatedCharacter): void {
+    const t = this.elapsed + (c.phase ?? 0);
+    const base = c._baseScale ?? 1;
+
+    // Always-on subtle "breathing" — slightly oscillate vertical scale.
+    const breath = 1 + Math.sin(t * 1.6) * 0.012;
+    c.root.scale.set(base, base * breath, base);
+
+    // Reset to neutral pose, then apply the action's transforms.
+    c.root.position.set(c.groundPos.x, 0, c.groundPos.y);
+    c.root.rotation.set(0, c.facingY, 0);
+
+    switch (c.action) {
+      case "idle": {
+        // Tiny lateral sway so they don't look completely frozen.
+        c.root.rotation.y += Math.sin(t * 0.9) * 0.04;
+        break;
+      }
+      case "walk": {
+        // Bob up/down faster than breathing — reads as footstep cadence.
+        const bob = Math.abs(Math.sin(t * 6.0)) * 0.08;
+        c.root.position.y += bob;
+        // Lean side-to-side slightly with each step.
+        c.root.rotation.z = Math.sin(t * 6.0) * 0.06;
+        break;
+      }
+      case "carry": {
+        // Same as walk + small forward pitch (carrying something heavy/forward).
+        const bob = Math.abs(Math.sin(t * 5.5)) * 0.06;
+        c.root.position.y += bob;
+        c.root.rotation.z = Math.sin(t * 5.5) * 0.04;
+        c.root.rotation.x = 0.08; // forward pitch
+        break;
+      }
+      case "sit": {
+        // Drop to seat height and tilt forward slightly to suggest the
+        // hip bend. Static — no oscillation while seated.
+        c.root.position.y = (c.seatHeight ?? 0.45);
+        c.root.rotation.x = 0.18;
+        // Subtle hand/torso shift over time so they don't look completely
+        // frozen (small azimuth wobble).
+        c.root.rotation.y += Math.sin(t * 0.5) * 0.03;
+        break;
+      }
+    }
+  }
+}
