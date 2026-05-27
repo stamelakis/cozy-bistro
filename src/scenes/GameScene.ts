@@ -9734,6 +9734,15 @@ export class GameScene extends Phaser.Scene {
     body.setData("colors", colors);
     body.setData("facing", facing);
     body.setData("seated", seated);
+    // Depth fix for seated guests: chair sprite extends into the floor-diamond
+    // bottom vertex so its sort-Y ends up ~10px past the chair's anchor.
+    // Default character sort-Y is container.y + 17 which lands BEHIND the
+    // chair, so the chair renders on top of the seated character. Add a
+    // sortYOffset to seated containers so they always sort after their chair.
+    const container = body.parentContainer;
+    if (container) {
+      container.setData("sortYOffset", seated ? 32 : 0);
+    }
     if (this.updateCharacterSprite(body, facing, phase, seated)) {
       body.clear().setVisible(false);
       legs.clear().setVisible(false);
