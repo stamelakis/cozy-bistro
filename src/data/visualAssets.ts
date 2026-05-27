@@ -136,13 +136,14 @@ export function getCharacterSpriteFrame(
     origin: { x: 0.5, y: 1 },
     xOffset: 0,
     // For seated guests we want the BUTT (not the feet) to land on the chair
-    // seat point. The AI seated sprite is drawn at real-human proportions
-    // (feet at sprite bottom, butt some way up). yOffset pushes the sprite
-    // down so the butt aligns with the seat; feet then end up below the
-    // chair's visual floor and are hidden by the chair leg sprite. The
-    // exact value depends on each character's pose proportions — 35 is a
-    // safe baseline that fixes the worst of the hover without overshooting.
-    yOffset: seated ? 35 : 6,
+    // seat point. Empirically iterating: 17 left them clearly hovering, 35
+    // still hovered slightly, 100 sent them way past the chair. 55 is the
+    // next try. The "right" value depends on each sprite's butt-position
+    // within the frame plus the chair's actual seat-vs-floor distance,
+    // which has been hard to derive analytically because the atlas-resampling
+    // step and the chair sprite's anchor convention introduce factors my
+    // math kept missing.
+    yOffset: seated ? 55 : 6,
     // Seated AI art is drawn full-height (head to feet on floor) so at the
     // standing scale the character towers over the chair. Shrink seated
     // sprites so the seated silhouette is roughly chair-sized.
