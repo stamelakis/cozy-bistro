@@ -5,6 +5,7 @@ import { Game } from "./Game";
 import { GuestSpawner } from "./GuestSpawner";
 import { Hud } from "../ui/Hud";
 import { BuildMenu } from "../ui/BuildMenu";
+import { StaffPanel } from "../ui/StaffPanel";
 import { StaffRouter } from "./StaffRouter";
 import { SaveSystem } from "./SaveSystem";
 
@@ -20,6 +21,7 @@ export class Engine {
   spawner?: GuestSpawner;
   router?: StaffRouter;
   readonly hud: Hud;
+  readonly staffPanel: StaffPanel;
   readonly saver: SaveSystem;
 
   private running = false;
@@ -50,7 +52,12 @@ export class Engine {
     const savedState = SaveSystem.loadFromStorage();
     this.game = new Game(savedState);
     this.saver = new SaveSystem(this.game);
-    this.hud = new Hud(container, this.game, { getActiveGuestCount: () => this.spawner?.getActiveGuestCount() ?? 0 });
+    this.hud = new Hud(container, this.game, {
+      getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
+      isOpen: () => this.spawner?.restaurantOpen ?? true,
+      setOpen: (open: boolean) => { if (this.spawner) this.spawner.restaurantOpen = open; },
+    });
+    this.staffPanel = new StaffPanel(container, this.game);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
 
@@ -141,6 +148,7 @@ export class Engine {
     this.hudAccumulator += dt;
     if (this.hudAccumulator >= 0.2) {
       this.hud.update();
+      this.staffPanel.update();
       this.hudAccumulator = 0;
     }
 

@@ -43,6 +43,9 @@ interface ActiveGuest {
   recipe: RecipeDefinition | null;
   // The ticket id from the StaffRouter (null until ordered).
   ticketId: string | null;
+  // Seconds remaining before guest gives up and leaves angry. Counts down
+  // only while waiting (seated/waitingForFood). Resets on eating.
+  patience: number;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -69,6 +72,9 @@ const ARRIVAL_THRESHOLD = 0.15;
 const TIME_TO_ORDER = 3.0;
 const TIME_TO_EAT = 8.0;
 const SPAWN_INTERVAL_SECONDS = 6.0; // a new guest every N seconds if seats free
+/** Guests give up if not served within this many seconds total. Scaled by
+ * the recipe's cook time so slow recipes don't unfairly anger guests. */
+const PATIENCE_BASE_SECONDS = 35;
 
 export class GuestSpawner {
   private readonly scene: THREE.Scene;
@@ -80,6 +86,9 @@ export class GuestSpawner {
   private occupiedSeats = new Set<number>();
   private spawnCooldown = 1.0;
   private nextGuestNum = 0;
+  /** Set false to stop new guests from arriving. Already-seated guests
+   * finish their meal regardless. */
+  restaurantOpen = true;
 
   constructor(
     scene: THREE.Scene,
@@ -99,19 +108,36 @@ export class GuestSpawner {
    * characters toward their targets. */
   update(dt: number): void {
     this.spawnCooldown -= dt;
-    if (this.spawnCooldown <= 0 && this.occupiedSeats.size < SEATS.length) {
+    if (this.restaurantOpen && this.spawnCooldown <= 0 && this.occupiedSeats.size < SEATS.length) {
       void this.spawnGuest();
       this.spawnCooldown = SPAWN_INTERVAL_SECONDS;
     }
 
     // Tick each guest's state machine.
     for (let i = this.guests.length - 1; i >= 0; i -= 1) {
-      this.tickGuest(this.guests[i], dt);
+      const g = this.guests[i];
+      this.tickPatience(g, dt);
+      this.tickGuest(g, dt);
       // Remove guest if they finished walking out.
-      if (this.guests[i].state === "walkingOut" && this.distanceToTarget(this.guests[i]) < ARRIVAL_THRESHOLD) {
+      if (g.state === "walkingOut" && this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
         this.despawnGuest(i);
       }
     }
+  }
+
+  /** Count down patience while the guest is waiting. If it hits zero they
+   * give up: record a lost customer, ding the rating, and walk them out. */
+  private tickPatience(g: ActiveGuest, dt: number): void {
+    if (g.state !== "seated" && g.state !== "waitingForFood") return;
+    g.patience -= dt;
+    if (g.patience > 0) return;
+    // Patience exhausted — angry exit.
+    this.game.customers.recordLost(1);
+    this.game.reputation.recordRating(1);
+    g.character.action = "walk";
+    g.target = EXIT_POSITION.clone();
+    g.state = "walkingOut";
+    g.stateClock = 0;
   }
 
   getActiveGuestCount(): number {
@@ -152,6 +178,7 @@ export class GuestSpawner {
         stateClock: 0,
         recipe: null,
         ticketId: null,
+        patience: PATIENCE_BASE_SECONDS,
       });
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);

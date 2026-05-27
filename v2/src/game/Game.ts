@@ -2,9 +2,14 @@ import { EconomySystem } from "../systems/EconomySystem";
 import { ReputationSystem } from "../systems/ReputationSystem";
 import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
-import { DayCycleSystem } from "../systems/DayCycleSystem";
+import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem } from "../systems/StaffSystem";
 import type { SaveGameState } from "../data/types";
+
+/** Money charged automatically per in-game day. */
+const DAILY_RENT = 40;
+/** Money charged per staff member per real minute. */
+const PAYROLL_PER_STAFF_PER_MINUTE = 6;
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -45,6 +50,17 @@ export class Game {
     const dayTick = this.day.tick(dt);
     if (dayTick.dayEnded) {
       this.rolloverDay();
+    }
+    // Rent ticks on the slow "rent period" timer (default = 1 in-game day).
+    const rentPeriodsDue = this.day.consumePendingRentPeriods(rentIntervalSeconds);
+    if (rentPeriodsDue > 0) {
+      this.economy.forceSpendMoney(DAILY_RENT * rentPeriodsDue, "rent");
+    }
+    // Payroll runs continuously while staff are hired. tickSalary takes
+    // a millisecond timestamp and internally rate-limits its own charges.
+    const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, PAYROLL_PER_STAFF_PER_MINUTE);
+    if (payroll.charge > 0) {
+      this.economy.forceSpendMoney(payroll.charge, "charge");
     }
   }
 
