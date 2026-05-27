@@ -67,17 +67,24 @@ const DOOR_POSITION = new THREE.Vector2(0, 5);
 // Where guests exit to when leaving
 const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 
-// 8 chair seats (matches the 2 dining tables in WorldScene). platePos is
+// 12 chair seats (matches the 3 dining tables in WorldScene). platePos is
 // where the food plate appears on the table in front of this seat.
 const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
-  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.45, 1.0) }, // left table, west chair
-  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.55, 1.0) }, // left table, east chair
-  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.55) }, // left table, north chair
-  { pos: new THREE.Vector2(-2,   1.9), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.45) }, // left table, south chair
-  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.55, 1.0) },  // right table, west chair
-  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.45, 1.0) },  // right table, east chair
-  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.55) },  // right table, north chair
-  { pos: new THREE.Vector2( 2,   1.9), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.45) },  // right table, south chair
+  // Left table
+  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.45, 1.0) },
+  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.55, 1.0) },
+  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.55) },
+  { pos: new THREE.Vector2(-2,   1.9), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.45) },
+  // Right table
+  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.55, 1.0) },
+  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.45, 1.0) },
+  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.55) },
+  { pos: new THREE.Vector2( 2,   1.9), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.45) },
+  // Front (third) table — added to keep up with rising spawn rates.
+  { pos: new THREE.Vector2(-0.9, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.45, 3.0) },
+  { pos: new THREE.Vector2( 0.9, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.45, 3.0) },
+  { pos: new THREE.Vector2( 0,   2.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 0,    2.55) },
+  { pos: new THREE.Vector2( 0,   3.9), facingY:  0,           platePos: new THREE.Vector2( 0,    3.45) },
 ];
 /** Approximate table-surface height (Kenney small-table) used for plate Y. */
 const TABLE_HEIGHT_Y = 0.52;

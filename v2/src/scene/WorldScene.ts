@@ -217,6 +217,13 @@ export class WorldScene {
       { id: "cushion-chair", x: 2,    z: 0.1, rotY: 0 },
       { id: "cushion-chair", x: 2,    z: 1.9, rotY: Math.PI },
 
+      // Third table near the front so the restaurant doesn't feel half-empty.
+      { id: "small-table",   x: 0,    z: 3 },
+      { id: "modern-chair",  x: -0.9, z: 3, rotY: Math.PI / 2 },
+      { id: "modern-chair",  x:  0.9, z: 3, rotY: -Math.PI / 2 },
+      { id: "modern-chair",  x:  0,   z: 2.1, rotY: 0 },
+      { id: "modern-chair",  x:  0,   z: 3.9, rotY: Math.PI },
+
       // Decor
       { id: "plant-medium",  x: -4.5, z: -4 },
       { id: "plant-small",   x:  4,   z: -4 },
