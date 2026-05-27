@@ -83,27 +83,46 @@ export class BuildMenu {
     root.appendChild(title);
 
     // Group buttons by category so a longer catalog stays scannable.
+    // Each category is a collapsible section (all collapsed by default
+    // except Tables) to handle the 50+ items without dominating the screen.
     const categoryOrder: FurnitureDef["category"][] = [
       "table", "chair", "stove", "counter", "decoration", "plant", "lamp", "door",
     ];
     const categoryLabels: Record<FurnitureDef["category"], string> = {
       table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
-      decoration: "Decor", plant: "Plants", lamp: "Lighting", door: "Doors",
+      decoration: "Decor", plant: "Plants", lamp: "Lighting", door: "Doors & Windows",
     };
     for (const cat of categoryOrder) {
       const items = furnitureCatalog.filter((d) => d.category === cat);
       if (items.length === 0) continue;
+      const startOpen = cat === "table";
+      let open = startOpen;
       const header = document.createElement("div");
-      header.textContent = categoryLabels[cat];
       Object.assign(header.style, {
         marginTop: "8px",
         marginBottom: "3px",
+        padding: "3px 4px",
         fontSize: "11px",
         fontWeight: "700",
-        opacity: "0.65",
+        opacity: "0.85",
         letterSpacing: "0.05em",
         textTransform: "uppercase",
+        cursor: "pointer",
+        background: "rgba(255,245,220,0.05)",
+        borderRadius: "3px",
+        userSelect: "none",
       } as Partial<CSSStyleDeclaration>);
+      const items_wrap = document.createElement("div");
+      items_wrap.style.display = open ? "block" : "none";
+      const refreshHeader = () => {
+        header.textContent = `${open ? "▾" : "▸"} ${categoryLabels[cat]} (${items.length})`;
+      };
+      refreshHeader();
+      header.onclick = () => {
+        open = !open;
+        items_wrap.style.display = open ? "block" : "none";
+        refreshHeader();
+      };
       root.appendChild(header);
       for (const def of items) {
         const btn = document.createElement("button");
@@ -124,8 +143,9 @@ export class BuildMenu {
         btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
         btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
         btn.onclick = () => this.startPlacing(def);
-        root.appendChild(btn);
+        items_wrap.appendChild(btn);
       }
+      root.appendChild(items_wrap);
     }
 
     const sellBtn = document.createElement("button");
