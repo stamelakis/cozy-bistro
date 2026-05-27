@@ -67,6 +67,7 @@ export class Hud {
     this.addRow("money", "Money: —");
     this.addRow("rating", "Rating: —");
     this.addRow("day", "Day: —");
+    this.addRow("weather", "Weather: —");
     this.addRow("guests", "Guests: —");
     this.addRow("served", "Served today: —");
     this.addRow("lost", "Lost today: —");
@@ -241,6 +242,8 @@ export class Hud {
     this.fields.money.textContent = `Money: $${money}`;
     this.fields.rating.textContent = `Rating: ${rating} ⭐`;
     this.fields.day.textContent = `Day: ${day}`;
+    const w = this.game.weather.getCurrent();
+    this.fields.weather.textContent = `Weather: ${w.emoji} ${w.label}`;
     this.fields.guests.textContent = `Guests in: ${guests}`;
     this.fields.served.textContent = `Served today: ${served}`;
     this.fields.lost.textContent = `Lost today: ${lost}`;

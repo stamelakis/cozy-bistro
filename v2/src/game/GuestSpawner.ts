@@ -183,11 +183,11 @@ export class GuestSpawner {
     }
     if (this.restaurantOpen && this.spawnCooldown <= 0 && this.countAvailableSeats() > 0) {
       void this.spawnGuest();
-      // Boosted: spawn at double rate while the timer's running.
-      const interval = this.game.isBoostActive()
-        ? SPAWN_INTERVAL_SECONDS * 0.5
-        : SPAWN_INTERVAL_SECONDS;
-      this.spawnCooldown = interval;
+      // Apply weather multiplier first, then halve if a paid boost is on.
+      // Weather values >1 slow spawning (rainy), <1 speed it up (festival).
+      const weatherMult = this.game.weather.getCurrent().spawnRateMultiplier;
+      const boostMult = this.game.isBoostActive() ? 0.5 : 1;
+      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult;
     }
 
     // Tick each guest's state machine.
@@ -523,11 +523,12 @@ export class GuestSpawner {
     this.game.reputation.recordRating(rating);
 
     // Tip: 0% at 1-2 stars, 5% at 3, 15% at 4, 30% at 5. Round to whole dollars.
-    // Archetype tip multiplier swings generous guests up to +50% and grumps
-    // down to ~40% of what they would normally tip.
+    // Modifiers: archetype (generous +50% / grumpy -60%) and weather
+    // (festival + cold snap make people tip a bit more).
     const tipMultByRating: Record<number, number> = { 1: 0, 2: 0, 3: 0.05, 4: 0.15, 5: 0.30 };
     const baseTipRate = tipMultByRating[rating] ?? 0;
-    const tip = Math.round(g.totalPaid * baseTipRate * g.archetype.tipMultiplier);
+    const weatherMult = this.game.weather.getCurrent().tipMultiplier;
+    const tip = Math.round(g.totalPaid * baseTipRate * g.archetype.tipMultiplier * weatherMult);
     if (tip > 0) {
       this.game.economy.earnMoney(tip, "payment");
     }

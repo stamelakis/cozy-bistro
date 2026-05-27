@@ -4,6 +4,7 @@ import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
+import { WeatherSystem } from "./WeatherSystem";
 import { recipes } from "../data/recipes";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -53,6 +54,7 @@ export class Game {
   readonly customers: CustomerSystem;
   readonly day: DayCycleSystem;
   readonly staff: StaffSystem;
+  readonly weather: WeatherSystem;
 
   /** Auto-shop accumulator (seconds since last attempt). */
   private autoShopClock = 0;
@@ -87,6 +89,7 @@ export class Game {
     this.customers = new CustomerSystem();
     this.day = new DayCycleSystem();
     this.staff = new StaffSystem();
+    this.weather = new WeatherSystem();
     if (save) this.hydrate(save);
     // Seed the cooking menu with one default recipe so guests have
     // something to order. (CookingSystem hydrate would handle this on
@@ -200,6 +203,9 @@ export class Game {
     this.economy.resetDailyTotals();
     this.customers.resetDailyTotals();
     this.day.rollOverDay();
+    // Roll the next day's weather AFTER the day counter advances so the
+    // HUD's "Day N" matches the weather forecast for that same day.
+    this.weather.rollForNewDay();
   }
 
   // === Recipe upgrade math (used by GuestSpawner + UpgradePanel) ===
