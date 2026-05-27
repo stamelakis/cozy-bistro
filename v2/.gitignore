@@ -5,7 +5,5 @@ dist/
 .DS_Store
 .env
 .env.local
-# Generated character GLBs — committed once stable, but skip
-# regenerations to avoid noisy diffs while iterating.
-# (Remove this line if you want to commit GLBs.)
-public/assets/characters/*.glb
+# Generated character GLBs ARE committed so users don't have to
+# regenerate. The regeneration script is in scripts/generate_triposr.py.
