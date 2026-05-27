@@ -5287,7 +5287,26 @@ export class GameScene extends Phaser.Scene {
     this.renderDirtyDishStack();
     this.updateRestaurantReadableTextRotation();
     this.sortActorDepths();
+    this.refreshSeatedGuestFacings(diningSeats);
     this.recordFurnitureRender(performance.now() - startedAt, time);
+  }
+
+  // Re-derive each currently-seated guest's facing from the live diningSeat
+  // data. Without this, a guest who sat down before the facing-computation
+  // logic changed would keep their stale stored facing forever.
+  private refreshSeatedGuestFacings(diningSeats: DiningSeat[]): void {
+    const seatsByUid = new Map(diningSeats.map((seat) => [seat.seatUid, seat]));
+    this.guests.forEach((guest) => {
+      if (guest.state === "entering" || guest.state === "leaving") {
+        return;
+      }
+      const seat = seatsByUid.get(guest.seatUid);
+      if (!seat || seat.seatedFacing === guest.seatedFacing) {
+        return;
+      }
+      guest.seatedFacing = seat.seatedFacing;
+      this.drawPersonPose(guest.body, guest.legs, guest.seatedFacing, 0, true);
+    });
   }
 
   private recordFurnitureRender(durationMs: number, time = this.time.now): void {
