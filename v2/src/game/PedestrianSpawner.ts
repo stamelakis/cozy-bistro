@@ -64,6 +64,11 @@ export class PedestrianSpawner {
     }
   }
 
+  /** Snapshot for the PersonalSpace pass. Pedestrians are all movable. */
+  snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
+    return this.people.map((p) => ({ character: p.character, pinned: false }));
+  }
+
   private async spawn(): Promise<void> {
     const dir = Math.random() < 0.5 ? 1 : -1;
     const startX = dir > 0 ? -PAVEMENT_X_RANGE : PAVEMENT_X_RANGE;

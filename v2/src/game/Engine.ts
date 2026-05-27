@@ -23,6 +23,7 @@ import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
+import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
@@ -381,6 +382,14 @@ export class Engine {
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.pedestrians?.update(dt);
+    // After all movement, run a personal-space pass so walking guests
+    // + pedestrians don't stack on top of each other.
+    if (dt > 0 && (this.spawner || this.pedestrians)) {
+      const actors: MovableActor[] = [];
+      if (this.spawner) actors.push(...this.spawner.snapshotMovable());
+      if (this.pedestrians) actors.push(...this.pedestrians.snapshotMovable());
+      PersonalSpace.apply(actors, dt);
+    }
     // Stove flame mirrors chef working state. Drive it before scene.update
     // so the flame's flicker animation runs this frame.
     this.scene.setStoveFlame(this.router?.isAnyChefCooking() ?? false);

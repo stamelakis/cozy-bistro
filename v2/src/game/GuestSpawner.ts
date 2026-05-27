@@ -250,6 +250,15 @@ export class GuestSpawner {
     }));
   }
 
+  /** Snapshot for the PersonalSpace pass. Guests are pinned while seated;
+   * walking guests are pushable. */
+  snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
+    return this.guests.map((g) => ({
+      character: g.character,
+      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating",
+    }));
+  }
+
   /** Count of seats that are neither occupied nor in the dirty-cleanup window. */
   private countAvailableSeats(): number {
     let n = 0;
