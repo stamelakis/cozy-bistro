@@ -26,6 +26,10 @@ export interface HudActions {
   openHelp: () => void;
   openStats: () => void;
   resetSave: () => void;
+  /** Returns whether audio is currently muted. */
+  isMuted: () => boolean;
+  /** Toggle audio on/off; returns the new muted state. */
+  toggleMute: () => boolean;
 }
 
 /**
@@ -162,6 +166,8 @@ export class Hud {
     this.root.appendChild(btn);
   }
 
+  private muteBtn?: HTMLButtonElement;
+
   private addSpeedControls(): void {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
@@ -194,6 +200,22 @@ export class Hud {
       wrap.appendChild(btn);
       this.speedBtns[c.key] = btn;
     }
+    // Mute toggle joins the speed row on the right.
+    const muteBtn = document.createElement("button");
+    Object.assign(muteBtn.style, {
+      flex: "0 0 32px",
+      padding: "4px 6px",
+      background: "rgba(255,245,220,0.08)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "13px",
+    } as Partial<CSSStyleDeclaration>);
+    muteBtn.onclick = () => { this.actions.toggleMute(); this.update(); };
+    wrap.appendChild(muteBtn);
+    this.muteBtn = muteBtn;
     this.root.appendChild(wrap);
   }
 
@@ -284,6 +306,11 @@ export class Hud {
         ? "rgba(120, 200, 120, 0.35)"
         : "rgba(255,245,220,0.08)";
       btn.style.fontWeight = key === activeKey ? "700" : "400";
+    }
+    if (this.muteBtn) {
+      const muted = this.actions.isMuted();
+      this.muteBtn.textContent = muted ? "🔇" : "🔈";
+      this.muteBtn.title = muted ? "Sound off — click to enable" : "Sound on — click to mute";
     }
   }
 }

@@ -4,6 +4,7 @@ import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAni
 import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
 import type { FloatingText } from "../ui/FloatingText";
+import type { SfxPlayer } from "../ui/SfxPlayer";
 import { recipes } from "../data/recipes";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
@@ -161,6 +162,8 @@ export class GuestSpawner {
 
   /** Optional: if provided, "+$N" / "-1★" labels pop above guests on key events. */
   floatingText?: FloatingText;
+  /** Optional: procedural sound cues on guest arrival / serve / leave / etc. */
+  sfx?: SfxPlayer;
 
   constructor(
     scene: THREE.Scene,
@@ -276,6 +279,9 @@ export class GuestSpawner {
       // Loud announcement for a food critic so the player knows to ace it.
       if (archetype.id === "critic") {
         this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966");
+        this.sfx?.alert();
+      } else {
+        this.sfx?.ding();
       }
       this.guests.push({
         id,
@@ -383,6 +389,7 @@ export class GuestSpawner {
           g.state = "eating";
           g.stateClock = 0;
           this.showPlateForGuest(g);
+          this.sfx?.chime();
         }
         break;
       }
@@ -498,6 +505,7 @@ export class GuestSpawner {
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
+    this.sfx?.thud();
     g.character.action = "walk";
     g.target = EXIT_POSITION.clone();
     g.state = "walkingOut";
@@ -516,6 +524,7 @@ export class GuestSpawner {
     g.totalSatisfaction += satisfaction;
     // Floating "+$N" above the guest.
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${price}`, "#a8e2a8");
+    this.sfx?.chaching();
   }
 
   /** End-of-visit: record one served + one averaged rating across courses.

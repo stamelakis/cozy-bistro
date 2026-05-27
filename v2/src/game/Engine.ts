@@ -17,6 +17,7 @@ import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
+import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
@@ -48,6 +49,7 @@ export class Engine {
   readonly statsModal: StatsModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
+  readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
 
   private running = false;
@@ -109,6 +111,8 @@ export class Engine {
       openHelp: () => this.helpModal.show(),
       openStats: () => this.statsModal.show(),
       resetSave: () => this.resetSave(),
+      isMuted: () => this.sfx.isMuted(),
+      toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
     });
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
@@ -116,7 +120,10 @@ export class Engine {
     this.upgradePanel = new UpgradePanel(container, this.game);
     this.expandPanel = new ExpandPanel(container, this.game);
     this.dayEndModal = new DayEndModal(container);
-    this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
+    this.game.onDayEnded = (summary) => {
+      this.dayEndModal.show(summary);
+      this.sfx.gong();
+    };
     this.ledgerModal = new LedgerModal(container, this.game);
     this.helpModal = new HelpModal(container);
     this.statsModal = new StatsModal(container, this.game);
@@ -124,6 +131,7 @@ export class Engine {
     if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
+    this.sfx = new SfxPlayer();
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
@@ -155,6 +163,7 @@ export class Engine {
       this.router = new StaffRouter(this.scene.chefChar, this.scene.waiterChar, this.scene.stovePos, this.scene.pickupPos);
       this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
       this.spawner.floatingText = this.floatingText;
+      this.spawner.sfx = this.sfx;
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       // Errand helper — runs to door + back whenever auto-shop fires.
       if (this.scene.errandChar) {
