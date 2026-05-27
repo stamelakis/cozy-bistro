@@ -79,6 +79,7 @@ export class Hud {
     this.addRow("lost", "Lost today: —");
     this.addRow("daytime", "Day ends in: —");
     this.addRow("dishes", "Dirty dishes: —");
+    this.addRow("rent", "Daily rent: —");
     this.addSpeedControls();
     this.addOpenCloseButton();
     this.addLedgerButton();
@@ -321,6 +322,7 @@ export class Hud {
     const dishes = this.game.getDirtyDishCount();
     this.fields.dishes.textContent = `Dirty dishes: ${dishes}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#fff5dc";
+    this.fields.rent.textContent = `Daily rent: $${this.game.getDailyRent()}`;
     const open = this.spawner.isOpen();
     this.fields.openclose.textContent = open ? "OPEN — click to close" : "CLOSED — click to open";
     (this.fields.openclose as HTMLButtonElement).style.background = open

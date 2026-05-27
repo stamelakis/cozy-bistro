@@ -35,8 +35,10 @@ export interface DayEndSummary {
   rating: number;
 }
 
-/** Money charged automatically per in-game day. */
-const DAILY_RENT = 40;
+/** Base money charged automatically per in-game day. Scales with luxury tier:
+ *  tier 1 → $40, tier 2 → $70, tier 3 → $100, tier 4 → $130, tier 5 → $160 */
+const BASE_DAILY_RENT = 40;
+const RENT_PER_TIER = 30;
 /** Money charged per staff member per real minute. */
 const PAYROLL_PER_STAFF_PER_MINUTE = 6;
 /** Cost per unit of ingredient when auto-shopping. */
@@ -160,7 +162,7 @@ export class Game {
     // Rent ticks on the slow "rent period" timer (default = 1 in-game day).
     const rentPeriodsDue = this.day.consumePendingRentPeriods(rentIntervalSeconds);
     if (rentPeriodsDue > 0) {
-      this.economy.forceSpendMoney(DAILY_RENT * rentPeriodsDue, "rent");
+      this.economy.forceSpendMoney(this.getDailyRent() * rentPeriodsDue, "rent");
     }
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
@@ -284,6 +286,11 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  /** Daily rent owed this in-game day. Scales with luxury tier. */
+  getDailyRent(): number {
+    return BASE_DAILY_RENT + (this.luxuryTier - 1) * RENT_PER_TIER;
   }
 
   // === Dirty-dish pile ===

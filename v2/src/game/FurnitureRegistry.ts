@@ -70,8 +70,10 @@ export class FurnitureRegistry {
     return null;
   }
 
-  /** Remove the item at the given cell and return its def + refund value
-   * (50% of cost). Returns null if nothing was there. */
+  /** Remove the item at the given cell and return its def + refund value.
+   * Refund = 50% of base cost, plus small bonuses for premium stats so
+   * selling a Linen Table doesn't punish the player as hard as selling a
+   * plain wooden chair. Returns null if nothing was there. */
   removeAt(x: number, z: number): { defId: string; refund: number } | null {
     let idx = -1;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
@@ -82,7 +84,15 @@ export class FurnitureRegistry {
     this.scene.remove(item.model);
     this.items.splice(idx, 1);
     const def = getFurnitureDef(item.defId);
-    const refund = def ? Math.floor(def.cost * 0.5) : 0;
+    if (!def) return { defId: item.defId, refund: 0 };
+    // Mirror of 2D's value formula, scaled down to roughly 50%-of-cost-plus-stats.
+    const refund = Math.floor(
+      def.cost * 0.5
+      + (def.style ?? 0) * 4
+      + (def.comfort ?? 0) * 3
+      + (def.ratingBonus ?? 0) * 200
+      + (def.attractionBonus ?? 0) * 2
+    );
     return { defId: item.defId, refund };
   }
 
