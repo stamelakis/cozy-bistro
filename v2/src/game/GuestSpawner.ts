@@ -63,17 +63,20 @@ const DOOR_POSITION = new THREE.Vector2(0, 5);
 // Where guests exit to when leaving
 const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 
-// 8 chair seats (matches the 2 dining tables in WorldScene)
-const SEATS: { pos: THREE.Vector2; facingY: number }[] = [
-  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2 },  // left table, west chair
-  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2 },  // left table, east chair
-  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI       }, // left table, north chair
-  { pos: new THREE.Vector2(-2,   1.9), facingY:  0             }, // left table, south chair
-  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2 },  // right table, west chair
-  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2 },  // right table, east chair
-  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI       }, // right table, north chair
-  { pos: new THREE.Vector2( 2,   1.9), facingY:  0             }, // right table, south chair
+// 8 chair seats (matches the 2 dining tables in WorldScene). platePos is
+// where the food plate appears on the table in front of this seat.
+const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
+  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.45, 1.0) }, // left table, west chair
+  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.55, 1.0) }, // left table, east chair
+  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.55) }, // left table, north chair
+  { pos: new THREE.Vector2(-2,   1.9), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.45) }, // left table, south chair
+  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.55, 1.0) },  // right table, west chair
+  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.45, 1.0) },  // right table, east chair
+  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.55) },  // right table, north chair
+  { pos: new THREE.Vector2( 2,   1.9), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.45) },  // right table, south chair
 ];
+/** Approximate table-surface height (Kenney small-table) used for plate Y. */
+const TABLE_HEIGHT_Y = 0.52;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -88,6 +91,20 @@ const PATIENCE_BASE_SECONDS = 35;
  * new guest can sit. Adds a visible turnaround beat between meals. */
 const SEAT_CLEAN_SECONDS = 4.0;
 
+/** Cheap color hash so different recipes look different on the plate
+ * without us shipping per-recipe textures. */
+function recipeFoodColor(recipe: RecipeDefinition): number {
+  if (recipe.category === "dessert") return 0xe09acb;     // pink
+  if (recipe.category === "drink")   return 0x8aa8c4;     // pale blue
+  if (recipe.category === "appetizer") return 0xc8d68a;   // green
+  if (recipe.category === "side")    return 0xd6b86a;     // yellow
+  // mains — vary by recipe id hash so meat/fish/pasta look different
+  let h = 0;
+  for (let i = 0; i < recipe.id.length; i += 1) h = (h * 31 + recipe.id.charCodeAt(i)) >>> 0;
+  const palette = [0xb5694a, 0xc4923a, 0x8a5236, 0xa07042, 0xd6824a];
+  return palette[h % palette.length];
+}
+
 export class GuestSpawner {
   private readonly scene: THREE.Scene;
   private readonly characterLoader: CharacterLoader;
@@ -98,6 +115,12 @@ export class GuestSpawner {
   private occupiedSeats = new Set<number>();
   /** seatIndex → wall-clock seconds when the seat becomes clean again. */
   private dirtyUntil = new Map<number, number>();
+  /** guestId → live Object3D for the plate sitting on their table.
+   * Spawned when food is delivered, removed when the guest stands up. */
+  private readonly tablePlates = new Map<string, THREE.Object3D>();
+  /** Shared plate geometry/material so we don't re-allocate per plate. */
+  private static plateGeo?: THREE.CylinderGeometry;
+  private static plateMat?: THREE.MeshStandardMaterial;
   /** Total elapsed seconds (matches Game.day.getTotalPlaySeconds vibe but
    * we don't need to share it — used only for dirty-seat timing). */
   private elapsed = 0;
@@ -235,12 +258,49 @@ export class GuestSpawner {
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
     this.occupiedSeats.delete(g.seatIndex);
+    // Clear any plate left on their table when they walk out.
+    this.removePlateForGuest(g.id);
     // Seat needs cleanup before the next guest can use it. Pop a small
     // marker above the seat to show the player why it's not taking guests.
     this.dirtyUntil.set(g.seatIndex, this.elapsed + SEAT_CLEAN_SECONDS);
     const seat = SEATS[g.seatIndex];
     this.floatingText?.pop(seat.pos.x, seat.pos.y, "🧹 cleaning", "#f0c8a0");
     this.guests.splice(idx, 1);
+  }
+
+  /** Drop a small white plate onto the guest's table-spot. Replaces any
+   * previous plate (e.g. between courses) so we don't accumulate. */
+  private showPlateForGuest(g: ActiveGuest): void {
+    this.removePlateForGuest(g.id);
+    if (!GuestSpawner.plateGeo) {
+      GuestSpawner.plateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
+      GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
+    }
+    const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
+    const seat = SEATS[g.seatIndex];
+    plate.position.set(seat.platePos.x, TABLE_HEIGHT_Y, seat.platePos.y);
+    plate.castShadow = true;
+    plate.receiveShadow = true;
+    // Add a small food-color blob on top so it doesn't read as "empty plate".
+    const recipe = g.order[g.orderIndex];
+    const foodColor = recipe ? recipeFoodColor(recipe) : 0xc28a52;
+    const food = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 10, 8),
+      new THREE.MeshStandardMaterial({ color: foodColor, roughness: 0.7 }),
+    );
+    food.position.set(0, 0.05, 0);
+    food.scale.y = 0.6; // squash so it reads as a mound, not a ball
+    plate.add(food);
+    this.scene.add(plate);
+    this.tablePlates.set(g.id, plate);
+  }
+
+  private removePlateForGuest(guestId: string): void {
+    const plate = this.tablePlates.get(guestId);
+    if (!plate) return;
+    this.scene.remove(plate);
+    // Children (the food sphere) are auto-removed with the parent.
+    this.tablePlates.delete(guestId);
   }
 
   private tickGuest(g: ActiveGuest, dt: number): void {
@@ -276,13 +336,15 @@ export class GuestSpawner {
         if (this.router.popDeliveredFor(g.id)) {
           g.state = "eating";
           g.stateClock = 0;
+          this.showPlateForGuest(g);
         }
         break;
       }
       case "eating": {
         if (g.stateClock >= TIME_TO_EAT) {
-          // Finished THIS course. Record payment + satisfaction.
+          // Finished THIS course. Record payment + satisfaction, clear plate.
           this.creditCourse(g);
+          this.removePlateForGuest(g.id);
           g.orderIndex += 1;
           if (g.orderIndex < g.order.length) {
             // Move to next course — go back to seated for a moment
