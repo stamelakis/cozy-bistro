@@ -3789,11 +3789,22 @@ def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> 
     "up-left": "up",
   }
   cardinal = diagonal_to_cardinal.get(facing)
-  candidates = [
+  candidates: list[Path] = []
+
+  # For seated frames, prefer dedicated seated artwork. The seated sprites
+  # are saved as {role}-v{variant}-{facing}-sit.png; if a specific facing
+  # doesn't exist we fall through to the cardinal/standing fallbacks below.
+  if action == "sit":
+    candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{facing}-sit.png")
+    if cardinal:
+      candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{cardinal}-sit.png")
+    candidates.append(AI_CHAR_DIR / f"{role}-{facing}-sit.png")
+
+  candidates.extend([
     AI_CHAR_DIR / f"{role}-v{variant}-{facing}.png",
     AI_CHAR_DIR / f"{role}-v{variant}.png",
     AI_CHAR_DIR / f"{role}-{facing}.png",
-  ]
+  ])
   if cardinal:
     # Cardinal fallback comes before role-default so the character at least
     # faces the correct general direction.

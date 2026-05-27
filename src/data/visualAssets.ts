@@ -136,6 +136,9 @@ export function getCharacterSpriteFrame(
     origin: { x: 0.5, y: 1 },
     xOffset: 0,
     yOffset: seated ? 6 : 6,
-    scale: seated ? 0.46 : 0.52,
+    // Seated sprites are dedicated seated-pose AI art (when available) so
+    // they don't need to be shrunk relative to standing — render at the
+    // same scale so they read at room-scale on the chair.
+    scale: 0.52,
   };
 }
