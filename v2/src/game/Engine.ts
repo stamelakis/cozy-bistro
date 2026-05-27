@@ -15,6 +15,7 @@ import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
 import { FloatingText } from "../ui/FloatingText";
+import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
@@ -44,6 +45,7 @@ export class Engine {
   readonly ledgerModal: LedgerModal;
   readonly helpModal: HelpModal;
   readonly floatingText: FloatingText;
+  readonly statusBubbles: StatusBubbles;
   readonly saver: SaveSystem;
 
   private running = false;
@@ -117,6 +119,7 @@ export class Engine {
     // Auto-show the welcome modal on a brand-new visit.
     if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
+    this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
@@ -174,6 +177,24 @@ export class Engine {
     // Save on tab close.
     window.addEventListener("beforeunload", () => this.saver.saveNow());
     window.addEventListener("resize", this.handleResize);
+  }
+
+  /** Build a fresh status-bubble list from the routers' current state.
+   * One entry per staff actor; empty label = no bubble that frame. */
+  private updateStatusBubbles(): void {
+    const entries: StatusEntry[] = [];
+    if (this.router) {
+      const snap = this.router.snapshotStatus();
+      snap.forEach((s, i) => {
+        entries.push({ key: `${s.role}-${i}`, character: s.character, label: s.label });
+      });
+    }
+    if (this.errand) {
+      this.errand.snapshotStatus().forEach((s, i) => {
+        entries.push({ key: `errand-${i}`, character: s.character, label: s.label, bg: "rgba(80, 50, 90, 0.85)" });
+      });
+    }
+    this.statusBubbles.update(entries);
   }
 
   /** Wipe localStorage and reload the page so the user gets a brand-new
@@ -327,6 +348,9 @@ export class Engine {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
     }
     this.scene.update(dt);
+    // Refresh status bubbles above staff (after scene.update so character
+    // positions reflect this frame's animator output).
+    this.updateStatusBubbles();
     // Camera + floating text + saver use real time so the camera still
     // responds to input while paused and we don't double-save under fast-forward.
     this.camera.update(rawDt);

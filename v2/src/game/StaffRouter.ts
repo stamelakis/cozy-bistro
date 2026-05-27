@@ -139,6 +139,15 @@ export class StaffRouter {
     return this.chefs.some((c) => c.state === "working");
   }
 
+  /** Snapshot used by the UI status-bubble layer. Returns one entry per
+   * staff member with their current activity label. Empty label = no bubble. */
+  snapshotStatus(): { character: AnimatedCharacter; role: "chef" | "waiter"; label: string }[] {
+    const out: { character: AnimatedCharacter; role: "chef" | "waiter"; label: string }[] = [];
+    for (const c of this.chefs) out.push({ character: c.character, role: "chef", label: chefLabel(c.state) });
+    for (const w of this.waiters) out.push({ character: w.character, role: "waiter", label: waiterLabel(w.state) });
+    return out;
+  }
+
   /** Called by GuestSpawner when a guest places an order. */
   enqueueOrder(guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -305,5 +314,23 @@ export class StaffRouter {
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {
     return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+}
+
+function chefLabel(state: StaffActor["state"]): string {
+  switch (state) {
+    case "movingToWork": return "→ stove";
+    case "working":       return "🍳 cooking";
+    case "returningHome": return "← back";
+    default:              return "";
+  }
+}
+
+function waiterLabel(state: StaffActor["state"]): string {
+  switch (state) {
+    case "movingToWork": return "→ pickup";
+    case "working":       return "🍽️ serving";
+    case "returningHome": return "← back";
+    default:              return "";
   }
 }

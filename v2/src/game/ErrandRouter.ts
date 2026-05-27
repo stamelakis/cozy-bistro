@@ -66,6 +66,14 @@ export class ErrandRouter {
 
   getHelperCount(): number { return this.helpers.length; }
 
+  /** Snapshot for the status-bubble layer. */
+  snapshotStatus(): { character: AnimatedCharacter; label: string }[] {
+    return this.helpers.map((h) => ({
+      character: h.character,
+      label: errandLabel(h.state),
+    }));
+  }
+
   /** Queue one trip to the door. */
   triggerRun(): void {
     this.pendingTrips = Math.min(this.pendingTrips + 1, MAX_PENDING_TRIPS);
@@ -134,5 +142,14 @@ export class ErrandRouter {
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {
     return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+}
+
+function errandLabel(state: ErrandActor["state"]): string {
+  switch (state) {
+    case "walkingToDoor": return "📦 fetching";
+    case "atDoor":        return "📦 at door";
+    case "returningHome": return "📦 returning";
+    default:              return "";
   }
 }
