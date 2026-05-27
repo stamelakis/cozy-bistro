@@ -12,6 +12,7 @@ import { UpgradePanel } from "../ui/UpgradePanel";
 import { ExpandPanel } from "../ui/ExpandPanel";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
+import { HelpModal } from "../ui/HelpModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -39,6 +40,7 @@ export class Engine {
   readonly expandPanel: ExpandPanel;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
+  readonly helpModal: HelpModal;
   readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
@@ -98,6 +100,7 @@ export class Engine {
       setTimeScale: (s) => this.setTimeScale(s),
     }, {
       openLedger: () => this.ledgerModal.show(),
+      openHelp: () => this.helpModal.show(),
       resetSave: () => this.resetSave(),
     });
     this.staffPanel = new StaffPanel(container, this.game);
@@ -108,6 +111,9 @@ export class Engine {
     this.dayEndModal = new DayEndModal(container);
     this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
     this.ledgerModal = new LedgerModal(container, this.game);
+    this.helpModal = new HelpModal(container);
+    // Auto-show the welcome modal on a brand-new visit.
+    if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
