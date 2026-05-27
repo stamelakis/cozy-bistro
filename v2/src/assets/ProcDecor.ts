@@ -135,6 +135,64 @@ function wineWall(): THREE.Group {
   return g;
 }
 
+/** A compact dishwasher — chrome box with a porthole. */
+function dishwasher(): THREE.Group {
+  const g = new THREE.Group();
+  // Body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 0.9, 0.85),
+    new THREE.MeshStandardMaterial({ color: 0xc8cdd2, roughness: 0.35, metalness: 0.6 }),
+  );
+  body.position.y = 0.45;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // Front porthole
+  const porthole = new THREE.Mesh(
+    new THREE.CircleGeometry(0.18, 16),
+    new THREE.MeshStandardMaterial({ color: 0x223040, roughness: 0.2, emissive: 0x4488cc, emissiveIntensity: 0.15 }),
+  );
+  porthole.position.set(0, 0.5, 0.43);
+  g.add(porthole);
+  // Top control strip
+  const strip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 0.06, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x1a1d20, roughness: 0.7 }),
+  );
+  strip.position.set(0, 0.85, 0.42);
+  g.add(strip);
+  return g;
+}
+
+/** A pro-grade dishwasher line. */
+function dishwasherPro(): THREE.Group {
+  const g = new THREE.Group();
+  // Wider stainless body
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(1.05, 1.0, 0.85),
+    new THREE.MeshStandardMaterial({ color: 0xb3bbc3, roughness: 0.25, metalness: 0.75 }),
+  );
+  body.position.y = 0.5;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // Twin portholes
+  const portMat = new THREE.MeshStandardMaterial({ color: 0x223040, roughness: 0.2, emissive: 0x4488cc, emissiveIntensity: 0.25 });
+  for (const x of [-0.22, 0.22]) {
+    const port = new THREE.Mesh(new THREE.CircleGeometry(0.17, 16), portMat);
+    port.position.set(x, 0.55, 0.43);
+    g.add(port);
+  }
+  // Steam stack on top — small glowing cylinder
+  const stack = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.08, 0.25, 10),
+    new THREE.MeshStandardMaterial({ color: 0xe0e6ec, emissive: 0xffffff, emissiveIntensity: 0.2, transparent: true, opacity: 0.85 }),
+  );
+  stack.position.set(0.3, 1.1, 0);
+  g.add(stack);
+  return g;
+}
+
 /** Map of "proc:" id suffix → builder. ModelLoader routes through this. */
 export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "framed-art-warm": () => framedArt(0xc97e4a, "warm"),
@@ -143,4 +201,6 @@ export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "menu-board": () => menuBoard(),
   "neon-sign": () => neonSign(),
   "wine-wall": () => wineWall(),
+  "dishwasher": () => dishwasher(),
+  "dishwasher-pro": () => dishwasherPro(),
 };

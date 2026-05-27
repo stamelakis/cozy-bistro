@@ -168,6 +168,9 @@ export class Engine {
       void this.registry.restore(restored);
     }
     this.saver.registry = this.registry;
+    // Let the Game read counts of placed sinks/dishwashers when scaling
+    // the dish-wash interval.
+    this.game.countPlacedById = (id) => this.registry.countById(id);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
 

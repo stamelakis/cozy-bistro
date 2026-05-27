@@ -118,6 +118,14 @@ export class FurnitureRegistry {
     return { style, comfort, attractionBonus, ratingBonus };
   }
 
+  /** Count of placed items of a specific id. Used to detect sinks /
+   * dishwashers for the wash-rate calculation. */
+  countById(defId: string): number {
+    let n = 0;
+    for (const it of this.items) if (it.defId === defId) n += 1;
+    return n;
+  }
+
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). */
   async restore(saved: PersistedPlacement[]): Promise<void> {

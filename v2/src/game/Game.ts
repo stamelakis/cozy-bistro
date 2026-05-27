@@ -17,7 +17,9 @@ const MAX_LUXURY_TIER: LuxuryTier = 5;
 const EXPANSION_BASE_COST = 500;
 const EXPANSION_GROWTH = 3;
 
-/** Seconds between automatic dish-wash ticks (one dish processed per tick). */
+/** Default seconds between automatic dish-wash ticks. Sinks and
+ * dishwashers placed in the registry shorten this — see
+ * Game.getEffectiveDishWashInterval. */
 const DISH_WASH_INTERVAL = 3;
 /** Above this pile, guests visibly notice and rate the restaurant lower. */
 const DIRTY_PILE_PENALTY_THRESHOLD = 8;
@@ -91,6 +93,9 @@ export class Game {
   /** Optional callback fired when the theme changes — Engine wires
    * this to WorldScene.setTheme so the world recolors. */
   onThemeChanged?: (theme: RestaurantTheme) => void;
+  /** Optional: when set, the dish-wash interval queries this for
+   * counts of placed sinks / dishwashers. */
+  countPlacedById?: (id: string) => number;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
@@ -206,10 +211,11 @@ export class Game {
     if (this.boostRemaining > 0) {
       this.boostRemaining = Math.max(0, this.boostRemaining - dt);
     }
-    // Wash dirty dishes one at a time at a steady interval.
+    // Wash dirty dishes one at a time. Interval is reduced (faster wash)
+    // for each placed sink + dishwasher.
     if (this.dirtyDishCount > 0) {
       this.dishWashClock += dt;
-      if (this.dishWashClock >= DISH_WASH_INTERVAL) {
+      if (this.dishWashClock >= this.getEffectiveDishWashInterval()) {
         this.dishWashClock = 0;
         this.dirtyDishCount -= 1;
       }
@@ -323,6 +329,17 @@ export class Game {
    * should be penalized for a noticeably dirty restaurant. */
   isDishPileOverwhelming(): boolean {
     return this.dirtyDishCount > DIRTY_PILE_PENALTY_THRESHOLD;
+  }
+
+  /** Seconds between wash ticks, reduced by sinks (-0.5s each) and
+   * dishwashers (-1.0s for compact, -1.5s for pro). Floored at 0.4s. */
+  getEffectiveDishWashInterval(): number {
+    if (!this.countPlacedById) return DISH_WASH_INTERVAL;
+    const sinks = this.countPlacedById("sink");
+    const dish = this.countPlacedById("dishwasher");
+    const dishPro = this.countPlacedById("dishwasher-pro");
+    const reduction = sinks * 0.5 + dish * 1.0 + dishPro * 1.5;
+    return Math.max(0.4, DISH_WASH_INTERVAL - reduction);
   }
 
   // === Interior themes (wall + floor color presets) ===
