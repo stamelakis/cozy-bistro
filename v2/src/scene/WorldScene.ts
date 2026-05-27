@@ -241,6 +241,16 @@ export class WorldScene {
       { id: "floor-lamp",    x: -4,   z:  3 },
       { id: "floor-lamp",    x:  4,   z:  3 },
       { id: "door",          x:  0,   z:  5, rotY: Math.PI },
+
+      // Street props (z > 5 is outside the building) — sidewalk life.
+      { id: "floor-lamp",    x: -7,   z:  7 },
+      { id: "floor-lamp",    x:  7,   z:  7 },
+      { id: "potted-plant",  x: -2.5, z:  6 },
+      { id: "potted-plant",  x:  2.5, z:  6 },
+      { id: "bench-plain",   x: -4,   z:  7, rotY: Math.PI },
+      { id: "bench-plain",   x:  4,   z:  7, rotY: Math.PI },
+      { id: "trashcan",      x:  6,   z:  6.5 },
+      { id: "cardboard-box", x: -6,   z:  6.5 },
     ];
 
     await Promise.all(placements.map(async (p) => {
