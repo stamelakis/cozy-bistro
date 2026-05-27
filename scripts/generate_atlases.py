@@ -3748,6 +3748,34 @@ def make_furniture_atlas() -> None:
 AI_CHAR_DIR = ROOT / "src" / "assets" / "ai_characters"
 
 
+def _resize_rgba_preserving_alpha(source: Image.Image, size: tuple[int, int]) -> Image.Image:
+  """Resize an RGBA image without bleeding the transparent-border RGB into the
+  body during downsampling.
+
+  Pillow's LANCZOS resamples RGB and alpha INDEPENDENTLY. At a sharp body edge
+  (alpha=255 next to alpha=0) the resampler averages alpha toward partial
+  values for neighboring output pixels — fine on its own — but because the RGB
+  channels also blend the original-background color of the alpha=0 pixels into
+  the body, the *interior* of the resized body ends up with semi-transparent
+  cream pixels showing the floor through it.
+  Premultiplied-alpha avoids the bleed: scale RGB by alpha first so transparent
+  source pixels have RGB=(0,0,0), then resample, then unpremultiply.
+  """
+  import numpy as np
+  arr = np.array(source.convert("RGBA"), dtype=np.float32)
+  a = arr[..., 3:4] / 255.0
+  # Premultiply RGB by alpha.
+  arr[..., :3] *= a
+  premul = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGBA")
+  resized_premul = premul.resize(size, Image.Resampling.LANCZOS)
+  out = np.array(resized_premul, dtype=np.float32)
+  out_a = out[..., 3:4] / 255.0
+  # Unpremultiply, guarding against divide-by-zero.
+  safe_a = np.where(out_a > 0, out_a, 1.0)
+  out[..., :3] = np.clip(out[..., :3] / safe_a, 0, 255)
+  return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGBA")
+
+
 def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> Image.Image | None:
   """Return an AI-illustration-based sprite if a matching file exists, else None."""
   # For diagonal facings, fall back to the matching cardinal if the
@@ -3800,7 +3828,7 @@ def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> 
   if target_w > canvas_w - 4:
     target_w = canvas_w - 4
     target_h = int(target_w / aspect)
-  resized = source.resize((target_w, target_h), Image.Resampling.LANCZOS)
+  resized = _resize_rgba_preserving_alpha(source, (target_w, target_h))
 
   draw_neutral_shadow(draw, canvas_w / 2, canvas_h - 6, 32, 9)
   paste_x = (canvas_w - target_w) // 2
