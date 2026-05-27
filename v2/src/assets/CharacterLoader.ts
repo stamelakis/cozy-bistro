@@ -30,8 +30,11 @@ export class CharacterLoader {
     const root = await this.modelLoader.load(`assets/characters/${characterId}.glb`);
     this.patchMaterials(root);
     this.computeNormalsIfMissing(root);
-    this.liftFeetToOrigin(root);
+    // Scale FIRST so bbox computation reflects the rendered size, THEN
+    // lift so the (scaled) feet land at y=0. Doing this in the other
+    // order leaves the model partially sunk into the floor.
     root.scale.setScalar(this.characterScale);
+    this.liftFeetToOrigin(root);
     return root;
   }
 
