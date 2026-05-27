@@ -235,6 +235,21 @@ export class WorldScene {
       { id: "modern-chair",  x:  0,   z: 2.1, rotY: 0 },
       { id: "modern-chair",  x:  0,   z: 3.9, rotY: Math.PI },
 
+      // Tier 3+ tables — placed to the sides, near the walls. GuestSpawner
+      // gates seat availability by tier so these visually exist but only
+      // start taking guests once luxury tier ≥ the unlock threshold.
+      { id: "small-table",   x: -4,   z: 0 },
+      { id: "cushion-chair", x: -4.9, z: 0, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: -3.1, z: 0, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: -4,   z: -0.9, rotY: 0 },
+      { id: "cushion-chair", x: -4,   z: 0.9, rotY: Math.PI },
+
+      { id: "small-table",   x: 4,    z: 0 },
+      { id: "cushion-chair", x: 4.9,  z: 0, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 3.1,  z: 0, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 4,    z: -0.9, rotY: 0 },
+      { id: "cushion-chair", x: 4,    z: 0.9, rotY: Math.PI },
+
       // Decor
       { id: "plant-medium",  x: -4.5, z: -4 },
       { id: "plant-small",   x:  4,   z: -4 },

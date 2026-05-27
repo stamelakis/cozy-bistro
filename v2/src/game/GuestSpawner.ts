@@ -69,25 +69,46 @@ const DOOR_POSITION = new THREE.Vector2(0, 5);
 // Where guests exit to when leaving
 const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 
-// 12 chair seats (matches the 3 dining tables in WorldScene). platePos is
-// where the food plate appears on the table in front of this seat.
+// 20 chair seats across 5 dining tables. The number of seats actually
+// available to guests is gated by Game.luxuryTier:
+//   tier 1 → 8 seats   (tables 1-2)
+//   tier 2 → 12 seats  (tables 1-3)
+//   tier 3 → 16 seats  (tables 1-4)
+//   tier 4 → 20 seats  (tables 1-5)
+//   tier 5 → 20 seats  (max)
+// Locked tables visually exist but seatsAvailableForTier() filters them.
 const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
-  // Left table
+  // Tables 1 + 2 — unlocked from tier 1.
   { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.45, 1.0) },
   { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.55, 1.0) },
   { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.55) },
   { pos: new THREE.Vector2(-2,   1.9), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.45) },
-  // Right table
   { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.55, 1.0) },
   { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.45, 1.0) },
   { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.55) },
   { pos: new THREE.Vector2( 2,   1.9), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.45) },
-  // Front (third) table — added to keep up with rising spawn rates.
+  // Front (table 3) — unlocked from tier 2.
   { pos: new THREE.Vector2(-0.9, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.45, 3.0) },
   { pos: new THREE.Vector2( 0.9, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.45, 3.0) },
   { pos: new THREE.Vector2( 0,   2.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 0,    2.55) },
   { pos: new THREE.Vector2( 0,   3.9), facingY:  0,           platePos: new THREE.Vector2( 0,    3.45) },
+  // Left side (table 4) — unlocked from tier 3.
+  { pos: new THREE.Vector2(-4.9, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.45, 0.0) },
+  { pos: new THREE.Vector2(-3.1, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.55, 0.0) },
+  { pos: new THREE.Vector2(-4,  -0.9), facingY:  Math.PI,     platePos: new THREE.Vector2(-4,   -0.45) },
+  { pos: new THREE.Vector2(-4,   0.9), facingY:  0,           platePos: new THREE.Vector2(-4,    0.45) },
+  // Right side (table 5) — unlocked from tier 4.
+  { pos: new THREE.Vector2( 3.1, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.55, 0.0) },
+  { pos: new THREE.Vector2( 4.9, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.45, 0.0) },
+  { pos: new THREE.Vector2( 4,  -0.9), facingY:  Math.PI,     platePos: new THREE.Vector2( 4,   -0.45) },
+  { pos: new THREE.Vector2( 4,   0.9), facingY:  0,           platePos: new THREE.Vector2( 4,    0.45) },
 ];
+
+/** Number of seats unlocked at a given luxury tier. */
+function seatsAvailableForTier(tier: number): number {
+  // tier 1: 8, tier 2: 12, tier 3: 16, tier 4+: 20
+  return Math.min(SEATS.length, 4 + tier * 4);
+}
 /** Approximate table-surface height (Kenney small-table) used for plate Y. */
 const TABLE_HEIGHT_Y = 0.52;
 
@@ -259,19 +280,24 @@ export class GuestSpawner {
     }));
   }
 
-  /** Count of seats that are neither occupied nor in the dirty-cleanup window. */
+  /** Count of seats that are unlocked-for-tier, not occupied, and not in
+   * the dirty-cleanup window. */
   private countAvailableSeats(): number {
+    const max = seatsAvailableForTier(this.game.getLuxuryTier());
     let n = 0;
-    for (let i = 0; i < SEATS.length; i += 1) {
+    for (let i = 0; i < max; i += 1) {
       if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) n += 1;
     }
     return n;
   }
 
   private async spawnGuest(): Promise<void> {
-    // Find a free seat that isn't currently being cleaned.
+    // Find a free seat that isn't currently being cleaned. Seats beyond
+    // the tier's unlock threshold are skipped — the chair model exists in
+    // the world but the bistro hasn't "opened" that section yet.
+    const max = seatsAvailableForTier(this.game.getLuxuryTier());
     let seatIndex = -1;
-    for (let i = 0; i < SEATS.length; i += 1) {
+    for (let i = 0; i < max; i += 1) {
       if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) { seatIndex = i; break; }
     }
     if (seatIndex < 0) return;
