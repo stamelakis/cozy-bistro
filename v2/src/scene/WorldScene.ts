@@ -1,30 +1,33 @@
 import * as THREE from "three";
+import { ModelLoader } from "../assets/ModelLoader";
+import { getFurnitureDef } from "../data/furnitureCatalog";
 
 /**
- * The 3D world. For now a placeholder scene with a ground, a couple of cubes
- * acting as stand-in furniture, and lighting. Will grow into the real
- * restaurant world (grid placement, furniture, characters, etc.) as we port
- * each system from the 2D version.
+ * The 3D world. A minimal demo restaurant: floor, walls, and a few pieces
+ * of Kenney furniture placed at fixed positions so we can verify the GLTF
+ * loader and confirm the overall scene reads as "restaurant".
+ *
+ * Phase 3+ will replace the hard-coded placements with a proper
+ * grid-driven building system that mirrors the 2D game.
  */
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
+  private readonly loader = new ModelLoader();
 
   constructor() {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
-    this.addGround();
-    this.addPlaceholderFurniture();
+    this.addBuilding();
+    void this.populateDemoRestaurant();
   }
 
   update(_dt: number): void {
-    // Per-frame logic goes here once we have moving entities.
+    // Per-frame logic placeholder.
   }
 
   private addLighting(): void {
-    // Soft ambient so shadows aren't pitch black.
     this.threeScene.add(new THREE.AmbientLight(0xfff1d6, 0.55));
 
-    // Key sun light, casting shadows.
     const sun = new THREE.DirectionalLight(0xffeac2, 1.1);
     sun.position.set(8, 14, 6);
     sun.castShadow = true;
@@ -38,85 +41,91 @@ export class WorldScene {
     sun.shadow.bias = -0.0005;
     this.threeScene.add(sun);
 
-    // Cool fill from the opposite side to soften shadow contrast.
     const fill = new THREE.DirectionalLight(0xb8c8e0, 0.25);
     fill.position.set(-6, 10, -4);
     this.threeScene.add(fill);
   }
 
-  private addGround(): void {
-    const ground = new THREE.Mesh(
+  private addBuilding(): void {
+    // Floor
+    const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshStandardMaterial({
-        color: 0xe7d4ad,
-        roughness: 0.95,
-        metalness: 0,
-      }),
+      new THREE.MeshStandardMaterial({ color: 0xe7d4ad, roughness: 0.95, metalness: 0 }),
     );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    this.threeScene.add(ground);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    this.threeScene.add(floor);
 
-    // Tile grid overlay so the iso "grid" feel is still legible.
+    // Grid overlay so the iso "tile" feel reads.
     const grid = new THREE.GridHelper(40, 40, 0xa68969, 0xc4ab85);
     (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.35;
-    grid.position.y = 0.001; // sit just above the ground to avoid z-fighting
+    (grid.material as THREE.Material).opacity = 0.3;
+    grid.position.y = 0.001;
     this.threeScene.add(grid);
+
+    // Two short walls to suggest the bistro interior corner.
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8a98a, roughness: 0.85 });
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), wallMat);
+    wallBack.position.set(0, 1.5, -5);
+    wallBack.castShadow = true;
+    wallBack.receiveShadow = true;
+    this.threeScene.add(wallBack);
+
+    const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), wallMat);
+    wallSide.position.set(-5, 1.5, 0);
+    wallSide.castShadow = true;
+    wallSide.receiveShadow = true;
+    this.threeScene.add(wallSide);
   }
 
-  private addPlaceholderFurniture(): void {
-    // Three cubes standing in for: a table, a chair, a person.
-    // These will be replaced with real Kenney models + Meshy characters once
-    // the asset pipeline is wired in (Phase 2).
-    const table = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 0.75, 1.2),
-      new THREE.MeshStandardMaterial({ color: 0x8c6a4a, roughness: 0.8 }),
-    );
-    table.position.set(0, 0.375, 0);
-    table.castShadow = true;
-    table.receiveShadow = true;
-    this.threeScene.add(table);
+  private async populateDemoRestaurant(): Promise<void> {
+    // Place a few Kenney pieces to verify loading + look. Positions are in
+    // world units (1 unit = 1 grid cell). Coords are (x, z) on the ground.
+    const placements: { id: string; x: number; z: number; rotY?: number }[] = [
+      // Kitchen line along the back wall
+      { id: "fridge",     x: -3,   z: -4 },
+      { id: "counter",    x: -2,   z: -4 },
+      { id: "sink",       x: -1,   z: -4 },
+      { id: "stove",      x:  0,   z: -4 },
+      { id: "counter",    x:  1,   z: -4 },
+      { id: "microwave",  x:  2,   z: -4 },
 
-    const chairColor = 0xb38a5e;
-    for (let i = 0; i < 4; i += 1) {
-      const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const chair = new THREE.Group();
-      const seat = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.08, 0.45),
-        new THREE.MeshStandardMaterial({ color: chairColor, roughness: 0.85 }),
-      );
-      seat.position.y = 0.46;
-      seat.castShadow = true;
-      seat.receiveShadow = true;
-      const back = new THREE.Mesh(
-        new THREE.BoxGeometry(0.45, 0.55, 0.06),
-        new THREE.MeshStandardMaterial({ color: chairColor, roughness: 0.85 }),
-      );
-      back.position.set(0, 0.78, -0.2);
-      back.castShadow = true;
-      chair.add(seat, back);
-      // Legs
-      for (const [lx, lz] of [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]] as const) {
-        const leg = new THREE.Mesh(
-          new THREE.BoxGeometry(0.06, 0.46, 0.06),
-          new THREE.MeshStandardMaterial({ color: chairColor, roughness: 0.85 }),
-        );
-        leg.position.set(lx, 0.23, lz);
-        leg.castShadow = true;
-        chair.add(leg);
+      // Dining: 2 tables with chairs around each
+      { id: "small-table",   x: -2,   z: 1 },
+      { id: "wooden-chair",  x: -2.9, z: 1, rotY: Math.PI / 2 },
+      { id: "wooden-chair",  x: -1.1, z: 1, rotY: -Math.PI / 2 },
+      { id: "wooden-chair",  x: -2,   z: 0.1, rotY: 0 },
+      { id: "wooden-chair",  x: -2,   z: 1.9, rotY: Math.PI },
+
+      { id: "small-table",   x: 2,    z: 1 },
+      { id: "cushion-chair", x: 1.1,  z: 1, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 2.9,  z: 1, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 2,    z: 0.1, rotY: 0 },
+      { id: "cushion-chair", x: 2,    z: 1.9, rotY: Math.PI },
+
+      // Decor
+      { id: "plant-medium",  x: -4.5, z: -4 },
+      { id: "plant-small",   x:  4,   z: -4 },
+      { id: "floor-lamp",    x: -4,   z:  3 },
+      { id: "floor-lamp",    x:  4,   z:  3 },
+      { id: "door",          x:  0,   z:  5, rotY: Math.PI },
+    ];
+
+    await Promise.all(placements.map(async (p) => {
+      const def = getFurnitureDef(p.id);
+      if (!def) {
+        console.warn(`Unknown furniture id: ${p.id}`);
+        return;
       }
-      const r = 1.1;
-      chair.position.set(Math.cos(angle) * r, 0, Math.sin(angle) * r);
-      chair.rotation.y = -angle + Math.PI / 2; // chair back faces table
-      this.threeScene.add(chair);
-    }
-
-    // A "person" placeholder — a capsule, seated next to one chair.
-    const personMat = new THREE.MeshStandardMaterial({ color: 0x4a5e7a, roughness: 0.7 });
-    const person = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.45, 4, 8), personMat);
-    person.position.set(1.1, 0.65, 0);
-    person.castShadow = true;
-    this.threeScene.add(person);
+      try {
+        const model = await this.loader.load(def.modelPath);
+        model.position.set(p.x, 0, p.z);
+        if (p.rotY != null) model.rotation.y = p.rotY;
+        model.scale.setScalar(def.scale);
+        this.threeScene.add(model);
+      } catch (err) {
+        console.error(`Failed to load ${def.id} (${def.modelPath})`, err);
+      }
+    }));
   }
 }
