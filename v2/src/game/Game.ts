@@ -13,6 +13,19 @@ const MAX_LUXURY_TIER: LuxuryTier = 5;
 const EXPANSION_BASE_COST = 500;
 const EXPANSION_GROWTH = 3;
 
+/** Snapshot of a day's results, captured the instant the day ends and
+ * before any daily counters are reset. */
+export interface DayEndSummary {
+  /** The day that just ended (1-based, matches the HUD). */
+  dayNumber: number;
+  served: number;
+  lost: number;
+  revenue: number;
+  expenses: number;
+  net: number;
+  rating: number;
+}
+
 /** Money charged automatically per in-game day. */
 const DAILY_RENT = 40;
 /** Money charged per staff member per real minute. */
@@ -52,6 +65,10 @@ export class Game {
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
   onAutoShop?: () => void;
+  /** Optional callback fired when a day rolls over. Receives a snapshot
+   * of the just-ended day's totals BEFORE they're reset. Engine wires
+   * this to the day-end modal so the player sees the recap. */
+  onDayEnded?: (summary: DayEndSummary) => void;
 
   constructor(save?: SaveGameState) {
     this.economy = new EconomySystem();
@@ -151,6 +168,21 @@ export class Game {
   }
 
   private rolloverDay(): void {
+    // Capture the day's totals BEFORE resetting them so the callback can
+    // show an accurate recap.
+    if (this.onDayEnded) {
+      const revenue = this.economy.getDailyRevenue();
+      const expenses = this.economy.getDailyExpenses();
+      this.onDayEnded({
+        dayNumber: this.day.getDayNumber(),
+        served: this.customers.getDailyServed(),
+        lost: this.customers.getDailyLost(),
+        revenue,
+        expenses,
+        net: revenue - expenses,
+        rating: this.reputation.getReputation(),
+      });
+    }
     this.economy.resetDailyTotals();
     this.customers.resetDailyTotals();
     this.day.rollOverDay();

@@ -10,6 +10,7 @@ import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradePanel } from "../ui/UpgradePanel";
 import { ExpandPanel } from "../ui/ExpandPanel";
+import { DayEndModal } from "../ui/DayEndModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -33,12 +34,30 @@ export class Engine {
   readonly menuPanel: MenuPanel;
   readonly upgradePanel: UpgradePanel;
   readonly expandPanel: ExpandPanel;
+  readonly dayEndModal: DayEndModal;
   readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
   private running = false;
   private lastResizeCheckAt = 0;
   private hudAccumulator = 0;
+  /** Multiplier applied to dt before sim updates. 1 = real-time, 2 = 2x, etc.
+   * Rendering is unaffected (so paused still re-renders camera moves). */
+  private timeScale = 1;
+  private paused = false;
+
+  setTimeScale(scale: number): void {
+    this.timeScale = Math.max(0, scale);
+  }
+  getTimeScale(): number {
+    return this.timeScale;
+  }
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+  isPaused(): boolean {
+    return this.paused;
+  }
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -68,12 +87,19 @@ export class Engine {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,
       setOpen: (open: boolean) => { if (this.spawner) this.spawner.restaurantOpen = open; },
+    }, {
+      isPaused: () => this.isPaused(),
+      setPaused: (p) => this.setPaused(p),
+      getTimeScale: () => this.getTimeScale(),
+      setTimeScale: (s) => this.setTimeScale(s),
     });
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradePanel = new UpgradePanel(container, this.game);
     this.expandPanel = new ExpandPanel(container, this.game);
+    this.dayEndModal = new DayEndModal(container);
+    this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
@@ -159,15 +185,20 @@ export class Engine {
       this.resizeIfNeeded();
     }
 
-    const dt = Math.min(this.clock.getDelta(), 0.1);
+    const rawDt = Math.min(this.clock.getDelta(), 0.1);
+    // Scale the sim dt by the player's time control. Cap the scaled value
+    // so 4x on a slow frame doesn't simulate a big jump.
+    const dt = this.paused ? 0 : Math.min(rawDt * this.timeScale, 0.25);
     this.game.update(dt);
     this.router?.update(dt);
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.scene.update(dt);
-    this.camera.update(dt);
-    this.floatingText.update(dt);
-    this.saver.update(dt);
+    // Camera + floating text + saver use real time so the camera still
+    // responds to input while paused and we don't double-save under fast-forward.
+    this.camera.update(rawDt);
+    this.floatingText.update(rawDt);
+    this.saver.update(rawDt);
 
     // HUD only needs ~5 Hz; updating every frame is wasteful DOM work.
     this.hudAccumulator += dt;

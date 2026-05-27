@@ -9,6 +9,15 @@ export interface SpawnerAccessor {
   setOpen(open: boolean): void;
 }
 
+/** Controls for the simulation clock (pause / speed). Engine wires this up
+ * so the HUD can drive timeScale without depending on Engine directly. */
+export interface TimeControl {
+  isPaused(): boolean;
+  setPaused(p: boolean): void;
+  getTimeScale(): number;
+  setTimeScale(scale: number): void;
+}
+
 /**
  * Minimal HTML overlay for the 3D game: shows money, rating, day, time
  * remaining, active guests, total served, etc. Just text-on-canvas style
@@ -19,11 +28,14 @@ export class Hud {
   private readonly root: HTMLElement;
   private readonly game: Game;
   private readonly spawner: SpawnerAccessor;
+  private readonly time: TimeControl;
   private readonly fields: Record<string, HTMLElement> = {};
+  private readonly speedBtns: Record<string, HTMLButtonElement> = {};
 
-  constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor) {
+  constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl) {
     this.game = game;
     this.spawner = spawner;
+    this.time = time;
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
@@ -48,8 +60,44 @@ export class Hud {
     this.addRow("served", "Served today: —");
     this.addRow("lost", "Lost today: —");
     this.addRow("daytime", "Day ends in: —");
+    this.addSpeedControls();
     this.addOpenCloseButton();
     this.addAdminGrantButton();
+  }
+
+  private addSpeedControls(): void {
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      marginTop: "6px",
+      display: "flex",
+      gap: "4px",
+      pointerEvents: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    const choices: { label: string; action: () => void; key: string }[] = [
+      { label: "‖", action: () => this.time.setPaused(true), key: "pause" },
+      { label: "1×", action: () => { this.time.setPaused(false); this.time.setTimeScale(1); }, key: "1" },
+      { label: "2×", action: () => { this.time.setPaused(false); this.time.setTimeScale(2); }, key: "2" },
+      { label: "4×", action: () => { this.time.setPaused(false); this.time.setTimeScale(4); }, key: "4" },
+    ];
+    for (const c of choices) {
+      const btn = document.createElement("button");
+      btn.textContent = c.label;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "4px 6px",
+        background: "rgba(255,245,220,0.08)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.25)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        font: "inherit",
+        fontSize: "12px",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => { c.action(); this.update(); };
+      wrap.appendChild(btn);
+      this.speedBtns[c.key] = btn;
+    }
+    this.root.appendChild(wrap);
   }
 
   private addAdminGrantButton(): void {
@@ -130,5 +178,13 @@ export class Hud {
     this.fields.openclose.textContent = open ? "OPEN — click to close" : "CLOSED — click to open";
     (this.fields.openclose as HTMLButtonElement).style.background = open
       ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
+    // Highlight whichever speed button matches the current state.
+    const activeKey = this.time.isPaused() ? "pause" : String(this.time.getTimeScale());
+    for (const [key, btn] of Object.entries(this.speedBtns)) {
+      btn.style.background = key === activeKey
+        ? "rgba(120, 200, 120, 0.35)"
+        : "rgba(255,245,220,0.08)";
+      btn.style.fontWeight = key === activeKey ? "700" : "400";
+    }
   }
 }
