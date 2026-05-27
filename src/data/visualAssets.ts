@@ -130,20 +130,17 @@ export function getCharacterSpriteFrame(
   const frameAction = action === "walk" ? `walk-${walkFrame}` : action === "cook" ? `cook-${walkFrame}` : action;
   const normalizedVariant = ((Math.floor(variant) % characterVariantCount) + characterVariantCount) % characterVariantCount;
   const seated = action === "sit";
+  // For seated sprites, anchor the sprite at the BUTT (not the feet) so the
+  // butt lands at the chair seat point automatically. Butt is at ~55% from
+  // the top of the seated AI art (head -> torso -> hips/butt -> bent legs ->
+  // feet). For standing sprites, anchor at feet (origin y = 1) as usual.
+  const originY = seated ? 0.55 : 1;
   return {
     atlas: "characters",
     frame: `${role}-${frameAction}-${facing}-v${normalizedVariant}`,
-    origin: { x: 0.5, y: 1 },
+    origin: { x: 0.5, y: originY },
     xOffset: 0,
-    // For seated guests we want the BUTT (not the feet) to land on the chair
-    // seat point. Empirically iterating: 17 left them clearly hovering, 35
-    // still hovered slightly, 100 sent them way past the chair. 55 is the
-    // next try. The "right" value depends on each sprite's butt-position
-    // within the frame plus the chair's actual seat-vs-floor distance,
-    // which has been hard to derive analytically because the atlas-resampling
-    // step and the chair sprite's anchor convention introduce factors my
-    // math kept missing.
-    yOffset: seated ? 10 : 6,
+    yOffset: 6,
     // Seated AI art is drawn full-height (head to feet on floor) so at the
     // standing scale the character towers over the chair. Shrink seated
     // sprites so the seated silhouette is roughly chair-sized.
