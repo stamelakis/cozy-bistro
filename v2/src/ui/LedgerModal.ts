@@ -67,6 +67,24 @@ export class LedgerModal {
     title.textContent = "TRANSACTION LEDGER";
     Object.assign(title.style, { fontSize: "16px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
     header.appendChild(title);
+    // Buttons (download + close) live together on the right.
+    const btnGroup = document.createElement("div");
+    Object.assign(btnGroup.style, { display: "flex", gap: "6px" } as Partial<CSSStyleDeclaration>);
+    const csvBtn = document.createElement("button");
+    csvBtn.textContent = "⬇ CSV";
+    Object.assign(csvBtn.style, {
+      padding: "0 10px",
+      height: "26px",
+      background: "rgba(140, 180, 200, 0.25)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    csvBtn.onclick = () => this.downloadCsv();
+    btnGroup.appendChild(csvBtn);
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -81,7 +99,8 @@ export class LedgerModal {
       fontSize: "13px",
     } as Partial<CSSStyleDeclaration>);
     closeBtn.onclick = () => this.hide();
-    header.appendChild(closeBtn);
+    btnGroup.appendChild(closeBtn);
+    header.appendChild(btnGroup);
     body.appendChild(header);
 
     this.listEl = document.createElement("div");
@@ -101,6 +120,30 @@ export class LedgerModal {
 
   hide(): void {
     this.root.style.display = "none";
+  }
+
+  /** Build a CSV from the full transaction log and trigger a browser
+   * download. Filename includes the current day so multiple exports
+   * don't overwrite. */
+  private downloadCsv(): void {
+    const log = this.game.economy.getTransactionLog();
+    const rows: string[] = ["time,iso,transaction,amount,balance"];
+    for (const e of log) {
+      const iso = new Date(e.at).toISOString();
+      const safeTxn = `"${e.transaction.replace(/"/g, '""')}"`;
+      rows.push(`${e.at},${iso},${safeTxn},${e.amount},${e.balance}`);
+    }
+    const csv = rows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const day = this.game.day.getDayNumber();
+    a.href = url;
+    a.download = `cozy-bistro-ledger-day${day}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   private refresh(): void {

@@ -77,7 +77,7 @@ export class MenuPanel {
           else this.game.cooking.removeFromMenu(id);
         };
         const text = document.createElement("span");
-        text.textContent = `${recipe.name} ($${recipe.sellPrice})`;
+        text.className = "recipe-text";
         text.style.flex = "1";
         const cat = document.createElement("span");
         cat.textContent = recipe.category[0].toUpperCase();
@@ -91,10 +91,22 @@ export class MenuPanel {
         this.body.appendChild(label);
       }
     }
-    // Refresh checkboxes (in case other systems toggled them).
+    // Refresh checkboxes + recipe-stat text (in case upgrade levels changed).
     Array.from(this.body.querySelectorAll("input[type=checkbox]")).forEach((cb) => {
       const id = (cb as HTMLInputElement).dataset.id!;
       (cb as HTMLInputElement).checked = onMenu.has(id);
+      const parent = (cb as HTMLInputElement).parentElement;
+      const textEl = parent?.querySelector(".recipe-text") as HTMLElement | null;
+      if (textEl) {
+        const recipe = recipes.find((r) => r.id === id);
+        if (recipe) {
+          const price = this.game.getEffectiveSellPrice(recipe);
+          const sat = this.game.getEffectiveSatisfaction(recipe).toFixed(0);
+          const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
+          const lvlSuffix = level > 1 ? ` L${level}` : "";
+          textEl.textContent = `${recipe.name}${lvlSuffix} — $${price} · ${sat}😋`;
+        }
+      }
     });
   }
 
