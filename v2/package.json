@@ -1,0 +1,20 @@
+{
+  "name": "cozy-bistro-3d",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "3D rewrite of Cozy Bistro using Three.js",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5180",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5180"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.169.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
