@@ -136,6 +136,6 @@ export function getCharacterSpriteFrame(
     origin: { x: 0.5, y: 1 },
     xOffset: 0,
     yOffset: seated ? 6 : 6,
-    scale: seated ? 0.38 : 0.42,
+    scale: seated ? 0.46 : 0.52,
   };
 }
