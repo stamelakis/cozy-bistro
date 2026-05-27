@@ -11,6 +11,7 @@ import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradePanel } from "../ui/UpgradePanel";
 import { ExpandPanel } from "../ui/ExpandPanel";
+import { DecorPanel } from "../ui/DecorPanel";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
@@ -44,6 +45,7 @@ export class Engine {
   readonly menuPanel: MenuPanel;
   readonly upgradePanel: UpgradePanel;
   readonly expandPanel: ExpandPanel;
+  readonly decorPanel: DecorPanel;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
   readonly helpModal: HelpModal;
@@ -122,6 +124,10 @@ export class Engine {
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradePanel = new UpgradePanel(container, this.game);
     this.expandPanel = new ExpandPanel(container, this.game);
+    this.decorPanel = new DecorPanel(container, this.game);
+    // Wire theme changes to the live scene + restore the saved theme.
+    this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
+    this.scene.setTheme(this.game.getCurrentTheme());
     this.dayEndModal = new DayEndModal(container);
     this.game.onDayEnded = (summary) => {
       this.dayEndModal.show(summary);
@@ -402,6 +408,7 @@ export class Engine {
       this.menuPanel.update();
       this.upgradePanel.update();
       this.expandPanel.update();
+      this.decorPanel.update();
       this.hudAccumulator = 0;
     }
 

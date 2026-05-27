@@ -163,6 +163,8 @@ export interface SaveGameState {
   dayHistory?: unknown[];
   /** Unlocked achievement ids. v2-specific. */
   achievements?: string[];
+  /** Selected interior theme id. v2-specific. */
+  themeId?: string;
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

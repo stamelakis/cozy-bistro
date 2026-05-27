@@ -7,6 +7,7 @@ import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
 import { AchievementSystem } from "./AchievementSystem";
+import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -70,6 +71,11 @@ export class Game {
   /** Seconds remaining of an active marketing boost. While > 0,
    * GuestSpawner halves its spawn interval. */
   private boostRemaining = 0;
+  /** Currently applied interior theme id. */
+  private themeId: string = RESTAURANT_THEMES[0].id;
+  /** Optional callback fired when the theme changes — Engine wires
+   * this to WorldScene.setTheme so the world recolors. */
+  onThemeChanged?: (theme: RestaurantTheme) => void;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
@@ -198,6 +204,9 @@ export class Game {
     if (Array.isArray(save.achievements)) {
       this.achievements.hydrate(save.achievements as string[]);
     }
+    if (typeof save.themeId === "string") {
+      this.themeId = save.themeId;
+    }
   }
 
   private rolloverDay(): void {
@@ -252,6 +261,24 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  // === Interior themes (wall + floor color presets) ===
+
+  getCurrentTheme(): RestaurantTheme {
+    return RESTAURANT_THEMES.find((t) => t.id === this.themeId) ?? RESTAURANT_THEMES[0];
+  }
+
+  /** Apply (and persist) a new interior theme. Free themes skip the
+   * money check. Returns true on success. */
+  applyTheme(themeId: string): boolean {
+    const theme = RESTAURANT_THEMES.find((t) => t.id === themeId);
+    if (!theme) return false;
+    if (theme.id === this.themeId) return true; // no-op
+    if (theme.cost > 0 && !this.economy.spendMoney(theme.cost, "decor")) return false;
+    this.themeId = theme.id;
+    this.onThemeChanged?.(theme);
+    return true;
   }
 
   // === Marketing boost (paid spawn-rate increase) ===

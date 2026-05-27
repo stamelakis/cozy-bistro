@@ -160,12 +160,15 @@ export class WorldScene {
     return { skyColor };
   }
 
+  /** Exposed so the DecorPanel can swap colors when the player picks a
+   * different theme. */
+  floorMat!: THREE.MeshStandardMaterial;
+  wallMat!: THREE.MeshStandardMaterial;
+
   private addBuilding(): void {
     // Floor
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(40, 40),
-      new THREE.MeshStandardMaterial({ color: 0xe7d4ad, roughness: 0.95, metalness: 0 }),
-    );
+    this.floorMat = new THREE.MeshStandardMaterial({ color: 0xe7d4ad, roughness: 0.95, metalness: 0 });
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
     this.threeScene.add(floor);
@@ -178,18 +181,26 @@ export class WorldScene {
     this.threeScene.add(grid);
 
     // Two short walls to suggest the bistro interior corner.
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8a98a, roughness: 0.85 });
-    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), wallMat);
+    this.wallMat = new THREE.MeshStandardMaterial({ color: 0xe8a98a, roughness: 0.85 });
+    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
     wallBack.position.set(0, 1.5, -5);
     wallBack.castShadow = true;
     wallBack.receiveShadow = true;
     this.threeScene.add(wallBack);
 
-    const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), wallMat);
+    const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallMat);
     wallSide.position.set(-5, 1.5, 0);
     wallSide.castShadow = true;
     wallSide.receiveShadow = true;
     this.threeScene.add(wallSide);
+  }
+
+  /** Apply a theme color set to the existing wall + floor materials.
+   * Used by the DecorPanel — the player picks one of a handful of
+   * pre-curated palettes. */
+  setTheme(theme: { wallColor: number; floorColor: number }): void {
+    if (this.wallMat) this.wallMat.color.setHex(theme.wallColor);
+    if (this.floorMat) this.floorMat.color.setHex(theme.floorColor);
   }
 
   private async populateDemoRestaurant(): Promise<void> {

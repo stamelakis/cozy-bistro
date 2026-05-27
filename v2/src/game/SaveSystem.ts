@@ -95,6 +95,7 @@ export class SaveSystem {
       expansionLevel: this.game.getLuxuryTier() - 1,
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
+      themeId: this.game.getCurrentTheme().id,
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };
