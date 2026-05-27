@@ -133,6 +133,12 @@ export class StaffRouter {
   getChefCount(): number { return this.chefs.length; }
   getWaiterCount(): number { return this.waiters.length; }
 
+  /** True if at least one chef is currently in their "working" (cooking)
+   * state. Used to drive the visible stove flame. */
+  isAnyChefCooking(): boolean {
+    return this.chefs.some((c) => c.state === "working");
+  }
+
   /** Called by GuestSpawner when a guest places an order. */
   enqueueOrder(guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;

@@ -138,7 +138,11 @@ export class GuestSpawner {
     }
     if (this.restaurantOpen && this.spawnCooldown <= 0 && this.countAvailableSeats() > 0) {
       void this.spawnGuest();
-      this.spawnCooldown = SPAWN_INTERVAL_SECONDS;
+      // Boosted: spawn at double rate while the timer's running.
+      const interval = this.game.isBoostActive()
+        ? SPAWN_INTERVAL_SECONDS * 0.5
+        : SPAWN_INTERVAL_SECONDS;
+      this.spawnCooldown = interval;
     }
 
     // Tick each guest's state machine.

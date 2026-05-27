@@ -61,6 +61,9 @@ export class Game {
   /** Current luxury tier (1..5). Raised by buyExpansion(); controls which
    * recipes the player can unlock through the menu picker. */
   private luxuryTier: LuxuryTier = 1;
+  /** Seconds remaining of an active marketing boost. While > 0,
+   * GuestSpawner halves its spawn interval. */
+  private boostRemaining = 0;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
@@ -156,6 +159,10 @@ export class Game {
       }
       if (purchased && this.onAutoShop) this.onAutoShop();
     }
+    // Boost timer counts down with real sim time.
+    if (this.boostRemaining > 0) {
+      this.boostRemaining = Math.max(0, this.boostRemaining - dt);
+    }
   }
 
   hydrate(save: SaveGameState): void {
@@ -213,6 +220,33 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  // === Marketing boost (paid spawn-rate increase) ===
+
+  /** True while a paid boost is active (halves GuestSpawner's interval). */
+  isBoostActive(): boolean {
+    return this.boostRemaining > 0;
+  }
+
+  /** Seconds remaining of the active boost (0 if inactive). */
+  getBoostRemaining(): number {
+    return this.boostRemaining;
+  }
+
+  /** Cost of buying a 60s boost. Scales gently with player wealth so it
+   * stays meaningful in the late game. */
+  getBoostCost(): number {
+    return 80;
+  }
+  getBoostDurationSeconds(): number {
+    return 60;
+  }
+  /** Try to buy a boost. Returns true if money was spent and timer was reset. */
+  buyBoost(): boolean {
+    if (!this.economy.spendMoney(this.getBoostCost(), "decor")) return false;
+    this.boostRemaining = this.getBoostDurationSeconds();
+    return true;
   }
 
   // === Staff hire/fire (wraps economy + StaffSystem + fires callback) ===

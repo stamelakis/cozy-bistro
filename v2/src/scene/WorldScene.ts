@@ -23,6 +23,12 @@ export class WorldScene {
   chefChar?: AnimatedCharacter;
   waiterChar?: AnimatedCharacter;
   errandChar?: AnimatedCharacter;
+  /** Glowing point light + emissive sphere over the stove. Toggled by
+   * setStoveFlame(visible) based on whether a chef is actively cooking. */
+  private stoveFlameGroup?: THREE.Group;
+  private stoveFlameMesh?: THREE.Mesh;
+  private stoveFlameLight?: THREE.PointLight;
+  private stoveFlamePhase = 0;
   /** World position of the stove and the plate-pickup spot. Used by the
    * StaffRouter to send chef/waiter to the right places. */
   readonly stovePos = new THREE.Vector2(0, -3.0);
@@ -37,11 +43,51 @@ export class WorldScene {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
     this.addBuilding();
+    this.addStoveFlame();
     void this.populateDemoRestaurant();
   }
 
   update(dt: number): void {
     this.animator.update(dt);
+    if (this.stoveFlameGroup && this.stoveFlameGroup.visible) {
+      this.stoveFlamePhase += dt;
+      // Flicker scale + intensity so the flame looks alive.
+      const flick = 0.85 + Math.sin(this.stoveFlamePhase * 22) * 0.1 + Math.random() * 0.1;
+      if (this.stoveFlameMesh) this.stoveFlameMesh.scale.setScalar(flick);
+      if (this.stoveFlameLight) this.stoveFlameLight.intensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
+    }
+  }
+
+  /** Show or hide the cooking flame above the stove. Engine calls this
+   * every frame based on whether any chef is in "working" state. */
+  setStoveFlame(visible: boolean): void {
+    if (this.stoveFlameGroup) this.stoveFlameGroup.visible = visible;
+  }
+
+  /** Build the stove flame (orange emissive sphere + point light) once.
+   * Default hidden — Engine toggles visibility based on chef state. */
+  private addStoveFlame(): void {
+    const group = new THREE.Group();
+    group.position.set(this.stovePos.x, 0.55, this.stovePos.y);
+    group.visible = false;
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 12, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0xff7a3c,
+        emissive: 0xff5500,
+        emissiveIntensity: 1.8,
+        transparent: true,
+        opacity: 0.85,
+      }),
+    );
+    group.add(mesh);
+    const light = new THREE.PointLight(0xff8844, 1.6, 4, 2);
+    light.position.set(0, 0.05, 0);
+    group.add(light);
+    this.threeScene.add(group);
+    this.stoveFlameGroup = group;
+    this.stoveFlameMesh = mesh;
+    this.stoveFlameLight = light;
   }
 
   private addLighting(): void {

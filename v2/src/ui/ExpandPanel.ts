@@ -18,6 +18,7 @@ export class ExpandPanel {
   private readonly statusEl: HTMLElement;
   private readonly buyBtn: HTMLButtonElement;
   private readonly unlocksEl: HTMLElement;
+  private readonly boostBtn: HTMLButtonElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -72,10 +73,44 @@ export class ExpandPanel {
     Object.assign(this.unlocksEl.style, { opacity: "0.7", fontSize: "11px", textAlign: "center" } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.unlocksEl);
 
+    // Marketing boost button — temporary spawn-rate doubling.
+    this.boostBtn = document.createElement("button");
+    Object.assign(this.boostBtn.style, {
+      marginTop: "2px",
+      padding: "4px 12px",
+      background: "rgba(200, 120, 200, 0.25)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.35)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "11px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    this.boostBtn.onclick = () => {
+      if (this.game.buyBoost()) this.update();
+    };
+    this.root.appendChild(this.boostBtn);
+
     this.update();
   }
 
   update(): void {
+    // Boost button reflects active timer if running.
+    if (this.game.isBoostActive()) {
+      const remaining = Math.ceil(this.game.getBoostRemaining());
+      this.boostBtn.textContent = `📣 BOOST ACTIVE — ${remaining}s`;
+      this.boostBtn.disabled = true;
+      this.boostBtn.style.opacity = "0.7";
+    } else {
+      const cost = this.game.getBoostCost();
+      const dur = this.game.getBoostDurationSeconds();
+      this.boostBtn.textContent = `📣 Boost guests (${dur}s) — $${cost}`;
+      const can = this.game.economy.canAfford(cost);
+      this.boostBtn.disabled = !can;
+      this.boostBtn.style.opacity = can ? "1" : "0.5";
+    }
+
     const tier = this.game.getLuxuryTier();
     const max = this.game.getMaxLuxuryTier();
     this.statusEl.textContent = `Restaurant tier ${tier} / ${max}`;
