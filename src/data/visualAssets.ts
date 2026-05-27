@@ -135,7 +135,13 @@ export function getCharacterSpriteFrame(
     frame: `${role}-${frameAction}-${facing}-v${normalizedVariant}`,
     origin: { x: 0.5, y: 1 },
     xOffset: 0,
-    yOffset: seated ? 6 : 6,
+    // For seated guests the container sits at the chair's seat-surface point
+    // (~11 world-px above the chair's floor anchor). Without a downward
+    // offset, the sprite's feet float at seat height while the chair's base
+    // is on the floor below — character looks like they hover. Push down
+    // ~11px so the feet land near the floor and the body covers the chair
+    // seat naturally.
+    yOffset: seated ? 17 : 6,
     // Seated AI art is drawn full-height (head to feet on floor) so at the
     // standing scale the character towers over the chair. Shrink seated
     // sprites so the seated silhouette is roughly chair-sized.

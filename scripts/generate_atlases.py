@@ -3793,12 +3793,25 @@ def try_load_ai_character(role: str, action: str, facing: str, variant: int) -> 
 
   # For seated frames, prefer dedicated seated artwork. The seated sprites
   # are saved as {role}-v{variant}-{facing}-sit.png; if a specific facing
-  # doesn't exist we fall through to the cardinal/standing fallbacks below.
+  # doesn't exist we fall back to a nearest DIAGONAL seated sprite (never to
+  # a standing sprite), because a slightly-wrong seated angle reads as
+  # "sitting" while a standing fallback breaks the illusion entirely.
   if action == "sit":
+    # Map cardinal facings to the visually-closest diagonal so a seat that
+    # happens to face up/down/left/right still gets a seated sprite.
+    cardinal_to_diagonal = {
+      "down": "down-left",
+      "up": "up-left",
+      "left": "down-left",
+      "right": "down-right",
+    }
+    diagonal = cardinal_to_diagonal.get(facing, facing)
     candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{facing}-sit.png")
-    if cardinal:
-      candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{cardinal}-sit.png")
+    if diagonal != facing:
+      candidates.append(AI_CHAR_DIR / f"{role}-v{variant}-{diagonal}-sit.png")
     candidates.append(AI_CHAR_DIR / f"{role}-{facing}-sit.png")
+    if diagonal != facing:
+      candidates.append(AI_CHAR_DIR / f"{role}-{diagonal}-sit.png")
 
   candidates.extend([
     AI_CHAR_DIR / f"{role}-v{variant}-{facing}.png",
