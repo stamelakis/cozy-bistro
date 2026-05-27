@@ -5251,11 +5251,15 @@ export class GameScene extends Phaser.Scene {
       }
       if (definition.category === "chair") {
         const seats = diningSeatsByChair.get(item.uid) ?? [];
-        // Chair-back overlay was designed for the thin procedural character
-        // silhouette — drawing chair posts on top of them made the figure
-        // look "between" the posts. AI character sprites are fully rendered
-        // 3D figures, so overlaying chair posts on top reads as the chair
-        // back being IN FRONT of the seated guest. Skip the overlay.
+        // Chair-back overlay re-enabled: only fires when the chair back is
+        // visually on the camera-side (i.e. the seated guest is facing AWAY
+        // from camera and the chair back is between camera and the guest).
+        // Internal logic in drawOccupiedChairBackOverlay checks
+        // `backIsCameraSide` and bails out otherwise.
+        const occupiedVisibleSeat = seats.find((seat) => !seat.disabled && occupiedSeatUids.has(seat.seatUid));
+        if (occupiedVisibleSeat) {
+          this.createSortedChairBackOverlay(context, occupiedVisibleSeat);
+        }
         if (seats.length === 0) {
           this.drawChairSeatMarker(graphics, this.getChairSeatMarkerPoint(context), "unpaired");
         }
