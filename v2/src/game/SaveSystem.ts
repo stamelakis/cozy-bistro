@@ -1,5 +1,6 @@
-import type { SaveGameState } from "../data/types";
+import type { SaveGameState, PlacedFurniture } from "../data/types";
 import type { Game } from "./Game";
+import type { FurnitureRegistry } from "./FurnitureRegistry";
 
 /**
  * localStorage-backed save/load. Snapshots Game state periodically so
@@ -13,6 +14,8 @@ const AUTOSAVE_INTERVAL_SECONDS = 5;
 
 export class SaveSystem {
   private readonly game: Game;
+  /** Optional — Engine sets this after the registry is constructed. */
+  registry?: FurnitureRegistry;
   private elapsed = 0;
 
   constructor(game: Game) {
@@ -61,7 +64,19 @@ export class SaveSystem {
       unlockedRecipeIds: this.game.cooking.getUnlockedRecipeIdsSnapshot(),
       menuRecipeIds: this.game.cooking.getMenuRecipeIdsSnapshot(),
       recipeUpgradeLevels: this.game.cooking.getRecipeUpgradeLevelsSnapshot(),
-      furniture: [], // v2 hard-codes the layout for now; will populate when build/buy UI lands
+      // Persist player-placed furniture so layouts survive reloads. The 2D
+      // PlacedFurniture shape uses {position:{x,y}, rotation:degrees}.
+      // World x/z snap to integer cells, so position is lossless. rotation
+      // is multiples of 90° (BuildMenu only rotates in quarters), so degree
+      // rounding is also lossless.
+      furniture: this.registry
+        ? (this.registry.snapshot().map((p) => ({
+            uid: p.uid,
+            furnitureId: p.defId,
+            position: { x: p.x, y: p.z },
+            rotation: Math.round((p.rotY * 180) / Math.PI),
+          })) as PlacedFurniture[])
+        : [],
       ingredients: this.game.cooking.getPantrySnapshot(),
       preparedServings: this.game.cooking.getPreparedServingsSnapshot(),
       staff: this.game.staff.getStaff(),

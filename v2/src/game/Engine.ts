@@ -14,6 +14,7 @@ import { DayEndModal } from "../ui/DayEndModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
+import { FurnitureRegistry } from "./FurnitureRegistry";
 import { SaveSystem } from "./SaveSystem";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
@@ -28,6 +29,7 @@ export class Engine {
   spawner?: GuestSpawner;
   router?: StaffRouter;
   errand?: ErrandRouter;
+  readonly registry: FurnitureRegistry;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
   readonly pantryPanel: PantryPanel;
@@ -101,8 +103,25 @@ export class Engine {
     this.dayEndModal = new DayEndModal(container);
     this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
+    // Furniture registry — tracks every placed item so it persists, supports
+    // overlap detection, and can be sold via the build-menu sell mode.
+    this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
+    if (savedState?.furniture && savedState.furniture.length > 0) {
+      // SaveGameState.furniture mirrors the 2D PlacedFurniture shape
+      // ({position:{x,y}, rotation:degrees}). Re-instantiate each item
+      // back into the 3D scene.
+      const restored = savedState.furniture.map((p) => ({
+        uid: p.uid,
+        defId: p.furnitureId,
+        x: p.position.x,
+        z: p.position.y,
+        rotY: ((p.rotation ?? 0) * Math.PI) / 180,
+      }));
+      void this.registry.restore(restored);
+    }
+    this.saver.registry = this.registry;
     // Build menu — for placing furniture at runtime.
-    new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
+    new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
 
     // Spawner + router need the staff characters. Wait until WorldScene
     // finishes loading them, then construct.

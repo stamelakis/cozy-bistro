@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
+import type { FurnitureRegistry } from "../game/FurnitureRegistry";
 
 /**
  * Minimal build/buy menu — list furniture items on the right side of the
@@ -22,6 +23,7 @@ export class BuildMenu {
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.Camera;
   private readonly canvas: HTMLCanvasElement;
+  private readonly registry: FurnitureRegistry;
 
   private placingDef: FurnitureDef | null = null;
   private preview: THREE.Object3D | null = null;
@@ -33,6 +35,10 @@ export class BuildMenu {
   /** Rotation (radians around Y) applied to the preview/placed model.
    * Press R while placing to rotate 90°. */
   private rotationY = 0;
+  /** When true, clicking a placed item refunds 50% and removes it.
+   * Mutually exclusive with placingDef (entering sell mode cancels placement). */
+  private sellMode = false;
+  private sellBtn?: HTMLButtonElement;
 
   constructor(
     parent: HTMLElement,
@@ -41,12 +47,14 @@ export class BuildMenu {
     scene: THREE.Scene,
     camera: THREE.Camera,
     canvas: HTMLCanvasElement,
+    registry: FurnitureRegistry,
   ) {
     this.game = game;
     this.loader = loader;
     this.scene = scene;
     this.camera = camera;
     this.canvas = canvas;
+    this.registry = registry;
     this.root = this.buildPanel(parent);
     this.attachInput();
   }
@@ -96,6 +104,26 @@ export class BuildMenu {
       root.appendChild(btn);
     }
 
+    const sellBtn = document.createElement("button");
+    sellBtn.textContent = "SELL MODE (50% refund)";
+    Object.assign(sellBtn.style, {
+      display: "block",
+      width: "100%",
+      marginTop: "10px",
+      padding: "6px 8px",
+      background: "rgba(220, 140, 80, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(220, 140, 80, 0.5)",
+      borderRadius: "4px",
+      textAlign: "center",
+      cursor: "pointer",
+      fontSize: "12px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    sellBtn.onclick = () => this.toggleSellMode();
+    root.appendChild(sellBtn);
+    this.sellBtn = sellBtn;
+
     const hint = document.createElement("div");
     hint.textContent = "Click item → click floor to place. R = rotate. Esc = cancel.";
     Object.assign(hint.style, { marginTop: "8px", opacity: "0.65", fontSize: "11px" } as Partial<CSSStyleDeclaration>);
@@ -104,11 +132,29 @@ export class BuildMenu {
     return root;
   }
 
+  private toggleSellMode(): void {
+    this.sellMode = !this.sellMode;
+    if (this.sellMode) {
+      this.cancelPlacing(); // sell mode and placing mode are mutually exclusive
+    }
+    if (this.sellBtn) {
+      this.sellBtn.style.background = this.sellMode
+        ? "rgba(220, 140, 80, 0.6)"
+        : "rgba(220, 140, 80, 0.18)";
+      this.sellBtn.textContent = this.sellMode
+        ? "SELL MODE — click item to sell (Esc to exit)"
+        : "SELL MODE (50% refund)";
+    }
+  }
+
   private attachInput(): void {
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("click", this.onClick);
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") this.cancelPlacing();
+      if (e.key === "Escape") {
+        this.cancelPlacing();
+        if (this.sellMode) this.toggleSellMode();
+      }
       if ((e.key === "r" || e.key === "R") && this.preview) {
         this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
         this.preview.rotation.y = this.rotationY;
@@ -121,6 +167,7 @@ export class BuildMenu {
       this.flashRoot("Not enough money");
       return;
     }
+    if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     this.cancelPlacing();
     this.placingDef = def;
     try {
@@ -165,7 +212,9 @@ export class BuildMenu {
   }
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (!this.placingDef || !this.preview) return;
+    // Run the raycaster in both placing mode (to position the preview)
+    // and sell mode (to know which cell a click would hit).
+    if (!this.placingDef && !this.sellMode) return;
     const rect = this.canvas.getBoundingClientRect();
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -177,14 +226,44 @@ export class BuildMenu {
     if (this.hoverValid) {
       // Snap to integer cells (1 cell = 1 world unit).
       this.hoverCell.set(Math.round(point.x), 0, Math.round(point.z));
-      this.preview.position.copy(this.hoverCell);
+      if (this.preview) {
+        this.preview.position.copy(this.hoverCell);
+        // Tint preview red if the cell is already taken — placement will be blocked.
+        const blocked = this.registry.isOccupied(this.hoverCell.x, this.hoverCell.z);
+        this.preview.traverse((o) => {
+          if (o instanceof THREE.Mesh) {
+            const m = o.material as THREE.MeshStandardMaterial;
+            if (m && "color" in m && m.color) {
+              m.color.set(blocked ? 0xff8080 : 0xffffff);
+            }
+          }
+        });
+      }
     }
   };
 
   private onClick = (e: MouseEvent): void => {
-    if (!this.placingDef || !this.preview || !this.hoverValid) return;
     if (e.button !== 0) return;
+    if (this.sellMode && this.hoverValid) {
+      const x = Math.round(this.hoverCell.x);
+      const z = Math.round(this.hoverCell.z);
+      const removed = this.registry.removeAt(x, z);
+      if (!removed) {
+        this.flashRoot("Nothing to sell there");
+        return;
+      }
+      this.game.economy.earnMoney(removed.refund, "payment");
+      this.flashRoot(`Sold for $${removed.refund}`);
+      return;
+    }
+    if (!this.placingDef || !this.preview || !this.hoverValid) return;
     const def = this.placingDef;
+    const cellX = Math.round(this.hoverCell.x);
+    const cellZ = Math.round(this.hoverCell.z);
+    if (this.registry.isOccupied(cellX, cellZ)) {
+      this.flashRoot("Cell already occupied");
+      return;
+    }
     if (!this.game.economy.spendMoney(def.cost, "decor")) {
       this.flashRoot("Not enough money");
       return;
@@ -192,10 +271,11 @@ export class BuildMenu {
     // Bake the preview into the scene: clone it as a solid model and add.
     const rotY = this.rotationY;
     void this.loader.load(def.modelPath).then((solid) => {
-      solid.position.copy(this.hoverCell);
+      solid.position.set(cellX, 0, cellZ);
       solid.rotation.y = rotY;
       solid.scale.setScalar(def.scale);
       this.scene.add(solid);
+      this.registry.register(def.id, cellX, cellZ, rotY, solid);
     });
     // Keep placing more of the same — many people want to drop multiples
     // (e.g. 4 chairs around a table). Esc / right-click to stop.
