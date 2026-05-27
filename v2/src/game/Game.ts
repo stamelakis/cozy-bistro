@@ -3,7 +3,7 @@ import { ReputationSystem } from "../systems/ReputationSystem";
 import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
-import { StaffSystem } from "../systems/StaffSystem";
+import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
 import { recipes } from "../data/recipes";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -69,6 +69,13 @@ export class Game {
    * of the just-ended day's totals BEFORE they're reset. Engine wires
    * this to the day-end modal so the player sees the recap. */
   onDayEnded?: (summary: DayEndSummary) => void;
+  /** Fired when the player successfully hires a new staff member. Engine
+   * uses this to spawn an extra character in the world and add them to
+   * the corresponding router pool. */
+  onStaffHired?: (role: StaffRole, indexAmongRole: number) => void;
+  /** Fired when the player fires a staff member. Engine uses this to
+   * remove the matching character from the world. */
+  onStaffFired?: (role: StaffRole) => void;
 
   constructor(save?: SaveGameState) {
     this.economy = new EconomySystem();
@@ -206,6 +213,29 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  // === Staff hire/fire (wraps economy + StaffSystem + fires callback) ===
+
+  /** Try to hire a staff member. Returns true on success (money was
+   * available and was charged, headcount went up, callback fired). */
+  hireStaff(role: StaffRole): boolean {
+    const cost = this.staff.getStaffHireCost(role);
+    if (!this.economy.spendMoney(cost, "staff")) return false;
+    const idx = this.staff.addStaff(role);
+    this.onStaffHired?.(role, idx);
+    return true;
+  }
+
+  /** Try to fire a staff member. Returns true if there was someone to fire
+   * (severance was charged and the callback fired). */
+  fireStaff(role: StaffRole): boolean {
+    if (this.staff.getStaffCount(role) === 0) return false;
+    const cost = this.staff.getStaffFireCost(role);
+    this.economy.forceSpendMoney(cost, "charge");
+    this.staff.removeStaff(role);
+    this.onStaffFired?.(role);
+    return true;
   }
 
   // === Luxury-tier expansion (controls which recipes can be unlocked) ===

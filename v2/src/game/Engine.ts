@@ -139,11 +139,87 @@ export class Engine {
         this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
         this.game.onAutoShop = () => this.errand?.triggerRun();
       }
+      // Wire hire/fire callbacks now that the routers exist. The first
+      // staff member of each role is already part of populateCharacters
+      // and was added to the router by the constructor; hiring extras
+      // spawns brand-new characters that get added to the pool.
+      this.game.onStaffHired = (role) => {
+        void this.handleStaffHired(role);
+      };
+      this.game.onStaffFired = (role) => {
+        this.handleStaffFired(role);
+      };
+      // Restore any extra hired staff from the save. The base 3 characters
+      // (1 chef, 1 waiter, 1 errand) are already in the world; if the save
+      // shows more, spawn the difference so what the player sees matches
+      // what they're paying payroll for.
+      void this.syncStaffToHeadcount();
     });
 
     // Save on tab close.
     window.addEventListener("beforeunload", () => this.saver.saveNow());
     window.addEventListener("resize", this.handleResize);
+  }
+
+  /** Match world characters to the saved StaffSystem headcount. The base
+   * 3 characters from populateCharacters cover "1 of each"; this fills
+   * in the rest on load. */
+  private async syncStaffToHeadcount(): Promise<void> {
+    if (!this.router || !this.errand) return;
+    const roles: ("chef" | "waiter" | "errand")[] = ["chef", "waiter", "errand"];
+    for (const role of roles) {
+      const want = this.game.staff.getStaffCount(role);
+      // The starter character counts as 1 if hired. If StaffSystem says 0,
+      // we leave the starter standing (cosmetic only — it won't grab tickets
+      // because we'd remove it, but for simplicity keep the body around).
+      const have = role === "chef"
+        ? this.router.getChefCount()
+        : role === "waiter"
+          ? this.router.getWaiterCount()
+          : this.errand.getHelperCount();
+      // Spawn missing extras. We bypass handleStaffHired because that one
+      // is for player-triggered hires; here we're just restoring visuals.
+      for (let i = have; i < Math.max(want, 1); i += 1) {
+        const char = await this.scene.spawnExtraStaff(role, i);
+        if (!char) continue;
+        if (role === "chef") this.router.addChef(char);
+        else if (role === "waiter") this.router.addWaiter(char);
+        else this.errand.addHelper(char);
+      }
+    }
+  }
+
+  /** Spawn an extra staff character and slot them into the right router.
+   * Picks an offset slot so multiple extras of the same role don't pile
+   * onto a single spot. */
+  private async handleStaffHired(role: "chef" | "waiter" | "errand"): Promise<void> {
+    // The starter character at populateCharacters time is index 0; extras
+    // start at offsetSlot=1.
+    const currentInRouter = role === "chef"
+      ? (this.router?.getChefCount() ?? 0)
+      : role === "waiter"
+        ? (this.router?.getWaiterCount() ?? 0)
+        : (this.errand?.getHelperCount() ?? 0);
+    const offsetSlot = currentInRouter; // 0 is the starter (already placed), so first extra is 1
+    const char = await this.scene.spawnExtraStaff(role, offsetSlot);
+    if (!char) return;
+    if (role === "chef") this.router?.addChef(char);
+    else if (role === "waiter") this.router?.addWaiter(char);
+    else this.errand?.addHelper(char);
+  }
+
+  /** Remove the most-recently-added staff character of this role from
+   * its router pool, and drop their model from the scene. */
+  private handleStaffFired(role: "chef" | "waiter" | "errand"): void {
+    let removed: { character: { root: import("three").Object3D } | null } | null = null;
+    if (role === "chef") removed = { character: this.router?.removeChef() ?? null };
+    else if (role === "waiter") removed = { character: this.router?.removeWaiter() ?? null };
+    else removed = { character: this.errand?.removeHelper() ?? null };
+    const model = removed?.character?.root;
+    if (model) {
+      this.scene.threeScene.remove(model);
+      this.scene.animator.remove(model);
+    }
   }
 
   /** Fallback if the staff GLBs failed to load — gives an instant-delivery

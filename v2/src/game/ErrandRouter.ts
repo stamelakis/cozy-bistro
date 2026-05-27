@@ -2,13 +2,17 @@ import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 
 /**
- * Drives the errand-helper character so the auto-shop has a visible
+ * Drives the errand-helper characters so the auto-shop has a visible
  * "someone is doing the work" beat. Whenever the kitchen restocks an
- * ingredient, the helper walks from their home position to the front
- * door, pauses briefly (as if collecting the delivery), then walks back.
+ * ingredient, the next idle helper walks from their home position to
+ * the front door, pauses briefly (as if collecting the delivery), then
+ * walks back.
  *
  * Trips are queued — many auto-shop events fired in quick succession
- * stack into a single visible trip rather than spamming overlapping walks.
+ * stack into a single visible trip rather than spamming overlapping
+ * walks. Multiple helpers in the pool each peel one trip off the
+ * queue, so a busy kitchen with extra helpers chews through pending
+ * deliveries in parallel.
  */
 
 interface ErrandActor {
@@ -23,36 +27,55 @@ const WALK_SPEED = 2.4; // a hair faster than other staff
 const ARRIVAL_THRESHOLD = 0.18;
 /** Pause at door (seconds) to suggest picking up the delivery. */
 const DOOR_DWELL_SECONDS = 0.8;
+/** Cap on queued trips so a long shortage doesn't queue dozens. */
+const MAX_PENDING_TRIPS = 6;
 
 export class ErrandRouter {
-  private readonly helper: ErrandActor;
+  private readonly helpers: ErrandActor[] = [];
   private readonly doorPos: THREE.Vector2;
-  /** Pending trips. Each call to triggerRun() bumps this by 1; one trip
-   * = one walk-to-door-and-back cycle. */
+  /** Pending trips. Each idle helper consumes one per tick. */
   private pendingTrips = 0;
 
   constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2) {
     this.doorPos = doorPos.clone();
-    this.helper = {
-      character: helperChar,
-      home: helperChar.groundPos.clone(),
-      state: "idle",
-      target: helperChar.groundPos.clone(),
-      clock: 0,
-    };
-    // Override the default "carry" action — they're idle until called.
-    helperChar.action = "idle";
+    this.addHelper(helperChar);
   }
 
-  /** Queue one trip to the door. Idempotent-safe: many calls just mean
-   * more trips will play out one after another. */
+  addHelper(char: AnimatedCharacter): void {
+    char.action = "idle"; // override the default "carry" pose
+    this.helpers.push({
+      character: char,
+      home: char.groundPos.clone(),
+      state: "idle",
+      target: char.groundPos.clone(),
+      clock: 0,
+    });
+  }
+
+  /** Pop one helper out of the pool. Prefers an idle helper so we don't
+   * abandon a trip mid-flight. Returns the character so Engine can drop
+   * its model from the scene. */
+  removeHelper(): AnimatedCharacter | null {
+    if (this.helpers.length === 0) return null;
+    const idleIdx = this.helpers.findIndex((h) => h.state === "idle");
+    const idx = idleIdx >= 0 ? idleIdx : this.helpers.length - 1;
+    const removed = this.helpers[idx];
+    this.helpers.splice(idx, 1);
+    return removed.character;
+  }
+
+  getHelperCount(): number { return this.helpers.length; }
+
+  /** Queue one trip to the door. */
   triggerRun(): void {
-    // Cap so a long shortage doesn't queue 40 trips.
-    this.pendingTrips = Math.min(this.pendingTrips + 1, 4);
+    this.pendingTrips = Math.min(this.pendingTrips + 1, MAX_PENDING_TRIPS);
   }
 
   update(dt: number): void {
-    const h = this.helper;
+    for (const h of this.helpers) this.tickHelper(h, dt);
+  }
+
+  private tickHelper(h: ErrandActor, dt: number): void {
     h.clock += dt;
 
     switch (h.state) {

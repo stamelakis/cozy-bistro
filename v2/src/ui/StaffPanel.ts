@@ -66,18 +66,13 @@ export class StaffPanel {
   }
 
   private tryHire(role: StaffRole): void {
-    const cost = this.game.staff.getStaffHireCost(role);
-    if (!this.game.economy.spendMoney(cost, "staff")) return;
-    this.game.staff.addStaff(role);
-    this.update();
+    // Game.hireStaff handles the economy + staff system + onStaffHired
+    // callback so the Engine can spawn the actual world character.
+    if (this.game.hireStaff(role)) this.update();
   }
 
   private tryFire(role: StaffRole): void {
-    if (this.game.staff.getStaffCount(role) === 0) return;
-    const cost = this.game.staff.getStaffFireCost(role);
-    this.game.economy.forceSpendMoney(cost, "charge");
-    this.game.staff.removeStaff(role);
-    this.update();
+    if (this.game.fireStaff(role)) this.update();
   }
 
   update(): void {

@@ -7,14 +7,18 @@ import type { AnimatedCharacter } from "../scene/CharacterAnimator";
  *
  * Coordination is via a shared Ticket queue:
  *  - GuestSpawner creates a ticket when a guest orders.
- *  - Chef pulls the oldest QUEUED ticket, walks to the stove, "cooks" for
- *    recipe.preparationTime seconds, marks ticket READY (a plate exists
- *    at the chef station).
- *  - Waiter watches for READY tickets, walks to the chef station to pick
- *    up the plate, walks to the seat, places it (ticket DELIVERED), then
- *    walks back to idle position.
+ *  - Any idle chef pulls the oldest QUEUED ticket, walks to the stove,
+ *    "cooks" for recipe.preparationTime seconds, marks ticket READY
+ *    (a plate exists at the chef station).
+ *  - Any idle waiter watches for READY tickets, walks to the chef station
+ *    to pick up the plate, walks to the seat, places it (ticket
+ *    DELIVERED), then walks back to idle position.
  *  - GuestSpawner watches for DELIVERED tickets matching its guests and
  *    transitions them to EATING.
+ *
+ * Each role is a pool of actors that share the same queue. Hiring an
+ * extra chef adds another worker to the chef pool; multiple tickets can
+ * cook in parallel. Same for waiters.
  *
  * Movement is direct A->B at WALK_SPEED. CharacterAnimator handles the
  * walk/idle/carry/sit poses.
@@ -54,8 +58,8 @@ export class StaffRouter {
   /** Public queue: GuestSpawner enqueues, GuestSpawner polls for DELIVERED. */
   readonly tickets: Ticket[] = [];
 
-  private readonly chef: StaffActor;
-  private readonly waiter: StaffActor;
+  private readonly chefs: StaffActor[] = [];
+  private readonly waiters: StaffActor[] = [];
 
   /** Where the chef cooks (next to the stove). */
   private readonly stovePos: THREE.Vector2;
@@ -70,23 +74,64 @@ export class StaffRouter {
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
-    this.chef = {
-      character: chefChar,
-      home: chefChar.groundPos.clone(),
-      state: "idle",
-      ticketId: null,
-      target: chefChar.groundPos.clone(),
-      clock: 0,
-    };
-    this.waiter = {
-      character: waiterChar,
-      home: waiterChar.groundPos.clone(),
-      state: "idle",
-      ticketId: null,
-      target: waiterChar.groundPos.clone(),
-      clock: 0,
-    };
+    this.addChef(chefChar);
+    this.addWaiter(waiterChar);
   }
+
+  /** Append a chef to the pool. Their current ground position becomes home. */
+  addChef(char: AnimatedCharacter): void {
+    this.chefs.push({
+      character: char,
+      home: char.groundPos.clone(),
+      state: "idle",
+      ticketId: null,
+      target: char.groundPos.clone(),
+      clock: 0,
+    });
+  }
+
+  addWaiter(char: AnimatedCharacter): void {
+    this.waiters.push({
+      character: char,
+      home: char.groundPos.clone(),
+      state: "idle",
+      ticketId: null,
+      target: char.groundPos.clone(),
+      clock: 0,
+    });
+  }
+
+  /** Pop a chef out of the pool. Returns the AnimatedCharacter so the
+   * caller (Engine) can remove its model from the scene. Prefers idle
+   * chefs so we don't strand an in-progress ticket. Returns null if the
+   * pool is empty. */
+  removeChef(): AnimatedCharacter | null {
+    return this.popPreferIdle(this.chefs);
+  }
+  removeWaiter(): AnimatedCharacter | null {
+    return this.popPreferIdle(this.waiters);
+  }
+
+  private popPreferIdle(pool: StaffActor[]): AnimatedCharacter | null {
+    if (pool.length === 0) return null;
+    const idleIdx = pool.findIndex((a) => a.state === "idle");
+    const idx = idleIdx >= 0 ? idleIdx : pool.length - 1;
+    const removed = pool[idx];
+    // If they were mid-task, mark the ticket back to its previous queue state
+    // so another staffer can pick it up.
+    if (removed.ticketId) {
+      const t = this.tickets.find((tk) => tk.id === removed.ticketId);
+      if (t) {
+        if (t.state === "cooking") t.state = "queued";
+        else if (t.state === "delivering") t.state = "ready";
+      }
+    }
+    pool.splice(idx, 1);
+    return removed.character;
+  }
+
+  getChefCount(): number { return this.chefs.length; }
+  getWaiterCount(): number { return this.waiters.length; }
 
   /** Called by GuestSpawner when a guest places an order. */
   enqueueOrder(guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number): string {
@@ -107,14 +152,13 @@ export class StaffRouter {
   }
 
   update(dt: number): void {
-    this.tickChef(dt);
-    this.tickWaiter(dt);
+    for (const c of this.chefs) this.tickChef(c, dt);
+    for (const w of this.waiters) this.tickWaiter(w, dt);
   }
 
   // === Chef state machine ===
 
-  private tickChef(dt: number): void {
-    const c = this.chef;
+  private tickChef(c: StaffActor, dt: number): void {
     c.clock += dt;
 
     switch (c.state) {
@@ -175,8 +219,7 @@ export class StaffRouter {
 
   // === Waiter state machine ===
 
-  private tickWaiter(dt: number): void {
-    const w = this.waiter;
+  private tickWaiter(w: StaffActor, dt: number): void {
     w.clock += dt;
 
     switch (w.state) {

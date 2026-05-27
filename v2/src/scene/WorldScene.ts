@@ -150,6 +150,38 @@ export class WorldScene {
     await this.populateCharacters();
   }
 
+  /** Spawn an extra staff character at runtime (when player hires another).
+   * Slots them in just to the right of the existing crew so they don't
+   * overlap. Returns the AnimatedCharacter, or null if the GLB failed
+   * to load. */
+  async spawnExtraStaff(role: "chef" | "waiter" | "errand", offsetSlot: number): Promise<AnimatedCharacter | null> {
+    const homeByRole: Record<"chef" | "waiter" | "errand", { x: number; z: number; facingY: number; action: CharacterAction }> = {
+      chef:   { x: -0.5, z: -2.6, facingY: 0,            action: "idle" },
+      waiter: { x:  1.5, z: -2.6, facingY: 0,            action: "idle" },
+      errand: { x:  3.5, z: -2.6, facingY: -Math.PI / 2, action: "idle" },
+    };
+    const base = homeByRole[role];
+    // Stagger each new hire 0.6 units further along the kitchen line.
+    const x = base.x + offsetSlot * 0.6;
+    try {
+      const model = await this.characterLoader.load(role);
+      const animated: AnimatedCharacter = {
+        root: model,
+        groundPos: new THREE.Vector2(x, base.z),
+        facingY: base.facingY,
+        action: base.action,
+        phase: Math.random() * 5,
+        seatHeight: 0.5,
+      };
+      this.threeScene.add(model);
+      this.animator.add(animated);
+      return animated;
+    } catch (err) {
+      console.warn(`Failed to spawn extra ${role}:`, err);
+      return null;
+    }
+  }
+
   /** Place the static staff models (chef + waiter + errand) at the kitchen
    * line. Guests are spawned dynamically by GuestSpawner — they're not
    * placed here. */
