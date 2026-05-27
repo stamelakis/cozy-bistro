@@ -273,6 +273,10 @@ export class GuestSpawner {
       this.animator.add(character);
 
       const archetype = rollArchetype();
+      // Loud announcement for a food critic so the player knows to ace it.
+      if (archetype.id === "critic") {
+        this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966");
+      }
       this.guests.push({
         id,
         variantId,
@@ -527,7 +531,12 @@ export class GuestSpawner {
     const base = clamp(2 + avgSat / 2, 1, 5);
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
-    this.game.reputation.recordRating(rating);
+    // Food critics swing the rating average harder. Record their rating
+    // three times — same direction, triple weight on overall reputation.
+    const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;
+    for (let i = 0; i < ratingsToRecord; i += 1) {
+      this.game.reputation.recordRating(rating);
+    }
 
     // Tip: 0% at 1-2 stars, 5% at 3, 15% at 4, 30% at 5. Round to whole dollars.
     // Modifiers: archetype (generous +50% / grumpy -60%) and weather

@@ -24,12 +24,14 @@ export interface CustomerArchetype {
 }
 
 export const customerArchetypes: readonly CustomerArchetype[] = [
-  { id: "casual",      name: "Casual Diner",  weight: 35, patienceMultiplier: 1.0,  tipMultiplier: 1.0, orderSizeBias:  0, shortLabel: "🙂" },
+  { id: "casual",      name: "Casual Diner",  weight: 33, patienceMultiplier: 1.0,  tipMultiplier: 1.0, orderSizeBias:  0, shortLabel: "🙂" },
   { id: "quick-lunch", name: "Quick Lunch",   weight: 20, patienceMultiplier: 0.6,  tipMultiplier: 0.8, orderSizeBias: -1, shortLabel: "⚡" },
   { id: "foodie",      name: "Foodie",        weight: 15, patienceMultiplier: 1.3,  tipMultiplier: 1.5, orderSizeBias:  1, shortLabel: "🍷" },
   { id: "tourist",     name: "Tourist",       weight: 15, patienceMultiplier: 0.85, tipMultiplier: 1.3, orderSizeBias:  0, shortLabel: "📸" },
   { id: "date-night",  name: "Date Night",    weight: 10, patienceMultiplier: 1.2,  tipMultiplier: 1.4, orderSizeBias:  1, shortLabel: "💕" },
   { id: "grump",       name: "Grumpy Critic", weight:  5, patienceMultiplier: 0.7,  tipMultiplier: 0.4, orderSizeBias:  0, shortLabel: "😠" },
+  // Rare: food critic whose rating counts triple but tips huge if pleased.
+  { id: "critic",      name: "Food Critic",   weight:  2, patienceMultiplier: 0.9,  tipMultiplier: 3.0, orderSizeBias:  1, shortLabel: "🕵️" },
 ];
 
 /** Pick one archetype weighted by its `weight` field. */
