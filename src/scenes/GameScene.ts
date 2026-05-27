@@ -10816,30 +10816,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startGuestEatingAnimation(guest: Guest): void {
+    // Eating animation (spoon-to-mouth + body lean) intentionally disabled.
+    // The AI character art reads as "seated dining" without it, and the
+    // spoon overlay clashes with the rendered character. We still need to
+    // call stopGuestEatingAnimation in case a previous animation was active
+    // (e.g. after a save reload), but no new tween is started.
     this.stopGuestEatingAnimation(guest);
     this.drawPersonPose(guest.body, guest.legs, guest.seatedFacing, 0, true);
-
-    const overlay = this.add.graphics();
-    overlay.setData("baseLocalX", 0);
-    overlay.setData("baseLocalY", 0);
-    guest.container.add(overlay);
-    guest.eatingOverlay = overlay;
-
-    guest.eatingTween = this.tweens.addCounter({
-      from: 0,
-      to: Math.PI * 2,
-      duration: 920,
-      repeat: -1,
-      onUpdate: (tween) => {
-        const phase = tween.getValue() ?? 0;
-        const lean = Math.max(0, Math.sin(phase));
-        guest.sprite?.setAngle(Math.sin(phase) * 1.6);
-        guest.body.setAngle(Math.sin(phase) * 1.6);
-        guest.body.setY(-lean * 1.4);
-        guest.sprite?.setY(((guest.sprite.getData("baseLocalY") as number | undefined) ?? guest.sprite.y) - lean * 1.4);
-        this.drawGuestEatingOverlay(overlay, guest.seatedFacing, phase);
-      },
-    });
   }
 
   private stopGuestEatingAnimation(guest: Guest): void {

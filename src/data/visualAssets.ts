@@ -135,9 +135,10 @@ export function getCharacterSpriteFrame(
   // the top of the seated AI art (head -> torso -> hips/butt -> bent legs ->
   // feet). For standing sprites, anchor at feet (origin y = 1) as usual.
   const originY = seated ? 0.65 : 1;
-  // For seated, no extra yOffset — the origin-at-butt convention puts the
-  // butt at container.y (= chair seat point) directly.
-  const yOffset = seated ? 0 : 6;
+  // For seated, a tiny downward nudge puts the body slightly forward on the
+  // seat instead of dead-center, so the back doesn't poke through the chair
+  // back and the legs don't poke through the chair's front wood.
+  const yOffset = seated ? 4 : 6;
   return {
     atlas: "characters",
     frame: `${role}-${frameAction}-${facing}-v${normalizedVariant}`,
