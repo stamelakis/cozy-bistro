@@ -18,6 +18,14 @@ export interface TimeControl {
   setTimeScale(scale: number): void;
 }
 
+/** Extra HUD action hooks the Engine wires in (opening modals, clearing
+ * the save). Kept as a plain callback bundle so we don't pass Engine
+ * directly. */
+export interface HudActions {
+  openLedger: () => void;
+  resetSave: () => void;
+}
+
 /**
  * Minimal HTML overlay for the 3D game: shows money, rating, day, time
  * remaining, active guests, total served, etc. Just text-on-canvas style
@@ -29,13 +37,15 @@ export class Hud {
   private readonly game: Game;
   private readonly spawner: SpawnerAccessor;
   private readonly time: TimeControl;
+  private readonly actions: HudActions;
   private readonly fields: Record<string, HTMLElement> = {};
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
 
-  constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl) {
+  constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl, actions: HudActions) {
     this.game = game;
     this.spawner = spawner;
     this.time = time;
+    this.actions = actions;
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
@@ -62,7 +72,49 @@ export class Hud {
     this.addRow("daytime", "Day ends in: —");
     this.addSpeedControls();
     this.addOpenCloseButton();
+    this.addLedgerButton();
     this.addAdminGrantButton();
+    this.addResetButton();
+  }
+
+  private addLedgerButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(200, 180, 120, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "Show ledger";
+    btn.onclick = () => this.actions.openLedger();
+    this.root.appendChild(btn);
+  }
+
+  private addResetButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(200, 80, 80, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "[dev] Reset save";
+    btn.onclick = () => this.actions.resetSave();
+    this.root.appendChild(btn);
   }
 
   private addSpeedControls(): void {

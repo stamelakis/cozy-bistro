@@ -11,6 +11,7 @@ import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradePanel } from "../ui/UpgradePanel";
 import { ExpandPanel } from "../ui/ExpandPanel";
 import { DayEndModal } from "../ui/DayEndModal";
+import { LedgerModal } from "../ui/LedgerModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -37,6 +38,7 @@ export class Engine {
   readonly upgradePanel: UpgradePanel;
   readonly expandPanel: ExpandPanel;
   readonly dayEndModal: DayEndModal;
+  readonly ledgerModal: LedgerModal;
   readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
@@ -94,6 +96,9 @@ export class Engine {
       setPaused: (p) => this.setPaused(p),
       getTimeScale: () => this.getTimeScale(),
       setTimeScale: (s) => this.setTimeScale(s),
+    }, {
+      openLedger: () => this.ledgerModal.show(),
+      resetSave: () => this.resetSave(),
     });
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
@@ -102,6 +107,7 @@ export class Engine {
     this.expandPanel = new ExpandPanel(container, this.game);
     this.dayEndModal = new DayEndModal(container);
     this.game.onDayEnded = (summary) => this.dayEndModal.show(summary);
+    this.ledgerModal = new LedgerModal(container, this.game);
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
@@ -159,6 +165,19 @@ export class Engine {
     // Save on tab close.
     window.addEventListener("beforeunload", () => this.saver.saveNow());
     window.addEventListener("resize", this.handleResize);
+  }
+
+  /** Wipe localStorage and reload the page so the user gets a brand-new
+   * game. Asks for confirmation since this is destructive. */
+  private resetSave(): void {
+    const ok = window.confirm("Reset save and start over? This wipes all progress and reloads the page.");
+    if (!ok) return;
+    try {
+      localStorage.removeItem("cozy-bistro-3d-save");
+    } catch (e) {
+      console.warn("Failed to clear save key:", e);
+    }
+    window.location.reload();
   }
 
   /** Match world characters to the saved StaffSystem headcount. The base
