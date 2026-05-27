@@ -180,6 +180,7 @@ export class Engine {
       this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
       this.spawner.floatingText = this.floatingText;
       this.spawner.sfx = this.sfx;
+      this.spawner.registry = this.registry;
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       // Errand helper — runs to door + back whenever auto-shop fires.
       if (this.scene.errandChar) {

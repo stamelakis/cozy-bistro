@@ -93,6 +93,21 @@ export class FurnitureRegistry {
     }));
   }
 
+  /** Aggregated stat bonuses across all placed furniture. Used by the
+   * Game to adjust guest spawn rate, satisfaction, and rating. */
+  getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number } {
+    let style = 0, comfort = 0, attractionBonus = 0, ratingBonus = 0;
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      style += def.style ?? 0;
+      comfort += def.comfort ?? 0;
+      attractionBonus += def.attractionBonus ?? 0;
+      ratingBonus += def.ratingBonus ?? 0;
+    }
+    return { style, comfort, attractionBonus, ratingBonus };
+  }
+
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). */
   async restore(saved: PersistedPlacement[]): Promise<void> {

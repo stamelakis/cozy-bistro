@@ -5,6 +5,7 @@ import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
 import type { FloatingText } from "../ui/FloatingText";
 import type { SfxPlayer } from "../ui/SfxPlayer";
+import type { FurnitureRegistry } from "./FurnitureRegistry";
 import { recipes } from "../data/recipes";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
@@ -164,6 +165,9 @@ export class GuestSpawner {
   floatingText?: FloatingText;
   /** Optional: procedural sound cues on guest arrival / serve / leave / etc. */
   sfx?: SfxPlayer;
+  /** Optional: registry of placed furniture. When provided, its stats
+   * scale spawn rate, satisfaction, and rating. */
+  registry?: FurnitureRegistry;
 
   constructor(
     scene: THREE.Scene,
@@ -197,7 +201,11 @@ export class GuestSpawner {
       // Weather values >1 slow spawning (rainy), <1 speed it up (festival).
       const weatherMult = this.game.weather.getCurrent().spawnRateMultiplier;
       const boostMult = this.game.isBoostActive() ? 0.5 : 1;
-      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult;
+      // Furniture attractionBonus speeds up spawning (capped so a hoarder
+      // with 100 plants doesn't break the game).
+      const attraction = this.registry?.getAggregateStats().attractionBonus ?? 0;
+      const attractionMult = Math.max(0.45, 1 - Math.min(0.55, attraction * 0.015));
+      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult;
     }
 
     // Tick each guest's state machine.
@@ -542,6 +550,14 @@ export class GuestSpawner {
     // 1 star so even an otherwise-good meal can drift to 3 stars.
     if (this.game.isDishPileOverwhelming()) {
       base = Math.max(1, base - 1);
+    }
+    // Furniture stats bump the rating. style + comfort/2 are summed into
+    // a "vibe" score (capped at +1.0 star equivalent), plus direct
+    // ratingBonus from prestige pieces (Linen Table, Designer Sofa).
+    const stats = this.registry?.getAggregateStats();
+    if (stats) {
+      const vibe = (stats.style + stats.comfort * 0.5) * 0.012;
+      base = clamp(base + Math.min(1.0, vibe) + stats.ratingBonus, 1, 5);
     }
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
