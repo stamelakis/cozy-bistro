@@ -18,6 +18,7 @@ import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
+import { SlotsModal } from "../ui/SlotsModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { SfxPlayer } from "../ui/SfxPlayer";
@@ -54,6 +55,7 @@ export class Engine {
   readonly helpModal: HelpModal;
   readonly statsModal: StatsModal;
   readonly achievementsModal: AchievementsModal;
+  readonly slotsModal: SlotsModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly sfx: SfxPlayer;
@@ -118,6 +120,7 @@ export class Engine {
       openHelp: () => this.helpModal.show(),
       openStats: () => this.statsModal.show(),
       openAchievements: () => this.achievementsModal.show(),
+      openSlots: () => this.slotsModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
@@ -140,6 +143,7 @@ export class Engine {
     this.helpModal = new HelpModal(container);
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
+    this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot());
     // Pop a toast above the door whenever an achievement unlocks.
     this.game.achievements.onUnlock = (a) => {
       // Floating text and sound; player can open the AchievementsModal for details.
@@ -247,16 +251,13 @@ export class Engine {
     this.statusBubbles.update(entries);
   }
 
-  /** Wipe localStorage and reload the page so the user gets a brand-new
-   * game. Asks for confirmation since this is destructive. */
+  /** Wipe the active save slot and reload. Asks for confirmation since
+   * this is destructive. */
   private resetSave(): void {
-    const ok = window.confirm("Reset save and start over? This wipes all progress and reloads the page.");
+    const slot = this.saver.getActiveSlot();
+    const ok = window.confirm(`Reset slot ${slot} and start over? This wipes the current save and reloads the page.`);
     if (!ok) return;
-    try {
-      localStorage.removeItem("cozy-bistro-3d-save");
-    } catch (e) {
-      console.warn("Failed to clear save key:", e);
-    }
+    SaveSystem.deleteSlot(slot);
     window.location.reload();
   }
 

@@ -3,29 +3,55 @@ import type { Game } from "./Game";
 import type { FurnitureRegistry } from "./FurnitureRegistry";
 
 /**
- * localStorage-backed save/load. Snapshots Game state periodically so
- * progress survives page reloads. Format mirrors the 2D SaveGameState
- * so we could in theory load a 2D save here, though guests/staff
- * actor positions don't carry over because the worlds aren't compatible.
+ * localStorage-backed save/load with slot support. Game state is
+ * snapshotted to whatever the active slot is (1-3 by default).
+ * Switching slots writes the active id to localStorage and reloads,
+ * giving the player parallel timelines.
  */
 
-const STORAGE_KEY = "cozy-bistro-3d-save";
+const STORAGE_PREFIX = "cozy-bistro-3d-save";
+const ACTIVE_SLOT_KEY = "cozy-bistro-3d-active-slot";
 const AUTOSAVE_INTERVAL_SECONDS = 5;
+export const MAX_SLOTS = 3;
+
+function slotKey(slot: number): string {
+  // Slot 1 reuses the legacy key for backwards compat with existing saves.
+  if (slot === 1) return STORAGE_PREFIX;
+  return `${STORAGE_PREFIX}-${slot}`;
+}
+
+function readActiveSlot(): number {
+  if (typeof localStorage === "undefined") return 1;
+  const raw = Number(localStorage.getItem(ACTIVE_SLOT_KEY));
+  return Number.isFinite(raw) && raw >= 1 && raw <= MAX_SLOTS ? Math.floor(raw) : 1;
+}
+
+export interface SlotInfo {
+  slot: number;
+  exists: boolean;
+  money?: number;
+  day?: number;
+  lastSavedAt?: number;
+}
 
 export class SaveSystem {
   private readonly game: Game;
   /** Optional — Engine sets this after the registry is constructed. */
   registry?: FurnitureRegistry;
   private elapsed = 0;
+  private readonly activeSlot: number;
 
   constructor(game: Game) {
     this.game = game;
+    this.activeSlot = readActiveSlot();
   }
 
-  /** Read a previously-saved state from localStorage, or undefined if none. */
+  getActiveSlot(): number { return this.activeSlot; }
+
+  /** Read the active slot's previously-saved state. */
   static loadFromStorage(): SaveGameState | undefined {
     if (typeof localStorage === "undefined") return undefined;
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(slotKey(readActiveSlot()));
     if (!raw) return undefined;
     try {
       return JSON.parse(raw) as SaveGameState;
@@ -35,12 +61,49 @@ export class SaveSystem {
     }
   }
 
+  /** List metadata for every slot — for the slot picker UI. */
+  static listSlots(): SlotInfo[] {
+    const out: SlotInfo[] = [];
+    for (let i = 1; i <= MAX_SLOTS; i += 1) {
+      const raw = typeof localStorage === "undefined" ? null : localStorage.getItem(slotKey(i));
+      if (!raw) { out.push({ slot: i, exists: false }); continue; }
+      try {
+        const parsed = JSON.parse(raw) as SaveGameState;
+        out.push({
+          slot: i, exists: true,
+          money: parsed.money,
+          day: parsed.dayNumber,
+          lastSavedAt: parsed.lastSavedAt,
+        });
+      } catch {
+        out.push({ slot: i, exists: false });
+      }
+    }
+    return out;
+  }
+
+  /** Switch to a different slot and reload — the new slot becomes
+   * active and its (possibly empty) save is loaded as the game state. */
+  static switchToSlot(slot: number): void {
+    if (slot < 1 || slot > MAX_SLOTS) return;
+    try {
+      localStorage.setItem(ACTIVE_SLOT_KEY, String(slot));
+    } catch (e) { console.warn(e); }
+    window.location.reload();
+  }
+
+  /** Erase the given slot. */
+  static deleteSlot(slot: number): void {
+    if (slot < 1 || slot > MAX_SLOTS) return;
+    try { localStorage.removeItem(slotKey(slot)); } catch (e) { console.warn(e); }
+  }
+
   /** Manually trigger a save right now (e.g. on `beforeunload`). */
   saveNow(): void {
     if (typeof localStorage === "undefined") return;
     const state = this.snapshot();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      localStorage.setItem(slotKey(this.activeSlot), JSON.stringify(state));
     } catch (e) {
       console.warn("Save failed (quota?):", e);
     }

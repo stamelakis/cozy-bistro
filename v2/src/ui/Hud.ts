@@ -26,6 +26,7 @@ export interface HudActions {
   openHelp: () => void;
   openStats: () => void;
   openAchievements: () => void;
+  openSlots: () => void;
   resetSave: () => void;
   /** Returns whether audio is currently muted. */
   isMuted: () => boolean;
@@ -85,6 +86,7 @@ export class Hud {
     this.addLedgerButton();
     this.addStatsButton();
     this.addAchievementsButton();
+    this.addSlotsButton();
     this.addHelpButton();
     this.addAdminGrantButton();
     this.addResetButton();
@@ -107,6 +109,26 @@ export class Hud {
     } as Partial<CSSStyleDeclaration>);
     btn.textContent = "? How to play";
     btn.onclick = () => this.actions.openHelp();
+    this.root.appendChild(btn);
+  }
+
+  private addSlotsButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(160, 180, 140, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "💾 Save slots";
+    btn.onclick = () => this.actions.openSlots();
     this.root.appendChild(btn);
   }
 
