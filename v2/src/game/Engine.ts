@@ -9,6 +9,7 @@ import { StaffPanel } from "../ui/StaffPanel";
 import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradePanel } from "../ui/UpgradePanel";
+import { ExpandPanel } from "../ui/ExpandPanel";
 import { FloatingText } from "../ui/FloatingText";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -31,6 +32,7 @@ export class Engine {
   readonly pantryPanel: PantryPanel;
   readonly menuPanel: MenuPanel;
   readonly upgradePanel: UpgradePanel;
+  readonly expandPanel: ExpandPanel;
   readonly floatingText: FloatingText;
   readonly saver: SaveSystem;
 
@@ -71,6 +73,7 @@ export class Engine {
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradePanel = new UpgradePanel(container, this.game);
+    this.expandPanel = new ExpandPanel(container, this.game);
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement);
@@ -174,6 +177,7 @@ export class Engine {
       this.pantryPanel.update();
       this.menuPanel.update();
       this.upgradePanel.update();
+      this.expandPanel.update();
       this.hudAccumulator = 0;
     }
 

@@ -74,6 +74,10 @@ export class SaveSystem {
       dailyExpenses: this.game.economy.getDailyExpenses(),
       rentElapsedSeconds: this.game.day.getRentElapsedSeconds(),
       totalPlaySeconds: this.game.day.getTotalPlaySeconds(),
+      // 2D stored expansionLevel as 0..8 where 0 = no expansions and the
+      // playable tier was expansionLevel + 1. We persist in the same shape
+      // so a 2D save would round-trip cleanly.
+      expansionLevel: this.game.getLuxuryTier() - 1,
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };

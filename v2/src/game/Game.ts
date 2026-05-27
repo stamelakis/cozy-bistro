@@ -5,7 +5,13 @@ import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
 import { StaffSystem } from "../systems/StaffSystem";
 import { recipes } from "../data/recipes";
-import type { IngredientStock, RecipeDefinition, SaveGameState } from "../data/types";
+import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
+
+/** Highest luxury tier the player can unlock. */
+const MAX_LUXURY_TIER: LuxuryTier = 5;
+/** Cost to go from tier N to tier N+1: BASE * GROWTH^(N-1). */
+const EXPANSION_BASE_COST = 500;
+const EXPANSION_GROWTH = 3;
 
 /** Money charged automatically per in-game day. */
 const DAILY_RENT = 40;
@@ -39,6 +45,9 @@ export class Game {
   private autoShopClock = 0;
   /** Set false to disable auto-shop (player will have to manage stock manually). */
   autoShopEnabled = true;
+  /** Current luxury tier (1..5). Raised by buyExpansion(); controls which
+   * recipes the player can unlock through the menu picker. */
+  private luxuryTier: LuxuryTier = 1;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
@@ -56,7 +65,7 @@ export class Game {
     // something to order. (CookingSystem hydrate would handle this on
     // load; for a fresh game we need to bootstrap it manually.)
     if (!save) {
-      this.cooking.syncLuxuryUnlocks(1);
+      this.cooking.syncLuxuryUnlocks(this.luxuryTier);
       if (this.cooking.getMenuRecipeIds().length === 0) {
         this.cooking.addToMenu("toast");
       }
@@ -128,9 +137,14 @@ export class Game {
   hydrate(save: SaveGameState): void {
     this.economy.hydrate(save);
     this.reputation.hydrate(save);
-    // cooking needs the current unlocked-tier; default to tier 1 for now
-    // (we'll wire real expansion progression later).
-    this.cooking.hydrate(save, 1);
+    // Restore expansion/tier first so cooking unlocks the right recipes.
+    // 2D stored expansionLevel as 0..8 (0 = no expansions); we squash to
+    // a 1..5 luxury tier by adding 1 and clamping.
+    if (typeof save.expansionLevel === "number") {
+      const raw = Math.max(1, Math.min(MAX_LUXURY_TIER, save.expansionLevel + 1));
+      this.luxuryTier = raw as LuxuryTier;
+    }
+    this.cooking.hydrate(save, this.luxuryTier);
     this.customers.hydrate(save);
     this.day.hydrate(save);
     this.staff.hydrate(save);
@@ -160,6 +174,33 @@ export class Game {
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  // === Luxury-tier expansion (controls which recipes can be unlocked) ===
+
+  getLuxuryTier(): LuxuryTier {
+    return this.luxuryTier;
+  }
+
+  getMaxLuxuryTier(): LuxuryTier {
+    return MAX_LUXURY_TIER;
+  }
+
+  /** Cost to go from the current tier to the next one. Returns 0 at max. */
+  getExpansionCost(): number {
+    if (this.luxuryTier >= MAX_LUXURY_TIER) return 0;
+    return Math.round(EXPANSION_BASE_COST * EXPANSION_GROWTH ** (this.luxuryTier - 1));
+  }
+
+  /** Try to bump luxury tier by 1. Spends money, syncs recipe unlocks.
+   * Returns true on success. */
+  buyExpansion(): boolean {
+    if (this.luxuryTier >= MAX_LUXURY_TIER) return false;
+    const cost = this.getExpansionCost();
+    if (!this.economy.spendMoney(cost, "unlock")) return false;
+    this.luxuryTier = (this.luxuryTier + 1) as LuxuryTier;
+    this.cooking.syncLuxuryUnlocks(this.luxuryTier);
+    return true;
   }
 }
 
