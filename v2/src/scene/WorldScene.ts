@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 
@@ -13,6 +14,7 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
   private readonly loader = new ModelLoader();
+  private readonly characterLoader = new CharacterLoader(this.loader);
 
   constructor() {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
@@ -149,18 +151,17 @@ export class WorldScene {
       { id: "guest-v6", x:  5,   z:  3 },
     ];
 
-    // TripoSR output is normalised — characters come out roughly 1 unit tall.
-    // Scale up so they're human-height (1.7m) relative to the chairs/tables.
-    const TRIPO_SCALE = 1.7;
-
     await Promise.all(characters.map(async (c) => {
       try {
-        const model = await this.loader.load(`assets/characters/${c.id}.glb`);
-        model.scale.setScalar(TRIPO_SCALE);
-        model.position.set(c.x, 0, c.z);
+        // CharacterLoader handles: vertex-color material, normal compute,
+        // and lifting feet to y=0. We just position in the XZ plane.
+        const model = await this.characterLoader.load(c.id);
+        model.position.x = c.x;
+        model.position.z = c.z;
+        // (model.position.y is set by liftFeetToOrigin in the loader)
         this.threeScene.add(model);
       } catch (err) {
-        console.warn(`Character ${c.id} unavailable (will fall back to placeholder later):`, err);
+        console.warn(`Character ${c.id} unavailable:`, err);
       }
     }));
   }
