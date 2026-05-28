@@ -209,14 +209,18 @@ export class PantryModal {
       const qtyEl = this.qtyEls.get(stock.id);
       if (qtyEl) {
         const prev = this.lastQty.get(stock.id) ?? stock.quantity;
-        if (stock.quantity !== prev) {
-          qtyEl.textContent = String(stock.quantity);
-          qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
-            : stock.quantity <= 3 ? "#ffd47a"
-            : "#a8e2a8";
+        const pending = this.game.cooking.getPendingForIngredient(stock.id);
+        const text = pending > 0
+          ? `${stock.quantity} +${pending}`
+          : String(stock.quantity);
+        if (qtyEl.textContent !== text) {
+          qtyEl.textContent = text;
           if (stock.quantity > prev) this.pulseRow(qtyEl);
-          this.lastQty.set(stock.id, stock.quantity);
         }
+        qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
+          : stock.quantity <= 3 ? "#ffd47a"
+          : "#a8e2a8";
+        this.lastQty.set(stock.id, stock.quantity);
       }
       const usedEl = this.usedTodayEls.get(stock.id);
       if (usedEl) {

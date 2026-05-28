@@ -293,10 +293,12 @@ export class Engine {
       this.spawner.registry = this.registry;
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
-      // Errand helper — runs to door + back whenever auto-shop fires.
+      // Errand helper — carries the shopping list out the door, then back.
+      // The frozen list is delivered to the pantry the moment they're home.
       if (this.scene.errandChar) {
         this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
-        this.game.onAutoShop = () => this.errand?.triggerRun();
+        this.errand.onDelivery = (list) => this.game.completeErrandDelivery(list);
+        this.game.onAutoShopDispatch = (list) => this.errand?.triggerRun(list);
       }
       // Hire / fire callbacks. We wire these even when staff is missing
       // so future hires can attempt to load (handleStaffHired falls back

@@ -78,9 +78,10 @@ const MIN_STOCK_TARGET = 3;
 const MAX_STOCK_TARGET = 50;
 /** Auto-shop runs this often (seconds). */
 const AUTOSHOP_INTERVAL = 4;
-/** Max units bought per ingredient per auto-shop tick. Higher = faster
- * recovery from a depleted pantry but bigger spending spikes. */
-const AUTOSHOP_BATCH_PER_INGREDIENT = 3;
+/** Max TOTAL units one errand trip can carry back. Tunes the supply
+ * chain: smaller → more frequent trips, larger → fewer trips but
+ * bigger lump payments. 10 means each helper run brings 10 units. */
+const AUTOSHOP_MAX_PER_TRIP = 10;
 /** Each recipe-upgrade level adds this much to satisfactionEffect. */
 const UPGRADE_SATISFACTION_PER_LEVEL = 1.5;
 /** Base profit per tier per upgrade level. Sell price = base * level + ingredient cost.
@@ -235,47 +236,17 @@ export class Game {
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
     }
-    // Auto-shop: refill any ingredient below the player-set stock target,
-    // 1 unit per tick (so a long shortage costs more money than a brief one
-    // and the player can react before going bankrupt).
+    // Auto-shop is now an errand-driven supply chain. Each tick we work
+    // out which ingredients are genuinely under target (accounting for
+    // units already on the way), build a shopping list capped at
+    // AUTOSHOP_MAX_PER_TRIP, debit the cost up-front, then hand the
+    // frozen list to an errand helper. The helper walks out, walks back,
+    // and only then are the units added to the pantry (via
+    // CookingSystem.deliverErrandOrder).
     this.autoShopClock += dt;
     if (this.autoShopEnabled && this.autoShopClock >= AUTOSHOP_INTERVAL) {
       this.autoShopClock = 0;
-      const pantry = this.cooking.getPantryRaw();
-      const target = this.stockTarget;
-      let purchased = false;
-      let totalSpent = 0;
-      const boughtIds = new Set<string>();
-      const needs = pantry
-        .map((stock, idx) => ({ stock, deficit: target - stock.quantity, idx }))
-        .filter((n) => n.deficit > 0)
-        .sort((a, b) => b.deficit - a.deficit);
-      const costMult = this.admin.ingredientCostMultiplier;
-      for (const need of needs) {
-        const unitCost = Math.max(0, Math.round(getIngredientCost(need.stock.id) * costMult));
-        const units = Math.min(AUTOSHOP_BATCH_PER_INGREDIENT, need.deficit);
-        let bought = 0;
-        for (let i = 0; i < units; i += 1) {
-          if (unitCost > 0 && !this.economy.spendMoney(unitCost, "ingredients")) break;
-          need.stock.quantity += 1;
-          bought += 1;
-          totalSpent += unitCost;
-        }
-        if (bought > 0) {
-          purchased = true;
-          boughtIds.add(need.stock.id);
-        }
-        if (bought < units) break; // out of money — stop scanning
-      }
-      if (purchased) {
-        this.lastAutoShop = {
-          atMs: Date.now(),
-          totalSpent,
-          itemCount: boughtIds.size,
-          ids: boughtIds,
-        };
-        this.onAutoShop?.();
-      }
+      this.dispatchAutoShopTrip();
     }
     // Boost timer counts down with real sim time.
     if (this.boostRemaining > 0) {
@@ -462,6 +433,70 @@ export class Game {
   getLastAutoShop(): { atMs: number; totalSpent: number; itemCount: number; ids: ReadonlySet<string> } | null {
     return this.lastAutoShop;
   }
+
+  /** Build a 10-item shopping list of ingredients genuinely below target
+   * (excluding any units already on the way with another errand helper),
+   * spend the money up-front, mark the units as pending, then trigger
+   * an errand trip with the frozen list. The list is delivered to the
+   * pantry by completeErrandDelivery when the helper returns home. */
+  private dispatchAutoShopTrip(): void {
+    const pantry = this.cooking.getPantryRaw();
+    const target = this.stockTarget;
+    const costMult = this.admin.ingredientCostMultiplier;
+    // Per-ingredient genuine need = target - on-shelf - on-the-way.
+    const needs = pantry
+      .map((stock) => ({
+        id: stock.id,
+        deficit: target - stock.quantity - this.cooking.getPendingForIngredient(stock.id),
+      }))
+      .filter((n) => n.deficit > 0)
+      .sort((a, b) => b.deficit - a.deficit);
+    if (needs.length === 0) return;
+    // Greedy fill of an AUTOSHOP_MAX_PER_TRIP-unit trip.
+    const list = new Map<string, number>();
+    let total = 0;
+    for (const n of needs) {
+      if (total >= AUTOSHOP_MAX_PER_TRIP) break;
+      const take = Math.min(n.deficit, AUTOSHOP_MAX_PER_TRIP - total);
+      if (take > 0) {
+        list.set(n.id, take);
+        total += take;
+      }
+    }
+    if (total === 0) return;
+    // Price out the trip + bail if the player can't afford it.
+    let totalCost = 0;
+    for (const [id, units] of list) {
+      totalCost += Math.max(0, Math.round(getIngredientCost(id) * costMult)) * units;
+    }
+    if (totalCost > 0 && !this.economy.spendMoney(totalCost, "ingredients")) {
+      return; // not enough money for this trip — try again next interval
+    }
+    // Reserve so the next dispatch won't re-buy the same units.
+    for (const [id, units] of list) this.cooking.addPendingErrandOrder(id, units);
+    // Record what was dispatched + fire the errand helper. The list is
+    // frozen here — by the time the helper returns home (~7s later) the
+    // pantry may have dropped further, but the trip still delivers
+    // exactly these units.
+    this.lastAutoShop = {
+      atMs: Date.now(),
+      totalSpent: totalCost,
+      itemCount: list.size,
+      ids: new Set(list.keys()),
+    };
+    this.onAutoShopDispatch?.(list);
+  }
+
+  /** Called by the Engine wiring once an errand helper walks back through
+   * the door — drains the list onto the pantry shelves and clears the
+   * pending reservation. */
+  completeErrandDelivery(list: Map<string, number>): void {
+    this.cooking.deliverErrandOrder(list);
+  }
+
+  /** Fired when an auto-shop trip is dispatched to an errand helper. The
+   * Engine wires this to ErrandRouter.triggerRun(list). */
+  onAutoShopDispatch?: (list: Map<string, number>) => void;
 
   /** A 0..5 vibe score that drives how willing customers are to wait
    * in an overflow chair. Combines the rolling average rating with a

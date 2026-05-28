@@ -222,6 +222,45 @@ export class CookingSystem {
     return true;
   }
 
+  // === Pending errand orders ===
+  // Auto-shop is now an errand-driven supply chain. When an errand helper
+  // leaves to go shopping, the list of items they're fetching is added
+  // here so subsequent auto-shop ticks know NOT to double-order them.
+  // When the helper returns home, deliverErrandOrder unwinds the entry
+  // and adds the units to the pantry.
+
+  private pendingErrandOrders: Map<string, number> = new Map();
+
+  /** Pending units for one ingredient (0 if none). */
+  getPendingForIngredient(id: string): number {
+    return this.pendingErrandOrders.get(id) ?? 0;
+  }
+
+  /** Snapshot of all pending orders for UI/debug. */
+  getPendingOrdersSnapshot(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [id, n] of this.pendingErrandOrders) out[id] = n;
+    return out;
+  }
+
+  /** Reserve N units of an ingredient as "an errand helper is bringing them". */
+  addPendingErrandOrder(id: string, units: number): void {
+    if (units <= 0) return;
+    this.pendingErrandOrders.set(id, (this.pendingErrandOrders.get(id) ?? 0) + units);
+  }
+
+  /** An errand helper returned home — deliver these units to the pantry
+   * and clear them from the pending map. */
+  deliverErrandOrder(list: Map<string, number>): void {
+    for (const [id, units] of list) {
+      this.addPantryStock(id, units);
+      const cur = this.pendingErrandOrders.get(id) ?? 0;
+      const next = Math.max(0, cur - units);
+      if (next === 0) this.pendingErrandOrders.delete(id);
+      else this.pendingErrandOrders.set(id, next);
+    }
+  }
+
   // === Prepared servings (cooked dishes waiting on the pass) ===
 
   getPreparedServings(): Readonly<Record<string, number>> {

@@ -15,12 +15,19 @@ import type { AnimatedCharacter } from "../scene/CharacterAnimator";
  * deliveries in parallel.
  */
 
+/** A frozen shopping list the helper is currently fetching, OR null
+ * when they're free to take the next queued trip. */
+type ShoppingList = Map<string, number>;
+
 interface ErrandActor {
   character: AnimatedCharacter;
   home: THREE.Vector2;
   state: "idle" | "walkingToDoor" | "atDoor" | "returningHome";
   target: THREE.Vector2;
   clock: number;
+  /** What this helper is currently fetching — set when they leave home,
+   * delivered (via onDelivery) when they return home, then cleared. */
+  payload: ShoppingList | null;
 }
 
 const WALK_SPEED = 2.4; // a hair faster than other staff
@@ -33,8 +40,15 @@ const MAX_PENDING_TRIPS = 6;
 export class ErrandRouter {
   private readonly helpers: ErrandActor[] = [];
   private readonly doorPos: THREE.Vector2;
-  /** Pending trips. Each idle helper consumes one per tick. */
-  private pendingTrips = 0;
+  /** Queue of shopping lists waiting for a helper. Each idle helper
+   * peels one off per tick. Capped at MAX_PENDING_TRIPS — the Game's
+   * auto-shop dispatcher knows to back off rather than queueing
+   * indefinitely. */
+  private pendingTrips: ShoppingList[] = [];
+  /** Fired when a helper arrives back home with their payload. The
+   * Engine wires this to Game.completeErrandDelivery so the units
+   * actually land on the pantry shelves. */
+  onDelivery?: (list: ShoppingList) => void;
 
   constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2) {
     this.doorPos = doorPos.clone();
@@ -49,17 +63,22 @@ export class ErrandRouter {
       state: "idle",
       target: char.groundPos.clone(),
       clock: 0,
+      payload: null,
     });
   }
 
   /** Pop one helper out of the pool. Prefers an idle helper so we don't
    * abandon a trip mid-flight. Returns the character so Engine can drop
-   * its model from the scene. */
+   * its model from the scene. If the removed helper was carrying a
+   * payload, it goes back onto the queue so another helper can fetch it. */
   removeHelper(): AnimatedCharacter | null {
     if (this.helpers.length === 0) return null;
     const idleIdx = this.helpers.findIndex((h) => h.state === "idle");
     const idx = idleIdx >= 0 ? idleIdx : this.helpers.length - 1;
     const removed = this.helpers[idx];
+    if (removed.payload && this.pendingTrips.length < MAX_PENDING_TRIPS) {
+      this.pendingTrips.unshift(removed.payload);
+    }
     this.helpers.splice(idx, 1);
     return removed.character;
   }
@@ -74,10 +93,18 @@ export class ErrandRouter {
     }));
   }
 
-  /** Queue one trip to the door. */
-  triggerRun(): void {
-    this.pendingTrips = Math.min(this.pendingTrips + 1, MAX_PENDING_TRIPS);
+  /** Queue a trip carrying this shopping list. Caller is responsible for
+   * having reserved those units via CookingSystem.addPendingErrandOrder
+   * first. Drops the list if the queue is already at MAX_PENDING_TRIPS
+   * (Game's dispatcher checks pending units so this is rarely hit). */
+  triggerRun(list: ShoppingList): void {
+    if (this.pendingTrips.length >= MAX_PENDING_TRIPS) return;
+    this.pendingTrips.push(list);
   }
+
+  /** How many trips are queued waiting for a helper. Engine surfaces
+   * this for the UI ("X trips queued"). */
+  getPendingTripCount(): number { return this.pendingTrips.length; }
 
   update(dt: number): void {
     for (const h of this.helpers) this.tickHelper(h, dt);
@@ -88,8 +115,8 @@ export class ErrandRouter {
 
     switch (h.state) {
       case "idle": {
-        if (this.pendingTrips > 0) {
-          this.pendingTrips -= 1;
+        if (this.pendingTrips.length > 0) {
+          h.payload = this.pendingTrips.shift() ?? null;
           h.target = this.doorPos.clone();
           h.state = "walkingToDoor";
           h.clock = 0;
@@ -119,6 +146,12 @@ export class ErrandRouter {
       case "returningHome": {
         this.moveActor(h, dt);
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
+          // Deliver the payload to the kitchen the moment they're home.
+          if (h.payload && this.onDelivery) {
+            try { this.onDelivery(h.payload); }
+            catch (e) { console.warn("[Errand] delivery callback threw:", e); }
+          }
+          h.payload = null;
           h.state = "idle";
           h.clock = 0;
           h.character.action = "idle";
