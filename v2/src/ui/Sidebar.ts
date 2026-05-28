@@ -15,6 +15,10 @@ export class Sidebar {
   /** Manual save button right next to the indicator. Engine wires its
    * onclick to fire SaveSystem.saveNow(). */
   readonly saveNowBtn: HTMLButtonElement;
+  /** Live spawner diagnostic line (above the save footer). Engine pushes
+   * `customers · functional seats · spawn in Ts` into here so the player
+   * can see at a glance whether the room is alive. */
+  readonly spawnerStatus: HTMLElement;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -48,6 +52,21 @@ export class Sidebar {
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.body);
 
+    // Pinned spawner diagnostic strip — sits just above the save footer.
+    this.spawnerStatus = document.createElement("div");
+    Object.assign(this.spawnerStatus.style, {
+      flex: "0 0 auto",
+      padding: "5px 10px",
+      borderTop: "1px solid rgba(255,245,220,0.10)",
+      background: "rgba(0,0,0,0.10)",
+      fontSize: "10px",
+      lineHeight: "1.35",
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    this.spawnerStatus.textContent = "👥 waiting on world…";
+    this.root.appendChild(this.spawnerStatus);
+
     // Pinned footer: save status + manual save button. Always visible so
     // the player can verify autosave is actually running.
     const footer = document.createElement("div");
@@ -76,6 +95,38 @@ export class Sidebar {
     } as Partial<CSSStyleDeclaration>);
     footer.appendChild(this.saveNowBtn);
     this.root.appendChild(footer);
+  }
+
+  /** Render the spawner diagnostic line. Color flips amber if no spawn
+   * is happening despite seats existing, red if seats are zero, green
+   * when customers are present. */
+  updateSpawnerStatus(stats: {
+    customers: number;
+    waiting: number;
+    seatsAvail: number;
+    seatsTotal: number;
+    overflow: number;
+    spawnInSec: number;
+    open: boolean;
+  }): void {
+    if (!stats.open) {
+      this.spawnerStatus.textContent = "🔒 closed — no spawning";
+      this.spawnerStatus.style.color = "#fff5dc";
+      this.spawnerStatus.style.opacity = "0.6";
+      return;
+    }
+    this.spawnerStatus.style.opacity = "1";
+    const parts: string[] = [];
+    parts.push(`👥 ${stats.customers}${stats.waiting > 0 ? `+${stats.waiting}🪑` : ""}`);
+    parts.push(`💺 ${stats.seatsAvail}/${stats.seatsTotal}`);
+    if (stats.overflow > 0) parts.push(`🪑${stats.overflow}`);
+    parts.push(`⏱ ${Math.max(0, stats.spawnInSec).toFixed(1)}s`);
+    this.spawnerStatus.textContent = parts.join(" · ");
+    // Color signals: red if no seats, amber if seats but no customers, green when alive.
+    this.spawnerStatus.style.color =
+      stats.seatsTotal === 0 ? "#ff9a9a" :
+      stats.customers === 0 && stats.waiting === 0 ? "#ffd47a" :
+      "#a8e2a8";
   }
 
   /** Refresh the pinned save indicator from a stats snapshot. Called by

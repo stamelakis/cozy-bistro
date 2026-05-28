@@ -388,21 +388,31 @@ export class Engine {
 
   /** Spawn an extra staff character and slot them into the right router.
    * Picks an offset slot so multiple extras of the same role don't pile
-   * onto a single spot. */
+   * onto a single spot. Pops a floating "+1 Role" toast at the new
+   * character's spot so the player can see where to look. */
   private async handleStaffHired(role: "chef" | "waiter" | "errand"): Promise<void> {
-    // The starter character at populateCharacters time is index 0; extras
-    // start at offsetSlot=1.
     const currentInRouter = role === "chef"
       ? (this.router?.getChefCount() ?? 0)
       : role === "waiter"
         ? (this.router?.getWaiterCount() ?? 0)
         : (this.errand?.getHelperCount() ?? 0);
-    const offsetSlot = currentInRouter; // 0 is the starter (already placed), so first extra is 1
+    const offsetSlot = currentInRouter;
+    // Spawn the model first so we know its actual world pose for the toast.
     const char = await this.scene.spawnExtraStaff(role, offsetSlot);
-    if (!char) return;
+    if (!char) {
+      // Loading failed — still tell the player something visible.
+      this.floatingText?.pop(0, -2.2, `+1 ${this.labelForRole(role)} (load failed)`, "#ff9a9a");
+      return;
+    }
+    this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
+      `+1 ${this.labelForRole(role)}`, "#a8e2a8");
     if (role === "chef") this.router?.addChef(char);
     else if (role === "waiter") this.router?.addWaiter(char);
     else this.errand?.addHelper(char);
+  }
+
+  private labelForRole(role: "chef" | "waiter" | "errand"): string {
+    return role === "chef" ? "Chef" : role === "waiter" ? "Waiter" : "Errand";
   }
 
   /** Remove the most-recently-added staff character of this role from
@@ -525,6 +535,11 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
+      // Spawner diagnostic line — defaults to "waiting on world" until
+      // the spawner is constructed (post-staffReady).
+      if (this.spawner) {
+        this.sidebar.updateSpawnerStatus(this.spawner.getSpawnerStats());
+      }
       // SeatMarkers.refresh internally no-ops when disabled, so this is
       // safe to call unconditionally — BuildMenu toggles the enabled flag.
       this.seatMarkers.refresh();

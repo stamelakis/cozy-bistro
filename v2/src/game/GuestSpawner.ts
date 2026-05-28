@@ -321,6 +321,27 @@ export class GuestSpawner {
     return this.guests.length;
   }
 
+  /** Stats snapshot for the live sidebar diagnostic strip. Cheap; safe
+   * to call every HUD tick. */
+  getSpawnerStats(): {
+    customers: number; waiting: number;
+    seatsAvail: number; seatsTotal: number;
+    overflow: number; spawnInSec: number; open: boolean;
+  } {
+    let waiting = 0;
+    for (const g of this.guests) if (g.waiting) waiting += 1;
+    const total = this.listFunctionalSeats().length;
+    return {
+      customers: this.guests.length - waiting,
+      waiting,
+      seatsAvail: this.countAvailableSeats(),
+      seatsTotal: total,
+      overflow: this.registry?.getOverflowChairs().length ?? 0,
+      spawnInSec: Math.max(0, this.spawnCooldown),
+      open: this.restaurantOpen,
+    };
+  }
+
   /** Snapshot used by the UI status-bubble layer. Returns one entry per
    * guest with a label + a panic flag so the bubble can flash red. */
   snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean }[] {

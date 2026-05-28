@@ -211,11 +211,10 @@ export class FurnitureRegistry {
 
   // === Seat-slot integration ===
 
-  /** Tolerance for matching a chair to its table's seat slot. Chairs within
-   * this distance AND with their facing within ~15° of the slot's required
-   * facing are considered "functional" seats. */
+  /** Tolerance for matching a chair to its table's seat slot. Position-
+   * only — see findChairAtSlot for why we intentionally don't gate on
+   * chair rotation. */
   private static readonly SEAT_POSITION_TOL = 0.35;
-  private static readonly SEAT_FACING_TOL = 0.27; // ≈15°
 
   /** Return every placed table, resolved with its seat slots in world space
    * and whether each slot is filled by a correctly-oriented chair. Pass
@@ -287,18 +286,20 @@ export class FurnitureRegistry {
     return best;
   }
 
-  /** Internal: find the uid of a chair whose pose matches a slot. The
-   * Kenney chair model has its default seat opening toward +Z, which is
-   * the CUSTOMER's facingY=π in our animator convention. So the chair's
-   * own rotY relates to the slot's customer-facing-direction by:
-   *   chair.rotY = π - slot.facingY
-   * Detection has to use that relationship — comparing rotY to facingY
-   * directly works for left/right seats by coincidence, but never for
-   * top/bottom seats (they end up π apart). */
-  private findChairAtSlot(slotX: number, slotZ: number, slotFacing: number, excludeUid?: string): string | null {
+  /** Internal: find the uid of a chair AT a slot. Position-only — we
+   * deliberately don't gate on chair rotation here. Many saved chairs
+   * were placed with the old auto-snap logic at the "wrong" rotation
+   * (the chair model's seat faces the customer correctly only when
+   * chair.rotY = π - slot.facingY, but a lot of pre-fix chairs are stuck
+   * at slot.facingY). Requiring an exact rotation match would silently
+   * mark all of them non-functional and customers stop spawning.
+   *
+   * The seated customer's facing comes from slot.facingY (not the chair),
+   * so they still look correctly oriented even when the chair behind
+   * them is rotated 180° off — and the player can run AUTO-ARRANGE to
+   * fix the visual whenever they want. */
+  private findChairAtSlot(slotX: number, slotZ: number, _slotFacing: number, excludeUid?: string): string | null {
     const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
-    const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
-    const expectedRotY = Math.PI - slotFacing;
     for (const it of this.items) {
       if (excludeUid && it.uid === excludeUid) continue;
       const def = getFurnitureDef(it.defId);
@@ -306,8 +307,6 @@ export class FurnitureRegistry {
       const dx = it.x - slotX;
       const dz = it.z - slotZ;
       if (Math.abs(dx) > TOL || Math.abs(dz) > TOL) continue;
-      const dFacing = Math.abs(this.normalizeAngle(it.rotY - expectedRotY));
-      if (dFacing > FTOL) continue;
       return it.uid;
     }
     return null;
@@ -355,16 +354,15 @@ export class FurnitureRegistry {
     return moved;
   }
 
-  /** Is this chair currently within tolerance of any of its tables' slots? */
+  /** Is this chair currently within tolerance of any of its tables' slots?
+   * Position-only — see findChairAtSlot for why rotation is intentionally
+   * ignored. */
   private isChairAtAnySlot(chair: PlacedFurnitureItem): boolean {
     const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
-    const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
     for (const slot of this.getResolvedSeatSlots()) {
       if (Math.abs(slot.x - chair.x) > TOL) continue;
       if (Math.abs(slot.z - chair.z) > TOL) continue;
-      const expectedRotY = Math.PI - slot.facingY;
-      const dFacing = Math.abs(this.normalizeAngle(chair.rotY - expectedRotY));
-      if (dFacing <= FTOL) return true;
+      return true;
     }
     return false;
   }
