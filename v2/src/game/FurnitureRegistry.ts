@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
-import { fitFurniture } from "../assets/fitFurniture";
+import { fitFurniture, placementY } from "../assets/fitFurniture";
 
 /**
  * Tracks furniture the player has placed at runtime. Owns the model
@@ -516,11 +516,11 @@ export class FurnitureRegistry {
       try {
         const model = await this.loader.load(def.modelPath);
         fitFurniture(model, def);
-        // Wall-mounted items lift to chest height when restored — must
-        // match the BuildMenu place handler so a save round-trip
-        // doesn't drop them on the floor.
-        const restoreY = def.placement === "wall" ? 1.5 : model.position.y;
-        model.position.set(p.x, restoreY, p.z);
+        // Use the shared placementY helper so a save round-trip puts
+        // ceiling lamps back on the ceiling, wall sconces at chest
+        // height, and floor items on the ground — matches the
+        // BuildMenu place handler exactly.
+        model.position.set(p.x, placementY(model, def), p.z);
         model.rotation.y = p.rotY;
         this.scene.add(model);
         this.items.push({ uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model });

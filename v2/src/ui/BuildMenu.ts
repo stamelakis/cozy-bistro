@@ -1061,11 +1061,12 @@ export class BuildMenu {
     const cost = def.cost;
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
-      // Wall-mounted items lift to chest height (~1.5m) instead of
-      // sitting on the floor. fitFurniture's recenter put their feet
-      // at y=0; we just bump position.y up to wall-mount height.
-      const y = def.placement === "wall" ? 1.5 : solid.position.y;
-      solid.position.set(placeX, y, placeZ);
+      // placementY picks the right Y per placement kind: 0 for floor
+      // items, 1.5 for wall sconces, CEILING_Y minus the model height
+      // for ceiling items so the model TOP touches the ceiling and the
+      // body hangs below. Was hardcoded to wall-only before — ceiling
+      // lamps landed at y=0 (on the floor) instead of overhead.
+      solid.position.set(placeX, placementY(solid, def), placeZ);
       solid.rotation.y = rotY;
       this.scene.add(solid);
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
