@@ -388,6 +388,24 @@ export class WorldScene {
    * different theme. */
   floorMat!: THREE.MeshStandardMaterial;
   wallMat!: THREE.MeshStandardMaterial;
+  /** Transparent "glass" version of wallMat used for walls between the
+   * camera and the room interior. Color is intentionally not themed —
+   * the peach tint reads as a CSS-cutaway hint rather than an actual
+   * wall colour. */
+  private wallGhostMat!: THREE.MeshStandardMaterial;
+  /** Individual exterior wall meshes — kept as fields (not just local
+   * vars) so updateWallVisibility can swap each one's material between
+   * solid and ghost as the camera rotates. The front wall isn't here
+   * because it's a dynamic group of segments + lintels; see
+   * frontWallSegments / frontWallLintels below. */
+  private wallBack!: THREE.Mesh;
+  private wallLeft!: THREE.Mesh;
+  private wallRight!: THREE.Mesh;
+  /** Whichever of {wallMat, wallGhostMat} the front wall is currently
+   * rendered with. rebuildFrontWall uses this when it rebuilds segments
+   * so a new segment immediately matches the rest of the front wall
+   * even between frames. */
+  private currentFrontWallMat!: THREE.MeshStandardMaterial;
 
   private addBuilding(): void {
     // === Exterior ground layers ===
@@ -504,35 +522,39 @@ export class WorldScene {
     this.threeScene.add(grid);
 
     // === Walls ===
-    // Solid back + left walls. Same (+0.5, +0.5) shift as the floor so
-    // the building envelope coincides with the tiled area.
+    // Both materials are created up-front and the appropriate one is
+    // assigned per wall based on which side of the room the camera is
+    // currently on (updateWallVisibility). Default azimuth = π/4 puts
+    // the camera looking from +X, +Z, so the front + right walls start
+    // ghosted and back + left start solid — matching the original
+    // hard-coded layout. The flip happens dynamically as the player
+    // rotates the camera.
     this.wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85 });
-    const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
-    wallBack.position.set(0.5, 1.5, -4.5);
-    wallBack.castShadow = true;
-    wallBack.receiveShadow = true;
-    this.threeScene.add(wallBack);
-
-    const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallMat);
-    wallSide.position.set(-4.5, 1.5, 0.5);
-    wallSide.castShadow = true;
-    wallSide.receiveShadow = true;
-    this.threeScene.add(wallSide);
-
-    // Transparent right + front walls (so the room is enclosed but the
-    // camera can still see in). 15% opacity → barely visible glass-like.
-    const ghostMat = new THREE.MeshStandardMaterial({
+    this.wallGhostMat = new THREE.MeshStandardMaterial({
       color: 0xe8a98a, roughness: 0.6,
       transparent: true, opacity: 0.15, depthWrite: false,
     });
-    const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), ghostMat);
-    wallRight.position.set(5.5, 1.5, 0.5);
-    this.threeScene.add(wallRight);
+    // Same (+0.5, +0.5) shift as the floor so the building envelope
+    // coincides with the tiled area.
+    this.wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
+    this.wallBack.position.set(0.5, 1.5, -4.5);
+    this.wallBack.castShadow = true;
+    this.wallBack.receiveShadow = true;
+    this.threeScene.add(this.wallBack);
+
+    this.wallLeft = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallMat);
+    this.wallLeft.position.set(-4.5, 1.5, 0.5);
+    this.wallLeft.castShadow = true;
+    this.wallLeft.receiveShadow = true;
+    this.threeScene.add(this.wallLeft);
+
+    this.wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallGhostMat);
+    this.wallRight.position.set(5.5, 1.5, 0.5);
+    this.threeScene.add(this.wallRight);
     // Front wall is rebuilt dynamically — every placed door punches a
     // 1-tile gap in the wall (and adds a lintel above) so additional
-    // doorways become real entries the customers can use. Stash the
-    // material so rebuildFrontWall can reuse it.
-    this.frontWallMat = ghostMat;
+    // doorways become real entries the customers can use.
+    this.currentFrontWallMat = this.wallGhostMat;
     this.rebuildFrontWall([]);
     // Restaurant rating sign mounted on the lintel — a small marquee
     // that shows the current ★ rating, just like a real bistro
@@ -554,14 +576,16 @@ export class WorldScene {
   // (and a lintel goes above it). rebuildFrontWall takes the list of
   // door X-coordinates currently on z=5.5 and lays the wall out around
   // them.
-  private frontWallMat?: THREE.MeshStandardMaterial;
   private frontWallSegments: THREE.Mesh[] = [];
   private frontWallLintels: THREE.Mesh[] = [];
   /** Re-render the front wall as solid segments between gaps for each
    * passed door X. Idempotent — call again whenever doors are
-   * added/removed and the geometry self-cleans. */
+   * added/removed and the geometry self-cleans. New segments adopt
+   * whatever material the front wall is currently rendered with
+   * (solid vs ghost), so a rebuild during a camera-far frame doesn't
+   * flash a transparent segment. */
   rebuildFrontWall(doorXs: readonly number[]): void {
-    if (!this.frontWallMat) return;
+    if (!this.currentFrontWallMat) return;
     // Tear down existing meshes + free geometry.
     for (const m of this.frontWallSegments) {
       this.threeScene.remove(m);
@@ -581,13 +605,13 @@ export class WorldScene {
       const width = to - from;
       if (width < 0.05) return; // skip degenerate slivers
       const center = (from + to) / 2;
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(width, 3, 0.2), this.frontWallMat!);
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(width, 3, 0.2), this.currentFrontWallMat);
       seg.position.set(center, 1.5, 5.5);
       this.threeScene.add(seg);
       this.frontWallSegments.push(seg);
     };
     const addLintel = (centerX: number): void => {
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), this.frontWallMat!);
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), this.currentFrontWallMat);
       lintel.position.set(centerX, 2.5, 5.5);
       this.threeScene.add(lintel);
       this.frontWallLintels.push(lintel);
@@ -600,6 +624,39 @@ export class WorldScene {
       segStart = gapEnd;
     }
     addSegment(segStart, X_MAX);
+  }
+
+  /** Swap wall materials so the two walls closest to the camera become
+   * the transparent ghost and the two far walls stay solid. Driven by
+   * the dot product of each wall's outward normal with the camera's
+   * world position relative to the building centre — positive means the
+   * camera is on the wall's outer face, so the wall is between the
+   * camera and the room interior and should be cut away.
+   *
+   * The front wall is the multi-mesh dynamic one — every segment +
+   * lintel adopts the same material. The back/left/right walls each
+   * have a single mesh.
+   *
+   * Cheap to call every frame; this is just 4 dot products + (potentially)
+   * a handful of material reassignments. */
+  updateWallVisibility(cameraPos: THREE.Vector3): void {
+    if (!this.wallMat || !this.wallGhostMat) return;
+    // Building's interior is centred near (0.5, 0.5); the dot product
+    // sign is what matters, not the magnitude, so we can ignore the
+    // 0.5 offset.
+    const matFor = (normalX: number, normalZ: number): THREE.MeshStandardMaterial => {
+      const dot = normalX * cameraPos.x + normalZ * cameraPos.z;
+      return dot > 0 ? this.wallGhostMat : this.wallMat;
+    };
+    this.wallBack.material = matFor(0, -1);   // outward normal -Z
+    this.wallLeft.material = matFor(-1, 0);   // outward normal -X
+    this.wallRight.material = matFor(1, 0);   // outward normal +X
+    const frontMat = matFor(0, 1);            // outward normal +Z
+    if (frontMat !== this.currentFrontWallMat) {
+      this.currentFrontWallMat = frontMat;
+      for (const m of this.frontWallSegments) m.material = frontMat;
+      for (const m of this.frontWallLintels) m.material = frontMat;
+    }
   }
 
   /** Wood-and-metal "back of house" counter where the errand helper

@@ -671,6 +671,10 @@ export class Engine {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
     }
     this.scene.update(dt);
+    // Swap which two exterior walls render as transparent glass based
+    // on which side the camera is currently on. Cheap enough to run
+    // every frame, and we want it to track right through a camera drag.
+    this.scene.updateWallVisibility(this.camera.threeCamera.position);
     // Refresh status bubbles above staff (after scene.update so character
     // positions reflect this frame's animator output).
     this.updateStatusBubbles();
