@@ -2,15 +2,16 @@ import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
 
 /**
- * Compact at-a-glance ingredient warning panel that sits attached
- * directly above the StaffPanel. Mirrors the three "right tab" sections
- * the 2D version had: In Need, Stock On Hand, Kitchen Tickets — plus a
- * compact "auto-shop status" footer.
+ * Compact at-a-glance ingredient status panel that sits above the
+ * StaffPanel. Always-visible sections:
+ *   - Top summary line (OUT / LOW / below-target / all-good)
+ *   - 📋 In Need: every ingredient below the stock target with detail
+ *   - 🛒 Auto-shop status + in-transit count
+ *   - 🍳 Kitchen ticket pipeline
  *
- * Like the StaffPanel + ExpandWidget, this is always visible — the goal
- * is to surface critical state without an extra click. Section headers
- * always render so the layout stays stable even when the pantry is
- * fully topped up.
+ * The summary line reflects the worst severity present so the player
+ * never sees "✓ All ingredients stocked" while the In Need section
+ * underneath lists shortfalls — that contradiction was a real bug.
  */
 export class StockStatusWidget {
   private readonly game: Game;
@@ -45,41 +46,16 @@ export class StockStatusWidget {
     const pantry = this.game.cooking.getPantry();
     const target = this.game.getStockTarget();
 
-    // === Top status line — out / low / all-stocked summary ===
+    // Severity buckets.
     const out = pantry.filter((s) => s.quantity === 0)
       .sort((a, b) => getIngredientCost(b.id) - getIngredientCost(a.id));
     const low = pantry.filter((s) => s.quantity > 0 && s.quantity <= 2)
       .sort((a, b) => a.quantity - b.quantity);
     const usedToday = this.game.cooking.getTotalConsumedToday();
 
-    if (out.length === 0 && low.length === 0) {
-      const ok = document.createElement("div");
-      ok.innerHTML = usedToday > 0
-        ? `✓ All ingredients stocked <span style="opacity:0.7">· ${usedToday} used today</span>`
-        : "✓ All ingredients stocked";
-      Object.assign(ok.style, { color: "#a8e2a8", textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
-      this.body.appendChild(ok);
-    } else {
-      if (out.length > 0) {
-        const line = document.createElement("div");
-        line.innerHTML = `<span style="color:#ff9a9a;font-weight:700">OUT:</span> ${out.slice(0, 6).map((s) => s.name).join(", ")}${out.length > 6 ? ` (+${out.length - 6})` : ""}`;
-        Object.assign(line.style, { marginBottom: "3px" } as Partial<CSSStyleDeclaration>);
-        this.body.appendChild(line);
-      }
-      if (low.length > 0) {
-        const line = document.createElement("div");
-        line.innerHTML = `<span style="color:#ffd47a;font-weight:700">LOW:</span> ${low.slice(0, 6).map((s) => `${s.name}(${s.quantity})`).join(", ")}${low.length > 6 ? ` (+${low.length - 6})` : ""}`;
-        this.body.appendChild(line);
-      }
-    }
-
-    // === In Need section (always shown — mirrors 2D layout) ===
-    // Lists every ingredient below target with the format
-    //   "Bread: need 2 (have 3, way 1)"
-    // …where "way" is how many units the errand helper is bringing.
-    // When pantry is at target shows a dim "All at target." line so the
-    // section header doesn't render with empty content (which looked
-    // broken in playtest).
+    // Below-target rows — used by both the top summary and the In Need
+    // list so they always agree. Each row: "Bread: need 2 (have 3, way 1)".
+    // "way" is how many units the errand helper is bringing right now.
     const needRows: string[] = [];
     for (const s of pantry) {
       const way = this.game.cooking.getPendingForIngredient(s.id);
@@ -88,6 +64,34 @@ export class StockStatusWidget {
       const wayStr = way > 0 ? `, way ${way}` : "";
       needRows.push(`<div>${s.name}: need ${need} <span style="opacity:0.7">(have ${s.quantity}${wayStr})</span></div>`);
     }
+
+    // === Top summary line (single source of truth) ===
+    // Reflects worst severity in the pantry. We used to show "✓ All
+    // ingredients stocked" whenever nothing was at qty=0 or qty<=2, but
+    // that ignored "below target with errand in flight" cases — leading
+    // to a contradiction where the In Need section listed shortfalls
+    // while the summary line claimed everything was fine.
+    const usedTodaySpan = usedToday > 0
+      ? ` <span style="opacity:0.7">· ${usedToday} used today</span>`
+      : "";
+    const top = document.createElement("div");
+    if (out.length > 0) {
+      top.innerHTML = `<span style="color:#ff9a9a;font-weight:700">OUT:</span> ${out.slice(0, 6).map((s) => s.name).join(", ")}${out.length > 6 ? ` (+${out.length - 6})` : ""}`;
+      Object.assign(top.style, { marginBottom: "3px" } as Partial<CSSStyleDeclaration>);
+    } else if (low.length > 0) {
+      top.innerHTML = `<span style="color:#ffd47a;font-weight:700">LOW:</span> ${low.slice(0, 6).map((s) => `${s.name}(${s.quantity})`).join(", ")}${low.length > 6 ? ` (+${low.length - 6})` : ""}`;
+    } else if (needRows.length > 0) {
+      // Nothing critical, but some items below target. Subtle amber so
+      // the player knows there's still work for the errand helper.
+      top.innerHTML = `<span style="color:#ffd47a">📋 ${needRows.length} item${needRows.length === 1 ? "" : "s"} below target</span>${usedTodaySpan}`;
+      Object.assign(top.style, { textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
+    } else {
+      top.innerHTML = `✓ All at target${usedTodaySpan}`;
+      Object.assign(top.style, { color: "#a8e2a8", textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
+    }
+    this.body.appendChild(top);
+
+    // === In Need section (always shown) ===
     this.appendSectionHeader("📋 In Need");
     {
       const list = document.createElement("div");
@@ -103,35 +107,6 @@ export class StockStatusWidget {
         }
       }
       this.body.appendChild(list);
-    }
-
-    // === Stock On Hand section (always shown — full pantry list) ===
-    // Two-column grid so 30+ ingredients still fit in a compact widget,
-    // scrollable past ~110px. Colors mirror the OUT/LOW alert so a glance
-    // tells the player which line items are red/amber/green.
-    this.appendSectionHeader("📦 Stock On Hand");
-    {
-      const grid = document.createElement("div");
-      Object.assign(grid.style, {
-        display: "grid", gridTemplateColumns: "1fr 1fr",
-        rowGap: "1px", columnGap: "6px",
-        maxHeight: "110px", overflowY: "auto",
-        fontSize: "10px", padding: "1px 0",
-      } as Partial<CSSStyleDeclaration>);
-      const sorted = [...pantry].sort((a, b) => a.name.localeCompare(b.name));
-      for (const s of sorted) {
-        const color = s.quantity === 0 ? "#ff9a9a"
-          : s.quantity <= 2 ? "#ffd47a"
-          : "#dcdcd8";
-        const cell = document.createElement("div");
-        // Truncate long names so the qty column stays aligned.
-        cell.innerHTML = `<span style="color:${color}">${s.name}</span>: <span style="color:${color};font-weight:600">${s.quantity}</span>`;
-        cell.style.whiteSpace = "nowrap";
-        cell.style.overflow = "hidden";
-        cell.style.textOverflow = "ellipsis";
-        grid.appendChild(cell);
-      }
-      this.body.appendChild(grid);
     }
 
     // === Auto-shop + in-transit summary ===
@@ -153,10 +128,7 @@ export class StockStatusWidget {
     }
     this.body.appendChild(auto);
 
-    // === Kitchen ticket pipeline (also revived from 2D) ===
-    // Always shown — empty pipeline reads "Kitchen idle — no tickets"
-    // so the player has a clear "nothing's cooking" anchor when the
-    // restaurant is quiet.
+    // === Kitchen ticket pipeline (always shown) ===
     const ts = this.game.getTicketStats?.();
     if (ts) {
       const totalTickets = ts.queued + ts.cooking + ts.ready + ts.delivering;
