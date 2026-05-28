@@ -161,10 +161,34 @@ export class MenuPanel {
     cat.title = recipe.category[0].toUpperCase() + recipe.category.slice(1);
     nameRow.appendChild(cat);
     const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
+    // Level badge — same styling as the category chip so the L number is
+    // unmissable instead of buried as plain trailing text on the name.
+    const lvlBadge = document.createElement("span");
+    lvlBadge.textContent = `L${level}`;
+    Object.assign(lvlBadge.style, {
+      fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
+      background: level >= 10 ? "#f5c14a" : level > 1 ? "#7a9a6a" : "#4a4137",
+      color: level > 1 ? "#fff" : "#cbb",
+      fontWeight: "700", minWidth: "18px", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    nameRow.appendChild(lvlBadge);
     const name = document.createElement("span");
-    name.textContent = `${recipe.name}${level > 1 ? `  L${level}` : ""}`;
+    name.textContent = recipe.name;
     Object.assign(name.style, { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } as Partial<CSSStyleDeclaration>);
     nameRow.appendChild(name);
+    // ACTIVE pill — bright green chip so the player can see at a glance
+    // which recipes are on the active menu without scanning the row's
+    // leftmost checkbox.
+    if (on) {
+      const activeBadge = document.createElement("span");
+      activeBadge.textContent = "ACTIVE";
+      Object.assign(activeBadge.style, {
+        fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
+        background: "rgba(120, 200, 120, 0.85)", color: "#1b1410",
+        fontWeight: "700", marginLeft: "2px",
+      } as Partial<CSSStyleDeclaration>);
+      nameRow.appendChild(activeBadge);
+    }
     left.appendChild(nameRow);
     // Ingredient line — list every ingredient with its per-unit cost.
     const ingLine = document.createElement("div");

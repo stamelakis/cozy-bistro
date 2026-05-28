@@ -16,9 +16,12 @@ import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } fro
 
 /** Highest luxury tier the player can unlock. */
 const MAX_LUXURY_TIER: LuxuryTier = 5;
-/** Cost to go from tier N to tier N+1: BASE * GROWTH^(N-1). */
-const EXPANSION_BASE_COST = 500;
-const EXPANSION_GROWTH = 3;
+/** Cost to go from tier N to tier N+1: BASE * GROWTH^(N-1).
+ * Tier 2 = $10k, tier 3 = $20k, tier 4 = $40k, tier 5 = $80k.
+ * Tuned so each tier is a real money sink rather than something the
+ * player walks past on day two. */
+const EXPANSION_BASE_COST = 10000;
+const EXPANSION_GROWTH = 2;
 
 /** Default seconds between automatic dish-wash ticks. Sinks and
  * dishwashers placed in the registry shorten this — see

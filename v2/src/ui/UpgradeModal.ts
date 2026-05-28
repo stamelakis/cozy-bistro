@@ -146,8 +146,17 @@ export class UpgradeModal {
       const price = this.game.getEffectiveSellPrice(recipe);
       const profit = this.game.getEffectiveProfit(recipe);
       const sat = this.game.getEffectiveSatisfaction(recipe).toFixed(0);
+      const isOnMenu = this.game.cooking.isOnMenu(recipe.id);
+      // Big bold L-badge — same styling as the MenuPanel so the upgrade
+      // level reads at a glance across both screens. ACTIVE pill marks
+      // the recipes the player has currently switched on.
+      const lvlBg = level >= 10 ? "#f5c14a" : level > 1 ? "#7a9a6a" : "#4a4137";
+      const lvlColor = level > 1 ? "#fff" : "#cbb";
+      const activeChip = isOnMenu
+        ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(120,200,120,0.85);color:#1b1410;font-weight:700;margin-left:6px;">ACTIVE</span>`
+        : "";
       const head = document.createElement("div");
-      head.innerHTML = `<b>${recipe.name}</b> &nbsp; L${level} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
+      head.innerHTML = `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;background:${lvlBg};color:${lvlColor};font-weight:800;margin-right:6px;">L${level}</span><b>${recipe.name}</b>${activeChip} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
       label.appendChild(head);
       if (level < 10) {
         const mats = this.game.getRecipeUpgradeMaterials(recipe);
