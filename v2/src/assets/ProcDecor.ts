@@ -193,6 +193,70 @@ function dishwasherPro(): THREE.Group {
   return g;
 }
 
+/**
+ * A door with a separate frame + hinged panel. The panel is exposed
+ * via group.userData.panel so the animator can rotate JUST the panel
+ * (around its hinge) while the frame stays put.
+ *
+ * Sized to fit a 1×1 tile: frame is 0.95 wide × 2.0 tall × 0.12 thick.
+ * Door panel is 0.85 wide × 1.85 tall, hinged on the left edge.
+ */
+function frontDoor(): THREE.Group {
+  const g = new THREE.Group();
+  const frameWidth = 0.95;
+  const frameHeight = 2.0;
+  const panelWidth = 0.85;
+  const panelHeight = 1.85;
+  const panelThick = 0.04;
+  const frameThick = 0.12;
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x4a3020, roughness: 0.7 });
+  const panelMat = new THREE.MeshStandardMaterial({ color: 0x7a4e30, roughness: 0.55 });
+  const knobMat = new THREE.MeshStandardMaterial({ color: 0xc4a060, roughness: 0.3, metalness: 0.7 });
+
+  // Top of frame.
+  const top = new THREE.Mesh(new THREE.BoxGeometry(frameWidth, 0.12, frameThick), frameMat);
+  top.position.set(0, frameHeight - 0.06, 0);
+  top.castShadow = true;
+  g.add(top);
+  // Left jamb.
+  const leftJamb = new THREE.Mesh(new THREE.BoxGeometry(0.08, frameHeight, frameThick), frameMat);
+  leftJamb.position.set(-frameWidth / 2 + 0.04, frameHeight / 2, 0);
+  leftJamb.castShadow = true;
+  g.add(leftJamb);
+  // Right jamb.
+  const rightJamb = new THREE.Mesh(new THREE.BoxGeometry(0.08, frameHeight, frameThick), frameMat);
+  rightJamb.position.set(frameWidth / 2 - 0.04, frameHeight / 2, 0);
+  rightJamb.castShadow = true;
+  g.add(rightJamb);
+
+  // Door panel — pivoted via a wrapper Group hinged at its LEFT edge
+  // so rotating .userData.panel makes it swing open inward like a real
+  // door.  The visible mesh sits offset +panelWidth/2 inside the wrapper.
+  const hinge = new THREE.Group();
+  hinge.position.set(-panelWidth / 2 + 0.04, 0, 0); // hinge at left jamb
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(panelWidth, panelHeight, panelThick), panelMat);
+  panel.position.set(panelWidth / 2, panelHeight / 2 + 0.04, 0);
+  panel.castShadow = true;
+  panel.receiveShadow = true;
+  hinge.add(panel);
+  // Knob on the far (free) edge of the panel.
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), knobMat);
+  knob.position.set(panelWidth - 0.08, panelHeight / 2, panelThick / 2 + 0.04);
+  panel.add(knob);
+  // Two horizontal panel-trim lines so it looks like a real door.
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0x5a3722, roughness: 0.7 });
+  for (let i = 0; i < 2; i += 1) {
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(panelWidth - 0.18, 0.04, 0.005), trimMat);
+    trim.position.set(panelWidth / 2 - 0.04, panelHeight * (i === 0 ? 0.3 : 0.7), panelThick / 2 + 0.001);
+    panel.add(trim);
+  }
+  g.add(hinge);
+  // Expose the hinge so WorldScene can rotate it.
+  g.userData.panel = hinge;
+
+  return g;
+}
+
 /** Map of "proc:" id suffix → builder. ModelLoader routes through this. */
 export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "framed-art-warm": () => framedArt(0xc97e4a, "warm"),
@@ -203,4 +267,5 @@ export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "wine-wall": () => wineWall(),
   "dishwasher": () => dishwasher(),
   "dishwasher-pro": () => dishwasherPro(),
+  "front-door": () => frontDoor(),
 };

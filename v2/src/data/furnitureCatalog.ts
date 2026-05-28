@@ -210,8 +210,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
     modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2, attractionBonus: 1 },
 
-  // Doors & windows
-  { id: "door",         name: "Doorway",       category: "door",
+  // Doors & windows. The "door" id is a procedural door with a separate
+  // hinged panel so we can swing the panel without moving the frame.
+  { id: "door",         name: "Front Door",    category: "door",
+    modelPath: "proc:front-door", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60 },
+  { id: "door-kenney",  name: "Kenney Doorway", category: "door",
     modelPath: "assets/kenney/doorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 60 },
   { id: "door-open",    name: "Open Doorway",  category: "door",
     modelPath: "assets/kenney/doorwayOpen.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 70 },

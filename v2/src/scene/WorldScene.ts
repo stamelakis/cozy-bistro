@@ -40,14 +40,13 @@ export class WorldScene {
   private stoveFlameMesh?: THREE.Mesh;
   private stoveFlameLight?: THREE.PointLight;
   private stoveFlamePhase = 0;
-  /** The door (front entrance) loaded into the scene during populateDemo.
-   * Captured so we can rotate it open/closed when characters approach. */
-  private doorObj?: THREE.Object3D;
+  /** The hinged door panel (sub-object of the procedural front-door
+   * group, exposed via userData.panel). Rotating this swings the door
+   * around its hinge while the frame stays put. */
+  private doorPanel?: THREE.Object3D;
   /** Door open amount [0,1] — lerps toward doorOpenTarget every frame. */
   private doorOpenAmount = 0;
   private doorOpenTarget = 0;
-  /** Base rotation of the door (whatever rotY it was placed with). */
-  private doorBaseRotY = Math.PI;
   /** World position of the stove and the plate-pickup spot. Used by the
    * StaffRouter to send chef/waiter to the right places. */
   readonly stovePos = new THREE.Vector2(0, -3.0);
@@ -81,14 +80,16 @@ export class WorldScene {
       if (this.stoveFlameMesh) this.stoveFlameMesh.scale.setScalar(flick);
       if (this.stoveFlameLight) this.stoveFlameLight.intensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
     }
-    // Lerp door open amount toward target and apply rotation.
-    if (this.doorObj) {
+    // Lerp door open amount toward target and apply rotation to the
+    // hinged panel only (the frame stays put).
+    if (this.doorPanel) {
       const lerpSpeed = 3.0; // ~0.3s open/close
       const diff = this.doorOpenTarget - this.doorOpenAmount;
       const step = Math.sign(diff) * Math.min(Math.abs(diff), lerpSpeed * dt);
       this.doorOpenAmount += step;
-      // Open swings 90° to the side. base + 90° = open inward.
-      this.doorObj.rotation.y = this.doorBaseRotY + this.doorOpenAmount * Math.PI / 2;
+      // Panel hinge swings -90° (opens inward). Negative because the hinge
+      // is at the left edge and we want the right edge to swing into the room.
+      this.doorPanel.rotation.y = -this.doorOpenAmount * Math.PI / 2;
     }
   }
 
@@ -431,10 +432,11 @@ export class WorldScene {
         const tier = p.tier ?? 0;
         if (!this.tierGroups.has(tier)) this.tierGroups.set(tier, []);
         this.tierGroups.get(tier)!.push(model);
-        // Capture the front-door reference for open/close animation.
+        // Capture the front-door's hinge sub-object for open/close animation.
+        // The procedural front-door exposes the panel hinge via userData.panel.
         if (p.id === "door" && p.x === 0 && p.z === 5) {
-          this.doorObj = model;
-          this.doorBaseRotY = p.rotY ?? 0;
+          const panel = model.userData?.panel as THREE.Object3D | undefined;
+          if (panel) this.doorPanel = panel;
         }
       } catch (err) {
         console.error(`Failed to load ${def.id} (${def.modelPath})`, err);
