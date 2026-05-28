@@ -54,13 +54,18 @@ export class StockStatusWidget {
     const usedToday = this.game.cooking.getTotalConsumedToday();
 
     // Below-target rows — used by both the top summary and the In Need
-    // list so they always agree. Each row: "Bread: need 2 (have 3, way 1)".
-    // "way" is how many units the errand helper is bringing right now.
+    // list so they always agree. Inclusion rule is "qty < target" — NOT
+    // "qty + pending < target" as it used to be. That older rule caused
+    // a real contradiction: an item could be OUT (qty=0) while pending
+    // covered the deficit on paper, so the top line correctly screamed
+    // "OUT: bread" while In Need said "All at target." The item is
+    // still empty on the shelf right now even if a helper is bringing
+    // more, so it belongs in the list.
     const needRows: string[] = [];
     for (const s of pantry) {
+      if (s.quantity >= target) continue;
       const way = this.game.cooking.getPendingForIngredient(s.id);
-      const need = Math.max(0, target - s.quantity - way);
-      if (need <= 0) continue;
+      const need = target - s.quantity;
       const wayStr = way > 0 ? `, way ${way}` : "";
       needRows.push(`<div>${s.name}: need ${need} <span style="opacity:0.7">(have ${s.quantity}${wayStr})</span></div>`);
     }

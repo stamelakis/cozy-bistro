@@ -438,8 +438,14 @@ export class Game {
    * (excluding any units already on the way with another errand helper),
    * spend the money up-front, mark the units as pending, then trigger
    * an errand trip with the frozen list. The list is delivered to the
-   * pantry by completeErrandDelivery when the helper returns home. */
+   * pantry by completeErrandDelivery when the helper returns home.
+   *
+   * Bails early if the errand system can't take another trip — the
+   * router used to silently drop overflow trips after debiting our
+   * money + reserving the pending units, which leaked the pending
+   * counter forever ("31 in transit but only 1 helper" bug). */
   private dispatchAutoShopTrip(): void {
+    if (this.canDispatchErrand && !this.canDispatchErrand()) return;
     const pantry = this.cooking.getPantryRaw();
     const target = this.stockTarget;
     const costMult = this.admin.ingredientCostMultiplier;
@@ -497,6 +503,12 @@ export class Game {
   /** Fired when an auto-shop trip is dispatched to an errand helper. The
    * Engine wires this to ErrandRouter.triggerRun(list). */
   onAutoShopDispatch?: (list: Map<string, number>) => void;
+  /** Queried by the auto-shop dispatcher before committing money — true
+   * if the errand router can absorb another trip. Wired by Engine to
+   * ErrandRouter.canAcceptTrip. Without this gate, dispatched trips
+   * that overflow the router queue silently dropped, leaking the
+   * pending-orders counter forever. */
+  canDispatchErrand?: () => boolean;
 
   /** A 0..5 vibe score that drives how willing customers are to wait
    * in an overflow chair. Combines the rolling average rating with a

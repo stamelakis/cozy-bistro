@@ -261,6 +261,16 @@ export class CookingSystem {
     }
   }
 
+  /** Wipe the pending-orders bookkeeping. Used only as a recovery
+   * mechanism — the auto-shop dispatcher used to silently leak the
+   * pending counter when the errand router queue overflowed, and a
+   * saved game from that era can come back showing 30+ units "in
+   * transit" with no helper carrying them. Engine calls this on
+   * startup when pending exceeds the helper count's plausible max. */
+  clearAllPendingOrders(): void {
+    this.pendingErrandOrders.clear();
+  }
+
   // === Prepared servings (cooked dishes waiting on the pass) ===
 
   getPreparedServings(): Readonly<Record<string, number>> {

@@ -152,6 +152,25 @@ export class ErrandRouter {
    * this for the UI ("X trips queued"). */
   getPendingTripCount(): number { return this.pendingTrips.length; }
 
+  /** Total trips currently in motion or queued — one per busy helper
+   * plus the explicit queue. Used by Game.dispatchAutoShopTrip to ask
+   * "should I even bother dispatching another trip?". */
+  getTotalTripsInProgress(): number {
+    let busy = 0;
+    for (const h of this.helpers) if (h.state !== "idle") busy += 1;
+    return busy + this.pendingTrips.length;
+  }
+
+  /** True if another trip can be absorbed right now. Caps total in-
+   * progress trips at the helper count so we don't queue 60 units of
+   * shopping behind a single helper — which used to happen because the
+   * dispatcher committed money/pending BEFORE asking the router, and
+   * the router silently dropped excess trips (= leaked pending forever). */
+  canAcceptTrip(): boolean {
+    if (this.helpers.length === 0) return false;
+    return this.getTotalTripsInProgress() < this.helpers.length;
+  }
+
   update(dt: number): void {
     for (const h of this.helpers) this.tickHelper(h, dt);
   }

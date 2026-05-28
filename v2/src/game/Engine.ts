@@ -327,6 +327,10 @@ export class Engine {
         );
         this.errand.onDelivery = (list) => this.game.completeErrandDelivery(list);
         this.game.onAutoShopDispatch = (list) => this.errand?.triggerRun(list);
+        // Gate the auto-shop dispatcher on actual errand capacity so we
+        // can't leak the pending counter again by committing money for
+        // trips the router drops.
+        this.game.canDispatchErrand = () => this.errand?.canAcceptTrip() ?? false;
       }
       // Hire / fire callbacks. We wire these even when staff is missing
       // so future hires can attempt to load (handleStaffHired falls back
