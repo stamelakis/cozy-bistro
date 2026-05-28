@@ -111,6 +111,10 @@ export class Game {
   /** Per-ingredient target stock level the auto-shop refills toward.
    * Player adjustable via PantryModal +/- buttons. */
   private stockTarget: number = DEFAULT_STOCK_TARGET;
+  /** Wall-clock summary of the most recent auto-shop fire — surfaced in
+   * the Pantry modal so the player can tell when restocking actually
+   * happened. Cleared by getLastAutoShop after rendering. */
+  private lastAutoShop: { atMs: number; totalSpent: number; itemCount: number; ids: Set<string> } | null = null;
   /** Current luxury tier (1..5). Raised by buyExpansion(); controls which
    * recipes the player can unlock through the menu picker. */
   private luxuryTier: LuxuryTier = 1;
@@ -235,18 +239,14 @@ export class Game {
       const pantry = this.cooking.getPantryRaw();
       const target = this.stockTarget;
       let purchased = false;
-      // Smart batched order: each ingredient buys up to BATCH_PER_INGREDIENT
-      // units toward the target in a single tick. Sort by which is most
-      // depleted first so a near-empty critical ingredient gets serviced
-      // before a barely-low one.
+      let totalSpent = 0;
+      const boughtIds = new Set<string>();
       const needs = pantry
         .map((stock, idx) => ({ stock, deficit: target - stock.quantity, idx }))
         .filter((n) => n.deficit > 0)
         .sort((a, b) => b.deficit - a.deficit);
       const costMult = this.admin.ingredientCostMultiplier;
       for (const need of needs) {
-        // Per-ingredient real cost × admin multiplier (so truffles cost
-        // more than bread, just like in real life).
         const unitCost = Math.max(0, Math.round(getIngredientCost(need.stock.id) * costMult));
         const units = Math.min(AUTOSHOP_BATCH_PER_INGREDIENT, need.deficit);
         let bought = 0;
@@ -254,11 +254,23 @@ export class Game {
           if (unitCost > 0 && !this.economy.spendMoney(unitCost, "ingredients")) break;
           need.stock.quantity += 1;
           bought += 1;
+          totalSpent += unitCost;
         }
-        if (bought > 0) purchased = true;
+        if (bought > 0) {
+          purchased = true;
+          boughtIds.add(need.stock.id);
+        }
         if (bought < units) break; // out of money — stop scanning
       }
-      if (purchased && this.onAutoShop) this.onAutoShop();
+      if (purchased) {
+        this.lastAutoShop = {
+          atMs: Date.now(),
+          totalSpent,
+          itemCount: boughtIds.size,
+          ids: boughtIds,
+        };
+        this.onAutoShop?.();
+      }
     }
     // Boost timer counts down with real sim time.
     if (this.boostRemaining > 0) {
@@ -435,6 +447,14 @@ export class Game {
   bumpStockTarget(delta: number): number {
     this.setStockTarget(this.stockTarget + delta);
     return this.stockTarget;
+  }
+
+  /** Read the latest auto-shop summary. Used by PantryModal so the player
+   * can see WHEN restocking actually happened — without it the modal
+   * sits frozen and looks like nothing is happening. Returns null if no
+   * auto-shop has fired this session yet. */
+  getLastAutoShop(): { atMs: number; totalSpent: number; itemCount: number; ids: ReadonlySet<string> } | null {
+    return this.lastAutoShop;
   }
 
   /** A 0..5 vibe score that drives how willing customers are to wait

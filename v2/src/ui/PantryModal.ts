@@ -15,6 +15,18 @@ export class PantryModal {
   private targetValueEl?: HTMLElement;
   private targetMinusBtn?: HTMLButtonElement;
   private targetPlusBtn?: HTMLButtonElement;
+  private restockLine?: HTMLElement;
+  /** Track last-known quantities so we can flash rows that just went up. */
+  private lastQty: Map<string, number> = new Map();
+  /** Map from ingredient id → quantity-cell element. Lets the live refresh
+   * mutate just the values without rebuilding the entire row list — keeps
+   * scroll position stable and gives us cheap per-row highlight pulses. */
+  private qtyEls: Map<string, HTMLElement> = new Map();
+  /** Last seen auto-shop wall-clock timestamp, so we re-render the summary
+   * line when a fresh restock fires. */
+  private lastSeenAutoShopMs = 0;
+  /** Interval handle for the live refresh while the modal is visible. */
+  private refreshTimer: number | null = null;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -149,15 +161,103 @@ export class PantryModal {
       textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.totalLine);
+
+    // Last-restock summary — flashes when a new auto-shop fires.
+    this.restockLine = document.createElement("div");
+    Object.assign(this.restockLine.style, {
+      marginTop: "4px", fontSize: "11px", textAlign: "center",
+      padding: "4px 6px", borderRadius: "4px",
+      transition: "background-color 0.4s ease",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.restockLine);
   }
 
-  show(): void { this.refresh(); this.root.style.display = "flex"; }
-  hide(): void { this.root.style.display = "none"; }
+  show(): void {
+    this.refresh();
+    this.root.style.display = "flex";
+    // Live-refresh while open so the player can watch the auto-shop
+    // increment ingredients in real time. 400ms is fast enough that a
+    // single auto-shop tick (every 4 game-sec) is visible immediately,
+    // cheap enough to not churn the DOM.
+    if (this.refreshTimer == null) {
+      this.refreshTimer = window.setInterval(() => this.tickRefresh(), 400);
+    }
+  }
+
+  hide(): void {
+    this.root.style.display = "none";
+    if (this.refreshTimer != null) {
+      window.clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
+  /** Cheap live update — only mutates the quantity cells + the restock
+   * summary. The full rebuild only fires on show() / target bump. */
+  private tickRefresh(): void {
+    const pantry = this.game.cooking.getPantry();
+    let totalValue = 0;
+    for (const stock of pantry) {
+      const cost = getIngredientCost(stock.id);
+      totalValue += cost * stock.quantity;
+      const qtyEl = this.qtyEls.get(stock.id);
+      if (!qtyEl) continue;
+      const prev = this.lastQty.get(stock.id) ?? stock.quantity;
+      if (stock.quantity !== prev) {
+        qtyEl.textContent = String(stock.quantity);
+        qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
+          : stock.quantity <= 3 ? "#ffd47a"
+          : "#a8e2a8";
+        if (stock.quantity > prev) this.pulseRow(qtyEl);
+        this.lastQty.set(stock.id, stock.quantity);
+      }
+    }
+    if (this.totalLine) this.totalLine.textContent = `Inventory value: $${totalValue}`;
+    this.updateRestockSummary();
+  }
+
+  /** Briefly flash an element's background to draw the eye to a change. */
+  private pulseRow(el: HTMLElement): void {
+    el.style.transition = "background-color 0.2s ease";
+    el.style.background = "rgba(120, 220, 120, 0.45)";
+    window.setTimeout(() => {
+      el.style.background = "transparent";
+    }, 500);
+  }
+
+  /** Render the "Last restock: …" line + a fade-from-green pulse whenever
+   * a fresh auto-shop fires. */
+  private updateRestockSummary(): void {
+    if (!this.restockLine) return;
+    const last = this.game.getLastAutoShop();
+    if (!last) {
+      this.restockLine.textContent = "Waiting for first auto-shop…";
+      this.restockLine.style.opacity = "0.55";
+      this.restockLine.style.background = "transparent";
+      this.restockLine.style.color = "#fff5dc";
+      return;
+    }
+    const isNew = last.atMs !== this.lastSeenAutoShopMs;
+    if (isNew) {
+      this.lastSeenAutoShopMs = last.atMs;
+      this.restockLine.style.background = "rgba(120, 200, 120, 0.30)";
+      window.setTimeout(() => {
+        if (this.restockLine) this.restockLine.style.background = "transparent";
+      }, 800);
+    }
+    const ageS = Math.max(0, Math.round((Date.now() - last.atMs) / 1000));
+    const ageStr = ageS < 60 ? `${ageS}s ago` : `${Math.round(ageS / 60)}m ago`;
+    const plural = last.itemCount === 1 ? "item" : "items";
+    this.restockLine.style.opacity = "1";
+    this.restockLine.style.color = "#d6f0c8";
+    this.restockLine.textContent = `🛒 Last restock: $${last.totalSpent} on ${last.itemCount} ${plural} · ${ageStr}`;
+  }
 
   private refresh(): void {
     const pantry = this.game.cooking.getPantry().slice()
       .sort((a, b) => getIngredientCost(b.id) - getIngredientCost(a.id) || a.name.localeCompare(b.name));
     this.list.innerHTML = "";
+    this.qtyEls.clear();
     let totalValue = 0;
     for (const stock of pantry) {
       const cost = getIngredientCost(stock.id);
@@ -187,8 +287,11 @@ export class PantryModal {
       row.appendChild(costEl);
       row.appendChild(qtyEl);
       this.list.appendChild(row);
+      this.qtyEls.set(stock.id, qtyEl);
+      this.lastQty.set(stock.id, stock.quantity);
       totalValue += cost * stock.quantity;
     }
+    this.updateRestockSummary();
     this.toggle.textContent = this.game.autoShopEnabled ? "Auto-shop: ON" : "Auto-shop: OFF";
     this.toggle.style.background = this.game.autoShopEnabled
       ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
