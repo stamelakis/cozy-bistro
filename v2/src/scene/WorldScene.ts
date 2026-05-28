@@ -56,12 +56,14 @@ export class WorldScene {
    * to position the cooking flame ON the stove, not in front of where
    * the chef stands. */
   readonly stoveFurniturePos = new THREE.Vector2(0, -4);
-  /** Where the errand helper reports to receive deliveries. A small
-   * supply counter at the back-left of the room (see addBuilding). */
+  /** Where the errand helper drops off groceries when they return —
+   * a small supply counter at the back-left of the room (see
+   * buildSupplyCounter in addBuilding). */
   readonly supplyCounterPos = new THREE.Vector2(-3, -3.2);
-  /** Legacy: front door world spot. Engine still uses it for the
-   * "anyone near door" check, but the errand helper no longer walks
-   * here — they go to supplyCounterPos instead. */
+  /** Front door world spot. Used both for the "anyone near door" check
+   * (which swings the door open) and as the errand helper's entry/exit
+   * waypoint — they walk through here on their way to the pavement
+   * and again on the way back. */
   readonly doorPos = new THREE.Vector2(0, 5);
   /** Resolves once the staff characters are loaded — so Engine can build
    * the StaffRouter at the right moment. Created synchronously in the

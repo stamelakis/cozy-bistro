@@ -308,12 +308,16 @@ export class Engine {
       // Errand helper — carries the shopping list out the door, then back.
       // The frozen list is delivered to the pantry the moment they're home.
       if (this.scene.errandChar) {
-        // Errand helper reports to the back-of-house supply counter to
-        // receive deliveries — not the front door. The "trip" still
-        // covers the same ingredient-fetch time, but visually they're
-        // working a delivery hand-off rather than walking through the
-        // dining room.
-        this.errand = new ErrandRouter(this.scene.errandChar, this.scene.supplyCounterPos);
+        // Errand helper makes a full out-and-back trip:
+        //   home → door → pavement edge → (offscreen 20s) → pavement
+        //   edge → door → supply counter → home
+        // The ErrandRouter needs both anchors: the door (entry/exit
+        // waypoint) and the supply counter (drop-off point).
+        this.errand = new ErrandRouter(
+          this.scene.errandChar,
+          this.scene.doorPos,
+          this.scene.supplyCounterPos,
+        );
         this.errand.onDelivery = (list) => this.game.completeErrandDelivery(list);
         this.game.onAutoShopDispatch = (list) => this.errand?.triggerRun(list);
       }
