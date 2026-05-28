@@ -390,9 +390,14 @@ export class StaffRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Face direction of motion. Convention: facingY=0 → -Z (toward camera),
-    // π/2 → +X, π → +Z, -π/2 → -X. atan2(dx, -dz) yields the matching angle.
     a.character.facingY = Math.atan2(dx, -dz);
+    // Sanity logging — fires occasionally during an actual walk so we can
+    // confirm in DevTools that groundPos IS being mutated. If you ever
+    // see these lines but the chef still looks frozen in 3D, the
+    // groundPos→model.position link in CharacterAnimator is the suspect.
+    if (Math.random() < 0.05) {
+      console.log(`[Router/move] ${a.state} now @ (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}), target (${a.target.x.toFixed(2)}, ${a.target.y.toFixed(2)}), step=${step.toFixed(3)}`);
+    }
   }
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {

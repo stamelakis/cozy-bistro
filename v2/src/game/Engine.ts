@@ -51,6 +51,12 @@ export class Engine {
   trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
   readonly seatMarkers: SeatMarkers;
+  /** True when the chef/waiter pair failed to load and the spawner is
+   * running with the stub router (tickets resolve internally with no
+   * staff motion). Surfaced in the UI as a loud warning so we don't
+   * spend another week chasing "staff not moving" without realizing
+   * THIS is the underlying state. */
+  private usingStubRouter = false;
   readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
@@ -279,10 +285,16 @@ export class Engine {
     // reported "0/0 seats" forever.
     void this.scene.staffReady.then(() => {
       const haveStaffPair = !!(this.scene.chefChar && this.scene.waiterChar);
+      console.log(`[Engine] staffReady: chefChar=${this.scene.chefChar ? "OK" : "MISSING"} waiterChar=${this.scene.waiterChar ? "OK" : "MISSING"} errandChar=${this.scene.errandChar ? "OK" : "MISSING"}`);
       if (!haveStaffPair) {
-        console.warn("Staff characters unavailable — spawner running with stub router");
+        console.error(
+          "[Engine] ⚠ STUB ROUTER ACTIVE — tickets will be processed but staff models won't move. " +
+          "Chef or waiter character GLB failed to load. Check Network tab for chef.glb / waiter.glb.",
+        );
+        this.usingStubRouter = true;
       } else {
         this.router = new StaffRouter(this.scene.chefChar!, this.scene.waiterChar!, this.scene.stovePos, this.scene.pickupPos);
+        console.log("[Engine] real StaffRouter created with 1 chef + 1 waiter");
       }
       this.spawner = new GuestSpawner(
         this.scene.threeScene, this.scene.characterLoader, this.scene.animator,
@@ -588,8 +600,19 @@ export class Engine {
       // count in sync with the actual restaurant rating.
       this.scene.updateRatingSign(this.game.reputation.getAverageRating());
       // Spawner diagnostic line — defaults to "waiting on world" until
-      // the spawner is constructed (post-staffReady).
-      if (this.spawner) {
+      // the spawner is constructed (post-staffReady). Stub-router state
+      // takes priority and surfaces as a red warning.
+      if (this.usingStubRouter) {
+        this.sidebar.updateSpawnerStatus({
+          customers: 0, waiting: 0, seatsAvail: 0, seatsTotal: 0,
+          overflow: 0, spawnInSec: 0, open: false, hasRegistry: false,
+          tables: 0, chairs: 0, rawSlots: 0,
+        });
+        this.sidebar.spawnerStatus.textContent =
+          "⚠ STUB ROUTER — staff models can't move. Hard-refresh once.";
+        this.sidebar.spawnerStatus.style.color = "#ff5050";
+        this.sidebar.spawnerStatus.style.opacity = "1";
+      } else if (this.spawner) {
         this.sidebar.updateSpawnerStatus(this.spawner.getSpawnerStats());
       }
       // SeatMarkers.refresh internally no-ops when disabled, so this is
