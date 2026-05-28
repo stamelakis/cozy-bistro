@@ -29,7 +29,9 @@ export class SeatMarkers {
   private readonly seatEmptyMat: THREE.MeshBasicMaterial;
   private readonly seatFilledMat: THREE.MeshBasicMaterial;
   private readonly plateMat: THREE.MeshBasicMaterial;
-  private enabled = true;
+  /** Off by default — BuildMenu calls setEnabled(true) when entering
+   * place/move mode and false again when leaving. */
+  private enabled = false;
 
   constructor(scene: THREE.Scene, registry: FurnitureRegistry) {
     this.scene = scene;
@@ -58,11 +60,22 @@ export class SeatMarkers {
     });
   }
 
-  /** Hide the markers (e.g. for screenshots). The data is still tracked. */
+  /** Show/hide the markers entirely. Markers are only meant to appear
+   * while the player is actively building or moving — they're a
+   * placement aid, not permanent decor. */
   setEnabled(on: boolean): void {
     this.enabled = on;
     this.group.visible = on;
+    if (!on) {
+      // Drop the meshes so they don't sit around in the scene graph
+      // (refresh re-creates them on the next enable).
+      while (this.group.children.length > 0) {
+        this.group.remove(this.group.children[0]);
+      }
+    }
   }
+
+  isEnabled(): boolean { return this.enabled; }
 
   /** Rebuild every marker from the current registry state. Cheap enough
    * to call at 5 Hz — ~20 markers max at v1 catalog scale. */

@@ -246,7 +246,8 @@ export class Engine {
       return this.errand?.snapshotStatus().filter((s) => s.label).length ?? 0;
     };
     // Build menu — for placing furniture at runtime.
-    new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
+    const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
+    buildMenu.seatMarkers = this.seatMarkers;
 
     // Spawner + router need the staff characters. Wait until WorldScene
     // finishes loading them, then construct.
@@ -524,6 +525,8 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
+      // SeatMarkers.refresh internally no-ops when disabled, so this is
+      // safe to call unconditionally — BuildMenu toggles the enabled flag.
       this.seatMarkers.refresh();
       this.hudAccumulator = 0;
     }

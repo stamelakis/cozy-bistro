@@ -85,27 +85,30 @@ export class FurnitureRegistry {
 
   /** True if any item is already at the given snapped cell. Allows a half-
    * cell tolerance so chairs placed at fractional coords (e.g. -2.9, 1.0)
-   * register as occupying the nearest integer cell too. */
-  isOccupied(x: number, z: number): boolean {
-    return this.findIndexNear(x, z) >= 0;
+   * register as occupying the nearest integer cell too. Pass `excludeUid`
+   * to skip a specific item (used during move mode so an item doesn't
+   * block its own destination). */
+  isOccupied(x: number, z: number, excludeUid?: string): boolean {
+    return this.findIndexNear(x, z, excludeUid) >= 0;
   }
 
   /** Find a placed item near the given snapped cell. Uses ±0.6 tolerance
    * so demo placements at fractional coords (chairs around table centers)
    * can still be picked by Move/Sell mode. Most recently-placed wins. */
-  findAt(x: number, z: number): PlacedFurnitureItem | null {
-    const i = this.findIndexNear(x, z);
+  findAt(x: number, z: number, excludeUid?: string): PlacedFurnitureItem | null {
+    const i = this.findIndexNear(x, z, excludeUid);
     return i >= 0 ? this.items[i] : null;
   }
 
   /** Internal: return the index of the nearest item within ±0.6 of (x, z),
    * or -1. Searches newest-first so player placements beat demo. */
-  private findIndexNear(x: number, z: number): number {
+  private findIndexNear(x: number, z: number, excludeUid?: string): number {
     const TOL = 0.6;
     let bestIdx = -1;
     let bestDist = Infinity;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
       const it = this.items[i];
+      if (excludeUid && it.uid === excludeUid) continue;
       const dx = it.x - x;
       const dz = it.z - z;
       const d2 = dx * dx + dz * dz;
@@ -217,8 +220,10 @@ export class FurnitureRegistry {
   /** Return every placed table, resolved with its seat slots in world space
    * and whether each slot is filled by a correctly-oriented chair. Pass
    * `onlyVisible: true` to skip slots whose table is currently hidden by
-   * the luxury-tier visibility groups in WorldScene. */
-  getResolvedSeatSlots(onlyVisible = false): ResolvedSeatSlot[] {
+   * the luxury-tier visibility groups in WorldScene. Pass `excludeUid`
+   * to ignore a specific chair when computing occupancy (used during move
+   * so a moving chair doesn't appear to occupy its own old slot). */
+  getResolvedSeatSlots(onlyVisible = false, excludeUid?: string): ResolvedSeatSlot[] {
     const out: ResolvedSeatSlot[] = [];
     for (const it of this.items) {
       if (onlyVisible && !this.isVisibleInScene(it.model)) continue;
@@ -234,7 +239,7 @@ export class FurnitureRegistry {
           z: it.z + world.dz,
           facingY: this.normalizeAngle(slot.facingY + it.rotY),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY)),
+          chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid),
         });
       }
     }
@@ -270,10 +275,10 @@ export class FurnitureRegistry {
 
   /** Find the seat slot closest to (x, z) within snap range. Returns null if
    * nothing in range. Used by BuildMenu's chair auto-snap behaviour. */
-  findNearestSeatSlot(x: number, z: number, range = 1.4): ResolvedSeatSlot | null {
+  findNearestSeatSlot(x: number, z: number, range = 1.4, excludeChairUid?: string): ResolvedSeatSlot | null {
     let best: ResolvedSeatSlot | null = null;
     let bestD2 = range * range;
-    for (const s of this.getResolvedSeatSlots()) {
+    for (const s of this.getResolvedSeatSlots(false, excludeChairUid)) {
       const dx = s.x - x;
       const dz = s.z - z;
       const d2 = dx * dx + dz * dz;
@@ -290,11 +295,12 @@ export class FurnitureRegistry {
    * Detection has to use that relationship — comparing rotY to facingY
    * directly works for left/right seats by coincidence, but never for
    * top/bottom seats (they end up π apart). */
-  private findChairAtSlot(slotX: number, slotZ: number, slotFacing: number): string | null {
+  private findChairAtSlot(slotX: number, slotZ: number, slotFacing: number, excludeUid?: string): string | null {
     const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
     const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
     const expectedRotY = Math.PI - slotFacing;
     for (const it of this.items) {
+      if (excludeUid && it.uid === excludeUid) continue;
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "chair") continue;
       const dx = it.x - slotX;

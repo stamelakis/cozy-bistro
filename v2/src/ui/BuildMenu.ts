@@ -3,6 +3,7 @@ import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry } from "../game/FurnitureRegistry";
+import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture } from "../assets/fitFurniture";
 
 /** A single user action that can be undone. The BuildMenu records one of
@@ -80,8 +81,14 @@ export class BuildMenu {
   /** uid of the item the player is currently moving (between the two
    * clicks of a move). null = not holding anything yet. */
   private holdingUid: string | null = null;
-  /** Original pose of the item being moved, for undo. */
+  /** Original pose of the item being moved, for undo + cancel-restore. */
   private holdingFrom: { x: number; z: number; rotY: number } | null = null;
+  /** The actual placed model that's being carried — we hide it while the
+   * preview ghost follows the cursor, and reveal it again on drop/cancel. */
+  private movingOriginalModel: THREE.Object3D | null = null;
+  /** Optional: gates the seat-slot markers so they only appear during
+   * active place/move modes. Engine wires this in after construction. */
+  seatMarkers?: SeatMarkers;
 
   constructor(
     parent: HTMLElement,
@@ -288,7 +295,13 @@ export class BuildMenu {
 
   private toggleMoveMode(): void {
     this.moveMode = !this.moveMode;
+    // If we were mid-carry, snap the original back to its starting pose
+    // (clean cancel).
+    if (!this.moveMode && this.holdingUid && this.holdingFrom) {
+      this.restoreMoveOriginal();
+    }
     this.holdingUid = null;
+    this.holdingFrom = null;
     if (this.moveMode) {
       this.cancelPlacing();
       if (this.sellMode) this.toggleSellMode();
@@ -301,6 +314,31 @@ export class BuildMenu {
         ? "MOVE — click item then dest (Esc to exit)"
         : "MOVE";
     }
+    // Show / hide the seat-slot markers — they're a placement aid only.
+    this.seatMarkers?.setEnabled(this.moveMode || this.placingDef != null);
+  }
+
+  /** Restore the carried original to its starting pose + visibility, and
+   * tear down the move preview. */
+  private restoreMoveOriginal(): void {
+    if (this.holdingUid && this.holdingFrom) {
+      this.registry.setPose(this.holdingUid, this.holdingFrom.x, this.holdingFrom.z, this.holdingFrom.rotY);
+    }
+    if (this.movingOriginalModel) {
+      this.movingOriginalModel.visible = true;
+      this.movingOriginalModel = null;
+    }
+    this.cancelPreview();
+  }
+
+  /** Tear down whatever ghost preview is currently in the scene. */
+  private cancelPreview(): void {
+    if (this.preview) {
+      this.scene.remove(this.preview);
+      this.preview = null;
+    }
+    this.placingDef = null;
+    this.currentPlan = null;
   }
 
   private toggleSellMode(): void {
@@ -323,7 +361,16 @@ export class BuildMenu {
     this.canvas.addEventListener("click", this.onClick);
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        this.cancelPlacing();
+        // Cancel order matters: if mid-carry, restore original first so
+        // toggleMoveMode doesn't re-trigger restore against a stale state.
+        if (this.holdingUid && this.holdingFrom) {
+          this.restoreMoveOriginal();
+          this.holdingUid = null;
+          this.holdingFrom = null;
+          this.flashRoot("Move cancelled");
+        } else {
+          this.cancelPlacing();
+        }
         if (this.sellMode) this.toggleSellMode();
         if (this.moveMode) this.toggleMoveMode();
       }
@@ -343,22 +390,39 @@ export class BuildMenu {
     if (this.moveMode) this.toggleMoveMode();
     this.cancelPlacing();
     this.placingDef = def;
+    this.preview = await this.makeGhostPreview(def);
+    if (!this.preview) {
+      this.placingDef = null;
+      return;
+    }
+    this.scene.add(this.preview);
+    // Surface seat-slot markers as a placement aid.
+    this.seatMarkers?.setEnabled(true);
+  }
+
+  /** Build a translucent ghost copy of the given item def for use as a
+   * placement preview. Cloned materials so tinting the ghost doesn't
+   * leak onto already-placed copies. */
+  private async makeGhostPreview(def: FurnitureDef): Promise<THREE.Object3D | null> {
     try {
-      this.preview = await this.loader.load(def.modelPath);
-      fitFurniture(this.preview, def);
-      this.preview.traverse((o) => {
+      const model = await this.loader.load(def.modelPath);
+      fitFurniture(model, def);
+      model.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           const m = (o.material as THREE.Material).clone() as THREE.Material;
           m.transparent = true;
-          m.opacity = 0.6;
+          m.opacity = 0.55;
+          // Preview must not write depth — otherwise the floor markers
+          // get z-occluded by the ghost when it's right over them.
+          (m as THREE.Material).depthWrite = false;
           o.material = m;
           o.castShadow = false;
         }
       });
-      this.scene.add(this.preview);
+      return model;
     } catch (err) {
       console.warn("preview load failed:", err);
-      this.placingDef = null;
+      return null;
     }
   }
 
@@ -368,6 +432,11 @@ export class BuildMenu {
       this.preview = null;
     }
     this.placingDef = null;
+    this.currentPlan = null;
+    // If nothing else needs the markers, hide them.
+    if (!this.moveMode && this.holdingUid == null) {
+      this.seatMarkers?.setEnabled(false);
+    }
   }
 
   /** Record an undoable action. Drops the oldest if over MAX_UNDO. */
@@ -505,16 +574,17 @@ export class BuildMenu {
   private computePlacementPlan(def: FurnitureDef, rawPoint: THREE.Vector3): PlacementPlan {
     const cellX = Math.round(rawPoint.x);
     const cellZ = Math.round(rawPoint.z);
+    // When moving an existing item, ignore that item in every overlap /
+    // slot-occupancy check — otherwise it would falsely block its own
+    // destination.
+    const excludeUid = this.holdingUid ?? undefined;
 
     // Chair-specific: try to snap to the nearest empty seat slot. Use the
     // raw (unsnapped) pointer position so the chair "magnets" toward the
     // ideal pose even while the cursor is over the table itself.
     if (def.category === "chair") {
-      const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4);
+      const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4, excludeUid);
       if (slot && slot.chairUid == null) {
-        // Snap! Convert the slot's customer-facing direction into the
-        // chair model's required rotY so the seat actually opens toward
-        // the customer's correct facing.
         return {
           quality: "snap-perfect",
           x: slot.x, z: slot.z,
@@ -523,7 +593,7 @@ export class BuildMenu {
       }
     }
 
-    const blocked = this.registry.isOccupied(cellX, cellZ);
+    const blocked = this.registry.isOccupied(cellX, cellZ, excludeUid);
     if (blocked) {
       return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
     }
@@ -587,18 +657,43 @@ export class BuildMenu {
         const item = this.registry.findAt(x, z);
         if (!item) { this.flashRoot("Nothing to move there"); return; }
         this.holdingUid = item.uid;
-        // Stash starting pose so undo can roll back to here.
         this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
+        // Hide the actual placed model while it's being "carried" so the
+        // player sees only the ghost preview following the cursor.
+        this.movingOriginalModel = item.model;
+        item.model.visible = false;
+        // Build a transparent preview for the same def + initial pose.
+        const def = furnitureCatalog.find((d) => d.id === item.defId);
+        if (def) {
+          this.placingDef = def;
+          this.rotationY = item.rotY;
+          this.makeGhostPreview(def).then((ghost) => {
+            if (!ghost || !this.holdingUid) return; // cancelled
+            this.preview = ghost;
+            this.preview.position.set(item.x, this.preview.position.y, item.z);
+            this.preview.rotation.y = item.rotY;
+            this.scene.add(this.preview);
+          });
+        }
         this.flashRoot(`Picked up — click destination`);
       } else {
-        // Second click: drop at the new cell.
+        // Second click: drop using the latest plan from pointermove.
+        const plan = this.currentPlan;
+        if (!plan || plan.quality === "blocked") {
+          this.flashRoot("Destination is blocked");
+          return;
+        }
         const fromPose = this.holdingFrom!;
-        const ok = this.registry.relocate(this.holdingUid, x, z);
-        if (!ok) { this.flashRoot("Destination is occupied"); return; }
+        this.registry.setPose(this.holdingUid, plan.x, plan.z, plan.rotY);
+        if (this.movingOriginalModel) {
+          this.movingOriginalModel.visible = true;
+          this.movingOriginalModel = null;
+        }
+        this.cancelPreview();
         this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY });
         this.holdingUid = null;
         this.holdingFrom = null;
-        this.flashRoot("Moved");
+        this.flashRoot(plan.quality === "snap-perfect" ? "Moved — perfect seat!" : "Moved");
       }
       return;
     }
