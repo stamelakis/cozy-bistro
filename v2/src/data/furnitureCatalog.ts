@@ -62,8 +62,12 @@ export interface FurnitureDef {
    *   - "edge": sits ON a grid line between two cells, doesn't claim
    *     either cell. Internal walls, internal doorways, decorative
    *     partitions. The tiles either side stay placeable.
-   * Edge items use a separate snap path in BuildMenu. */
-  placement?: "tile" | "edge";
+   *   - "wall": mounted ON an existing wall (any edge-placed wall item
+   *     already in the scene). Picks the nearest placed wall to the
+   *     cursor, snaps to its centre at chest height (~1.5m), and
+   *     copies its rotation so the item face matches the wall face.
+   *     Used for art, mirrors, menu boards, signage, sconces. */
+  placement?: "tile" | "edge" | "wall";
   /** Optional realistic world-space height (in units ≈ metres). When set,
    * fitFurniture independently stretches Y so the placed item lands at
    * this height regardless of the raw mesh's proportions. Without it
@@ -271,17 +275,23 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "pillow-blue",    name: "Blue Cushion",    category: "decoration",
     modelPath: "assets/kenney/pillowBlue.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 10 },
 
-  // Wall art / signage (procedural, no GLB)
+  // Wall art / signage (procedural, no GLB). All wall-mounted — snap
+  // to the nearest placed wall instead of taking up a floor tile.
   { id: "framed-art-warm", name: "Framed Art (Warm)", category: "decoration",
-    modelPath: "proc:framed-art-warm", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+    modelPath: "proc:framed-art-warm", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2,
+    placement: "wall" },
   { id: "framed-art-cool", name: "Framed Art (Cool)", category: "decoration",
-    modelPath: "proc:framed-art-cool", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+    modelPath: "proc:framed-art-cool", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2,
+    placement: "wall" },
   { id: "framed-art-mint", name: "Framed Art (Mint)", category: "decoration",
-    modelPath: "proc:framed-art-mint", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2 },
+    modelPath: "proc:framed-art-mint", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 4, attractionBonus: 2,
+    placement: "wall" },
   { id: "menu-board",      name: "Chalk Menu Board",  category: "decoration",
-    modelPath: "proc:menu-board", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 3 },
+    modelPath: "proc:menu-board", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 3,
+    placement: "wall" },
   { id: "neon-sign",       name: "Neon OPEN Sign",    category: "decoration",
-    modelPath: "proc:neon-sign", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 85, style: 4, attractionBonus: 6 },
+    modelPath: "proc:neon-sign", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 85, style: 4, attractionBonus: 6,
+    placement: "wall" },
   { id: "wine-wall",       name: "Wine Wall",         category: "decoration",
     modelPath: "proc:wine-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 140, style: 6, ratingBonus: 0.06, attractionBonus: 3 },
 
@@ -315,7 +325,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
     modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 18, style: 2 },
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
-    modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2, attractionBonus: 1 },
+    modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2, attractionBonus: 1,
+    placement: "wall" },
 
   // Doors & windows. The "door" id is a procedural door with a separate
   // hinged panel so we can swing the panel without moving the frame.
@@ -347,7 +358,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bathroom-sink-sq", name: "Square Bath Sink", category: "bathroom",
     modelPath: "assets/kenney/bathroomSinkSquare.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 140, style: 3 },
   { id: "bathroom-mirror", name: "Bathroom Mirror", category: "bathroom",
-    modelPath: "assets/kenney/bathroomMirror.glb", scale: 0.7, size: { width: 1, depth: 1 }, cost: 60, style: 2, attractionBonus: 1 },
+    modelPath: "assets/kenney/bathroomMirror.glb", scale: 0.7, size: { width: 1, depth: 1 }, cost: 60, style: 2, attractionBonus: 1,
+    placement: "wall" },
   { id: "bathroom-cabinet", name: "Bath Cabinet",  category: "bathroom",
     modelPath: "assets/kenney/bathroomCabinet.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 110, style: 2 },
   { id: "bathroom-cabinet-d", name: "Bath Cabinet (Drawer)", category: "bathroom",

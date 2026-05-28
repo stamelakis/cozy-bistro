@@ -296,11 +296,17 @@ function internalWallHalf(): THREE.Group {
   return g;
 }
 
-/** Internal doorway — wall section with a doorway opening in the middle. */
+/** Internal doorway — wall section with a hinged door panel that swings
+ * open when a guest is near. The door panel is exposed via
+ * .userData.panel so WorldScene can rotate it (same pattern as the
+ * procedural front door). */
 function internalDoorway(): THREE.Group {
   const g = new THREE.Group();
   const sideW = 0.18;
   const openingW = 1.0 - sideW * 2;
+  const panelH = 2.0;
+  const panelW = openingW - 0.04; // small clearance so the panel doesn't bind on the jambs
+  const panelThick = 0.04;
   // Side jambs (full height).
   for (const sx of [-0.5 + sideW / 2, 0.5 - sideW / 2]) {
     const jamb = new THREE.Mesh(new THREE.BoxGeometry(sideW, 2.4, 0.12), WALL_MAT);
@@ -311,13 +317,35 @@ function internalDoorway(): THREE.Group {
   }
   // Lintel (above the doorway).
   const lintel = new THREE.Mesh(new THREE.BoxGeometry(openingW, 0.4, 0.12), WALL_MAT);
-  lintel.position.set(0, 2.2, 0);
+  lintel.position.set(0, panelH + 0.2, 0);
   lintel.castShadow = true;
   g.add(lintel);
   // Top trim runs across the whole 1-tile span.
   const trim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.06, 0.14), WALL_TRIM_MAT);
   trim.position.y = 2.43;
   g.add(trim);
+  // Door panel — hinged at the left jamb edge so .userData.panel can
+  // swing the door open inward when a guest is near. Lighter wood than
+  // the wall so it reads as a separate object.
+  const doorMat = new THREE.MeshStandardMaterial({ color: 0xb88a5e, roughness: 0.55 });
+  const knobMat = new THREE.MeshStandardMaterial({ color: 0xc4a060, roughness: 0.3, metalness: 0.7 });
+  const hinge = new THREE.Group();
+  // Hinge sits at the left jamb's inner edge: x = -0.5 + sideW.
+  hinge.position.set(-0.5 + sideW, 0, 0);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(panelW, panelH, panelThick), doorMat);
+  panel.position.set(panelW / 2, panelH / 2, 0);
+  panel.castShadow = true;
+  panel.receiveShadow = true;
+  hinge.add(panel);
+  // Door knob on the panel's right edge (handles authored in hinge frame
+  // for the same reason as the front door — see frontDoor() comment).
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), knobMat);
+  knob.position.set(panelW - 0.08, panelH / 2, panelThick / 2 + 0.03);
+  hinge.add(knob);
+  g.add(hinge);
+  // Expose so consumers (WorldScene's per-door open/close animator)
+  // can rotate it. Same convention as front door's userData.panel.
+  g.userData.panel = hinge;
   return g;
 }
 

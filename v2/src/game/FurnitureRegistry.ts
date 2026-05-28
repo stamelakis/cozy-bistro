@@ -430,7 +430,11 @@ export class FurnitureRegistry {
       try {
         const model = await this.loader.load(def.modelPath);
         fitFurniture(model, def);
-        model.position.set(p.x, model.position.y, p.z);
+        // Wall-mounted items lift to chest height when restored — must
+        // match the BuildMenu place handler so a save round-trip
+        // doesn't drop them on the floor.
+        const restoreY = def.placement === "wall" ? 1.5 : model.position.y;
+        model.position.set(p.x, restoreY, p.z);
         model.rotation.y = p.rotY;
         this.scene.add(model);
         this.items.push({ uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model });

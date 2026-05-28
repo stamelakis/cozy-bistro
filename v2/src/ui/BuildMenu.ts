@@ -520,7 +520,8 @@ export class BuildMenu {
       this.game.economy.charge(entry.refundPaid);
       void this.loader.load(def.modelPath).then((solid) => {
         fitFurniture(solid, def);
-        solid.position.set(entry.x, solid.position.y, entry.z);
+        const y = def.placement === "wall" ? 1.5 : solid.position.y;
+        solid.position.set(entry.x, y, entry.z);
         solid.rotation.y = entry.rotY;
         this.scene.add(solid);
         this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid);
@@ -683,6 +684,17 @@ export class BuildMenu {
       // No tile-overlap check — walls don't claim a tile.
       return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
     }
+    // Wall-mounted items (mirror, art, signage, sconces) need an
+    // existing placed wall to attach to. Find the nearest one and use
+    // its anchor + rotation. Mark blocked if no wall is within reach
+    // so the player gets an immediate red preview.
+    if (def.placement === "wall") {
+      const host = this.findNearestWall(rawPoint.x, rawPoint.z, 1.8);
+      if (host) {
+        return { quality: "snap-perfect", x: host.x, z: host.z, rotY: host.rotY };
+      }
+      return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
+    }
 
     const cellX = this.snapAxis(rawPoint.x, def.size.width);
     const cellZ = this.snapAxis(rawPoint.z, def.size.depth);
@@ -710,6 +722,26 @@ export class BuildMenu {
       return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
     }
     return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };
+  }
+
+  /** Find the registered wall (edge-placed item) closest to the cursor,
+   * returning its anchor + rotation so a wall-mounted item can snap
+   * onto it. Returns null if none is within maxDist. */
+  private findNearestWall(x: number, z: number, maxDist: number): { x: number; z: number; rotY: number } | null {
+    let bestDistSq = maxDist * maxDist;
+    let best: { x: number; z: number; rotY: number } | null = null;
+    for (const it of this.registry.snapshotItems()) {
+      if (this.holdingUid && it.uid === this.holdingUid) continue;
+      const itDef = furnitureCatalog.find((d) => d.id === it.defId);
+      if (!itDef || itDef.placement !== "edge") continue;
+      const dx = it.x - x, dz = it.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestDistSq) {
+        bestDistSq = d2;
+        best = { x: it.x, z: it.z, rotY: it.rotY };
+      }
+    }
+    return best;
   }
 
   /** Snap a raw cursor position to the nearest grid edge for "edge"
@@ -866,7 +898,11 @@ export class BuildMenu {
     const cost = def.cost;
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
-      solid.position.set(placeX, solid.position.y, placeZ);
+      // Wall-mounted items lift to chest height (~1.5m) instead of
+      // sitting on the floor. fitFurniture's recenter put their feet
+      // at y=0; we just bump position.y up to wall-mount height.
+      const y = def.placement === "wall" ? 1.5 : solid.position.y;
+      solid.position.set(placeX, y, placeZ);
       solid.rotation.y = rotY;
       this.scene.add(solid);
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
