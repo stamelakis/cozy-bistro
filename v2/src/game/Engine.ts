@@ -347,7 +347,12 @@ export class Engine {
         );
         this.usingStubRouter = true;
       } else {
-        this.router = new StaffRouter(this.scene.chefChar!, this.scene.waiterChar!, this.scene.stovePos, this.scene.pickupPos, this.pathfind);
+        this.router = new StaffRouter(
+          this.scene.chefChar!, this.scene.waiterChar!,
+          this.scene.stovePos, this.scene.pickupPos,
+          this.pathfind,
+          () => this.registry.getStoves(),
+        );
         console.log("[Engine] real StaffRouter created with 1 chef + 1 waiter");
       }
       this.spawner = new GuestSpawner(

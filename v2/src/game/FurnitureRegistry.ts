@@ -83,32 +83,45 @@ export class FurnitureRegistry {
     }
   }
 
-  /** True if any item is already at the given snapped cell. Allows a half-
-   * cell tolerance so chairs placed at fractional coords (e.g. -2.9, 1.0)
-   * register as occupying the nearest integer cell too. Pass `excludeUid`
-   * to skip a specific item (used during move mode so an item doesn't
-   * block its own destination). */
+  /** True if a tile-claiming item is already at the given snapped cell.
+   * Allows a half-cell tolerance so chairs placed at fractional coords
+   * (e.g. -2.9, 1.0) register as occupying the nearest integer cell too.
+   * Pass `excludeUid` to skip a specific item (used during move mode so
+   * an item doesn't block its own destination).
+   *
+   * Critically: edge/wall-placed items don't claim a tile and are
+   * skipped — otherwise a wall sitting at x=1.5 would falsely block
+   * both (1, _) and (2, _) because its 0.5 distance to each cell center
+   * falls inside the 0.6 tolerance. */
   isOccupied(x: number, z: number, excludeUid?: string): boolean {
-    return this.findIndexNear(x, z, excludeUid) >= 0;
+    return this.findIndexNear(x, z, excludeUid, true) >= 0;
   }
 
   /** Find a placed item near the given snapped cell. Uses ±0.6 tolerance
    * so demo placements at fractional coords (chairs around table centers)
-   * can still be picked by Move/Sell mode. Most recently-placed wins. */
+   * can still be picked by Move/Sell mode. Most recently-placed wins.
+   * Includes edge/wall items so Sell mode can still target a wall by
+   * clicking on the tile next to it. */
   findAt(x: number, z: number, excludeUid?: string): PlacedFurnitureItem | null {
-    const i = this.findIndexNear(x, z, excludeUid);
+    const i = this.findIndexNear(x, z, excludeUid, false);
     return i >= 0 ? this.items[i] : null;
   }
 
   /** Internal: return the index of the nearest item within ±0.6 of (x, z),
-   * or -1. Searches newest-first so player placements beat demo. */
-  private findIndexNear(x: number, z: number, excludeUid?: string): number {
+   * or -1. Searches newest-first so player placements beat demo. When
+   * `tileOnly` is true, items whose def.placement is "edge" or "wall"
+   * are ignored — those don't claim a floor tile. */
+  private findIndexNear(x: number, z: number, excludeUid: string | undefined, tileOnly: boolean): number {
     const TOL = 0.6;
     let bestIdx = -1;
     let bestDist = Infinity;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
       const it = this.items[i];
       if (excludeUid && it.uid === excludeUid) continue;
+      if (tileOnly) {
+        const placement = getFurnitureDef(it.defId)?.placement;
+        if (placement === "edge" || placement === "wall") continue;
+      }
       const dx = it.x - x;
       const dz = it.z - z;
       const d2 = dx * dx + dz * dz;
@@ -125,7 +138,9 @@ export class FurnitureRegistry {
    * selling a Linen Table doesn't punish the player as hard as selling a
    * plain wooden chair. Returns null if nothing was there. */
   removeAt(x: number, z: number): { defId: string; refund: number } | null {
-    const idx = this.findIndexNear(x, z);
+    // Sell mode should be able to target walls + wall-mounted items too,
+    // so include all placements here (tileOnly=false).
+    const idx = this.findIndexNear(x, z, undefined, false);
     if (idx < 0) return null;
     const item = this.items[idx];
     this.scene.remove(item.model);
@@ -413,6 +428,21 @@ export class FurnitureRegistry {
     if (v > Math.PI) v -= Math.PI * 2;
     if (v <= -Math.PI) v += Math.PI * 2;
     return v;
+  }
+
+  /** Every visible placed stove. StaffRouter uses this to assign chefs
+   * to stoves 1-to-1; the world position is the stove's footprint
+   * centre and rotY is its model rotation (used to compute the chef
+   * standing position one tile in front of it). */
+  getStoves(): { uid: string; x: number; z: number; rotY: number }[] {
+    const out: { uid: string; x: number; z: number; rotY: number }[] = [];
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "stove") continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY });
+    }
+    return out;
   }
 
   /** Count of placed items of a specific id. Used to detect sinks /

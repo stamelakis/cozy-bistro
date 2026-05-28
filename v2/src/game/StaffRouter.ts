@@ -62,6 +62,22 @@ interface StaffActor {
    * pathfind to a.target. Empty array = no plan; moveActor falls back
    * to direct movement so the actor still does SOMETHING. */
   path: PathStep[];
+  /** Chef only: uid of the stove this chef is currently reserving while
+   * cooking. Released on finish/abandon/fire so another chef can take
+   * it. null between cooks. */
+  assignedStoveUid?: string | null;
+  /** Chef only: uid of the most recent stove they cooked at. Used as
+   * the anchor for their idle "loiter" zone — same vibe as the errand
+   * helper hanging out near the supply counter. */
+  lastStoveUid?: string | null;
+}
+
+/** Snapshot of a placed stove the router can assign a chef to. */
+export interface StoveInfo {
+  uid: string;
+  x: number;
+  z: number;
+  rotY: number;
 }
 
 // Chef stays slow so the visible "shuffle to the stove" reads at the
@@ -109,18 +125,79 @@ export class StaffRouter {
    * fall back to direct A→B movement (the pre-pathfinding behaviour). */
   private readonly pathfind?: Pathfinding;
 
+  /** Live snapshot of placed stoves. Each chef reserves one before
+   * walking over so two chefs can't pile on the same appliance. When
+   * the callback returns an empty list (no stove placed anywhere) we
+   * fall back to the legacy shared {@link stovePos}. */
+  private readonly getStoves?: () => readonly StoveInfo[];
+
+  /** uids of stoves currently reserved by a chef in cooking flight.
+   * Cleared when the chef leaves the "working" state OR when they're
+   * fired mid-cook. */
+  private readonly busyStoveUids = new Set<string>();
+
   constructor(
     chefChar: AnimatedCharacter,
     waiterChar: AnimatedCharacter,
     stovePos: THREE.Vector2,
     pickupPos: THREE.Vector2,
     pathfind?: Pathfinding,
+    getStoves?: () => readonly StoveInfo[],
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
     this.pathfind = pathfind;
+    this.getStoves = getStoves;
     this.addChef(chefChar);
     this.addWaiter(waiterChar);
+  }
+
+  /** Compute the chef's standing position one tile in front of a stove.
+   * Stove models face their +Z axis by default, so the chef's spot is
+   * (stove.x + sin rotY, stove.z + cos rotY). */
+  private chefStandPosFor(stove: StoveInfo): THREE.Vector2 {
+    return new THREE.Vector2(
+      stove.x + Math.sin(stove.rotY),
+      stove.z + Math.cos(stove.rotY),
+    );
+  }
+
+  /** Reserve the first stove that isn't already in {@link busyStoveUids}.
+   * Returns null when every stove is busy. Callers should defer the
+   * cook (stay idle) when this returns null so a second chef doesn't
+   * walk to a stove already in use. */
+  private claimFreeStove(): StoveInfo | null {
+    if (!this.getStoves) return null;
+    const stoves = this.getStoves();
+    for (const s of stoves) {
+      if (!this.busyStoveUids.has(s.uid)) {
+        this.busyStoveUids.add(s.uid);
+        return s;
+      }
+    }
+    return null;
+  }
+
+  /** A loiter spot for a chef who isn't cooking right now. If the chef
+   * has a remembered last stove (and it's still placed), drift a small
+   * random offset around that stove's stand position. Otherwise fall
+   * back to their original home. Mirrors the errand helper's
+   * pickIdleSpot — keeps chefs near the appliance they're "assigned"
+   * to in the player's eyes. */
+  private pickChefIdleSpot(c: StaffActor): THREE.Vector2 {
+    if (c.lastStoveUid && this.getStoves) {
+      const stove = this.getStoves().find((s) => s.uid === c.lastStoveUid);
+      if (stove) {
+        const base = this.chefStandPosFor(stove);
+        base.x += (Math.random() - 0.5) * 1.2;
+        base.y += (Math.random() - 0.5) * 0.8;
+        return base;
+      }
+      // The stove was sold/moved — forget it so we don't keep
+      // searching for a ghost next tick.
+      c.lastStoveUid = null;
+    }
+    return c.home.clone();
   }
 
   /** Recompute the path from the actor's current position to its
@@ -150,6 +227,8 @@ export class StaffRouter {
       clock: 0,
       speed: CHEF_SPEED,
       path: [],
+      assignedStoveUid: null,
+      lastStoveUid: null,
     });
   }
 
@@ -190,6 +269,12 @@ export class StaffRouter {
         if (t.state === "cooking") t.state = "queued";
         else if (t.state === "delivering") t.state = "ready";
       }
+    }
+    // Release any stove this chef had reserved so the next chef can
+    // claim it. (Waiters won't have one set, the field is just unused.)
+    if (removed.assignedStoveUid) {
+      this.busyStoveUids.delete(removed.assignedStoveUid);
+      removed.assignedStoveUid = null;
     }
     pool.splice(idx, 1);
     return removed.character;
@@ -289,17 +374,37 @@ export class StaffRouter {
     switch (c.state) {
       case "idle": {
         const ticket = this.tickets.find((t) => t.state === "queued");
-        if (ticket) {
-          ticket.state = "cooking";
-          ticket.clock = 0;
-          c.ticketId = ticket.id;
-          c.target = this.stovePos.clone();
-          this.planPath(c);
-          c.state = "movingToWork";
-          c.clock = 0;
-          c.character.action = "walk";
-          console.log(`[Router] chef picked up ${ticket.id} → walking to stove`);
+        if (!ticket) break;
+        // Reserve a free stove before taking the ticket. If every
+        // placed stove is busy, defer — another idle chef can't sneak
+        // ahead because each tickChef runs serially and the busy set
+        // is updated before the next chef looks.
+        const stove = this.claimFreeStove();
+        let target: THREE.Vector2;
+        const stoveCount = this.getStoves ? this.getStoves().length : 0;
+        if (stove) {
+          c.assignedStoveUid = stove.uid;
+          target = this.chefStandPosFor(stove);
+        } else if (stoveCount === 0) {
+          // No stoves placed anywhere — fall back to the legacy
+          // shared cooking spot so the kitchen still functions in a
+          // degenerate "no appliance" save. No reservation possible
+          // here; multiple chefs may pile on this fallback.
+          c.assignedStoveUid = null;
+          target = this.stovePos.clone();
+        } else {
+          // Stoves exist but they're all taken — wait it out.
+          break;
         }
+        ticket.state = "cooking";
+        ticket.clock = 0;
+        c.ticketId = ticket.id;
+        c.target = target;
+        this.planPath(c);
+        c.state = "movingToWork";
+        c.clock = 0;
+        c.character.action = "walk";
+        console.log(`[Router] chef picked up ${ticket.id} → walking to ${stove ? `stove ${stove.uid}` : "fallback stovePos"}`);
         break;
       }
       case "movingToWork": {
@@ -314,7 +419,8 @@ export class StaffRouter {
       case "working": {
         const ticket = this.tickets.find((t) => t.id === c.ticketId);
         if (!ticket) { // guest left, abandon the cook
-          c.target = c.home.clone();
+          this.releaseStove(c);
+          c.target = this.pickChefIdleSpot(c);
           this.planPath(c);
           c.state = "returningHome";
           c.character.action = "walk";
@@ -325,7 +431,8 @@ export class StaffRouter {
         if (c.clock >= ticket.cookSeconds) {
           ticket.state = "ready";
           ticket.clock = 0;
-          c.target = c.home.clone();
+          this.releaseStove(c);
+          c.target = this.pickChefIdleSpot(c);
           this.planPath(c);
           c.state = "returningHome";
           c.character.action = "walk";
@@ -343,6 +450,17 @@ export class StaffRouter {
         }
         break;
       }
+    }
+  }
+
+  /** Release the chef's stove reservation and remember it as their
+   * last-used stove for loiter targeting. Safe to call when the chef
+   * was on the fallback stovePos (no assignment to clear). */
+  private releaseStove(c: StaffActor): void {
+    if (c.assignedStoveUid) {
+      this.busyStoveUids.delete(c.assignedStoveUid);
+      c.lastStoveUid = c.assignedStoveUid;
+      c.assignedStoveUid = null;
     }
   }
 
