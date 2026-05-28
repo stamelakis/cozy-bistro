@@ -697,12 +697,22 @@ export class BuildMenu {
    * GREEN. Otherwise we use the integer cell under the cursor and mark
    * YELLOW (or RED if blocked). */
   private computePlacementPlan(def: FurnitureDef, rawPoint: THREE.Vector3): PlacementPlan {
-    // Edge-placed items (walls, internal doorways, partitions) snap to
-    // grid LINES rather than tile centers. The wall sits between two
-    // adjacent cells; both cells stay usable. rotY swings 90° so the
-    // wall mesh aligns with the edge direction (horizontal vs vertical).
+    // Edge-placed items (walls, internal doorways, partitions, the
+    // front door) snap to grid LINES rather than tile centers. The
+    // wall sits between two adjacent cells; both cells stay usable.
+    // rotY swings 90° so the mesh aligns with the edge direction.
     if (def.placement === "edge") {
       const e = this.snapToEdge(rawPoint.x, rawPoint.z);
+      // For front doors specifically: only allow placement when the
+      // snapped edge actually coincides with an exterior wall segment.
+      // Stops the player from dropping a "front door" floating between
+      // tiles in the middle of the restaurant.
+      if (def.category === "door") {
+        const onPerimeter = this.isOnPerimeterWall(e.x, e.z);
+        if (!onPerimeter) {
+          return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
+        }
+      }
       // No tile-overlap check — walls don't claim a tile.
       return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
     }
@@ -816,6 +826,31 @@ export class BuildMenu {
       // to the wall.
       rotY: Math.atan2(-mountNX, -mountNZ),
     };
+  }
+
+  /** True if a snapped edge anchor (x, z) sits on one of the exterior
+   * wall segments — used to gate front-door placement so the player
+   * can't drop a door in the middle of the floor. Allows a small
+   * tolerance because the snap quantizes to half-integers while the
+   * segment endpoints may not. */
+  private isOnPerimeterWall(x: number, z: number): boolean {
+    const TOL = 0.05;
+    for (const seg of EXTERIOR_WALL_SEGMENTS) {
+      // Segment-aligned axis check: if seg.rotY = 0 the segment runs
+      // along X at fixed Z; otherwise it runs along Z at fixed X.
+      if (seg.rotY === 0) {
+        if (Math.abs(z - seg.z1) > TOL) continue;
+        const xMin = Math.min(seg.x1, seg.x2);
+        const xMax = Math.max(seg.x1, seg.x2);
+        if (x >= xMin - TOL && x <= xMax + TOL) return true;
+      } else {
+        if (Math.abs(x - seg.x1) > TOL) continue;
+        const zMin = Math.min(seg.z1, seg.z2);
+        const zMax = Math.max(seg.z1, seg.z2);
+        if (z >= zMin - TOL && z <= zMax + TOL) return true;
+      }
+    }
+    return false;
   }
 
   /** Snap a raw cursor position to the nearest grid edge for "edge"

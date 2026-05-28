@@ -350,8 +350,12 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
 
   // Doors & windows. The "door" id is a procedural door with a separate
   // hinged panel so we can swing the panel without moving the frame.
+  // Edge-placed: doors sit ON grid lines (between two tiles), exactly
+  // like internal walls. That way the front door snaps to the front
+  // wall plane rather than dropping the frame in the middle of a tile.
   { id: "door",         name: "Front Door",    category: "door",
-    modelPath: "proc:front-door", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60 },
+    modelPath: "proc:front-door", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60,
+    placement: "edge" },
   { id: "door-kenney",  name: "Kenney Doorway", category: "door",
     modelPath: "assets/kenney/doorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 60 },
   { id: "door-open",    name: "Open Doorway",  category: "door",
