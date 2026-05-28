@@ -570,19 +570,20 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
-      // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Four chairs,
-      // one centered on each side (symmetric). Chair anchors are at
-      // half-integer in one axis (sit on tile borders) but plates land
-      // symmetrically on the four table edges, which reads cleanly.
+      // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Chairs go
+      // in the four corner-adjacent cells (pinwheel pattern) so each
+      // chair sits AT a tile center rather than straddling tile
+      // borders. Each chair gets its own corner of the table top for
+      // the plate, so there's no plate conflict between adjacent seats.
       { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
-      // Top side chair (faces +Z toward table).
-      { id: "wooden-chair", x:  0.5, z: -0.5, rotY: Math.PI,      tier: 1 },
-      // Right side chair (faces -X).
-      { id: "wooden-chair", x:  2.5, z:  1.5, rotY: -Math.PI / 2, tier: 1 },
-      // Bottom side chair (facingY=0 baseline).
-      { id: "wooden-chair", x:  0.5, z:  3.5, rotY: 0,            tier: 1 },
-      // Left side chair (faces +X).
-      { id: "wooden-chair", x: -1.5, z:  1.5, rotY:  Math.PI / 2, tier: 1 },
+      // Top-left corner chair (cell (0, 0), faces +Z toward table).
+      { id: "wooden-chair", x:  0,   z:  0,   rotY: Math.PI,      tier: 1 },
+      // Top-right corner chair (cell (2, 1), faces -X).
+      { id: "wooden-chair", x:  2,   z:  1,   rotY: -Math.PI / 2, tier: 1 },
+      // Bottom-right corner chair (cell (1, 3), faces -Z baseline).
+      { id: "wooden-chair", x:  1,   z:  3,   rotY: 0,            tier: 1 },
+      // Bottom-left corner chair (cell (-1, 2), faces +X).
+      { id: "wooden-chair", x: -1,   z:  2,   rotY:  Math.PI / 2, tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {

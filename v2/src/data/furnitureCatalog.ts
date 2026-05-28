@@ -109,20 +109,29 @@ export interface FurnitureDef {
  * different table meshes can have different top heights without the
  * plate floating. */
 const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
-  // One chair centered on each side of the 2×2 table, plate just inside
-  // the matching edge so it reads as "this guest's plate". Chair anchors
-  // end up half-integer (table center is half-integer, ±2.0 offset →
-  // also half-integer) so the chairs sit on tile borders — acceptable
-  // for chairs since they're small and don't visibly straddle tiles
-  // the way tables would.
-  // Top side: chair faces +Z (toward table); plate inside top edge.
-  { dx:  0,   dz: -2.0, facingY:  Math.PI,     platePos: { dx:  0,   dz: -0.7 } },
-  // Right side: chair faces -X.
-  { dx:  2.0, dz:  0,   facingY: -Math.PI / 2, platePos: { dx:  0.7, dz:  0   } },
-  // Bottom side: chair faces -Z (facingY=0 baseline).
-  { dx:  0,   dz:  2.0, facingY:  0,           platePos: { dx:  0,   dz:  0.7 } },
-  // Left side: chair faces +X.
-  { dx: -2.0, dz:  0,   facingY:  Math.PI / 2, platePos: { dx: -0.7, dz:  0   } },
+  // Four chairs around a 2×2 table, each in one of the corner cells
+  // adjacent to the table. The pattern is intentionally asymmetric (a
+  // "pinwheel" — top-left, top-right, bottom-right, bottom-left) so
+  // every chair lands on an integer tile center rather than sitting at
+  // a tile cross-section the way a perfectly symmetric "one chair per
+  // side midpoint" layout would on a 2-tile-wide table.
+  //
+  // Each chair gets its own corner of the table top for the plate, so
+  // there's no shared-corner conflict: top-left chair's plate hugs the
+  // top edge near the LEFT half of the table, top-right's hugs the
+  // RIGHT edge near the TOP half, etc.
+  //
+  // For a table anchored at (0.5, 1.5), the resulting chair world
+  // coords are (0, 0), (2, 1), (1, 3), (-1, 2) — all integer cell
+  // centers.
+  // Top-left chair: facing +Z (toward table).
+  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.5, dz: -0.8 } },
+  // Top-right chair: facing -X.
+  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
+  // Bottom-right chair: facing -Z (facingY=0 baseline).
+  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.5, dz:  0.8 } },
+  // Bottom-left chair: facing +X.
+  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
