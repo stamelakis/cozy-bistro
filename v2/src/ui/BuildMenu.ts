@@ -114,8 +114,11 @@ export class BuildMenu {
   seatMarkers?: SeatMarkers;
   /** Optional callback fired when the player places a door — Engine
    * uses this to re-capture the hinge panel ref for the open/close
-   * animation. */
+   * animation and to punch a fresh gap in the front wall. */
   onDoorPlaced?: (model: THREE.Object3D) => void;
+  /** Fired when a door is sold or undone, so the front wall can be
+   * resealed where the door used to be. */
+  onDoorRemoved?: (model: THREE.Object3D) => void;
   /** Optional callback fired when the player places a stove — Engine
    * pins the cooking flame to the new stove's measured top. */
   onStovePlaced?: (model: THREE.Object3D) => void;
@@ -836,27 +839,22 @@ export class BuildMenu {
   }
 
   /** True if a snapped edge anchor (x, z) sits on one of the exterior
-   * wall segments — used to gate front-door placement so the player
-   * can't drop a door in the middle of the floor. Allows a small
-   * tolerance because the snap quantizes to half-integers while the
-   * segment endpoints may not. */
+   * wall PLANES — used to gate front-door placement so the player
+   * can't drop a door in the middle of the floor. Note this checks
+   * the plane, not the segment list, because the front wall is now
+   * rebuilt around every placed door — the gap left by the demo door
+   * isn't an "off the wall" position, it's just where the existing
+   * door already lives. */
   private isOnPerimeterWall(x: number, z: number): boolean {
     const TOL = 0.05;
-    for (const seg of EXTERIOR_WALL_SEGMENTS) {
-      // Segment-aligned axis check: if seg.rotY = 0 the segment runs
-      // along X at fixed Z; otherwise it runs along Z at fixed X.
-      if (seg.rotY === 0) {
-        if (Math.abs(z - seg.z1) > TOL) continue;
-        const xMin = Math.min(seg.x1, seg.x2);
-        const xMax = Math.max(seg.x1, seg.x2);
-        if (x >= xMin - TOL && x <= xMax + TOL) return true;
-      } else {
-        if (Math.abs(x - seg.x1) > TOL) continue;
-        const zMin = Math.min(seg.z1, seg.z2);
-        const zMax = Math.max(seg.z1, seg.z2);
-        if (z >= zMin - TOL && z <= zMax + TOL) return true;
-      }
-    }
+    const X_MIN = -4.5, X_MAX = 5.5;
+    const Z_MIN = -4.5, Z_MAX = 5.5;
+    // Back / front horizontal walls.
+    if (Math.abs(z - Z_MIN) < TOL && x >= X_MIN - TOL && x <= X_MAX + TOL) return true;
+    if (Math.abs(z - Z_MAX) < TOL && x >= X_MIN - TOL && x <= X_MAX + TOL) return true;
+    // Left / right vertical walls.
+    if (Math.abs(x - X_MIN) < TOL && z >= Z_MIN - TOL && z <= Z_MAX + TOL) return true;
+    if (Math.abs(x - X_MAX) < TOL && z >= Z_MIN - TOL && z <= Z_MAX + TOL) return true;
     return false;
   }
 
@@ -943,6 +941,7 @@ export class BuildMenu {
         return;
       }
       if (itemDef?.category === "lamp") this.onLampRemoved?.(itemModel);
+      if (itemDef?.category === "door") this.onDoorRemoved?.(itemModel);
       this.game.economy.earnMoney(removed.refund, "payment");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
       this.flashRoot(`Sold for $${removed.refund}`, "success");

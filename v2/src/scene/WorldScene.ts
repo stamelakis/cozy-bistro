@@ -504,26 +504,12 @@ export class WorldScene {
     const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), ghostMat);
     wallRight.position.set(5.5, 1.5, 0.5);
     this.threeScene.add(wallRight);
-    // Front wall is split into two segments leaving a 1-tile doorway
-    // open at x=-0.5..+0.5 (the demo door's footprint at x=0). The
-    // segment WIDTHS + positions are tuned so each runs exactly from
-    // its side wall to the doorway edge — previously they were 4.5 +
-    // 5.5 m wide and stuck out 0.5 m past the corners of the building
-    // because they still used the pre-shift X extents.
-    //   left wall ends at x=-4.5 → segment from -4.5 to -0.5 → width 4
-    //   right wall ends at x=5.5 → segment from  0.5 to  5.5 → width 5
-    const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 0.2), ghostMat);
-    frontLeft.position.set(-2.5, 1.5, 5.5);
-    this.threeScene.add(frontLeft);
-    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(5, 3, 0.2), ghostMat);
-    frontRight.position.set(3, 1.5, 5.5);
-    this.threeScene.add(frontRight);
-    // Door lintel — fills the gap above the doorway so the front wall
-    // reads as enclosed (door panel is 2 units tall; lintel runs from
-    // y=2 to y=3). 1.0 wide so it exactly meets frontLeft/frontRight.
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), ghostMat);
-    lintel.position.set(0, 2.5, 5.5);
-    this.threeScene.add(lintel);
+    // Front wall is rebuilt dynamically — every placed door punches a
+    // 1-tile gap in the wall (and adds a lintel above) so additional
+    // doorways become real entries the customers can use. Stash the
+    // material so rebuildFrontWall can reuse it.
+    this.frontWallMat = ghostMat;
+    this.rebuildFrontWall([]);
     // Restaurant rating sign mounted on the lintel — a small marquee
     // that shows the current ★ rating, just like a real bistro
     // entrance. Hooked up by updateRatingSign() from Engine.
@@ -535,6 +521,61 @@ export class WorldScene {
     // as the back-of-house workflow it actually is). Procedural so it
     // shows for both new and existing saves regardless of registry state.
     this.buildSupplyCounter();
+  }
+
+  // === Dynamic front wall ====================================================
+  // The front wall is no longer a hard-coded pair of segments around a
+  // fixed doorway. Instead it's rebuilt every time a door is placed,
+  // moved or sold, so each door visibly opens a real gap in the wall
+  // (and a lintel goes above it). rebuildFrontWall takes the list of
+  // door X-coordinates currently on z=5.5 and lays the wall out around
+  // them.
+  private frontWallMat?: THREE.MeshStandardMaterial;
+  private frontWallSegments: THREE.Mesh[] = [];
+  private frontWallLintels: THREE.Mesh[] = [];
+  /** Re-render the front wall as solid segments between gaps for each
+   * passed door X. Idempotent — call again whenever doors are
+   * added/removed and the geometry self-cleans. */
+  rebuildFrontWall(doorXs: readonly number[]): void {
+    if (!this.frontWallMat) return;
+    // Tear down existing meshes + free geometry.
+    for (const m of this.frontWallSegments) {
+      this.threeScene.remove(m);
+      m.geometry.dispose();
+    }
+    this.frontWallSegments.length = 0;
+    for (const m of this.frontWallLintels) {
+      this.threeScene.remove(m);
+      m.geometry.dispose();
+    }
+    this.frontWallLintels.length = 0;
+    const X_MIN = -4.5, X_MAX = 5.5;
+    const GAP_HALF = 0.5; // each door takes 1 tile of wall
+    const sorted = [...doorXs].filter((x) => x > X_MIN && x < X_MAX).sort((a, b) => a - b);
+    let segStart = X_MIN;
+    const addSegment = (from: number, to: number): void => {
+      const width = to - from;
+      if (width < 0.05) return; // skip degenerate slivers
+      const center = (from + to) / 2;
+      const seg = new THREE.Mesh(new THREE.BoxGeometry(width, 3, 0.2), this.frontWallMat!);
+      seg.position.set(center, 1.5, 5.5);
+      this.threeScene.add(seg);
+      this.frontWallSegments.push(seg);
+    };
+    const addLintel = (centerX: number): void => {
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), this.frontWallMat!);
+      lintel.position.set(centerX, 2.5, 5.5);
+      this.threeScene.add(lintel);
+      this.frontWallLintels.push(lintel);
+    };
+    for (const doorX of sorted) {
+      const gapStart = doorX - GAP_HALF;
+      const gapEnd = doorX + GAP_HALF;
+      addSegment(segStart, gapStart);
+      addLintel(doorX);
+      segStart = gapEnd;
+    }
+    addSegment(segStart, X_MAX);
   }
 
   /** Wood-and-metal "back of house" counter where the errand helper

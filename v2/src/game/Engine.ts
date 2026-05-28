@@ -252,6 +252,9 @@ export class Engine {
           if (def?.category === "lamp") this.scene.registerLamp(it.model);
         }
         if (primaryStove) this.scene.alignStoveFlameToStove(primaryStove);
+        // Doors restored from save → rebuild the front wall so the
+        // gaps reflect where they actually live now.
+        this.scene.rebuildFrontWall(this.frontWallDoorXs());
       });
     }
     this.saver.registry = this.registry;
@@ -269,6 +272,10 @@ export class Engine {
       }
       // Apply tier visibility so locked sections show their marker.
       this.scene.setLuxuryTier(this.game.getLuxuryTier());
+      // Now that the demo door is in the registry (or NOT, for a
+      // saved game where it was sold), rebuild the front wall so it
+      // has its gaps in the right places.
+      this.scene.rebuildFrontWall(this.frontWallDoorXs());
     });
     // Let the Game read counts of placed sinks/dishwashers when scaling
     // the dish-wash interval.
@@ -300,7 +307,15 @@ export class Engine {
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     buildMenu.seatMarkers = this.seatMarkers;
-    buildMenu.onDoorPlaced = (model) => this.scene.attachDoorPanel(model);
+    buildMenu.onDoorPlaced = (model) => {
+      this.scene.attachDoorPanel(model);
+      // Door event invalidates the front-wall layout — rebuild from
+      // whatever's now in the registry.
+      this.scene.rebuildFrontWall(this.frontWallDoorXs());
+    };
+    buildMenu.onDoorRemoved = () => {
+      this.scene.rebuildFrontWall(this.frontWallDoorXs());
+    };
     buildMenu.onStovePlaced = (model) => this.scene.alignStoveFlameToStove(model);
     buildMenu.onLampPlaced = (model) => this.scene.registerLamp(model);
     buildMenu.onLampRemoved = (model) => this.scene.unregisterLamp(model);
@@ -434,6 +449,17 @@ export class Engine {
       });
     }
     this.statusBubbles.update(entries);
+  }
+
+  /** Current X-coords of doors sitting on the front wall (z=5.5). The
+   * scene rebuilds its front-wall geometry from this list, so each
+   * door visibly punches a 1-tile gap with a lintel above. */
+  private frontWallDoorXs(): number[] {
+    const out: number[] = [];
+    for (const it of this.registry.snapshotItems()) {
+      if (it.defId === "door" && Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
+    }
+    return out;
   }
 
   /** Wipe the active save slot and reload. Asks for confirmation since
