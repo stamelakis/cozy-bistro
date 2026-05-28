@@ -53,10 +53,10 @@ export class PedestrianSpawner {
     for (let i = this.people.length - 1; i >= 0; i -= 1) {
       const p = this.people[i];
       p.character.groundPos.x += p.dir * PEDESTRIAN_SPEED * dt;
-      // CharacterLoader now pre-rotates GLB children -π/2 around Y so
-      // facingY=0 reliably maps to -Z (matches the staff/guest atan2
-      // convention). Eastbound walkers face +X → facingY = π/2.
-      p.character.facingY = p.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      // GLBs face +X by default, so a pedestrian walking east (+X)
+      // wants no rotation (facingY = 0) and walking west (-X) wants
+      // a 180° flip (facingY = π).
+      p.character.facingY = p.dir > 0 ? 0 : Math.PI;
       const x = p.character.groundPos.x;
       if (x > PAVEMENT_X_RANGE + 1 || x < -PAVEMENT_X_RANGE - 1) {
         this.scene.remove(p.character.root);
@@ -83,9 +83,8 @@ export class PedestrianSpawner {
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(startX, z),
-        // Match update() — facingY=π/2 is "facing +X" after the
-        // CharacterLoader child-rotation correction.
-        facingY: dir > 0 ? Math.PI / 2 : -Math.PI / 2,
+        // Match update() — GLB faces +X, so east = 0, west = π.
+        facingY: dir > 0 ? 0 : Math.PI,
         action: "walk",
         phase: Math.random() * 5,
       };

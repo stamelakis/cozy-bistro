@@ -394,7 +394,12 @@ export class StaffRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    a.character.facingY = Math.atan2(dx, -dz);
+    // Character GLBs are authored with "front" pointing +X. For the
+    // visible front to align with the movement direction we need
+    // rotation θ such that R_y(θ) * (+X) = (dx, 0, dz), i.e.
+    // θ = atan2(-dz, dx). Using the older atan2(dx, -dz) produced
+    // crab-walking (visible 90° off from motion).
+    a.character.facingY = Math.atan2(-dz, dx);
     // Sanity logging — fires occasionally during an actual walk so we can
     // confirm in DevTools that groundPos IS being mutated. If you ever
     // see these lines but the chef still looks frozen in 3D, the

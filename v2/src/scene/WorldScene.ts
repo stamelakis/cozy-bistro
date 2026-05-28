@@ -659,9 +659,11 @@ export class WorldScene {
     // Matches the new starter homes in populateCharacters — further south
     // so the walking distance to the kitchen line is large enough to read.
     const homeByRole: Record<"chef" | "waiter" | "errand", { x: number; z: number; facingY: number; action: CharacterAction }> = {
-      chef:   { x: -1.5, z: -1.0, facingY: 0,            action: "idle" },
-      waiter: { x:  1.5, z: -1.0, facingY: 0,            action: "idle" },
-      errand: { x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle" },
+      // facingY=π/2 → faces -Z (north, toward the kitchen line) under
+      // the corrected convention (GLB front is +X, formula atan2(-dz, dx)).
+      chef:   { x: -1.5, z: -1.0, facingY: Math.PI / 2, action: "idle" },
+      waiter: { x:  1.5, z: -1.0, facingY: Math.PI / 2, action: "idle" },
+      errand: { x:  3.5, z: -1.0, facingY: Math.PI / 2, action: "idle" },
     };
     const base = homeByRole[role];
     // Stagger each new hire 0.6 units further along the kitchen line.
@@ -696,9 +698,12 @@ export class WorldScene {
     // stove and the waiter ~2.5 from the pickup point — every ticket now
     // forces a clearly visible cross-kitchen trip.
     const staff: { id: string; x: number; z: number; facingY: number; action: CharacterAction }[] = [
-      { id: "chef",   x: -1.5, z: -1.0, facingY: 0,            action: "idle"  },
-      { id: "waiter", x:  1.5, z: -1.0, facingY: 0,            action: "idle"  },
-      { id: "errand", x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle"  },
+      // facingY=π/2 maps to -Z (north, toward the kitchen line) under
+      // the corrected formula. See spawnExtraStaff above for the same
+      // mapping when hiring extras.
+      { id: "chef",   x: -1.5, z: -1.0, facingY: Math.PI / 2, action: "idle"  },
+      { id: "waiter", x:  1.5, z: -1.0, facingY: Math.PI / 2, action: "idle"  },
+      { id: "errand", x:  3.5, z: -1.0, facingY: Math.PI / 2, action: "idle"  },
     ];
 
     // staffReady promise is created in the constructor (above) so any

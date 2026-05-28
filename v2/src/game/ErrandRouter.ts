@@ -305,8 +305,10 @@ export class ErrandRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // facingY=0 → -Z, π/2 → +X, π → +Z, -π/2 → -X. atan2(dx, -dz) maps.
-    a.character.facingY = Math.atan2(dx, -dz);
+    // GLBs face +X by default → rotation θ such that R_y(θ) * +X = (dx, 0, dz)
+    // is θ = atan2(-dz, dx). Old comment said atan2(dx, -dz); that was a
+    // 90° crab walk.
+    a.character.facingY = Math.atan2(-dz, dx);
   }
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {

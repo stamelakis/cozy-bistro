@@ -725,11 +725,14 @@ export class BuildMenu {
   }
 
   /** Find the registered wall (edge-placed item) closest to the cursor,
-   * returning its anchor + rotation so a wall-mounted item can snap
-   * onto it. Returns null if none is within maxDist. */
+   * returning a mount anchor + rotation for a wall-mounted item. Picks
+   * the FACE of the wall the cursor is hovering over, so a mirror can
+   * be mounted on either side of the same wall (the rotation flips
+   * 180° when the cursor crosses to the other side). Returns null if
+   * no wall is within maxDist. */
   private findNearestWall(x: number, z: number, maxDist: number): { x: number; z: number; rotY: number } | null {
     let bestDistSq = maxDist * maxDist;
-    let best: { x: number; z: number; rotY: number } | null = null;
+    let bestWall: { x: number; z: number; rotY: number } | null = null;
     for (const it of this.registry.snapshotItems()) {
       if (this.holdingUid && it.uid === this.holdingUid) continue;
       const itDef = furnitureCatalog.find((d) => d.id === it.defId);
@@ -738,10 +741,30 @@ export class BuildMenu {
       const d2 = dx * dx + dz * dz;
       if (d2 < bestDistSq) {
         bestDistSq = d2;
-        best = { x: it.x, z: it.z, rotY: it.rotY };
+        bestWall = { x: it.x, z: it.z, rotY: it.rotY };
       }
     }
-    return best;
+    if (!bestWall) return null;
+    // Wall's two normals: rotY=0 wall extends along X with normals on
+    // ±Z; rotY=π/2 wall extends along Z with normals on ±X. Pick the
+    // side the cursor is on.
+    const wallNormalX = Math.sin(bestWall.rotY);
+    const wallNormalZ = Math.cos(bestWall.rotY);
+    const proj = (x - bestWall.x) * wallNormalX + (z - bestWall.z) * wallNormalZ;
+    const sign = proj >= 0 ? 1 : -1;
+    const mountNX = wallNormalX * sign;
+    const mountNZ = wallNormalZ * sign;
+    // Push the item a hair (~0.07 m) off the wall plane so its own
+    // depth doesn't z-fight with the wall.
+    const off = 0.07;
+    return {
+      x: bestWall.x + mountNX * off,
+      z: bestWall.z + mountNZ * off,
+      // Item's GLB front is +X; rotate so it faces the same way as
+      // the mount normal. atan2(-nz, nx) is the inverse of the
+      // R_y(θ) * +X = (nx, 0, nz) used elsewhere.
+      rotY: Math.atan2(-mountNZ, mountNX),
+    };
   }
 
   /** Snap a raw cursor position to the nearest grid edge for "edge"

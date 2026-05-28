@@ -46,20 +46,16 @@ export class CharacterLoader {
     const root = await this.modelLoader.load(`assets/characters/${characterId}.glb`);
     this.patchMaterials(root, characterId);
     this.computeNormalsIfMissing(root);
-    // The TripoSR-generated GLBs ship with their "front" facing +X
-    // (east), but the entire codebase treats facingY=0 as "facing -Z"
-    // (see the StaffRouter / GuestSpawner / ErrandRouter atan2 comments).
-    // Without correcting this, every walking character moved in one
-    // direction while looking 90° off — what the user saw as "crab
-    // walking sideways". Rotate the direct children -π/2 around Y so
-    // the model's visible front aligns with -Z and the existing
-    // atan2-based facing formula produces the right pose.
-    for (const child of root.children) {
-      child.rotation.y -= Math.PI / 2;
-    }
     // Scale FIRST so bbox computation reflects the rendered size, THEN
     // lift so the (scaled) feet land at y=0. Doing this in the other
     // order leaves the model partially sunk into the floor.
+    //
+    // Orientation note: previous commit tried a -π/2 child rotation to
+    // "fix" crab walking, but that ended up rotating some characters
+    // by the WRONG axis and breaking guests + the helper. The actual
+    // fix lives in the routers' moveActor functions (formula change to
+    // atan2(-dz, dx)) and PedestrianSpawner — the GLB's authored
+    // forward stays +X and the formula compensates.
     root.scale.setScalar(this.characterScale);
     this.liftFeetToOrigin(root);
     return root;

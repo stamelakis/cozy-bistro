@@ -124,14 +124,21 @@ const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   // For a table anchored at (0.5, 1.5), the resulting chair world
   // coords are (0, 0), (2, 1), (1, 3), (-1, 2) — all integer cell
   // centers.
-  // Top-left chair: facing +Z (toward table).
-  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.5, dz: -0.8 } },
-  // Top-right chair: facing -X.
-  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
-  // Bottom-right chair: facing -Z (facingY=0 baseline).
-  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.5, dz:  0.8 } },
-  // Bottom-left chair: facing +X.
-  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
+  // Facing values reflect the corrected convention: GLB front is +X by
+  // default, so for the visible front of a SEATED character to point
+  // toward the table:
+  //   face south (+Z, top chair) → facingY = -π/2
+  //   face west  (-X, right chair) → facingY = π
+  //   face north (-Z, bottom chair) → facingY = π/2
+  //   face east  (+X, left chair) → facingY = 0
+  // Top-left chair: looking south toward table.
+  { dx: -0.5, dz: -1.5, facingY: -Math.PI / 2, platePos: { dx: -0.5, dz: -0.8 } },
+  // Top-right chair: looking west toward table.
+  { dx:  1.5, dz: -0.5, facingY:  Math.PI,     platePos: { dx:  0.8, dz: -0.5 } },
+  // Bottom-right chair: looking north toward table.
+  { dx:  0.5, dz:  1.5, facingY:  Math.PI / 2, platePos: { dx:  0.5, dz:  0.8 } },
+  // Bottom-left chair: looking east toward table.
+  { dx: -1.5, dz:  0.5, facingY:  0,           platePos: { dx: -0.8, dz:  0.5 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
@@ -233,12 +240,12 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/kitchenMicrowave.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80 },
   { id: "fridge",         name: "Fridge",          category: "counter",
     modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 360,
-    stockCapacity: 4 },
+    stockCapacity: 2 },
   // Walk-in is a "room" — actually 2×2 tiles and stretched tall. Holds
-  // a lot more stock than a standard upright fridge.
+  // about three regular fridges' worth of stock.
   { id: "fridge-large",   name: "Walk-in Fridge",  category: "counter",
     modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 2, depth: 2 }, cost: 540,
-    targetHeight: 2.2, stockCapacity: 12 },
+    targetHeight: 2.2, stockCapacity: 6 },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90 },
   { id: "coffee-machine", name: "Coffee Machine",  category: "counter",
@@ -257,10 +264,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120 },
   { id: "fridge-built-in", name: "Built-in Fridge", category: "counter",
     modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 380,
-    stockCapacity: 5 },
+    stockCapacity: 3 },
   { id: "fridge-small",   name: "Mini Fridge",     category: "counter",
     modelPath: "assets/kenney/kitchenFridgeSmall.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180,
-    stockCapacity: 2 },
+    stockCapacity: 1 },
   { id: "counter-drawer", name: "Drawer Counter",  category: "counter",
     modelPath: "assets/kenney/kitchenCabinetDrawer.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 110 },
 
