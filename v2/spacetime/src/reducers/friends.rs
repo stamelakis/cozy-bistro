@@ -1,6 +1,6 @@
 //! Friend requests + friendship management + co-ownership.
 
-use spacetimedb::{reducer, ReducerContext, Identity, Timestamp, Table};
+use spacetimedb::{reducer, ReducerContext, Identity, Table};
 use crate::tables::{
     friend_request, friendship, co_owner, restaurant, player,
     FriendRequest, Friendship, CoOwner,
@@ -47,14 +47,17 @@ pub fn respond_friend_request(ctx: &ReducerContext, request_id: u64, accept: boo
     if req.status != "pending" {
         return Err("Request already resolved".into());
     }
+    // Capture fields we'll need after the update, then consume req.
+    let from_player = req.from_player;
+    let to_player = req.to_player;
     let new_status = if accept { "accepted" } else { "declined" };
     ctx.db.friend_request().id().update(FriendRequest {
         status: new_status.into(),
         resolved_at: Some(ctx.timestamp),
-        ..req.clone()
+        ..req
     });
     if accept {
-        let (a, b) = canonical_pair(req.from_player, req.to_player);
+        let (a, b) = canonical_pair(from_player, to_player);
         ctx.db.friendship().insert(Friendship {
             id: 0, // auto_inc
             player_a: a,
@@ -130,6 +133,3 @@ fn are_friends(ctx: &ReducerContext, a: Identity, b: Identity) -> bool {
     ctx.db.friendship().player_a().filter(pa).any(|f| f.player_b == pb)
 }
 
-// Silence the unused-Timestamp import warning if we end up never using it
-// directly here.
-const _: Option<Timestamp> = None;

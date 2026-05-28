@@ -55,9 +55,10 @@ pub fn delete_restaurant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(),
 
 /// Upsert the save snapshot for a restaurant. The caller must be the
 /// owner or a co-owner. `data` is the JSON-serialized SaveGameState
-/// blob the client builds.
+/// blob the client builds. (Reducer name distinct from the table
+/// accessor so they don't shadow each other.)
 #[reducer]
-pub fn save_snapshot(
+pub fn save_restaurant_snapshot(
     ctx: &ReducerContext,
     restaurant_id: u64,
     data: String,

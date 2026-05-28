@@ -10,6 +10,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 5180"
   },
   "dependencies": {
+    "spacetimedb": "^2.3.0",
     "three": "^0.169.0"
   },
   "devDependencies": {
