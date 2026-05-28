@@ -119,6 +119,13 @@ export class BuildMenu {
   /** Optional callback fired when the player places a stove — Engine
    * pins the cooking flame to the new stove's measured top. */
   onStovePlaced?: (model: THREE.Object3D) => void;
+  /** Fired whenever the player places (or restores) a lamp — Engine
+   * forwards to WorldScene.registerLamp so the new lamp picks up the
+   * night-cycle illumination. */
+  onLampPlaced?: (model: THREE.Object3D) => void;
+  /** Fired whenever a lamp is sold or undone, so the same registration
+   * can be torn down. */
+  onLampRemoved?: (model: THREE.Object3D) => void;
 
   constructor(
     parent: HTMLElement,
@@ -926,11 +933,16 @@ export class BuildMenu {
         return;
       }
       const snapshot = { defId: item.defId, x: item.x, z: item.z, rotY: item.rotY };
+      // Capture the model BEFORE removeAtByUid drops it from the scene
+      // so we can tear down its lamp registration if applicable.
+      const itemModel = item.model;
+      const itemDef = furnitureCatalog.find((d) => d.id === item.defId);
       const removed = this.registry.removeAtByUid(item.uid);
       if (!removed) {
         this.flashRoot("Nothing to sell there", "error");
         return;
       }
+      if (itemDef?.category === "lamp") this.onLampRemoved?.(itemModel);
       this.game.economy.earnMoney(removed.refund, "payment");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
       this.flashRoot(`Sold for $${removed.refund}`, "success");
@@ -1018,6 +1030,7 @@ export class BuildMenu {
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
       if (def.id === "door") this.onDoorPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
+      if (def.category === "lamp") this.onLampPlaced?.(solid);
     });
     if (plan.quality === "snap-perfect") {
       this.flashRoot("Perfect placement!", "success");

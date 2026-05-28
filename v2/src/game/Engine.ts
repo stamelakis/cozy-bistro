@@ -3,6 +3,7 @@ import { IsoCamera } from "../scene/IsoCamera";
 import { WorldScene } from "../scene/WorldScene";
 import { Game } from "./Game";
 import { GuestSpawner } from "./GuestSpawner";
+import { getFurnitureDef } from "../data/furnitureCatalog";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
@@ -242,6 +243,13 @@ export class Engine {
             const d = dx * dx + dz * dz;
             if (d < bestDist) { bestDist = d; primaryStove = it.model; }
           }
+          // Re-register lamps so a freshly-loaded save still gets the
+          // night illumination on every placed lamp without the player
+          // having to move them. Category lookup beats id-by-id checks
+          // because new lamp variants in the catalog get picked up for
+          // free.
+          const def = getFurnitureDef(it.defId);
+          if (def?.category === "lamp") this.scene.registerLamp(it.model);
         }
         if (primaryStove) this.scene.alignStoveFlameToStove(primaryStove);
       });
@@ -294,6 +302,8 @@ export class Engine {
     buildMenu.seatMarkers = this.seatMarkers;
     buildMenu.onDoorPlaced = (model) => this.scene.attachDoorPanel(model);
     buildMenu.onStovePlaced = (model) => this.scene.alignStoveFlameToStove(model);
+    buildMenu.onLampPlaced = (model) => this.scene.registerLamp(model);
+    buildMenu.onLampRemoved = (model) => this.scene.unregisterLamp(model);
 
     // Spawner + routers + per-event hooks. Wait until WorldScene finishes
     // loading staff characters, then construct. Critically, all "common"

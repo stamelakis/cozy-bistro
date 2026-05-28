@@ -242,6 +242,80 @@ export class WorldScene {
     this.threeScene.add(this.fillLight);
   }
 
+  // === Placed lamps (lighting items registered via registerLamp) ===
+  // Each entry holds the placed model and the warm point-light child
+  // we attach to it. updateLamps() walks the list every frame and
+  // ramps the intensity with how dark the sky is. Cap is enforced
+  // implicitly by the player's furniture budget.
+  private placedLamps: { model: THREE.Object3D; light: THREE.PointLight; bulb: THREE.Mesh }[] = [];
+  /** Most recently computed nightAmount in [0, 1] — used so a freshly
+   * registered lamp picks up the current darkness immediately, not on
+   * the next applyDayNight tick. */
+  private currentNightAmount = 0;
+
+  /** Attach a warm point light + small emissive bulb to a placed lamp
+   * model so it actually illuminates the area at night. Returns silently
+   * if the same model is already registered.
+   *
+   * Wall sconces (placement="wall") are anchored at chest height by
+   * BuildMenu; floor / table / ceiling lamps land with feet at y=0,
+   * so we put the light a meter and a half above the model's local
+   * origin — splits the difference and reads as "bulb-level" for all
+   * lamp types without needing per-id offsets. */
+  registerLamp(model: THREE.Object3D): void {
+    if (this.placedLamps.some((lp) => lp.model === model)) return;
+    const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
+    light.position.set(0, 1.5, 0);
+    light.castShadow = false; // shadow maps for many lamps tank perf
+    model.add(light);
+    // A tiny emissive sphere makes the bulb itself visibly "lit" at
+    // night even when the player can't see the cone of illumination.
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 10, 10),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff4cc, emissive: 0xfff4cc, emissiveIntensity: 0,
+        transparent: true, opacity: 0.0,
+      }),
+    );
+    bulb.position.set(0, 1.5, 0);
+    model.add(bulb);
+    this.placedLamps.push({ model, light, bulb });
+    // Apply current darkness immediately so newly placed lamps come on
+    // at the right brightness instead of waiting a frame.
+    this.applyLampIntensity(light, bulb, this.currentNightAmount);
+  }
+
+  /** Remove a lamp from the active list (sell mode, undo, etc.). The
+   * point light is disposed; the bulb mesh is removed too. */
+  unregisterLamp(model: THREE.Object3D): void {
+    const i = this.placedLamps.findIndex((lp) => lp.model === model);
+    if (i < 0) return;
+    const lp = this.placedLamps[i];
+    model.remove(lp.light);
+    model.remove(lp.bulb);
+    lp.bulb.geometry.dispose();
+    (lp.bulb.material as THREE.Material).dispose();
+    this.placedLamps.splice(i, 1);
+  }
+
+  /** Walk every registered lamp and ramp its intensity + bulb emissive
+   * with the current darkness. */
+  private updateLamps(nightAmount: number): void {
+    this.currentNightAmount = nightAmount;
+    for (const lp of this.placedLamps) {
+      this.applyLampIntensity(lp.light, lp.bulb, nightAmount);
+    }
+  }
+  private applyLampIntensity(light: THREE.PointLight, bulb: THREE.Mesh, nightAmount: number): void {
+    // Up to 1.8 intensity at full night — bright enough to read the
+    // floor under each lamp but not so bright that an indoor scene
+    // turns into floodlit daylight when the player drops a dozen lamps.
+    light.intensity = nightAmount * 1.8;
+    const bulbMat = bulb.material as THREE.MeshStandardMaterial;
+    bulbMat.emissiveIntensity = nightAmount * 1.4;
+    bulbMat.opacity = Math.min(1, nightAmount * 1.5);
+  }
+
   /** Drive lighting + sky tint by time of day. progress is 0..1 from
    * dawn through dusk into night. Engine ticks this every frame. */
   applyDayNight(progress: number): { skyColor: number } {
@@ -273,6 +347,16 @@ export class WorldScene {
     else if (progress < 0.85) skyColor = 0xd8c4a3; // day
     else if (progress < 0.95) skyColor = mixColors(0xd8c4a3, 0xb27a52, (progress - 0.85) / 0.1); // day → dusk
     else skyColor = mixColors(0xb27a52, 0x1f2a48, (progress - 0.95) / 0.05); // dusk → night
+    // Lamps come on as the sky darkens. The ramp matches the dusk
+    // window (0.85 → 0.95) so bulbs visibly warm up over a couple
+    // sim-seconds rather than snapping on. Stays at full intensity
+    // through the deep-night portion and through the dawn fade-in.
+    let nightAmount: number;
+    if (progress < 0.1) nightAmount = 1 - progress / 0.1;        // dawn — dim out
+    else if (progress < 0.85) nightAmount = 0;                    // day — off
+    else if (progress < 0.95) nightAmount = (progress - 0.85) / 0.1; // dusk — fade in
+    else nightAmount = 1;                                          // night — full
+    this.updateLamps(nightAmount);
     return { skyColor };
   }
 
