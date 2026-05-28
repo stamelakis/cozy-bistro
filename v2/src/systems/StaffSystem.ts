@@ -29,18 +29,11 @@ export interface SalaryTickResult {
  * but not overwhelming bump and the player has a clear endpoint. */
 export const STAFF_UPGRADE_MAX = 5;
 
-/** Training duration in IN-GAME seconds. One in-game day is 720 real
- * seconds (12 real minutes), 24 in-game hours → 30 real seconds per
- * game-hour. Doubles per level:
- *   L1: 3h game = 90s real (1.5 min at 1×)
- *   L2: 6h game = 180s real
- *   L3: 12h game = 360s real
- *   L4: 24h game = 720s real (1 full day)
- *   L5: 48h game = 1440s real (2 full days)
- *
- * Indexed by the TARGET level (the one the trainee is studying
- * toward). targetLevel 1 = the first upgrade purchase. */
-const GAME_SECONDS_PER_HOUR = 30;
+/** Training duration in REAL hours, doubling per target level. L1 is
+ * "set it and come back in 3 hours" — the trainee's deadline is a
+ * wall-clock timestamp (Date.now() + duration_ms), so closing the
+ * tab or fast-forwarding game time don't accelerate it. Indexed by
+ * the TARGET level (1..STAFF_UPGRADE_MAX). */
 const TRAINING_HOURS_BY_TARGET_LEVEL: Record<number, number> = {
   1: 3,
   2: 6,
@@ -48,12 +41,13 @@ const TRAINING_HOURS_BY_TARGET_LEVEL: Record<number, number> = {
   4: 24,
   5: 48,
 };
-export function getTrainingDurationSeconds(targetLevel: number): number {
-  const hours = TRAINING_HOURS_BY_TARGET_LEVEL[targetLevel] ?? 3;
-  return hours * GAME_SECONDS_PER_HOUR;
-}
 export function getTrainingDurationHours(targetLevel: number): number {
   return TRAINING_HOURS_BY_TARGET_LEVEL[targetLevel] ?? 3;
+}
+/** Training duration in milliseconds — what startMemberTraining adds
+ * to Date.now() to compute the deadline. */
+export function getTrainingDurationMs(targetLevel: number): number {
+  return getTrainingDurationHours(targetLevel) * 3600 * 1000;
 }
 
 export class StaffSystem {
@@ -177,13 +171,18 @@ export class StaffSystem {
   }
 
   /** Cost to move THIS member from their current level to the next.
-   * Doubled from the original linear ramp now that training also
-   * takes time: 500 × next level. Full progression: 500 / 1k / 1.5k /
-   * 2k / 2.5k = $7500 total per member. */
+   * Quadruples per level — late-game training is a serious
+   * investment. Base $500, so the full ladder is:
+   *   L0 → L1: $500
+   *   L1 → L2: $2,000
+   *   L2 → L3: $8,000
+   *   L3 → L4: $32,000
+   *   L4 → L5: $128,000
+   *   Total: $170,500 to fully max one member. */
   getMemberUpgradeCost(id: string): number {
     const level = this.getMemberUpgradeLevel(id);
     if (level >= STAFF_UPGRADE_MAX) return 0;
-    return 500 * (level + 1);
+    return 500 * Math.pow(4, level);
   }
 
   /** True if the member is currently training toward their next
@@ -206,21 +205,24 @@ export class StaffSystem {
     return this.getCurrentlyTrainingMemberId() !== null;
   }
 
-  /** Total playtime (seconds) at which the current training will
-   * complete, or null when the member isn't training. */
+  /** Wall-clock timestamp (ms since epoch) at which the current
+   * training will complete, or null when the member isn't training.
+   * Lives on the wall clock so closing the tab, pausing, or fast-
+   * forwarding in-game time don't shorten the deadline. */
   getMemberTrainingCompletesAt(id: string): number | null {
     const m = this.getMember(id);
     return typeof m?.trainingCompletesAt === "number" ? m.trainingCompletesAt : null;
   }
 
-  /** Start training one member toward their next level. Returns true
-   * when the timer actually started. Caller handles money. */
-  startMemberTraining(id: string, totalPlaySeconds: number): boolean {
+  /** Start training one member toward their next level. Sets the
+   * deadline to {@link Date.now} + duration in MS. Returns true when
+   * the timer actually started. */
+  startMemberTraining(id: string): boolean {
     const m = this.getMember(id);
     if (!m || m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
     if (typeof m.trainingCompletesAt === "number") return false; // already training
     const targetLevel = m.upgradeLevel + 1;
-    m.trainingCompletesAt = totalPlaySeconds + getTrainingDurationSeconds(targetLevel);
+    m.trainingCompletesAt = Date.now() + getTrainingDurationMs(targetLevel);
     return true;
   }
 
@@ -233,15 +235,17 @@ export class StaffSystem {
     return true;
   }
 
-  /** Advance every member's training clock. Completes any whose
-   * deadline has passed (their level ticks up). Called once per Game
-   * tick. Returns the list of members who just completed a level so
-   * the caller can pop UI confirmations. */
-  tickTraining(totalPlaySeconds: number): HiredStaffMember[] {
+  /** Advance every member's training clock against the wall clock.
+   * Completes any whose Date.now() deadline has passed (their level
+   * ticks up). Called once per Game tick. Returns the list of
+   * members who just completed a level so the caller can pop UI
+   * confirmations. */
+  tickTraining(): HiredStaffMember[] {
     const completed: HiredStaffMember[] = [];
+    const now = Date.now();
     for (const m of this.members) {
       if (typeof m.trainingCompletesAt !== "number") continue;
-      if (totalPlaySeconds >= m.trainingCompletesAt) {
+      if (now >= m.trainingCompletesAt) {
         m.upgradeLevel = Math.min(STAFF_UPGRADE_MAX, m.upgradeLevel + 1);
         delete m.trainingCompletesAt;
         completed.push(m);

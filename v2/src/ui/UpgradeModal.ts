@@ -361,7 +361,7 @@ export class UpgradeModal {
         detail.innerHTML =
           `<span style="opacity:0.7">Now:</span> ${meta.current(level)} ` +
           `&nbsp; · &nbsp; ` +
-          `<span style="color:#a8d4f0">📚 Training to L${targetLevel} — ${hours}h total, ${formatHM(remaining)} left</span>`;
+          `<span style="color:#a8d4f0">📚 Training to L${targetLevel} — ${hours}h real, ${formatHM(remaining)} left</span>`;
       } else {
         const cost = this.game.getMemberUpgradeCost(m.id);
         const requiredTier = this.game.getMemberUpgradeRequiredTier(m.id);
@@ -373,18 +373,19 @@ export class UpgradeModal {
         // has one chair, you can train only one staff member at a time.
         const otherTrainingId = this.game.getCurrentlyTrainingMemberId();
         const someoneElseTraining = otherTrainingId !== null && otherTrainingId !== m.id;
+        const costLabel = compactDollars(cost);
         if (tierLocked) {
-          btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
+          btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">${costLabel} · ${hours}h</span>`;
           btn.title = `Requires restaurant tier ${requiredTier} (you're on ${playerTier})`;
         } else if (someoneElseTraining) {
           const other = this.game.staff.getMember(otherTrainingId!);
-          btn.innerHTML = `📚 Busy<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
+          btn.innerHTML = `📚 Busy<br><span style="font-size:10px;opacity:0.85">${costLabel} · ${hours}h</span>`;
           btn.title = other
             ? `${other.name} is currently training — only one staff member at a time`
             : "Someone else is currently training";
         } else {
-          btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
-          btn.title = `Spend $${cost} and ${hours} in-game hours to reach L${targetLevel}`;
+          btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">${costLabel} · ${hours}h</span>`;
+          btn.title = `Spend $${cost.toLocaleString()} and wait ${hours} real hours to reach L${targetLevel}`;
         }
         const can = this.game.canUpgradeMember(m.id);
         btn.disabled = !can;
@@ -404,24 +405,39 @@ export class UpgradeModal {
       fontSize: "11px", lineHeight: "1.5", opacity: "0.85",
     } as Partial<CSSStyleDeclaration>);
     footer.innerHTML =
-      `Training affects <b>only that person</b> — promote your stars and ` +
-      `hire more rookies as you grow. The Errand Helper's training raises ` +
-      `how much they can bring back in a single auto-shop trip; the auto-shop ` +
-      `uses the best-trained helper on the team.`;
+      `Training affects <b>only that person</b>. Costs <b>4× per level</b> ` +
+      `($500 / $2k / $8k / $32k / $128k) and runs on a <b>real-time</b> clock ` +
+      `(3h / 6h / 12h / 24h / 48h) — closing the tab, pausing, or fast-forwarding ` +
+      `in-game time won't speed it up. Only <b>one</b> staff member can train at ` +
+      `a time. The Errand Helper's training raises the auto-shop's carry cap.`;
     this.body.appendChild(footer);
   }
 
   private pretty(id: string): string { return id.replace(/[-_]/g, " "); }
 }
 
-/** Format a duration in IN-GAME seconds as "Xh Ym" (game hours +
- * minutes). One in-game day is 720 real seconds = 24 in-game hours,
- * so 1 game hour = 30 seconds. */
-function formatHM(gameSeconds: number): string {
-  const gameHours = gameSeconds / 30; // 30 real sec per game hour
-  const wholeHours = Math.floor(gameHours);
-  const minutes = Math.round((gameHours - wholeHours) * 60);
-  if (wholeHours === 0) return `${minutes}m`;
-  if (minutes === 0) return `${wholeHours}h`;
-  return `${wholeHours}h ${minutes}m`;
+/** Compact currency: $500, $2k, $8k, $32k, $128k. End-game training
+ * costs blow past 5 digits so the full $128,000 doesn't fit on the
+ * Train button — abbreviate above $1000. */
+function compactDollars(amount: number): string {
+  if (amount < 1000) return `$${amount}`;
+  if (amount < 1_000_000) {
+    const k = amount / 1000;
+    return Number.isInteger(k) ? `$${k}k` : `$${k.toFixed(1)}k`;
+  }
+  const m = amount / 1_000_000;
+  return Number.isInteger(m) ? `$${m}M` : `$${m.toFixed(1)}M`;
+}
+
+/** Format a duration in REAL seconds as "Xh Ym" / "Xm Ys". Training
+ * deadlines are wall-clock now, so this is straightforward
+ * seconds → hours/minutes/seconds. */
+function formatHM(realSeconds: number): string {
+  const totalMinutes = Math.floor(realSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes - hours * 60;
+  const seconds = Math.max(0, Math.round(realSeconds - totalMinutes * 60));
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  return `${seconds}s`;
 }

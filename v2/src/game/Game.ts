@@ -249,10 +249,12 @@ export class Game {
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
     }
-    // Tick any in-flight staff training. Each completed level fires a
-    // floating-text confirmation so the player notices the bump even
-    // when their attention is elsewhere on the canvas.
-    const completed = this.staff.tickTraining(this.day.getTotalPlaySeconds());
+    // Tick any in-flight staff training. Deadlines are wall-clock so
+    // we always pass Date.now() through inside tickTraining; this
+    // call just polls. Each completed level fires a floating-text
+    // confirmation so the player notices the bump even when their
+    // attention is elsewhere on the canvas.
+    const completed = this.staff.tickTraining();
     for (const m of completed) {
       this.onTrainingCompleted?.(m);
     }
@@ -483,26 +485,26 @@ export class Game {
     return this.staff.getCurrentlyTrainingMemberId();
   }
   /** Start a training run on a member. Money is debited up front;
-   * the level ticks up automatically once the in-game timer (driven
-   * from {@link DayCycleSystem.totalPlaySeconds}) crosses the
-   * deadline. */
+   * the level ticks up automatically when the wall-clock deadline
+   * passes — closing the tab, pausing, or fast-forwarding in-game
+   * time don't speed it up. */
   upgradeMember(id: string): boolean {
     if (!this.canUpgradeMember(id)) return false;
     const cost = this.staff.getMemberUpgradeCost(id);
     if (!this.economy.spendMoney(cost, "unlock")) return false;
-    return this.staff.startMemberTraining(id, this.day.getTotalPlaySeconds());
+    return this.staff.startMemberTraining(id);
   }
   /** True if the member is currently mid-training. UI uses this to
    * disable the Train button and show a countdown instead. */
   isMemberTraining(id: string): boolean {
     return this.staff.isMemberTraining(id);
   }
-  /** Seconds of in-game time remaining on this member's training,
-   * or null if they're not training. */
+  /** Real-time seconds remaining on this member's training, or null
+   * if they're not training. */
   getMemberTrainingRemainingSeconds(id: string): number | null {
     const target = this.staff.getMemberTrainingCompletesAt(id);
     if (target === null) return null;
-    return Math.max(0, target - this.day.getTotalPlaySeconds());
+    return Math.max(0, (target - Date.now()) / 1000);
   }
   /** Roll a member back one training level. Used by the dev-tools
    * "Manage Upgrades" window. Doesn't refund the money — the dev
