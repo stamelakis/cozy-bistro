@@ -54,7 +54,13 @@ interface StaffActor {
   heldPlate?: THREE.Mesh;
 }
 
-const WALK_SPEED = 2.2; // staff move faster than guests for visibility
+// Slower than guests. The kitchen stations are clustered close together
+// (~0.6 units from chef home to the stove waypoint), so at the old 2.2
+// the entire walk took 0.3s — players couldn't catch them mid-stride.
+// 1.2 stretches a typical kitchen walk to ~0.5s, which combined with
+// the louder walk bob in CharacterAnimator makes the chef visibly
+// shuffle between tasks instead of looking idle.
+const WALK_SPEED = 1.2;
 const ARRIVAL_THRESHOLD = 0.18;
 
 /** Shared geometry/material so all waiters reuse the same allocation. */
@@ -190,6 +196,24 @@ export class StaffRouter {
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
     this.recoverStalledTickets(dt);
+    this.logHeartbeatIfDue(dt);
+  }
+
+  /** Every 5 sim-seconds, dump one line summarizing what the kitchen is
+   * actually doing right now. Catches the case where a chef is stuck in
+   * a state (e.g. "working" with no matching ticket) — they'd show as
+   * non-idle but never produce a ticket transition log. */
+  private heartbeatElapsed = 0;
+  private logHeartbeatIfDue(dt: number): void {
+    this.heartbeatElapsed += dt;
+    if (this.heartbeatElapsed < 5) return;
+    this.heartbeatElapsed = 0;
+    const chefStates = this.chefs.map((c) => c.state).join("/");
+    const waiterStates = this.waiters.map((w) => w.state).join("/");
+    const ticketStates: Record<string, number> = {};
+    for (const t of this.tickets) ticketStates[t.state] = (ticketStates[t.state] ?? 0) + 1;
+    const ticketSummary = Object.entries(ticketStates).map(([s, n]) => `${n} ${s}`).join(", ") || "none";
+    console.log(`[Router/💓] chefs:[${chefStates}] waiters:[${waiterStates}] tickets:{${ticketSummary}}`);
   }
 
   /** Re-queue tickets that are stuck in a transient state because the

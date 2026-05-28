@@ -87,19 +87,23 @@ export class CharacterAnimator {
         break;
       }
       case "walk": {
-        // Bob up/down faster than breathing — reads as footstep cadence.
-        const bob = Math.abs(Math.sin(t * 6.0)) * 0.08;
+        // Bigger bob + lean than before — kitchen walks are short and we
+        // need them to read instantly. Reads as footstep cadence.
+        const bob = Math.abs(Math.sin(t * 6.5)) * 0.16;
         c.root.position.y += bob;
-        // Lean side-to-side slightly with each step.
-        c.root.rotation.z = Math.sin(t * 6.0) * 0.06;
+        c.root.rotation.z = Math.sin(t * 6.5) * 0.11;
+        // Slight forward lean so they look purposeful, not strolling.
+        c.root.rotation.x = 0.05;
         break;
       }
       case "carry": {
-        // Same as walk + small forward pitch (carrying something heavy/forward).
-        const bob = Math.abs(Math.sin(t * 5.5)) * 0.06;
+        // Cooking / carrying pose. Add a clear side-to-side sway + small
+        // bob so a stationary chef at the stove still looks busy ("stirring")
+        // rather than frozen in place.
+        const bob = Math.abs(Math.sin(t * 4.5)) * 0.06;
         c.root.position.y += bob;
-        c.root.rotation.z = Math.sin(t * 5.5) * 0.04;
-        c.root.rotation.x = 0.08; // forward pitch
+        c.root.rotation.z = Math.sin(t * 3.2) * 0.10; // sway L-R
+        c.root.rotation.x = 0.10 + Math.sin(t * 3.2) * 0.04; // pitch + small bob
         break;
       }
       case "sit": {
