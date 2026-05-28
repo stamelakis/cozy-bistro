@@ -140,6 +140,38 @@ export class FurnitureRegistry {
     return { defId: item.defId, refund };
   }
 
+  /** Direct setter for pose (used by undo / auto-arrange). Skips the
+   * occupied-cell check intentionally so a rollback can drop the item
+   * back where it was even if the player has placed something there
+   * since. */
+  setPose(uid: string, x: number, z: number, rotY: number): boolean {
+    const item = this.items.find((it) => it.uid === uid);
+    if (!item) return false;
+    item.x = x; item.z = z; item.rotY = rotY;
+    item.model.position.set(x, item.model.position.y, z);
+    item.model.rotation.y = rotY;
+    return true;
+  }
+
+  /** Remove a specific placed item by uid. Returns the def + refund value
+   * (mirrors removeAt) or null. Used by undo of a `place`. */
+  removeAtByUid(uid: string): { defId: string; refund: number } | null {
+    const idx = this.items.findIndex((it) => it.uid === uid);
+    if (idx < 0) return null;
+    const item = this.items[idx];
+    this.scene.remove(item.model);
+    this.items.splice(idx, 1);
+    const def = getFurnitureDef(item.defId);
+    return { defId: item.defId, refund: def?.cost ?? 0 };
+  }
+
+  /** Read-only snapshot of every placed item (used by BuildMenu auto-arrange
+   * to diff before/after). Models are included by reference so callers
+   * must not mutate them. */
+  snapshotItems(): readonly PlacedFurnitureItem[] {
+    return this.items;
+  }
+
   /** Move an existing item to a new cell. Returns true on success
    * (item exists, new cell is free or the same). */
   relocate(uid: string, x: number, z: number): boolean {
@@ -250,6 +282,73 @@ export class FurnitureRegistry {
       return it.uid;
     }
     return null;
+  }
+
+  /** Snap each placed chair to its nearest empty seat slot within range.
+   * Returns the count of chairs moved. Skips chairs already at a slot.
+   * Used by the BuildMenu "Auto-Arrange" button to fix up existing or
+   * saved restaurants so they line up with the new placement standard. */
+  autoArrangeChairs(range = 2.0): number {
+    let moved = 0;
+    // Snapshot of taken positions so we don't double-claim a slot in a
+    // single pass.
+    const claimed = new Set<string>();
+    // Existing chairs already at slots are auto-claimed so we don't kick
+    // them out.
+    for (const slot of this.getResolvedSeatSlots()) {
+      if (slot.chairUid) claimed.add(`${slot.tableUid}#${slot.slotIndex}`);
+    }
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "chair") continue;
+      // Skip chairs already correctly seated.
+      if (this.isChairAtAnySlot(it)) continue;
+      // Find nearest empty slot.
+      const target = this.findNearestEmptySlot(it.x, it.z, range, claimed);
+      if (!target) continue;
+      const newKey = `${target.tableUid}#${target.slotIndex}`;
+      it.x = target.x;
+      it.z = target.z;
+      it.rotY = target.facingY;
+      it.model.position.set(target.x, it.model.position.y, target.z);
+      it.model.rotation.y = target.facingY;
+      claimed.add(newKey);
+      moved += 1;
+    }
+    return moved;
+  }
+
+  /** Is this chair currently within tolerance of any of its tables' slots? */
+  private isChairAtAnySlot(chair: PlacedFurnitureItem): boolean {
+    const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
+    const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
+    for (const slot of this.getResolvedSeatSlots()) {
+      if (Math.abs(slot.x - chair.x) > TOL) continue;
+      if (Math.abs(slot.z - chair.z) > TOL) continue;
+      const dFacing = Math.abs(this.normalizeAngle(chair.rotY - slot.facingY));
+      if (dFacing <= FTOL) return true;
+    }
+    return false;
+  }
+
+  /** Find the closest empty (not in `claimed`) slot within range. */
+  private findNearestEmptySlot(
+    x: number,
+    z: number,
+    range: number,
+    claimed: Set<string>,
+  ): ResolvedSeatSlot | null {
+    let best: ResolvedSeatSlot | null = null;
+    let bestD2 = range * range;
+    for (const slot of this.getResolvedSeatSlots()) {
+      const key = `${slot.tableUid}#${slot.slotIndex}`;
+      if (claimed.has(key)) continue;
+      const dx = slot.x - x;
+      const dz = slot.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = slot; }
+    }
+    return best;
   }
 
   /** Internal: apply the table's rotation to a slot offset so a rotated

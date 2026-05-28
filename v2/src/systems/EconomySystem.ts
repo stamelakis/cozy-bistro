@@ -113,8 +113,15 @@ export class EconomySystem {
     }
   }
 
-  /** Restore economy state (daily totals + transaction log) from a save snapshot. Money is set separately by the scene. */
+  /** Restore economy state from a save snapshot. Includes money — the
+   * old 2D comment ("Money is set separately by the scene") referred to
+   * GameScene wiring that no longer exists in v2; without restoring money
+   * here the player's balance always resets to the constructor default
+   * on every page reload. */
   hydrate(save: SaveGameState | null | undefined): void {
+    if (typeof save?.money === "number" && Number.isFinite(save.money)) {
+      this.money = save.money;
+    }
     this.dailyRevenueTotal = save?.dailyRevenue ?? 0;
     this.dailyExpensesTotal = save?.dailyExpenses ?? 0;
     this.transactionLog = hydrateTransactionLogEntries(save?.transactionLog);

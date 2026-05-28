@@ -5,6 +5,14 @@ import type { Game } from "../game/Game";
 import type { FurnitureRegistry } from "../game/FurnitureRegistry";
 import { fitFurniture } from "../assets/fitFurniture";
 
+/** A single user action that can be undone. The BuildMenu records one of
+ * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
+type UndoEntry =
+  | { kind: "place"; uid: string; defId: string; refundCost: number }
+  | { kind: "sell"; defId: string; x: number; z: number; rotY: number; refundPaid: number }
+  | { kind: "move"; uid: string; fromX: number; fromZ: number; fromRotY: number }
+  | { kind: "auto-arrange"; moves: Array<{ uid: string; fromX: number; fromZ: number; fromRotY: number }> };
+
 /** Result of evaluating the current hover position for a placement preview.
  *
  * - "blocked": cell is occupied or otherwise invalid — show RED, don't allow click.
@@ -43,6 +51,10 @@ export class BuildMenu {
   private readonly canvas: HTMLCanvasElement;
   private readonly registry: FurnitureRegistry;
 
+  /** Past actions the player can undo. Capped at MAX_UNDO; oldest dropped. */
+  private undoStack: UndoEntry[] = [];
+  private static readonly MAX_UNDO = 5;
+  private undoBtn?: HTMLButtonElement;
   private placingDef: FurnitureDef | null = null;
   private preview: THREE.Object3D | null = null;
   private readonly raycaster = new THREE.Raycaster();
@@ -68,6 +80,8 @@ export class BuildMenu {
   /** uid of the item the player is currently moving (between the two
    * clicks of a move). null = not holding anything yet. */
   private holdingUid: string | null = null;
+  /** Original pose of the item being moved, for undo. */
+  private holdingFrom: { x: number; z: number; rotY: number } | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -219,6 +233,49 @@ export class BuildMenu {
     this.moveBtn = moveBtn;
     root.appendChild(actionRow);
 
+    // Auto-Arrange + Undo as a second pair of actions.
+    const actionRow2 = document.createElement("div");
+    Object.assign(actionRow2.style, {
+      display: "grid", gridTemplateColumns: "1fr 1fr",
+      gap: "4px", marginTop: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const autoBtn = document.createElement("button");
+    autoBtn.textContent = "AUTO-ARRANGE";
+    autoBtn.title = "Snap every chair to its nearest empty table seat slot";
+    Object.assign(autoBtn.style, {
+      padding: "6px 4px",
+      background: "rgba(140, 200, 140, 0.22)",
+      color: "#fff5dc",
+      border: "1px solid rgba(140, 200, 140, 0.5)",
+      borderRadius: "4px",
+      textAlign: "center",
+      cursor: "pointer",
+      fontSize: "11px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    autoBtn.onclick = () => this.runAutoArrange();
+    actionRow2.appendChild(autoBtn);
+
+    this.undoBtn = document.createElement("button");
+    this.undoBtn.textContent = "↶ UNDO";
+    this.undoBtn.title = "Undo the last build action (up to 5)";
+    Object.assign(this.undoBtn.style, {
+      padding: "6px 4px",
+      background: "rgba(200, 180, 120, 0.22)",
+      color: "#fff5dc",
+      border: "1px solid rgba(200, 180, 120, 0.5)",
+      borderRadius: "4px",
+      textAlign: "center",
+      cursor: "pointer",
+      fontSize: "11px",
+      fontWeight: "600",
+      opacity: "0.5", // disabled until something is on the stack
+    } as Partial<CSSStyleDeclaration>);
+    this.undoBtn.disabled = true;
+    this.undoBtn.onclick = () => this.runUndo();
+    actionRow2.appendChild(this.undoBtn);
+    root.appendChild(actionRow2);
+
     const hint = document.createElement("div");
     hint.innerHTML = `Click item → click floor to place. R = rotate. Esc = cancel.<br/>
       Preview tints: <span style="color:#70e070">green</span> = perfect (chair snapped to a table seat),
@@ -311,6 +368,94 @@ export class BuildMenu {
       this.preview = null;
     }
     this.placingDef = null;
+  }
+
+  /** Record an undoable action. Drops the oldest if over MAX_UNDO. */
+  private pushUndo(entry: UndoEntry): void {
+    this.undoStack.push(entry);
+    if (this.undoStack.length > BuildMenu.MAX_UNDO) {
+      this.undoStack = this.undoStack.slice(-BuildMenu.MAX_UNDO);
+    }
+    this.refreshUndoBtn();
+  }
+
+  /** Update the Undo button label + enabled state to reflect the stack. */
+  private refreshUndoBtn(): void {
+    if (!this.undoBtn) return;
+    const n = this.undoStack.length;
+    this.undoBtn.disabled = n === 0;
+    this.undoBtn.style.opacity = n === 0 ? "0.45" : "1";
+    this.undoBtn.textContent = n === 0 ? "↶ UNDO" : `↶ UNDO (${n})`;
+  }
+
+  /** Pop the latest undo entry and reverse its effect. */
+  private runUndo(): void {
+    const entry = this.undoStack.pop();
+    this.refreshUndoBtn();
+    if (!entry) return;
+    if (entry.kind === "place") {
+      const removed = this.registry.removeAtByUid(entry.uid);
+      if (removed) {
+        this.game.economy.earnMoney(entry.refundCost, "refund");
+        this.flashRoot(`Undid place — refunded $${entry.refundCost}`);
+      }
+      return;
+    }
+    if (entry.kind === "sell") {
+      const def = furnitureCatalog.find((d) => d.id === entry.defId);
+      if (!def) return;
+      // Charge back the refund the player got, then re-spawn the item.
+      this.game.economy.charge(entry.refundPaid);
+      void this.loader.load(def.modelPath).then((solid) => {
+        fitFurniture(solid, def);
+        solid.position.set(entry.x, solid.position.y, entry.z);
+        solid.rotation.y = entry.rotY;
+        this.scene.add(solid);
+        this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid);
+      });
+      this.flashRoot(`Undid sell — paid back $${entry.refundPaid}`);
+      return;
+    }
+    if (entry.kind === "move") {
+      this.registry.setPose(entry.uid, entry.fromX, entry.fromZ, entry.fromRotY);
+      this.flashRoot("Undid move");
+      return;
+    }
+    if (entry.kind === "auto-arrange") {
+      for (const m of entry.moves) {
+        this.registry.setPose(m.uid, m.fromX, m.fromZ, m.fromRotY);
+      }
+      this.flashRoot(`Undid auto-arrange (${entry.moves.length} chairs)`);
+      return;
+    }
+  }
+
+  /** Snap every chair to its nearest free seat slot via the registry, then
+   * record the moves so they can be undone as a single action. */
+  private runAutoArrange(): void {
+    // Capture pre-state so undo can reverse the batch.
+    const preState = new Map<string, { x: number; z: number; rotY: number }>();
+    for (const it of this.registry.snapshotItems()) {
+      preState.set(it.uid, { x: it.x, z: it.z, rotY: it.rotY });
+    }
+    const moved = this.registry.autoArrangeChairs(2.0);
+    if (moved === 0) {
+      this.flashRoot("Every chair is already at a seat slot");
+      return;
+    }
+    // Diff: keep only the items that actually moved.
+    const moves: Array<{ uid: string; fromX: number; fromZ: number; fromRotY: number }> = [];
+    for (const it of this.registry.snapshotItems()) {
+      const before = preState.get(it.uid);
+      if (!before) continue;
+      if (before.x !== it.x || before.z !== it.z || before.rotY !== it.rotY) {
+        moves.push({ uid: it.uid, fromX: before.x, fromZ: before.z, fromRotY: before.rotY });
+      }
+    }
+    if (moves.length > 0) {
+      this.pushUndo({ kind: "auto-arrange", moves });
+    }
+    this.flashRoot(`Auto-arranged ${moved} chair${moved === 1 ? "" : "s"}`);
   }
 
   private flashRoot(msg: string): void {
@@ -411,12 +556,20 @@ export class BuildMenu {
     if (this.sellMode && this.hoverValid) {
       const x = Math.round(this.hoverCell.x);
       const z = Math.round(this.hoverCell.z);
+      // Look up the item first so we can snapshot it for undo.
+      const item = this.registry.findAt(x, z);
+      if (!item) {
+        this.flashRoot("Nothing to sell there");
+        return;
+      }
+      const snapshot = { defId: item.defId, x: item.x, z: item.z, rotY: item.rotY };
       const removed = this.registry.removeAt(x, z);
       if (!removed) {
         this.flashRoot("Nothing to sell there");
         return;
       }
       this.game.economy.earnMoney(removed.refund, "payment");
+      this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
       this.flashRoot(`Sold for $${removed.refund}`);
       return;
     }
@@ -428,12 +581,17 @@ export class BuildMenu {
         const item = this.registry.findAt(x, z);
         if (!item) { this.flashRoot("Nothing to move there"); return; }
         this.holdingUid = item.uid;
+        // Stash starting pose so undo can roll back to here.
+        this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
         this.flashRoot(`Picked up — click destination`);
       } else {
         // Second click: drop at the new cell.
+        const fromPose = this.holdingFrom!;
         const ok = this.registry.relocate(this.holdingUid, x, z);
         if (!ok) { this.flashRoot("Destination is occupied"); return; }
+        this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY });
         this.holdingUid = null;
+        this.holdingFrom = null;
         this.flashRoot("Moved");
       }
       return;
@@ -452,12 +610,14 @@ export class BuildMenu {
     // Bake the preview into the scene using the plan's final pose (which
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
+    const cost = def.cost;
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
       solid.position.set(placeX, solid.position.y, placeZ);
       solid.rotation.y = rotY;
       this.scene.add(solid);
-      this.registry.register(def.id, placeX, placeZ, rotY, solid);
+      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
+      this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
     });
     if (plan.quality === "snap-perfect") {
       this.flashRoot("Perfect placement!");

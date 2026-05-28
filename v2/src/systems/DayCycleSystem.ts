@@ -95,8 +95,15 @@ export class DayCycleSystem {
     return periodsDue;
   }
 
-  /** Restore time accumulators from a save snapshot. */
+  /** Restore time accumulators from a save snapshot. Includes dayNumber —
+   * without this, every reload showed "Day 1" even after the player had
+   * advanced. (elapsedSeconds isn't persisted yet because the save schema
+   * doesn't carry it; days roll over silently within a session and that's
+   * acceptable.) */
   hydrate(save: SaveGameState | null | undefined): void {
+    if (typeof save?.dayNumber === "number" && save.dayNumber >= 1) {
+      this.dayNumber = Math.floor(save.dayNumber);
+    }
     this.rentElapsedSeconds = save?.rentElapsedSeconds ?? 0;
     this.totalPlaySeconds = save?.totalPlaySeconds ?? 0;
   }

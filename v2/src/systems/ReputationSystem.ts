@@ -91,8 +91,13 @@ export class ReputationSystem {
     }
   }
 
-  /** Replace in-memory rating history from a save snapshot. */
+  /** Replace in-memory rating + history from a save snapshot. The
+   * `reputation` numeric score was previously not restored, so every
+   * reload reset the player's reputation to 1.0. */
   hydrate(save: SaveGameState | null | undefined): void {
+    if (typeof save?.reputation === "number" && Number.isFinite(save.reputation)) {
+      this.reputation = save.reputation;
+    }
     this.ratingHistory = hydrateRatingHistoryFromSave(save);
   }
 }
