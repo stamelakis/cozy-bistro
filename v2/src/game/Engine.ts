@@ -30,6 +30,7 @@ import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
+import { SpacetimeClient } from "../cloud/SpacetimeClient";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -66,6 +67,7 @@ export class Engine {
   readonly statusBubbles: StatusBubbles;
   readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
+  readonly cloud: SpacetimeClient;
 
   private running = false;
   private lastResizeCheckAt = 0;
@@ -112,6 +114,12 @@ export class Engine {
     const savedState = SaveSystem.loadFromStorage();
     this.game = new Game(savedState);
     this.saver = new SaveSystem(this.game);
+    // Cloud sync to SpacetimeDB Maincloud (cozy-bistro-andre). Runs in
+    // parallel with the local save; if the network is down the game
+    // continues working from localStorage.
+    this.cloud = new SpacetimeClient(this.game, this.saver);
+    this.cloud.connect();
+    window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
     this.hud = new Hud(container, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,

@@ -118,6 +118,11 @@ export class SaveSystem {
     }
   }
 
+  /** Build a snapshot the cloud bridge can JSON-stringify and ship. */
+  snapshotForCloud(): SaveGameState {
+    return this.snapshot();
+  }
+
   /** Build a SaveGameState snapshot from the current game systems. */
   private snapshot(): SaveGameState {
     return {
