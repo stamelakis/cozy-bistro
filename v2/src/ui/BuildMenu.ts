@@ -419,7 +419,15 @@ export class BuildMenu {
    * empty floor. */
   private cloneModelAsGhost(source: THREE.Object3D): THREE.Object3D {
     const ghost = source.clone(true);
+    // Object3D.clone() copies the `visible` flag — and pickup code hides
+    // the source BEFORE calling us. Without this force-visible pass,
+    // every move-mode ghost rendered invisible and the player saw their
+    // chair vanish for the duration of the move. Force-visible on the
+    // root + all descendants so the ghost reliably renders regardless
+    // of the source's current visibility state.
+    ghost.visible = true;
     ghost.traverse((o) => {
+      o.visible = true;
       if (o instanceof THREE.Mesh) {
         const cloneOne = (m: THREE.Material): THREE.Material => {
           const c = m.clone();
@@ -798,14 +806,17 @@ export class BuildMenu {
         this.holdingUid = item.uid;
         this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
         this.movingOriginalModel = item.model;
-        item.model.visible = false;
         const def = furnitureCatalog.find((d) => d.id === item.defId);
         if (def) {
           this.placingDef = def;
           this.rotationY = item.rotY;
           // Build the ghost SYNCHRONOUSLY from the actual placed model so
           // it appears immediately — no async load race that could leave
-          // the original hidden with no preview.
+          // the original hidden with no preview. Clone BEFORE hiding the
+          // source so the cloned `visible` flag stays true (the helper
+          // still force-sets visible, but doing this in the right order
+          // means the ghost is correct even if the helper is later
+          // refactored).
           const ghost = this.cloneModelAsGhost(item.model);
           this.preview = ghost;
           this.preview.position.set(item.x, this.preview.position.y, item.z);
@@ -813,6 +824,9 @@ export class BuildMenu {
           this.scene.add(this.preview);
           this.tintPreview("snap-perfect"); // at start, sits at its current valid pose
         }
+        // Now hide the original — done after cloning so the clone above
+        // never inherited an invisible source.
+        item.model.visible = false;
         this.flashRoot(`Picked up — click destination`, "success");
       } else {
         // Second click: drop using the latest plan from pointermove.
