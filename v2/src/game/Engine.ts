@@ -222,9 +222,15 @@ export class Engine {
       // After restore, the demo's door (with its hinge panel captured)
       // gets removed and the save's restored door comes in fresh —
       // re-capture the hinge panel so setDoorOpen actually animates it.
+      // Same dance for the stove + cooking flame: pin the flame to the
+      // restored stove model so it sits on the actual burner instead
+      // of the default fallback height.
       void this.registry.restore(restored).then(() => {
         for (const it of this.registry.snapshotItems()) {
-          if (it.defId === "door") { this.scene.attachDoorPanel(it.model); break; }
+          if (it.defId === "door") this.scene.attachDoorPanel(it.model);
+          if (it.defId === "stove" || it.defId === "stove-electric") {
+            this.scene.alignStoveFlameToStove(it.model);
+          }
         }
       });
     }
@@ -275,6 +281,7 @@ export class Engine {
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     buildMenu.seatMarkers = this.seatMarkers;
     buildMenu.onDoorPlaced = (model) => this.scene.attachDoorPanel(model);
+    buildMenu.onStovePlaced = (model) => this.scene.alignStoveFlameToStove(model);
 
     // Spawner + routers + per-event hooks. Wait until WorldScene finishes
     // loading staff characters, then construct. Critically, all "common"

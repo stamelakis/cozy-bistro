@@ -154,21 +154,18 @@ export class WorldScene {
   }
 
   /** Build the stove flame (small orange emissive bead + point light) once.
-   * Sits on top of the stove furniture's burner area, not where the chef
-   * stands — we used to anchor it to stovePos (the chef's standing spot)
-   * which made the flame visibly float between the chef and the stove.
-   * Default hidden — Engine toggles visibility based on chef state.
+   * The flame is constructed empty at the origin; its actual world
+   * position is patched in later by alignStoveFlameToStove() once the
+   * stove model has loaded and we can read its real bounding box. This
+   * avoids the prior hardcoded y=0.85 which only happened to look right
+   * before furniture auto-fit landed (post-auto-fit the stove's top is
+   * a different height per asset).
    *
    * TODO: differentiate per stove type (gas vs electric → blue vs orange
    * glow, plus different sound). For now the starter restaurant only has
    * the gas stove so a single flame is fine. */
   private addStoveFlame(): void {
     const group = new THREE.Group();
-    // y=0.85 sits roughly on top of the scaled stove (1.6 scale, model
-    // ~0.55 tall raw → ~0.88 tall scaled). z=-3.85 pulls slightly forward
-    // so the flame reads as the front burner, not buried in the back of
-    // the cabinet.
-    group.position.set(this.stoveFurniturePos.x, 0.85, this.stoveFurniturePos.y + 0.15);
     group.visible = false;
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 12, 12),
@@ -188,6 +185,34 @@ export class WorldScene {
     this.stoveFlameGroup = group;
     this.stoveFlameMesh = mesh;
     this.stoveFlameLight = light;
+  }
+
+  /** Pin the stove flame to a specific stove model's measured top. Call
+   * this whenever a stove is placed (demo restaurant, build-menu place,
+   * save restore). If no stove model is provided we fall back to a
+   * reasonable height above stoveFurniturePos. */
+  alignStoveFlameToStove(stoveModel?: THREE.Object3D): void {
+    if (!this.stoveFlameGroup) return;
+    if (stoveModel) {
+      // World-space top of the stove model — the flame sits a hair
+      // above the burners. Use the model's bounding box so this works
+      // regardless of which stove type the player has placed.
+      stoveModel.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(stoveModel);
+      // Center the flame on the stove's XZ footprint, not the chef-
+      // standing waypoint — that's what made the flame visibly drift
+      // off the burner.
+      const cx = (box.min.x + box.max.x) / 2;
+      const cz = (box.min.z + box.max.z) / 2;
+      const topY = box.max.y + 0.03;
+      this.stoveFlameGroup.position.set(cx, topY, cz);
+    } else {
+      // Fallback when we haven't seen a stove model yet — sit a bit
+      // above where the back-wall stove would be.
+      this.stoveFlameGroup.position.set(
+        this.stoveFurniturePos.x, 0.55, this.stoveFurniturePos.y,
+      );
+    }
   }
 
   /** Exposed for Engine to drive the day-night cycle each frame. */
@@ -559,6 +584,13 @@ export class WorldScene {
         if (p.id === "door" && p.x === 0 && p.z === 5) {
           const panel = model.userData?.panel as THREE.Object3D | undefined;
           if (panel) this.doorPanel = panel;
+        }
+        // Pin the cooking flame onto whichever stove just landed at the
+        // canonical demo position so the flame reads as part of the
+        // appliance instead of a separate floating ball.
+        if ((p.id === "stove" || p.id === "stove-electric") &&
+            p.x === this.stoveFurniturePos.x && p.z === this.stoveFurniturePos.y) {
+          this.alignStoveFlameToStove(model);
         }
       } catch (err) {
         console.error(`Failed to load ${def.id} (${def.modelPath})`, err);

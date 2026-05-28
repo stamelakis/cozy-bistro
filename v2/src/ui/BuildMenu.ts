@@ -97,6 +97,9 @@ export class BuildMenu {
    * uses this to re-capture the hinge panel ref for the open/close
    * animation. */
   onDoorPlaced?: (model: THREE.Object3D) => void;
+  /** Optional callback fired when the player places a stove — Engine
+   * pins the cooking flame to the new stove's measured top. */
+  onStovePlaced?: (model: THREE.Object3D) => void;
 
   constructor(
     parent: HTMLElement,
@@ -788,6 +791,7 @@ export class BuildMenu {
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
       if (def.id === "door") this.onDoorPlaced?.(solid);
+      if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
     });
     if (plan.quality === "snap-perfect") {
       this.flashRoot("Perfect placement!", "success");

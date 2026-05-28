@@ -6,12 +6,18 @@
  * Models live under v2/public/assets/kenney/ (Vite serves them at
  * /assets/kenney/<file>.glb at runtime).
  *
- * Scales are tuned per-category to match characters (which render at scale 1.7):
- *   tables  ≈ 1.9  (so a 4-top fills a cell + reads as dining height)
- *   chairs  ≈ 1.7  (so seat-back rises to character chest)
- *   stove / counter ≈ 1.6
- *   plants / decor / lamps ≈ 1.3
- *   procedurally-built items already self-scale (kept at 1.0).
+ * SCALE SEMANTICS (changed when we moved to per-tile auto-fit, see
+ * fitFurniture.ts). `scale` is now a FILL RATIO of the assigned tile
+ * footprint, not a raw mesh multiplier:
+ *   1.0  → the item fills its assigned tile(s) completely
+ *   0.7  → the item fills ~70% of its tile(s), with margin around it
+ *   0.4  → small decorative prop centered in a tile
+ * Auto-fit handles the actual mesh→world unit conversion per-asset, so
+ * an authored 0.7 here means 0.7 visually regardless of whether the
+ * raw Kenney mesh ships at 0.5 or 2.5 units wide.
+ *
+ * Procedural items (modelPath starts with "proc:") bypass auto-fit
+ * because they author meshes at exact tile size already.
  */
 
 /**
@@ -74,15 +80,17 @@ const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   { dx:  0,   dz:  0.9, facingY:  0,           platePos: { dx:  0,   dz:  0.3 } },
 ];
 
-// Per-category scale defaults. Use these constants when authoring entries.
-const S_TABLE = 1.9;
-const S_CHAIR = 1.7;
-const S_KITCHEN = 1.6;
-const S_DECOR = 1.3;
-const S_PLANT = 1.3;
-const S_LAMP = 1.3;
-const S_DOOR = 1.6;
-const S_PROC = 1.0;
+// Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
+// these are NOT raw mesh multipliers anymore, they're "how much of the
+// assigned tile this category should visually occupy".
+const S_TABLE = 1.0;   // dining tables fill their tile
+const S_CHAIR = 0.7;   // chair smaller than tile so it can sit beside a table without overlap
+const S_KITCHEN = 1.0; // appliances fill their tile (stove, sink, fridge)
+const S_DECOR = 0.55;  // crates / books / small props well below tile size
+const S_PLANT = 0.55;  // potted plants — leaves the pot reading as decoration
+const S_LAMP = 0.5;    // lamps are slim; auto-fit would otherwise inflate them
+const S_DOOR = 1.0;    // door frame fills its tile
+const S_PROC = 1.0;    // procedurals bypass auto-fit; this is their raw multiplier
 
 export const furnitureCatalog: readonly FurnitureDef[] = [
   // Tables (small-table now uses the proper dining table mesh — the old
