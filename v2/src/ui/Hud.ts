@@ -27,6 +27,7 @@ export interface HudActions {
   openStats: () => void;
   openAchievements: () => void;
   openSlots: () => void;
+  openAdmin: () => void;
   resetSave: () => void;
   /** Returns whether audio is currently muted. */
   isMuted: () => boolean;
@@ -89,7 +90,28 @@ export class Hud {
     this.addSlotsButton();
     this.addHelpButton();
     this.addAdminGrantButton();
+    this.addAdminTuningButton();
     this.addResetButton();
+  }
+
+  private addAdminTuningButton(): void {
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      marginTop: "4px",
+      padding: "4px 8px",
+      background: "rgba(120, 140, 200, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      pointerEvents: "auto",
+      font: "inherit",
+      width: "100%",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.textContent = "[dev] Tuning sliders";
+    btn.onclick = () => this.actions.openAdmin();
+    this.root.appendChild(btn);
   }
 
   private addHelpButton(): void {

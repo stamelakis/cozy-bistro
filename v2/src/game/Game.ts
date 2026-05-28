@@ -41,10 +41,34 @@ export interface DayEndSummary {
  *  tier 1 → $40, tier 2 → $70, tier 3 → $100, tier 4 → $130, tier 5 → $160 */
 const BASE_DAILY_RENT = 40;
 const RENT_PER_TIER = 30;
-/** Money charged per staff member per real minute. */
-const PAYROLL_PER_STAFF_PER_MINUTE = 6;
-/** Cost per unit of ingredient when auto-shopping. */
+/** Default money charged per staff member per real minute. */
+const DEFAULT_PAYROLL_PER_STAFF_PER_MINUTE = 6;
+/** Default cost per unit of ingredient when auto-shopping. */
 export const INGREDIENT_UNIT_COST = 2;
+
+/**
+ * Runtime-tweakable knobs. Game.admin holds an instance the player can
+ * mutate via the AdminPanel (dev mode). Each tick reads from admin
+ * instead of the static defaults, so changes take effect immediately.
+ */
+export interface AdminSettings {
+  payrollPerStaffPerMinute: number;
+  /** Multiplier on the per-ingredient buy cost (1 = default, <1 = cheaper). */
+  ingredientCostMultiplier: number;
+  /** Multiplier on guest spawn interval (>1 = slower spawns). */
+  spawnRateMultiplier: number;
+  /** Multiplier on the dish-wash interval (<1 = faster). */
+  dishWashMultiplier: number;
+  /** Multiplier on daily rent (<1 = cheaper rent). */
+  rentMultiplier: number;
+}
+const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
+  payrollPerStaffPerMinute: DEFAULT_PAYROLL_PER_STAFF_PER_MINUTE,
+  ingredientCostMultiplier: 1,
+  spawnRateMultiplier: 1,
+  dishWashMultiplier: 1,
+  rentMultiplier: 1,
+};
 /** Auto-shop tries to keep each ingredient stocked at this level. */
 const STOCK_TARGET = 8;
 /** Auto-shop runs this often (seconds). */
@@ -90,6 +114,8 @@ export class Game {
   private dirtyDishCount = 0;
   /** Accumulator for the auto-wash tick. */
   private dishWashClock = 0;
+  /** Runtime-mutable tuning knobs (AdminPanel). */
+  readonly admin: AdminSettings = { ...DEFAULT_ADMIN_SETTINGS };
   /** Optional callback fired when the theme changes — Engine wires
    * this to WorldScene.setTheme so the world recolors. */
   onThemeChanged?: (theme: RestaurantTheme) => void;
@@ -174,7 +200,7 @@ export class Game {
     }
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
-    const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, PAYROLL_PER_STAFF_PER_MINUTE);
+    const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
     }
@@ -194,11 +220,12 @@ export class Game {
         .map((stock, idx) => ({ stock, deficit: STOCK_TARGET - stock.quantity, idx }))
         .filter((n) => n.deficit > 0)
         .sort((a, b) => b.deficit - a.deficit);
+      const unitCost = Math.max(0, Math.round(INGREDIENT_UNIT_COST * this.admin.ingredientCostMultiplier));
       for (const need of needs) {
         const units = Math.min(AUTOSHOP_BATCH_PER_INGREDIENT, need.deficit);
         let bought = 0;
         for (let i = 0; i < units; i += 1) {
-          if (!this.economy.spendMoney(INGREDIENT_UNIT_COST, "ingredients")) break;
+          if (unitCost > 0 && !this.economy.spendMoney(unitCost, "ingredients")) break;
           need.stock.quantity += 1;
           bought += 1;
         }
@@ -310,9 +337,11 @@ export class Game {
     return level * level * 30;
   }
 
-  /** Daily rent owed this in-game day. Scales with luxury tier. */
+  /** Daily rent owed this in-game day. Scales with luxury tier and the
+   * admin.rentMultiplier knob. */
   getDailyRent(): number {
-    return BASE_DAILY_RENT + (this.luxuryTier - 1) * RENT_PER_TIER;
+    const raw = BASE_DAILY_RENT + (this.luxuryTier - 1) * RENT_PER_TIER;
+    return Math.max(0, Math.round(raw * this.admin.rentMultiplier));
   }
 
   // === Dirty-dish pile ===
@@ -332,14 +361,17 @@ export class Game {
   }
 
   /** Seconds between wash ticks, reduced by sinks (-0.5s each) and
-   * dishwashers (-1.0s for compact, -1.5s for pro). Floored at 0.4s. */
+   * dishwashers (-1.0s for compact, -1.5s for pro), then scaled by
+   * admin.dishWashMultiplier. Floored at 0.4s. */
   getEffectiveDishWashInterval(): number {
-    if (!this.countPlacedById) return DISH_WASH_INTERVAL;
-    const sinks = this.countPlacedById("sink");
-    const dish = this.countPlacedById("dishwasher");
-    const dishPro = this.countPlacedById("dishwasher-pro");
-    const reduction = sinks * 0.5 + dish * 1.0 + dishPro * 1.5;
-    return Math.max(0.4, DISH_WASH_INTERVAL - reduction);
+    let interval = DISH_WASH_INTERVAL;
+    if (this.countPlacedById) {
+      const sinks = this.countPlacedById("sink");
+      const dish = this.countPlacedById("dishwasher");
+      const dishPro = this.countPlacedById("dishwasher-pro");
+      interval -= sinks * 0.5 + dish * 1.0 + dishPro * 1.5;
+    }
+    return Math.max(0.4, interval * this.admin.dishWashMultiplier);
   }
 
   // === Interior themes (wall + floor color presets) ===

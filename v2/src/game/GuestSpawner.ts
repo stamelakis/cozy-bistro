@@ -226,7 +226,9 @@ export class GuestSpawner {
       // with 100 plants doesn't break the game).
       const attraction = this.registry?.getAggregateStats().attractionBonus ?? 0;
       const attractionMult = Math.max(0.45, 1 - Math.min(0.55, attraction * 0.015));
-      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult;
+      // AdminPanel spawn-rate multiplier (1 = default).
+      const adminMult = this.game.admin.spawnRateMultiplier;
+      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult;
     }
 
     // Tick each guest's state machine.
