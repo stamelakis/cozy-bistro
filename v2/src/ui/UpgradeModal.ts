@@ -369,9 +369,19 @@ export class UpgradeModal {
         const tierLocked = requiredTier !== null && requiredTier > playerTier;
         const targetLevel = level + 1;
         const hours = getTrainingDurationHours(targetLevel);
+        // Lockout when someone ELSE is mid-training — the school only
+        // has one chair, you can train only one staff member at a time.
+        const otherTrainingId = this.game.getCurrentlyTrainingMemberId();
+        const someoneElseTraining = otherTrainingId !== null && otherTrainingId !== m.id;
         if (tierLocked) {
           btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
           btn.title = `Requires restaurant tier ${requiredTier} (you're on ${playerTier})`;
+        } else if (someoneElseTraining) {
+          const other = this.game.staff.getMember(otherTrainingId!);
+          btn.innerHTML = `📚 Busy<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
+          btn.title = other
+            ? `${other.name} is currently training — only one staff member at a time`
+            : "Someone else is currently training";
         } else {
           btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
           btn.title = `Spend $${cost} and ${hours} in-game hours to reach L${targetLevel}`;

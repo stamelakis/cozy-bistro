@@ -192,6 +192,20 @@ export class StaffSystem {
     return typeof this.getMember(id)?.trainingCompletesAt === "number";
   }
 
+  /** True if ANY member of the restaurant is currently training. The
+   * training school only has one chair — only one staff member can
+   * be off-shift studying at a time. Returns the id of that member
+   * so callers can show "{name} is studying" in disabled rows. */
+  getCurrentlyTrainingMemberId(): string | null {
+    for (const m of this.members) {
+      if (typeof m.trainingCompletesAt === "number") return m.id;
+    }
+    return null;
+  }
+  isAnyMemberTraining(): boolean {
+    return this.getCurrentlyTrainingMemberId() !== null;
+  }
+
   /** Total playtime (seconds) at which the current training will
    * complete, or null when the member isn't training. */
   getMemberTrainingCompletesAt(id: string): number | null {

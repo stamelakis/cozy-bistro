@@ -467,12 +467,20 @@ export class Game {
     const m = this.staff.getMember(id);
     if (!m) return false;
     if (m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
-    // A member who's already training can't queue up a second one.
-    if (this.staff.isMemberTraining(id)) return false;
+    // Only one training slot in the whole restaurant — if anyone is
+    // currently studying, nobody else can start.
+    if (this.staff.isAnyMemberTraining()) return false;
     // Each training level is gated behind the matching restaurant
     // tier: L1 needs T1, L5 needs T5.
     if (m.upgradeLevel + 1 > this.getLuxuryTier()) return false;
     return this.economy.canAfford(this.staff.getMemberUpgradeCost(id));
+  }
+
+  /** Id of the member who's currently in training (null if nobody
+   * is). UI uses this to show "Another in progress" on the other
+   * rows. */
+  getCurrentlyTrainingMemberId(): string | null {
+    return this.staff.getCurrentlyTrainingMemberId();
   }
   /** Start a training run on a member. Money is debited up front;
    * the level ticks up automatically once the in-game timer (driven
