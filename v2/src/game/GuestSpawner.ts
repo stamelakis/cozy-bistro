@@ -174,6 +174,14 @@ export class GuestSpawner {
   /** chairUid → guestId that's currently waiting at it. Cleared when the
    * waiting guest either takes a real seat or gives up. */
   private claimedWaitingChairs = new Map<string, string>();
+  /** Seats reserved by a spawnGuest that hasn't pushed its guest into
+   * this.guests yet (await on character GLB). reconcileOccupancy MUST
+   * preserve these, otherwise a second spawnGuest fired during that
+   * await would see the seat as free and two guests end up assigned to
+   * the same chair. */
+  private inFlightSpawnSeats = new Set<SeatId>();
+  /** Same protection for overflow-chair reservations during await. */
+  private inFlightSpawnChairs = new Set<string>();
   /** guestId → live Object3D for the plate sitting on their table.
    * Spawned when food is delivered, removed when the guest stands up. */
   private readonly tablePlates = new Map<string, THREE.Object3D>();
@@ -270,20 +278,28 @@ export class GuestSpawner {
 
   /** Drop seat-occupancy entries that don't correspond to any live guest,
    * and drop waiting-chair claims with no matching guest. Cheap to run
-   * every tick — these sets are tiny. */
+   * every tick — these sets are tiny. Critically PRESERVES entries that
+   * a still-in-flight spawnGuest reserved before its await; otherwise
+   * the race window between "mark seat occupied" and "push guest to
+   * this.guests" lets reconcile free the seat, and a second spawnGuest
+   * grabs the same chair (two customers sitting on top of each other). */
   private reconcileOccupancy(): void {
     if (this.occupiedSeats.size > 0) {
       const live = new Set<SeatId>();
       for (const g of this.guests) if (g.seatId) live.add(g.seatId);
       for (const id of this.occupiedSeats) {
-        if (!live.has(id)) this.occupiedSeats.delete(id);
+        if (!live.has(id) && !this.inFlightSpawnSeats.has(id)) {
+          this.occupiedSeats.delete(id);
+        }
       }
     }
     if (this.claimedWaitingChairs.size > 0) {
       const liveChairs = new Set<string>();
       for (const g of this.guests) if (g.waiting) liveChairs.add(g.waiting.chairUid);
       for (const chairUid of this.claimedWaitingChairs.keys()) {
-        if (!liveChairs.has(chairUid)) this.claimedWaitingChairs.delete(chairUid);
+        if (!liveChairs.has(chairUid) && !this.inFlightSpawnChairs.has(chairUid)) {
+          this.claimedWaitingChairs.delete(chairUid);
+        }
       }
     }
   }
@@ -515,8 +531,12 @@ export class GuestSpawner {
     if (available) {
       seatId = makeSeatId(available);
       this.occupiedSeats.add(seatId);
+      // Protect against reconcileOccupancy freeing this seat during the
+      // upcoming await — the guest isn't in this.guests yet.
+      this.inFlightSpawnSeats.add(seatId);
     } else if (waitingChair) {
       this.claimedWaitingChairs.set(waitingChair.uid, "pending");
+      this.inFlightSpawnChairs.add(waitingChair.uid);
     }
 
     const variantId = pick(GUEST_VARIANT_IDS);
@@ -586,6 +606,11 @@ export class GuestSpawner {
       console.warn(`Could not spawn ${variantId}:`, err);
       if (seatId) this.occupiedSeats.delete(seatId);
       if (waitingChair) this.claimedWaitingChairs.delete(waitingChair.uid);
+    } finally {
+      // Whether the spawn succeeded or failed, the await is over — the
+      // reconcile pass can safely consider this seat/chair from now on.
+      if (seatId) this.inFlightSpawnSeats.delete(seatId);
+      if (waitingChair) this.inFlightSpawnChairs.delete(waitingChair.uid);
     }
   }
 
