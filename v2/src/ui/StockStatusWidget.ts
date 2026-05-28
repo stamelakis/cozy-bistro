@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
+import { getFurnitureDef } from "../data/furnitureCatalog";
 
 /**
  * Compact at-a-glance ingredient status panel that sits above the
@@ -132,6 +133,50 @@ export class StockStatusWidget {
       auto.textContent = "🛒 Auto-shop OFF — restock manually";
     }
     this.body.appendChild(auto);
+
+    // === Storage capacity breakdown ===
+    // Show what's setting the stock ceiling: the base 5 every player
+    // starts with, plus every fridge / pantry shelf they've placed
+    // grouped by type. Helps the player decide whether buying another
+    // fridge is worth it before they head to the build menu.
+    this.appendSectionHeader("❄️ Storage Cap");
+    {
+      const base = this.game.getMinStockTarget();
+      const lines: string[] = [];
+      lines.push(`<div style="opacity:0.75">Base (no fridges): +${base}</div>`);
+      const registry = this.game.registry;
+      if (registry) {
+        // Group placed items by defId, sum stockCapacity bonuses.
+        const counts = new Map<string, number>();
+        for (const it of registry.snapshotItems()) {
+          const def = getFurnitureDef(it.defId);
+          if (def?.stockCapacity) {
+            counts.set(it.defId, (counts.get(it.defId) ?? 0) + 1);
+          }
+        }
+        // Sort by total bonus contribution, descending.
+        const entries = Array.from(counts.entries())
+          .map(([id, count]) => {
+            const def = getFurnitureDef(id);
+            const each = def?.stockCapacity ?? 0;
+            return { id, name: def?.name ?? id, count, each, total: count * each };
+          })
+          .sort((a, b) => b.total - a.total);
+        for (const e of entries) {
+          const countTag = e.count > 1 ? ` <span style="opacity:0.6">×${e.count}</span>` : "";
+          lines.push(`<div>${e.name}${countTag}: <span style="color:#a8c8e8">+${e.total}</span> <span style="opacity:0.5">(@${e.each})</span></div>`);
+        }
+      }
+      const cap = this.game.getMaxStockTarget();
+      const current = this.game.getStockTarget();
+      lines.push(`<div style="margin-top:2px;border-top:1px solid rgba(255,245,220,0.12);padding-top:2px;color:#a8e2a8">Cap: <b>${cap}</b> · using <b>${current}</b></div>`);
+      const list = document.createElement("div");
+      Object.assign(list.style, {
+        maxHeight: "84px", overflowY: "auto", fontSize: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      list.innerHTML = lines.join("");
+      this.body.appendChild(list);
+    }
 
     // === Kitchen ticket pipeline (always shown) ===
     const ts = this.game.getTicketStats?.();
