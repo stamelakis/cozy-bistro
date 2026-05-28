@@ -46,6 +46,8 @@ const DEFAULT_HEIGHTS: Record<FurnitureDef["category"], number> = {
   plant: 0.85,        // potted plant + foliage
   lamp: 1.55,         // floor lamps tall, table lamps shorter (override per-id)
   door: 2.3,          // 2m + frame
+  bathroom: 0.88,     // toilets / bathroom sinks roughly counter-height
+  wall: 2.4,          // interior partition walls — match the procedural mesh
 };
 
 export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {

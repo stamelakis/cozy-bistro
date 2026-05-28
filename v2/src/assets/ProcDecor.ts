@@ -260,6 +260,326 @@ function frontDoor(): THREE.Group {
   return g;
 }
 
+// === Internal partitions (edge-placed). =====================================
+
+const WALL_MAT = new THREE.MeshStandardMaterial({ color: 0xf5efe2, roughness: 0.85 });
+const WALL_TRIM_MAT = new THREE.MeshStandardMaterial({ color: 0xc8b894, roughness: 0.7 });
+
+/** Interior wall section — thin slab 1 tile long, ~2.4 m tall, ~0.12 m
+ * thick. Centered on the grid line between two cells when placed in
+ * "edge" mode by BuildMenu. */
+function internalWall(): THREE.Group {
+  const g = new THREE.Group();
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.12), WALL_MAT);
+  slab.position.y = 1.2;
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  g.add(slab);
+  // Top trim — adds shadow / contrast against the ceiling.
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.06, 0.14), WALL_TRIM_MAT);
+  trim.position.y = 2.43;
+  g.add(trim);
+  return g;
+}
+
+/** Half-height interior wall — like a banquette divider. */
+function internalWallHalf(): THREE.Group {
+  const g = new THREE.Group();
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.1, 0.12), WALL_MAT);
+  slab.position.y = 0.55;
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  g.add(slab);
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.05, 0.14), WALL_TRIM_MAT);
+  trim.position.y = 1.13;
+  g.add(trim);
+  return g;
+}
+
+/** Internal doorway — wall section with a doorway opening in the middle. */
+function internalDoorway(): THREE.Group {
+  const g = new THREE.Group();
+  const sideW = 0.18;
+  const openingW = 1.0 - sideW * 2;
+  // Side jambs (full height).
+  for (const sx of [-0.5 + sideW / 2, 0.5 - sideW / 2]) {
+    const jamb = new THREE.Mesh(new THREE.BoxGeometry(sideW, 2.4, 0.12), WALL_MAT);
+    jamb.position.set(sx, 1.2, 0);
+    jamb.castShadow = true;
+    jamb.receiveShadow = true;
+    g.add(jamb);
+  }
+  // Lintel (above the doorway).
+  const lintel = new THREE.Mesh(new THREE.BoxGeometry(openingW, 0.4, 0.12), WALL_MAT);
+  lintel.position.set(0, 2.2, 0);
+  lintel.castShadow = true;
+  g.add(lintel);
+  // Top trim runs across the whole 1-tile span.
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.06, 0.14), WALL_TRIM_MAT);
+  trim.position.y = 2.43;
+  g.add(trim);
+  return g;
+}
+
+/** Interior window — wall section with a glass panel up high. */
+function internalWindow(): THREE.Group {
+  const g = new THREE.Group();
+  // Top + bottom wall slabs framing the glass.
+  const bottom = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.9, 0.12), WALL_MAT);
+  bottom.position.y = 0.45;
+  bottom.castShadow = true;
+  g.add(bottom);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.5, 0.12), WALL_MAT);
+  top.position.y = 2.15;
+  top.castShadow = true;
+  g.add(top);
+  // Glass pane.
+  const glass = new THREE.Mesh(
+    new THREE.BoxGeometry(0.86, 1.0, 0.04),
+    new THREE.MeshStandardMaterial({
+      color: 0xb8d4e0, roughness: 0.1, metalness: 0.2,
+      transparent: true, opacity: 0.35, depthWrite: false,
+    }),
+  );
+  glass.position.y = 1.4;
+  g.add(glass);
+  // Frame trim.
+  for (const yy of [0.9, 1.9]) {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.04, 0.14), WALL_TRIM_MAT);
+    t.position.y = yy;
+    g.add(t);
+  }
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.06, 0.14), WALL_TRIM_MAT);
+  trim.position.y = 2.43;
+  g.add(trim);
+  return g;
+}
+
+// === Fancy decor (fountain / aquarium / planter / hanging plant / dessert case). ===
+
+/** Two-tier indoor fountain — round basin with a column + water droplet. */
+function fountain(): THREE.Group {
+  const g = new THREE.Group();
+  // Outer basin (low, wide).
+  const basin = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.9, 1.0, 0.25, 24),
+    new THREE.MeshStandardMaterial({ color: 0xb5a99a, roughness: 0.6 }),
+  );
+  basin.position.y = 0.125;
+  basin.castShadow = true;
+  basin.receiveShadow = true;
+  g.add(basin);
+  // Water surface.
+  const water = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.82, 0.82, 0.04, 24),
+    new THREE.MeshStandardMaterial({
+      color: 0x6fa8c4, roughness: 0.15, metalness: 0.2,
+      transparent: true, opacity: 0.85,
+      emissive: 0x3a6c8a, emissiveIntensity: 0.25,
+    }),
+  );
+  water.position.y = 0.26;
+  g.add(water);
+  // Central column.
+  const column = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.18, 0.22, 0.55, 16),
+    new THREE.MeshStandardMaterial({ color: 0xd6cdb8, roughness: 0.55 }),
+  );
+  column.position.y = 0.55;
+  column.castShadow = true;
+  g.add(column);
+  // Upper bowl.
+  const upper = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.4, 0.32, 0.1, 20),
+    new THREE.MeshStandardMaterial({ color: 0xd6cdb8, roughness: 0.55 }),
+  );
+  upper.position.y = 0.88;
+  upper.castShadow = true;
+  g.add(upper);
+  // Water droplet on top.
+  const drop = new THREE.Mesh(
+    new THREE.SphereGeometry(0.1, 12, 12),
+    new THREE.MeshStandardMaterial({
+      color: 0x6fa8c4, emissive: 0x3a6c8a, emissiveIntensity: 0.4,
+      transparent: true, opacity: 0.85,
+    }),
+  );
+  drop.position.y = 1.05;
+  g.add(drop);
+  return g;
+}
+
+/** Aquarium — long glass tank on a wooden stand, faint blue interior glow. */
+function aquarium(): THREE.Group {
+  const g = new THREE.Group();
+  // Wooden stand.
+  const stand = new THREE.Mesh(
+    new THREE.BoxGeometry(1.9, 0.55, 0.7),
+    new THREE.MeshStandardMaterial({ color: 0x5a3e26, roughness: 0.75 }),
+  );
+  stand.position.y = 0.275;
+  stand.castShadow = true;
+  stand.receiveShadow = true;
+  g.add(stand);
+  // Tank base.
+  const tankFloor = new THREE.Mesh(
+    new THREE.BoxGeometry(1.75, 0.04, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0x2a2218, roughness: 0.6 }),
+  );
+  tankFloor.position.y = 0.575;
+  g.add(tankFloor);
+  // Glass walls (thin boxes around the perimeter).
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x9ec8d6, roughness: 0.1, metalness: 0.2,
+    transparent: true, opacity: 0.3, depthWrite: false,
+  });
+  const gx = [-0.875, 0.875]; // left/right faces
+  for (const x of gx) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.55, 0.55), glassMat);
+    wall.position.set(x, 0.875, 0);
+    g.add(wall);
+  }
+  const gz = [-0.275, 0.275]; // front/back faces
+  for (const z of gz) {
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.55, 0.04), glassMat);
+    wall.position.set(0, 0.875, z);
+    g.add(wall);
+  }
+  // Water + glow inside the tank.
+  const water = new THREE.Mesh(
+    new THREE.BoxGeometry(1.7, 0.45, 0.5),
+    new THREE.MeshStandardMaterial({
+      color: 0x4a90b0, roughness: 0.3,
+      emissive: 0x2a6080, emissiveIntensity: 0.5,
+      transparent: true, opacity: 0.6, depthWrite: false,
+    }),
+  );
+  water.position.y = 0.85;
+  g.add(water);
+  const innerLight = new THREE.PointLight(0x6fb8d8, 0.8, 3, 2);
+  innerLight.position.set(0, 1.0, 0);
+  g.add(innerLight);
+  // Top trim.
+  const trim = new THREE.Mesh(
+    new THREE.BoxGeometry(1.78, 0.06, 0.58),
+    new THREE.MeshStandardMaterial({ color: 0x3a2818, roughness: 0.7 }),
+  );
+  trim.position.y = 1.17;
+  g.add(trim);
+  return g;
+}
+
+/** Planter box — long wooden box with three small green tufts. */
+function planterBox(): THREE.Group {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(1.85, 0.32, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0x6a4828, roughness: 0.8 }),
+  );
+  box.position.y = 0.16;
+  box.castShadow = true;
+  box.receiveShadow = true;
+  g.add(box);
+  // Soil top.
+  const soil = new THREE.Mesh(
+    new THREE.BoxGeometry(1.78, 0.04, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x382010, roughness: 1.0 }),
+  );
+  soil.position.y = 0.34;
+  g.add(soil);
+  // Three small foliage tufts.
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x4a7028, roughness: 0.85 });
+  for (let i = 0; i < 3; i += 1) {
+    const t = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.45, 6), leafMat);
+    t.position.set(-0.6 + i * 0.6, 0.56, 0);
+    t.castShadow = true;
+    g.add(t);
+  }
+  return g;
+}
+
+/** Hanging plant — chain + pot suspended from ceiling height. */
+function hangingPlant(): THREE.Group {
+  const g = new THREE.Group();
+  // "Chain" — thin pillar from ceiling.
+  const chain = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.02, 1.6, 6),
+    new THREE.MeshStandardMaterial({ color: 0x5a5550, roughness: 0.5, metalness: 0.6 }),
+  );
+  chain.position.y = 2.0;
+  g.add(chain);
+  // Pot.
+  const pot = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.22, 0.16, 0.22, 16),
+    new THREE.MeshStandardMaterial({ color: 0x9a5a3a, roughness: 0.8 }),
+  );
+  pot.position.y = 1.1;
+  pot.castShadow = true;
+  g.add(pot);
+  // Cascading leaves (overhanging cone going down).
+  const leaves = new THREE.Mesh(
+    new THREE.ConeGeometry(0.32, 0.6, 8),
+    new THREE.MeshStandardMaterial({ color: 0x5a8038, roughness: 0.85 }),
+  );
+  leaves.position.y = 0.85;
+  leaves.rotation.x = Math.PI; // point down
+  leaves.castShadow = true;
+  g.add(leaves);
+  return g;
+}
+
+/** Dessert display case — glass-fronted pastry cabinet with two shelves
+ * of colored "cakes" inside. */
+function dessertDisplay(): THREE.Group {
+  const g = new THREE.Group();
+  // Base cabinet.
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 0.5, 0.55),
+    new THREE.MeshStandardMaterial({ color: 0xc2a988, roughness: 0.7 }),
+  );
+  base.position.y = 0.25;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  g.add(base);
+  // Display body (glass).
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0xdde8ee, roughness: 0.1, metalness: 0.2,
+    transparent: true, opacity: 0.4, depthWrite: false,
+  });
+  const glassBody = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.55), glassMat);
+  glassBody.position.y = 0.95;
+  g.add(glassBody);
+  // Frame.
+  for (const yy of [0.55, 1.4]) {
+    const t = new THREE.Mesh(
+      new THREE.BoxGeometry(0.87, 0.04, 0.57),
+      new THREE.MeshStandardMaterial({ color: 0x6a4220, roughness: 0.7 }),
+    );
+    t.position.y = yy;
+    g.add(t);
+  }
+  // Internal warm light + cakes.
+  const inner = new THREE.PointLight(0xffd99c, 0.5, 1.5, 2);
+  inner.position.set(0, 1.0, 0);
+  g.add(inner);
+  const cakeColors = [0xf2c4a8, 0xf5d894, 0xd68a78, 0xa2c4c8];
+  for (let i = 0; i < 4; i += 1) {
+    const cake = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.075, 0.075, 0.07, 12),
+      new THREE.MeshStandardMaterial({
+        color: cakeColors[i], roughness: 0.6,
+        emissive: cakeColors[i], emissiveIntensity: 0.1,
+      }),
+    );
+    const row = Math.floor(i / 2);
+    const col = i % 2;
+    cake.position.set(-0.16 + col * 0.32, 0.7 + row * 0.32, 0);
+    cake.castShadow = true;
+    g.add(cake);
+  }
+  return g;
+}
+
 /** Map of "proc:" id suffix → builder. ModelLoader routes through this. */
 export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "framed-art-warm": () => framedArt(0xc97e4a, "warm"),
@@ -271,4 +591,13 @@ export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "dishwasher": () => dishwasher(),
   "dishwasher-pro": () => dishwasherPro(),
   "front-door": () => frontDoor(),
+  "int-wall": () => internalWall(),
+  "int-wall-half": () => internalWallHalf(),
+  "int-doorway": () => internalDoorway(),
+  "int-window": () => internalWindow(),
+  "fountain": () => fountain(),
+  "aquarium": () => aquarium(),
+  "planter-box": () => planterBox(),
+  "hanging-plant": () => hangingPlant(),
+  "dessert-display": () => dessertDisplay(),
 };

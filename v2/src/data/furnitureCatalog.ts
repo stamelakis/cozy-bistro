@@ -43,7 +43,7 @@ export interface FurnitureDef {
   /** Human label for the build menu. */
   name: string;
   /** Game category (mirrors 2D categories). */
-  category: "table" | "chair" | "stove" | "counter" | "decoration" | "plant" | "lamp" | "door";
+  category: "table" | "chair" | "stove" | "counter" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
   /** Relative path under v2/public — fed to ModelLoader.load(). */
   modelPath: string;
   /** Fill ratio used by fitFurniture as a multiplier on top of the
@@ -57,6 +57,13 @@ export interface FurnitureDef {
   cost: number;
   /** Optional rotation offset (radians) if the model points the wrong way. */
   rotationOffset?: number;
+  /** How the item snaps to the grid:
+   *   - "tile" (default): centered in a cell, occupies the cell
+   *   - "edge": sits ON a grid line between two cells, doesn't claim
+   *     either cell. Internal walls, internal doorways, decorative
+   *     partitions. The tiles either side stay placeable.
+   * Edge items use a separate snap path in BuildMenu. */
+  placement?: "tile" | "edge";
   /** Optional realistic world-space height (in units ≈ metres). When set,
    * fitFurniture independently stretches Y so the placed item lands at
    * this height regardless of the raw mesh's proportions. Without it
@@ -311,6 +318,120 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/wallWindow.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 75 },
   { id: "window-slide", name: "Sliding Window", category: "decoration",
     modelPath: "assets/kenney/wallWindowSlide.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 95 },
+
+  // === Bathroom — needed for the toilet-use customer loop. ===
+  // Toilets sit in a small partitioned room; sinks for handwashing.
+  { id: "toilet",         name: "Toilet",          category: "bathroom",
+    modelPath: "assets/kenney/toilet.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 140, style: 2 },
+  { id: "toilet-square",  name: "Square Toilet",   category: "bathroom",
+    modelPath: "assets/kenney/toiletSquare.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 160, style: 3 },
+  { id: "bathroom-sink",  name: "Bathroom Sink",   category: "bathroom",
+    modelPath: "assets/kenney/bathroomSink.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 120, style: 2 },
+  { id: "bathroom-sink-sq", name: "Square Bath Sink", category: "bathroom",
+    modelPath: "assets/kenney/bathroomSinkSquare.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 140, style: 3 },
+  { id: "bathroom-mirror", name: "Bathroom Mirror", category: "bathroom",
+    modelPath: "assets/kenney/bathroomMirror.glb", scale: 0.7, size: { width: 1, depth: 1 }, cost: 60, style: 2, attractionBonus: 1 },
+  { id: "bathroom-cabinet", name: "Bath Cabinet",  category: "bathroom",
+    modelPath: "assets/kenney/bathroomCabinet.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 110, style: 2 },
+  { id: "bathroom-cabinet-d", name: "Bath Cabinet (Drawer)", category: "bathroom",
+    modelPath: "assets/kenney/bathroomCabinetDrawer.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 130, style: 3 },
+  { id: "bathtub",        name: "Bathtub",         category: "bathroom",
+    modelPath: "assets/kenney/bathtub.glb", scale: 0.95, size: { width: 2, depth: 1 }, cost: 280, style: 4, attractionBonus: 3 },
+  { id: "shower",         name: "Shower",          category: "bathroom",
+    modelPath: "assets/kenney/shower.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 200, style: 3 },
+  { id: "shower-round",   name: "Round Shower",    category: "bathroom",
+    modelPath: "assets/kenney/showerRound.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 240, style: 4, ratingBonus: 0.03 },
+
+  // === Internal walls + doorways — edge-placed, don't claim tiles. ===
+  // These snap to grid lines instead of tile centers so the player can
+  // partition off rooms (bathroom, private dining, kitchen line, etc.)
+  // without losing the floor area to wall thickness.
+  { id: "int-wall",       name: "Wall Section",    category: "wall",
+    modelPath: "proc:int-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 18, placement: "edge" },
+  { id: "int-wall-half",  name: "Half Wall",       category: "wall",
+    modelPath: "proc:int-wall-half", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 14, placement: "edge", style: 1 },
+  { id: "int-doorway",    name: "Internal Doorway", category: "wall",
+    modelPath: "proc:int-doorway", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 36, placement: "edge", style: 2 },
+  { id: "int-window",     name: "Interior Window", category: "wall",
+    modelPath: "proc:int-window", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 28, placement: "edge", style: 2, attractionBonus: 1 },
+
+  // === More tables: coffee variants for lounge corners. ===
+  { id: "coffee-square",  name: "Square Coffee Table", category: "table",
+    modelPath: "assets/kenney/tableCoffeeSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 30, style: 2 },
+  { id: "coffee-glass-sq", name: "Glass Square Coffee", category: "table",
+    modelPath: "assets/kenney/tableCoffeeGlassSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 42, style: 3 },
+
+  // === More chairs / desks. ===
+  { id: "chair-desk",     name: "Desk Chair",      category: "chair",
+    modelPath: "assets/kenney/chairDesk.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 26, comfort: 2, style: 2 },
+  { id: "chair-modern-fr", name: "Frame Chair",    category: "chair",
+    modelPath: "assets/kenney/chairModernFrameCushion.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 36, comfort: 3, style: 3 },
+  { id: "sofa-ottoman",   name: "Sofa Ottoman",    category: "chair",
+    modelPath: "assets/kenney/loungeSofaOttoman.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 70, comfort: 4, style: 3 },
+  { id: "sofa-design-c",  name: "Designer Corner Sofa", category: "chair",
+    modelPath: "assets/kenney/loungeDesignSofaCorner.glb", scale: S_CHAIR, size: { width: 2, depth: 2 }, cost: 280, comfort: 6, style: 6, ratingBonus: 0.08, seatingCapacity: 4 },
+
+  // === More kitchen cabinets + corner pieces. ===
+  { id: "kitchen-upper",  name: "Upper Cabinet",   category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 70, style: 1 },
+  { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 110, style: 1 },
+  { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1 },
+  { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 95, style: 1 },
+  { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetCornerRound.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 110, style: 2 },
+
+  // === Entertainment / TV / electronics. ===
+  { id: "tv-modern",      name: "Modern TV",       category: "decoration",
+    modelPath: "assets/kenney/televisionModern.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 180, style: 4, attractionBonus: 3 },
+  { id: "tv-vintage",     name: "Vintage TV",      category: "decoration",
+    modelPath: "assets/kenney/televisionVintage.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 120, style: 3, attractionBonus: 2 },
+  { id: "tv-antenna",     name: "Antenna TV",      category: "decoration",
+    modelPath: "assets/kenney/televisionAntenna.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 90, style: 2 },
+  { id: "tv-cabinet",     name: "TV Cabinet",      category: "decoration",
+    modelPath: "assets/kenney/cabinetTelevision.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 75, style: 2 },
+  { id: "tv-cabinet-d",   name: "TV Cabinet (Doors)", category: "decoration",
+    modelPath: "assets/kenney/cabinetTelevisionDoors.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 95, style: 3 },
+  { id: "radio",          name: "Radio",           category: "decoration",
+    modelPath: "assets/kenney/radio.glb", scale: S_DECOR * 0.7, size: { width: 1, depth: 1 }, cost: 45, style: 2 },
+  { id: "speaker",        name: "Speaker",         category: "decoration",
+    modelPath: "assets/kenney/speaker.glb", scale: S_DECOR * 0.6, size: { width: 1, depth: 1 }, cost: 55, style: 3, attractionBonus: 1 },
+  { id: "speaker-small",  name: "Small Speaker",   category: "decoration",
+    modelPath: "assets/kenney/speakerSmall.glb", scale: S_DECOR * 0.5, size: { width: 1, depth: 1 }, cost: 28, style: 1 },
+  { id: "laptop",         name: "Laptop",          category: "decoration",
+    modelPath: "assets/kenney/laptop.glb", scale: S_DECOR * 0.6, size: { width: 1, depth: 1 }, cost: 60, style: 2 },
+
+  // === More soft furnishings (pillows + rugs). ===
+  { id: "pillow-long",    name: "Long Pillow",     category: "decoration",
+    modelPath: "assets/kenney/pillowLong.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 14 },
+  { id: "pillow-blue-long", name: "Long Blue Pillow", category: "decoration",
+    modelPath: "assets/kenney/pillowBlueLong.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 18 },
+  { id: "rug-doormat",    name: "Doormat",         category: "decoration",
+    modelPath: "assets/kenney/rugDoormat.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 18, style: 1 },
+  { id: "rug-rounded",    name: "Rounded Rug",     category: "decoration",
+    modelPath: "assets/kenney/rugRounded.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 38, style: 3, comfort: 1 },
+  { id: "rug-square",     name: "Square Rug",      category: "decoration",
+    modelPath: "assets/kenney/rugSquare.glb", scale: S_DECOR, size: { width: 2, depth: 2 }, cost: 52, style: 3, comfort: 1, attractionBonus: 1 },
+
+  // === Cute/quirky decor. ===
+  { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",
+    modelPath: "assets/kenney/bear.glb", scale: S_DECOR * 0.55, size: { width: 1, depth: 1 }, cost: 22, attractionBonus: 1, style: 2 },
+  { id: "coat-rack-wall", name: "Wall Coat Rack",  category: "decoration",
+    modelPath: "assets/kenney/coatRack.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 16, style: 1 },
+
+  // === Procedural fancy decor — inspired by polished restaurant sims. ===
+  { id: "fountain",       name: "Indoor Fountain", category: "decoration",
+    modelPath: "proc:fountain", scale: S_PROC, size: { width: 2, depth: 2 }, cost: 240, style: 6, attractionBonus: 6, ratingBonus: 0.05 },
+  { id: "aquarium",       name: "Aquarium",        category: "decoration",
+    modelPath: "proc:aquarium", scale: S_PROC, size: { width: 2, depth: 1 }, cost: 280, style: 5, attractionBonus: 5, ratingBonus: 0.04 },
+  { id: "planter-box",    name: "Planter Box",     category: "plant",
+    modelPath: "proc:planter-box", scale: S_PROC, size: { width: 2, depth: 1 }, cost: 60, style: 2, attractionBonus: 2 },
+  { id: "hanging-plant",  name: "Hanging Plant",   category: "plant",
+    modelPath: "proc:hanging-plant", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 35, style: 2, attractionBonus: 1 },
+  { id: "dessert-display", name: "Dessert Case",   category: "decoration",
+    modelPath: "proc:dessert-display", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 180, style: 4, attractionBonus: 4, ratingBonus: 0.03 },
 ];
 
 export function getFurnitureDef(id: string): FurnitureDef | undefined {

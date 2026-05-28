@@ -148,11 +148,13 @@ export class BuildMenu {
     // Each category is a collapsible section (all collapsed by default
     // except Tables) to handle the 50+ items without dominating the screen.
     const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "counter", "decoration", "plant", "lamp", "door",
+      "table", "chair", "stove", "counter", "wall", "door", "bathroom",
+      "decoration", "plant", "lamp",
     ];
     const categoryLabels: Record<FurnitureDef["category"], string> = {
       table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
-      decoration: "Decor", plant: "Plants", lamp: "Lighting", door: "Doors & Windows",
+      wall: "Walls & Partitions", door: "Doors & Windows", bathroom: "Bathroom",
+      decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };
     for (const cat of categoryOrder) {
       const items = furnitureCatalog.filter((d) => d.category === cat);
@@ -595,12 +597,19 @@ export class BuildMenu {
     const point = new THREE.Vector3();
     this.hoverValid = this.raycaster.ray.intersectPlane(groundPlane, point) !== null;
     if (!this.hoverValid) return;
-    // Snap to tile center for the currently-placing item. Even-sized
-    // items (2×2 etc.) anchor at the cross-section of cells, so they
-    // need a half-integer snap — otherwise their footprint straddles
-    // cells unevenly. Use the placingDef's size to pick the parity.
-    this.hoverCell.set(this.snapAxis(point.x, this.placingDef?.size.width ?? 1), 0,
-                       this.snapAxis(point.z, this.placingDef?.size.depth ?? 1));
+    // Snap differently for edge-placed items (walls / internal doorways
+    // sit on grid lines) vs tile items (centered in cells).
+    if (this.placingDef?.placement === "edge") {
+      const e = this.snapToEdge(point.x, point.z);
+      this.hoverCell.set(e.x, 0, e.z);
+    } else {
+      // Even-sized tile items anchor at the cross-section of cells, so
+      // they need a half-integer snap — otherwise their footprint
+      // straddles cells unevenly. Use the placingDef's size to pick
+      // the parity.
+      this.hoverCell.set(this.snapAxis(point.x, this.placingDef?.size.width ?? 1), 0,
+                         this.snapAxis(point.z, this.placingDef?.size.depth ?? 1));
+    }
 
     // Pickup-mode raycast: while the player is in sell or move-pickup,
     // they're aiming AT items (not floor cells). With an iso camera, a
@@ -657,6 +666,16 @@ export class BuildMenu {
    * GREEN. Otherwise we use the integer cell under the cursor and mark
    * YELLOW (or RED if blocked). */
   private computePlacementPlan(def: FurnitureDef, rawPoint: THREE.Vector3): PlacementPlan {
+    // Edge-placed items (walls, internal doorways, partitions) snap to
+    // grid LINES rather than tile centers. The wall sits between two
+    // adjacent cells; both cells stay usable. rotY swings 90° so the
+    // wall mesh aligns with the edge direction (horizontal vs vertical).
+    if (def.placement === "edge") {
+      const e = this.snapToEdge(rawPoint.x, rawPoint.z);
+      // No tile-overlap check — walls don't claim a tile.
+      return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
+    }
+
     const cellX = this.snapAxis(rawPoint.x, def.size.width);
     const cellZ = this.snapAxis(rawPoint.z, def.size.depth);
     // When moving an existing item, ignore that item in every overlap /
@@ -683,6 +702,39 @@ export class BuildMenu {
       return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
     }
     return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };
+  }
+
+  /** Snap a raw cursor position to the nearest grid edge for "edge"
+   * placement (walls, internal doorways). Picks horizontal vs vertical
+   * orientation based on which axis is closer to a half-integer line.
+   *
+   *   - Horizontal edge (between cells differing in Z): rotY = 0,
+   *     mesh runs along X. Anchor at (integer X, half-integer Z).
+   *   - Vertical edge (between cells differing in X): rotY = π/2,
+   *     mesh runs along Z. Anchor at (half-integer X, integer Z).
+   *
+   * The mesh is authored 1 tile long, so a snapped edge anchor lines
+   * the wall up exactly between two cell centers. */
+  private snapToEdge(rawX: number, rawZ: number): { x: number; z: number; rotY: number } {
+    const fracX = rawX - Math.floor(rawX); // 0..1
+    const fracZ = rawZ - Math.floor(rawZ);
+    // Distance from each axis's nearest 0.5 (mid-cell line).
+    const distVertical = Math.abs(fracX - 0.5);
+    const distHorizontal = Math.abs(fracZ - 0.5);
+    if (distVertical < distHorizontal) {
+      // Closer to a vertical grid line — place a vertical wall (runs
+      // along Z). Snap X to nearest half-integer, Z to integer.
+      return {
+        x: Math.floor(rawX) + 0.5,
+        z: Math.round(rawZ),
+        rotY: Math.PI / 2,
+      };
+    }
+    return {
+      x: Math.round(rawX),
+      z: Math.floor(rawZ) + 0.5,
+      rotY: 0,
+    };
   }
 
   /** Set every mesh on the preview to the quality color. Materials were
