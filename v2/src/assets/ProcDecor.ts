@@ -239,16 +239,19 @@ function frontDoor(): THREE.Group {
   panel.castShadow = true;
   panel.receiveShadow = true;
   hinge.add(panel);
-  // Knob on the far (free) edge of the panel.
+  // Knob + trim — attached to the HINGE (not the panel) because their
+  // coordinates were authored in the hinge's frame. Adding them as
+  // children of `panel` made them inherit panel's +panelWidth/2 offset,
+  // which pushed both outside the panel on the right side — hence the
+  // "two bars and a dot floating next to the door" visual.
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), knobMat);
   knob.position.set(panelWidth - 0.08, panelHeight / 2, panelThick / 2 + 0.04);
-  panel.add(knob);
-  // Two horizontal panel-trim lines so it looks like a real door.
+  hinge.add(knob);
   const trimMat = new THREE.MeshStandardMaterial({ color: 0x5a3722, roughness: 0.7 });
   for (let i = 0; i < 2; i += 1) {
     const trim = new THREE.Mesh(new THREE.BoxGeometry(panelWidth - 0.18, 0.04, 0.005), trimMat);
     trim.position.set(panelWidth / 2 - 0.04, panelHeight * (i === 0 ? 0.3 : 0.7), panelThick / 2 + 0.001);
-    panel.add(trim);
+    hinge.add(trim);
   }
   g.add(hinge);
   // Expose the hinge so WorldScene can rotate it.
