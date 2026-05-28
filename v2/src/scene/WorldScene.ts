@@ -371,21 +371,24 @@ export class WorldScene {
     // Default starter colors are intentionally bare white — the warm
     // tones moved into purchasable themes the player picks in the Decor
     // menu. See data/themes.ts.
+    //
+    // Floor + walls + grid are all shifted by (+0.5, +0.5) so they
+    // enclose the same area as the grid (which has lines at half-integer
+    // coords so items placed at integer coords appear inside tiles).
+    // Before this shift the floor extended 0.5 past the grid on the
+    // back/left, which the player saw as "floor leaking outside the
+    // restaurant".
     this.floorMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.95, metalness: 0 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = 0.0; // sits above grass
+    floor.position.set(0.5, 0.0, 0.5); // sits above grass; +0.5 shift to align with tile-center convention
     floor.receiveShadow = true;
     this.threeScene.add(floor);
 
-    // Grid overlay so the iso "tile" feel reads (interior only).
-    // Shifted by (+0.5, +0.5) so grid lines fall on the BORDERS of tiles
-    // rather than through their CENTERS. Items are placed at integer
-    // coords (snap function uses Math.round) which are the centers of
-    // tiles in this convention, so the visual lines have to live at
-    // half-integers to enclose each tile cleanly. Without this shift,
-    // every placed item visually sat on the cross-section of four
-    // tiles instead of inside one.
+    // Grid overlay so the iso "tile" feel reads (interior only). Lines
+    // at half-integer coords so items at integer snap visually sit
+    // inside cells. See the floor comment above for why the (0.5, 0.5)
+    // shift exists at all.
     const grid = new THREE.GridHelper(10, 10, 0xa68969, 0xc4ab85);
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.3;
@@ -393,16 +396,17 @@ export class WorldScene {
     this.threeScene.add(grid);
 
     // === Walls ===
-    // Solid back + left walls.
+    // Solid back + left walls. Same (+0.5, +0.5) shift as the floor so
+    // the building envelope coincides with the tiled area.
     this.wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85 });
     const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
-    wallBack.position.set(0, 1.5, -5);
+    wallBack.position.set(0.5, 1.5, -4.5);
     wallBack.castShadow = true;
     wallBack.receiveShadow = true;
     this.threeScene.add(wallBack);
 
     const wallSide = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallMat);
-    wallSide.position.set(-5, 1.5, 0);
+    wallSide.position.set(-4.5, 1.5, 0.5);
     wallSide.castShadow = true;
     wallSide.receiveShadow = true;
     this.threeScene.add(wallSide);
@@ -414,21 +418,23 @@ export class WorldScene {
       transparent: true, opacity: 0.15, depthWrite: false,
     });
     const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), ghostMat);
-    wallRight.position.set(5, 1.5, 0);
+    wallRight.position.set(5.5, 1.5, 0.5);
     this.threeScene.add(wallRight);
     // Front wall is split into two segments leaving a 1-tile doorway
-    // open at x=-0.5..+0.5 (matches the 1×1 door footprint).
+    // open at x=-0.5..+0.5 (matches the 1×1 door footprint at x=0).
+    // X positions of these segments stay unshifted so the gap remains
+    // centered on x=0 — that's where the demo door's tile lands.
     const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(4.5, 3, 0.2), ghostMat);
-    frontLeft.position.set(-2.75, 1.5, 5);
+    frontLeft.position.set(-2.75, 1.5, 5.5);
     this.threeScene.add(frontLeft);
-    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(4.5, 3, 0.2), ghostMat);
-    frontRight.position.set(2.75, 1.5, 5);
+    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(5.5, 3, 0.2), ghostMat);
+    frontRight.position.set(3.25, 1.5, 5.5);
     this.threeScene.add(frontRight);
     // Door lintel — fills the gap above the doorway so the front wall
     // reads as enclosed (door panel is 2 units tall; lintel runs from
     // y=2 to y=3). 1.0 wide so it exactly meets frontLeft/frontRight.
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), ghostMat);
-    lintel.position.set(0, 2.5, 5);
+    lintel.position.set(0, 2.5, 5.5);
     this.threeScene.add(lintel);
     // Restaurant rating sign mounted on the lintel — a small marquee
     // that shows the current ★ rating, just like a real bistro
@@ -447,7 +453,10 @@ export class WorldScene {
    * drops off groceries. Static — not registered, not sellable. */
   private buildSupplyCounter(): void {
     const counter = new THREE.Group();
-    counter.position.set(this.stoveFurniturePos.x - 3, 0, this.stoveFurniturePos.y);
+    // Position relative to the back wall (z = -4.5 after the (+0.5, +0.5)
+    // shift). Counter back face hugs the wall; the helper's drop-off
+    // standing spot (supplyCounterPos) sits one tile to the south.
+    counter.position.set(this.stoveFurniturePos.x - 3, 0, this.stoveFurniturePos.y - 0.05);
     // Cabinet body — 1 unit wide, ~0.85 tall, 0.7 deep, hugging the back wall.
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(1.0, 0.85, 0.7),
@@ -491,7 +500,7 @@ export class WorldScene {
     // the wall so it casts a shadow and reads as physical.
     const boardMat = new THREE.MeshStandardMaterial({ color: 0x1d1813, roughness: 0.75 });
     const board = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.45, 0.04), boardMat);
-    board.position.set(0, 2.5, 5.13);
+    board.position.set(0, 2.5, 5.63);
     board.castShadow = true;
     this.threeScene.add(board);
     // 5 star slots evenly spaced. Each star is a thin disc with a gold
@@ -509,7 +518,7 @@ export class WorldScene {
       const offMat = offMatTemplate.clone();
       const star = new THREE.Mesh(new THREE.CircleGeometry(0.06, 16), offMat);
       // Star x positions evenly across the board's 0.8 usable width.
-      star.position.set(-0.32 + i * 0.16, 2.5, 5.16);
+      star.position.set(-0.32 + i * 0.16, 2.5, 5.66);
       this.threeScene.add(star);
       this.ratingStars.push({ mesh: star, litMat, offMat });
     }
@@ -561,21 +570,19 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
-      // Starter 4-top: the small-table is 2×2 so its anchor is at the
-      // cross-section of four cells (0.5, 1.5), covering cells (0,1)
-      // (1,1) (0,2) (1,2). The four chairs sit on the four adjacent
-      // tiles, one per side, each facing toward the table center —
-      // every chair lands on an integer cell coord so they read as
-      // properly centered in their own tiles.
+      // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Four chairs,
+      // one centered on each side (symmetric). Chair anchors are at
+      // half-integer in one axis (sit on tile borders) but plates land
+      // symmetrically on the four table edges, which reads cleanly.
       { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
-      // Top chair: cell (0, 0), faces +Z (toward table).
-      { id: "wooden-chair", x:  0,   z:  0,   rotY: Math.PI,     tier: 1 },
-      // Right chair: cell (2, 1), faces -X.
-      { id: "wooden-chair", x:  2,   z:  1,   rotY: -Math.PI / 2, tier: 1 },
-      // Bottom chair: cell (1, 3), faces -Z (the facingY=0 baseline).
-      { id: "wooden-chair", x:  1,   z:  3,   rotY: 0,            tier: 1 },
-      // Left chair: cell (-1, 2), faces +X.
-      { id: "wooden-chair", x: -1,   z:  2,   rotY:  Math.PI / 2, tier: 1 },
+      // Top side chair (faces +Z toward table).
+      { id: "wooden-chair", x:  0.5, z: -0.5, rotY: Math.PI,      tier: 1 },
+      // Right side chair (faces -X).
+      { id: "wooden-chair", x:  2.5, z:  1.5, rotY: -Math.PI / 2, tier: 1 },
+      // Bottom side chair (facingY=0 baseline).
+      { id: "wooden-chair", x:  0.5, z:  3.5, rotY: 0,            tier: 1 },
+      // Left side chair (faces +X).
+      { id: "wooden-chair", x: -1.5, z:  1.5, rotY:  Math.PI / 2, tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {

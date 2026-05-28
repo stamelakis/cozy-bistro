@@ -80,6 +80,11 @@ export interface FurnitureDef {
   attractionBonus?: number;
   ratingBonus?: number;
   seatingCapacity?: number;
+  /** How many extra units of pantry stock this piece adds to the
+   * restaurant's max stock per ingredient. Fridges contribute the most,
+   * shelves/cabinets a smaller amount. Game sums this across all placed
+   * items and uses it to scale the auto-shop's stock target. */
+  stockCapacity?: number;
 }
 
 /** Default 4-side seat slot pattern for a 2×2 dining table that seats 4.
@@ -100,14 +105,20 @@ export interface FurnitureDef {
  * different table meshes can have different top heights without the
  * plate floating. */
 const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
-  // Top chair: cell at table_anchor + (-0.5, -1.5). Faces +Z.
-  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.3, dz: -0.7 } },
-  // Right chair: cell at (+1.5, -0.5). Faces -X.
-  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.7, dz: -0.3 } },
-  // Bottom chair: cell at (+0.5, +1.5). Faces -Z (facingY=0 baseline).
-  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.3, dz:  0.7 } },
-  // Left chair: cell at (-1.5, +0.5). Faces +X.
-  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.7, dz:  0.3 } },
+  // One chair centered on each side of the 2×2 table, plate just inside
+  // the matching edge so it reads as "this guest's plate". Chair anchors
+  // end up half-integer (table center is half-integer, ±2.0 offset →
+  // also half-integer) so the chairs sit on tile borders — acceptable
+  // for chairs since they're small and don't visibly straddle tiles
+  // the way tables would.
+  // Top side: chair faces +Z (toward table); plate inside top edge.
+  { dx:  0,   dz: -2.0, facingY:  Math.PI,     platePos: { dx:  0,   dz: -0.7 } },
+  // Right side: chair faces -X.
+  { dx:  2.0, dz:  0,   facingY: -Math.PI / 2, platePos: { dx:  0.7, dz:  0   } },
+  // Bottom side: chair faces -Z (facingY=0 baseline).
+  { dx:  0,   dz:  2.0, facingY:  0,           platePos: { dx:  0,   dz:  0.7 } },
+  // Left side: chair faces +X.
+  { dx: -2.0, dz:  0,   facingY:  Math.PI / 2, platePos: { dx: -0.7, dz:  0   } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
@@ -208,9 +219,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "microwave",      name: "Microwave",       category: "counter",
     modelPath: "assets/kenney/kitchenMicrowave.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80 },
   { id: "fridge",         name: "Fridge",          category: "counter",
-    modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 360 },
+    modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 360,
+    stockCapacity: 4 },
+  // Walk-in is a "room" — actually 2×2 tiles and stretched tall. Holds
+  // a lot more stock than a standard upright fridge.
   { id: "fridge-large",   name: "Walk-in Fridge",  category: "counter",
-    modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 540 },
+    modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 2, depth: 2 }, cost: 540,
+    targetHeight: 2.2, stockCapacity: 12 },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90 },
   { id: "coffee-machine", name: "Coffee Machine",  category: "counter",
@@ -228,9 +243,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120 },
   { id: "fridge-built-in", name: "Built-in Fridge", category: "counter",
-    modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 380 },
+    modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 380,
+    stockCapacity: 5 },
   { id: "fridge-small",   name: "Mini Fridge",     category: "counter",
-    modelPath: "assets/kenney/kitchenFridgeSmall.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180 },
+    modelPath: "assets/kenney/kitchenFridgeSmall.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180,
+    stockCapacity: 2 },
   { id: "counter-drawer", name: "Drawer Counter",  category: "counter",
     modelPath: "assets/kenney/kitchenCabinetDrawer.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 110 },
 

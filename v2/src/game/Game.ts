@@ -10,6 +10,7 @@ import { AchievementSystem } from "./AchievementSystem";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
 import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
+import { getFurnitureDef } from "../data/furnitureCatalog";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -414,13 +415,37 @@ export class Game {
   }
 
   // === Stock target (auto-shop refill level) ===
-  getStockTarget(): number { return this.stockTarget; }
+  /** Stock target per ingredient. Combines the player's manually-set
+   * baseline with bonuses from placed fridges / shelves (FurnitureDef
+   * .stockCapacity). A bare restaurant defaults to MIN_STOCK_TARGET;
+   * a fridge adds +4, a walk-in adds +12, etc. Capped so the auto-shop
+   * never tries to stockpile more than MAX_STOCK_TARGET per item. */
+  getStockTarget(): number {
+    const cap = Math.min(MAX_STOCK_TARGET, this.stockTarget + this.getFridgeStockBonus());
+    return Math.max(MIN_STOCK_TARGET, cap);
+  }
+  /** Manually-set baseline, before fridge bonuses. Exposed so the +/-
+   * UI can show "X (+Y from fridges)" instead of pretending the bonus
+   * is part of the user's choice. */
+  getBaseStockTarget(): number { return this.stockTarget; }
+  /** Sum of stockCapacity across all placed furniture. Recomputed each
+   * call — cheap because the registry is in-memory. */
+  getFridgeStockBonus(): number {
+    if (!this.registry) return 0;
+    let sum = 0;
+    for (const it of this.registry.snapshotItems()) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.stockCapacity) sum += def.stockCapacity;
+    }
+    return sum;
+  }
   getMinStockTarget(): number { return MIN_STOCK_TARGET; }
   getMaxStockTarget(): number { return MAX_STOCK_TARGET; }
   setStockTarget(n: number): void {
     this.stockTarget = Math.max(MIN_STOCK_TARGET, Math.min(MAX_STOCK_TARGET, Math.round(n)));
   }
-  /** Convenience: +1 or -1 with clamp. Returns the new value. */
+  /** Convenience: +1 or -1 with clamp. Returns the new value (manual
+   * baseline, not the fridge-augmented effective target). */
   bumpStockTarget(delta: number): number {
     this.setStockTarget(this.stockTarget + delta);
     return this.stockTarget;
@@ -530,7 +555,10 @@ export class Game {
 
   /** Optional accessor to the placed-furniture registry — set by Engine
    * once the world is ready. Used by getAttractiveness to read decor. */
-  registry?: { getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number } };
+  registry?: {
+    getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number };
+    snapshotItems(): readonly { defId: string }[];
+  };
 
   /** Daily rent owed this in-game day. Scales with luxury tier and the
    * admin.rentMultiplier knob. */
