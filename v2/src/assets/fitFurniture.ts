@@ -125,3 +125,25 @@ export function fittedHeight(model: THREE.Object3D): number {
   const box = new THREE.Box3().setFromObject(model);
   return box.max.y - box.min.y;
 }
+
+/** Top of the building envelope. Walls are 3 units tall (BoxGeometry y=3
+ * centred at y=1.5), so the ceiling sits at y=3. Ceiling-mounted items
+ * have their model TOP aligned with this. */
+export const CEILING_Y = 3;
+
+/** Pick the world-space Y for a placed model based on its placement
+ * kind. Shared by BuildMenu (place / preview), the undo handler, and
+ * FurnitureRegistry.restore so a ceiling lamp lands at the same Y
+ * however it got into the scene.
+ *
+ *   - "wall"    → 1.5 (chest height, set by the wall-mount logic)
+ *   - "ceiling" → CEILING_Y minus the model's own height, so its TOP
+ *                 touches the ceiling and the body hangs below
+ *   - otherwise → whatever fitFurniture left model.position.y at (≈ 0) */
+export function placementY(model: THREE.Object3D, def: FurnitureDef): number {
+  if (def.placement === "wall") return 1.5;
+  if (def.placement === "ceiling") {
+    return Math.max(0, CEILING_Y - fittedHeight(model));
+  }
+  return model.position.y;
+}

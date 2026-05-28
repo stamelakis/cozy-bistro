@@ -134,8 +134,11 @@ const SEAT_CLEAN_SECONDS = 4.0;
 
 /** Per-state guest label for the status-bubble layer. Returns empty
  * string while walking in/out (the bubble layer hides empty labels).
- * Prefixes the archetype emoji so the player can tell who's who. */
-function guestLabel(g: ActiveGuest): string {
+ * Prefixes the archetype emoji so the player can tell who's who, and
+ * swaps the meal icons for a drink emoji when the guest is seated at
+ * a drink-only table — that way the player can see at a glance which
+ * customers are using the lounge / coffee corner. */
+function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
   const prefix = g.archetype.shortLabel;
   switch (g.state) {
     case "walkingIn":      return "";
@@ -144,13 +147,17 @@ function guestLabel(g: ActiveGuest): string {
       const secs = g.waiting ? Math.max(0, Math.ceil(g.waiting.timeLeft)) : 0;
       return `${prefix} 🪑 ${secs}s`;
     }
-    case "seated":         return g.order.length === 0 ? `${prefix} 📋` : `${prefix} ⏳`;
+    case "seated": {
+      const menuIcon = drinkTable ? "📋🥤" : "📋";
+      return g.order.length === 0 ? `${prefix} ${menuIcon}` : `${prefix} ⏳`;
+    }
     case "waitingForFood": {
       // Show patience countdown so the player feels the urgency.
       const secs = Math.max(0, Math.ceil(g.patience));
-      return `${prefix} ⏳ ${secs}s`;
+      const waitIcon = drinkTable ? "🥤" : "⏳";
+      return `${prefix} ${waitIcon} ${secs}s`;
     }
-    case "eating":         return `${prefix} 🍴`;
+    case "eating":         return `${prefix} ${drinkTable ? "🥤" : "🍴"}`;
     case "walkingToDoor":  return "";
     case "walkingOut":     return "";
   }
@@ -404,12 +411,14 @@ export class GuestSpawner {
   }
 
   /** Snapshot used by the UI status-bubble layer. Returns one entry per
-   * guest with a label + a panic flag so the bubble can flash red. */
+   * guest with a label + a panic flag so the bubble can flash red.
+   * Looks up the seated table's surface so drink-table guests render
+   * with the 🥤 icon instead of 🍴 / 📋. */
   snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean }[] {
     return this.guests.map((g) => ({
       id: g.id,
       character: g.character,
-      label: guestLabel(g),
+      label: guestLabel(g, this.tableSurfaceForGuest(g) === "drink"),
       panic: (g.state === "seated" || g.state === "waitingForFood") && g.patience < 12,
     }));
   }

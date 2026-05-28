@@ -2,9 +2,9 @@ import * as THREE from "three";
 import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
-import { FurnitureRegistry } from "../game/FurnitureRegistry";
+import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
-import { fitFurniture } from "../assets/fitFurniture";
+import { fitFurniture, placementY } from "../assets/fitFurniture";
 
 /** A single user action that can be undone. The BuildMenu records one of
  * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
@@ -577,8 +577,7 @@ export class BuildMenu {
       this.game.economy.charge(entry.refundPaid);
       void this.loader.load(def.modelPath).then((solid) => {
         fitFurniture(solid, def);
-        const y = def.placement === "wall" ? 1.5 : solid.position.y;
-        solid.position.set(entry.x, y, entry.z);
+        solid.position.set(entry.x, placementY(solid, def), entry.z);
         solid.rotation.y = entry.rotY;
         this.scene.add(solid);
         this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid);
@@ -710,9 +709,10 @@ export class BuildMenu {
     const plan = this.computePlacementPlan(this.placingDef, point);
     this.currentPlan = plan;
     // Apply the plan's pose to the preview so the user sees the snap.
-    // Wall-mounted items show at chest height (matches where they'll
-    // land on the wall) instead of dropping the ghost to the floor.
-    const previewY = this.placingDef?.placement === "wall" ? 1.5 : 0;
+    // placementY picks the right Y for each placement kind: floor at 0,
+    // wall items at chest height, ceiling items hanging from y=3 so
+    // their top touches the ceiling.
+    const previewY = placementY(this.preview, this.placingDef);
     this.preview.position.set(plan.x, previewY, plan.z);
     this.preview.rotation.y = plan.rotY;
     this.tintPreview(plan.quality);
@@ -792,9 +792,19 @@ export class BuildMenu {
       }
     }
 
-    const blocked = this.registry.isOccupied(cellX, cellZ, excludeUid);
-    if (blocked) {
-      return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+    // Footprint-aware occupancy check. Enumerate the cells this item
+    // would actually cover (honouring L-shape masks + rotation) and
+    // make sure every one of them is clear on the right layer. The
+    // legacy single-point isOccupied was too coarse for multi-tile
+    // L-shapes — a corner sofa wrapping a coffee table would see the
+    // table inside its 0.6 tolerance and report "blocked" even though
+    // the table sat in the sofa's open elbow (mask = 0).
+    const layer: "tile" | "ceiling" = def.placement === "ceiling" ? "ceiling" : "tile";
+    const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
+    for (const cell of previewCells) {
+      if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer)) {
+        return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+      }
     }
     return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };
   }

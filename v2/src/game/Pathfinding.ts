@@ -190,10 +190,10 @@ function reconstruct(came: Map<string, string>, startKey: string, goalKey: strin
 
 /** Decide whether a furniture category should block walking on its
  * cells. Mirrors the visual rule of thumb: solid furniture blocks;
- * rugs, wall-mounted decor, and edge-placed walls/windows don't claim
- * tiles. */
+ * rugs, wall-mounted decor, edge-placed walls/windows, and ceiling-
+ * mounted items don't claim floor tiles. */
 function isBlockingCategory(category: string, placement: string | undefined): boolean {
-  if (placement === "edge" || placement === "wall") return false;
+  if (placement === "edge" || placement === "wall" || placement === "ceiling") return false;
   switch (category) {
     case "table":
     case "chair":

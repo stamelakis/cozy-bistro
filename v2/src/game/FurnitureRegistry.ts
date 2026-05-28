@@ -83,44 +83,73 @@ export class FurnitureRegistry {
     }
   }
 
-  /** True if a tile-claiming item is already at the given snapped cell.
-   * Allows a half-cell tolerance so chairs placed at fractional coords
-   * (e.g. -2.9, 1.0) register as occupying the nearest integer cell too.
-   * Pass `excludeUid` to skip a specific item (used during move mode so
-   * an item doesn't block its own destination).
-   *
-   * Critically: edge/wall-placed items don't claim a tile and are
-   * skipped — otherwise a wall sitting at x=1.5 would falsely block
-   * both (1, _) and (2, _) because its 0.5 distance to each cell center
-   * falls inside the 0.6 tolerance. */
-  isOccupied(x: number, z: number, excludeUid?: string): boolean {
-    return this.findIndexNear(x, z, excludeUid, true) >= 0;
+  /** True if an item on the SAME placement layer is already at the
+   * given cell. Allows a half-cell tolerance so chairs placed at
+   * fractional coords (e.g. -2.9, 1.0) register as occupying the
+   * nearest integer cell too. Pass `excludeUid` to skip a specific
+   * item (used during move mode so an item doesn't block its own
+   * destination). The `layer` decides which placement plane to check:
+   *   - "tile"   (default): floor furniture. Skips edge/wall items
+   *              (they don't claim a tile) AND skips ceiling items
+   *              (different plane).
+   *   - "ceiling": only checks other ceiling items at this cell. A
+   *              floor item underneath a hanging lamp doesn't block. */
+  isOccupied(x: number, z: number, excludeUid?: string, layer: "tile" | "ceiling" = "tile"): boolean {
+    return this.findIndexNear(x, z, excludeUid, layer) >= 0;
+  }
+
+  /** True if any same-layer item's FOOTPRINT covers the integer cell
+   * (cellX, cellZ). Differs from {@link isOccupied} in that it honours
+   * the placed item's footprint mask — an L-shaped corner sofa's open
+   * elbow doesn't count as occupied, so the player can drop a coffee
+   * table into the open corner without the simple ±0.6 tolerance check
+   * falsely blocking it. This is the right per-cell test when you've
+   * already enumerated the would-be placement's footprint cells via
+   * {@link footprintCells} and need to verify each one is clear. */
+  isCellBlocked(cellX: number, cellZ: number, excludeUid: string | undefined, layer: "tile" | "ceiling"): boolean {
+    for (const it of this.items) {
+      if (excludeUid && it.uid === excludeUid) continue;
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      const placement = def.placement ?? "tile";
+      if (placement !== layer) continue;
+      if (footprintCoversCell(it, def, cellX, cellZ)) return true;
+    }
+    return false;
   }
 
   /** Find a placed item near the given snapped cell. Uses ±0.6 tolerance
    * so demo placements at fractional coords (chairs around table centers)
    * can still be picked by Move/Sell mode. Most recently-placed wins.
-   * Includes edge/wall items so Sell mode can still target a wall by
-   * clicking on the tile next to it. */
+   * Considers ALL placement layers so Sell mode can target walls,
+   * ceilings, and floor items by clicking the cell. */
   findAt(x: number, z: number, excludeUid?: string): PlacedFurnitureItem | null {
-    const i = this.findIndexNear(x, z, excludeUid, false);
+    const i = this.findIndexNear(x, z, excludeUid, "any");
     return i >= 0 ? this.items[i] : null;
   }
 
   /** Internal: return the index of the nearest item within ±0.6 of (x, z),
-   * or -1. Searches newest-first so player placements beat demo. When
-   * `tileOnly` is true, items whose def.placement is "edge" or "wall"
-   * are ignored — those don't claim a floor tile. */
-  private findIndexNear(x: number, z: number, excludeUid: string | undefined, tileOnly: boolean): number {
+   * or -1. Searches newest-first so player placements beat demo.
+   *   - layer="tile": consider only tile-claiming floor items (skip
+   *     edge/wall/ceiling).
+   *   - layer="ceiling": consider only ceiling items.
+   *   - layer="any": include every item (used by Move/Sell pickup). */
+  private findIndexNear(x: number, z: number, excludeUid: string | undefined, layer: "tile" | "ceiling" | "any"): number {
     const TOL = 0.6;
     let bestIdx = -1;
     let bestDist = Infinity;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
       const it = this.items[i];
       if (excludeUid && it.uid === excludeUid) continue;
-      if (tileOnly) {
-        const placement = getFurnitureDef(it.defId)?.placement;
-        if (placement === "edge" || placement === "wall") continue;
+      if (layer !== "any") {
+        const placement = getFurnitureDef(it.defId)?.placement ?? "tile";
+        if (layer === "tile") {
+          // Floor layer: skip everything that isn't "tile".
+          if (placement !== "tile") continue;
+        } else {
+          // Ceiling layer: skip everything that isn't "ceiling".
+          if (placement !== "ceiling") continue;
+        }
       }
       const dx = it.x - x;
       const dz = it.z - z;
@@ -138,9 +167,9 @@ export class FurnitureRegistry {
    * selling a Linen Table doesn't punish the player as hard as selling a
    * plain wooden chair. Returns null if nothing was there. */
   removeAt(x: number, z: number): { defId: string; refund: number } | null {
-    // Sell mode should be able to target walls + wall-mounted items too,
-    // so include all placements here (tileOnly=false).
-    const idx = this.findIndexNear(x, z, undefined, false);
+    // Sell mode should be able to target walls / wall-mounted items /
+    // ceiling items too, so include all placements here (layer="any").
+    const idx = this.findIndexNear(x, z, undefined, "any");
     if (idx < 0) return null;
     const item = this.items[idx];
     this.scene.remove(item.model);
@@ -191,14 +220,25 @@ export class FurnitureRegistry {
   }
 
   /** Move an existing item to a new cell. Returns true on success
-   * (item exists, new cell is free or the same). */
+   * (item exists, new cell is free or the same). Checks occupancy on
+   * the same placement layer using the full footprint so a corner sofa
+   * moving INTO a spot whose elbow already has a coffee table still
+   * relocates (the elbow cell is mask = 0). */
   relocate(uid: string, x: number, z: number): boolean {
     const item = this.items.find((it) => it.uid === uid);
     if (!item) return false;
     if (item.x === x && item.z === z) return true;
-    if (this.isOccupied(x, z)) return false;
+    const def = getFurnitureDef(item.defId);
+    if (!def) return false;
+    const layer: "tile" | "ceiling" = def.placement === "ceiling" ? "ceiling" : "tile";
+    const cells = footprintCells({ x, z, rotY: item.rotY }, def);
+    for (const cell of cells) {
+      if (this.isCellBlocked(cell.x, cell.z, uid, layer)) return false;
+    }
     item.x = x; item.z = z;
-    item.model.position.set(x, 0, z);
+    // Preserve the model's Y — relocating a ceiling lamp keeps it on
+    // the ceiling, a floor table keeps its floor Y.
+    item.model.position.set(x, item.model.position.y, z);
     return true;
   }
 

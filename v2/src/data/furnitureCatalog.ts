@@ -66,8 +66,13 @@ export interface FurnitureDef {
    *     already in the scene). Picks the nearest placed wall to the
    *     cursor, snaps to its centre at chest height (~1.5m), and
    *     copies its rotation so the item face matches the wall face.
-   *     Used for art, mirrors, menu boards, signage, sconces. */
-  placement?: "tile" | "edge" | "wall";
+   *     Used for art, mirrors, menu boards, signage, sconces.
+   *   - "ceiling": hangs from the top of the wall (y=3). Snaps to
+   *     integer tile centers like "tile" placement, but the ceiling
+   *     and floor are independent layers — a ceiling lamp at (3, 2)
+   *     does NOT block a chair from going on the floor tile below it.
+   *     Ceiling-lamp, ceiling-fan, hanging-plant. */
+  placement?: "tile" | "edge" | "wall" | "ceiling";
   /** Optional realistic world-space height (in units ≈ metres). When set,
    * fitFurniture independently stretches Y so the placed item lands at
    * this height regardless of the raw mesh's proportions. Without it
@@ -253,23 +258,22 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "rounded-chair",  name: "Rounded Chair", category: "chair",
     modelPath: "assets/kenney/chairRounded.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 28, comfort: 3, style: 2 },
   { id: "bar-stool",      name: "Bar Stool",     category: "chair",
-    modelPath: "assets/kenney/stoolBar.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 20, comfort: 1, style: 1 },
+    modelPath: "assets/kenney/stoolBar.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 20, comfort: 1, style: 1,
+    surface: "drink" },
   { id: "lounge-chair",   name: "Lounge Chair",  category: "chair",
     modelPath: "assets/kenney/loungeChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 56, comfort: 4, style: 3 },
   { id: "bench-cushion",  name: "Cushion Bench", category: "chair",
-    modelPath: "assets/kenney/benchCushion.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 64, comfort: 3, style: 2, seatingCapacity: 2,
-    surface: "drink" },
+    modelPath: "assets/kenney/benchCushion.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 64, comfort: 3, style: 2, seatingCapacity: 2 },
   { id: "bench-cushion-low", name: "Low Cushion Bench", category: "chair",
-    modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 2, style: 2, seatingCapacity: 2,
-    surface: "drink" },
+    modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 2, style: 2, seatingCapacity: 2 },
   { id: "bench-plain",    name: "Wooden Bench",  category: "chair",
-    modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 40, comfort: 1, style: 1, seatingCapacity: 2,
-    surface: "drink" },
+    modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 40, comfort: 1, style: 1, seatingCapacity: 2 },
   { id: "bar-stool-sq",   name: "Square Bar Stool", category: "chair",
-    modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 22, comfort: 1, style: 2 },
+    modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 22, comfort: 1, style: 2,
+    surface: "drink" },
   { id: "lounge-relax",   name: "Relax Lounge",  category: "chair",
     modelPath: "assets/kenney/loungeChairRelax.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 72, comfort: 5, style: 4 },
-  { id: "lounge-design",  name: "Designer Lounge", category: "chair",
+  { id: "lounge-design",  name: "Designer Lounge Chair", category: "chair",
     modelPath: "assets/kenney/loungeDesignChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 88, comfort: 4, style: 5, ratingBonus: 0.05 },
   { id: "sofa",           name: "Sofa",          category: "chair",
     modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 120, comfort: 5, style: 3, seatingCapacity: 2,
@@ -347,7 +351,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "side-table-d",   name: "Side Table w/ Drawer", category: "decoration",
     modelPath: "assets/kenney/sideTableDrawers.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 42 },
   { id: "ceiling-fan",    name: "Ceiling Fan",     category: "decoration",
-    modelPath: "assets/kenney/ceilingFan.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 65 },
+    modelPath: "assets/kenney/ceilingFan.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 65,
+    placement: "ceiling" },
   { id: "trashcan",       name: "Trash Can",       category: "decoration",
     modelPath: "assets/kenney/trashcan.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 14 },
   { id: "pillow",         name: "Cushion",         category: "decoration",
@@ -401,7 +406,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "floor-lamp-sq",  name: "Square Floor Lamp", category: "lamp",
     modelPath: "assets/kenney/lampSquareFloor.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 30, style: 2, attractionBonus: 1 },
   { id: "ceiling-lamp",   name: "Ceiling Lamp",      category: "lamp",
-    modelPath: "assets/kenney/lampSquareCeiling.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 22, style: 1, attractionBonus: 1 },
+    modelPath: "assets/kenney/lampSquareCeiling.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 22, style: 1, attractionBonus: 1,
+    placement: "ceiling" },
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
     modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 18, style: 2 },
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
@@ -559,7 +565,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "planter-box",    name: "Planter Box",     category: "plant",
     modelPath: "proc:planter-box", scale: S_PROC, size: { width: 2, depth: 1 }, cost: 60, style: 2, attractionBonus: 2 },
   { id: "hanging-plant",  name: "Hanging Plant",   category: "plant",
-    modelPath: "proc:hanging-plant", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 35, style: 2, attractionBonus: 1 },
+    modelPath: "proc:hanging-plant", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 35, style: 2, attractionBonus: 1,
+    placement: "ceiling" },
   { id: "dessert-display", name: "Dessert Case",   category: "decoration",
     modelPath: "proc:dessert-display", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 180, style: 4, attractionBonus: 4, ratingBonus: 0.03 },
 ];
