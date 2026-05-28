@@ -567,3 +567,25 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
 export function getFurnitureDef(id: string): FurnitureDef | undefined {
   return furnitureCatalog.find((f) => f.id === id);
 }
+
+/** Group a furniture item into one of the 5 quality tiers (1 = basic,
+ * 5 = luxury) for display in the build menu's tier tabs. Heuristic
+ * blends cost with the rating-bonus flag so the prestige pieces are
+ * reliably in T4/T5 even when their nominal cost is modest. Items
+ * have no explicit `tier` field in the catalog yet — this is the
+ * single source of truth. */
+export function inferQualityTier(def: FurnitureDef): 1 | 2 | 3 | 4 | 5 {
+  // Strong "luxury" signal: explicit rating bonus pieces always land
+  // in the prestige tiers regardless of price.
+  if ((def.ratingBonus ?? 0) >= 0.06) return 5;
+  if ((def.ratingBonus ?? 0) > 0)     return 4;
+  // Otherwise fall back to a cost ladder. Thresholds are tuned so the
+  // cheapest functional stove ($240) lands in T3 rather than getting
+  // pushed up just because cooking gear costs more than dining gear.
+  const cost = def.cost;
+  if (cost <  50) return 1;
+  if (cost < 150) return 2;
+  if (cost < 300) return 3;
+  if (cost < 500) return 4;
+  return 5;
+}

@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
+import { furnitureCatalog, inferQualityTier, type FurnitureDef } from "../data/furnitureCatalog";
+import type { LuxuryTier } from "../data/types";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
@@ -130,6 +131,19 @@ export class BuildMenu {
    * can be torn down. */
   onLampRemoved?: (model: THREE.Object3D) => void;
 
+  /** Foldable state — when collapsed only the title bar shows. */
+  private collapsed = false;
+  /** Which tier tab is currently active. */
+  private selectedTier: LuxuryTier = 1;
+  /** Title bar DOM element — text + arrow updated on collapse toggle. */
+  private titleEl?: HTMLDivElement;
+  /** Body wrapper holding the tier tabs + content. Hidden when collapsed. */
+  private bodyEl?: HTMLDivElement;
+  /** Tier tab row — rebuilt on tier change to update the active highlight. */
+  private tierTabsEl?: HTMLDivElement;
+  /** Content area — rebuilt each time the selected tier changes. */
+  private tierContentEl?: HTMLDivElement;
+
   constructor(
     parent: HTMLElement,
     game: Game,
@@ -155,7 +169,7 @@ export class BuildMenu {
       position: "fixed",
       top: "12px",
       right: "12px",
-      width: "230px",
+      width: "260px",
       // Leave room for the PantryPanel at bottom-right (~35vh).
       maxHeight: "calc(60vh)",
       overflowY: "auto",
@@ -168,106 +182,46 @@ export class BuildMenu {
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(root);
 
+    // Title bar — clickable to collapse / expand. Mirrors MenuPanel's
+    // affordance so the player has a single collapse pattern across
+    // both center-bottom and top-right panels.
     const title = document.createElement("div");
-    title.textContent = "BUILD";
-    Object.assign(title.style, { fontSize: "14px", fontWeight: "600", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(title.style, {
+      fontSize: "14px", fontWeight: "600",
+      marginBottom: "0",
+      cursor: "pointer",
+      userSelect: "none",
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+    } as Partial<CSSStyleDeclaration>);
+    title.onclick = () => this.toggleCollapsed();
     root.appendChild(title);
+    this.titleEl = title;
 
-    // Group buttons by category so a longer catalog stays scannable.
-    // Each category is a collapsible section (all collapsed by default
-    // except Tables) to handle the 50+ items without dominating the screen.
-    const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "counter", "wall", "door", "bathroom",
-      "decoration", "plant", "lamp",
-    ];
-    const categoryLabels: Record<FurnitureDef["category"], string> = {
-      table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
-      wall: "Walls & Partitions", door: "Doors & Windows", bathroom: "Bathroom",
-      decoration: "Decor", plant: "Plants", lamp: "Lighting",
-    };
-    for (const cat of categoryOrder) {
-      const items = furnitureCatalog.filter((d) => d.category === cat);
-      if (items.length === 0) continue;
-      const startOpen = cat === "table";
-      let open = startOpen;
-      const header = document.createElement("div");
-      Object.assign(header.style, {
-        marginTop: "8px",
-        marginBottom: "3px",
-        padding: "3px 4px",
-        fontSize: "11px",
-        fontWeight: "700",
-        opacity: "0.85",
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        cursor: "pointer",
-        background: "rgba(255,245,220,0.05)",
-        borderRadius: "3px",
-        userSelect: "none",
-      } as Partial<CSSStyleDeclaration>);
-      const items_wrap = document.createElement("div");
-      items_wrap.style.display = open ? "block" : "none";
-      const refreshHeader = () => {
-        header.textContent = `${open ? "▾" : "▸"} ${categoryLabels[cat]} (${items.length})`;
-      };
-      refreshHeader();
-      header.onclick = () => {
-        open = !open;
-        items_wrap.style.display = open ? "block" : "none";
-        refreshHeader();
-      };
-      root.appendChild(header);
-      for (const def of items) {
-        const btn = document.createElement("button");
-        // Clear the text content; we lay out name+cost on the left and
-        // an optional badge on the right via inline child spans so the
-        // button stays scannable for the player.
-        btn.textContent = "";
-        Object.assign(btn.style, {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "6px",
-          width: "100%",
-          margin: "0 0 3px 0",
-          padding: "5px 8px",
-          background: "rgba(255,245,220,0.08)",
-          color: "#fff5dc",
-          border: "1px solid rgba(255,245,220,0.18)",
-          borderRadius: "4px",
-          textAlign: "left",
-          cursor: "pointer",
-          fontSize: "12px",
-        } as Partial<CSSStyleDeclaration>);
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = `${def.name} — $${def.cost}`;
-        btn.appendChild(nameSpan);
-        if (def.surface === "drink") {
-          // Coffee tables behave drinks-only; sofas / benches / corner
-          // sofas are flagged purely so the player knows they belong in
-          // a lounge setup. Either way the chip-style badge gives a
-          // glance-read of "this is for the drink side".
-          const badge = document.createElement("span");
-          badge.textContent = "🥤 Drinks only";
-          Object.assign(badge.style, {
-            fontSize: "10px",
-            padding: "1px 6px",
-            borderRadius: "999px",
-            background: "rgba(120, 180, 220, 0.18)",
-            border: "1px solid rgba(120, 180, 220, 0.55)",
-            color: "#c8e0f0",
-            whiteSpace: "nowrap",
-            letterSpacing: "0.02em",
-          } as Partial<CSSStyleDeclaration>);
-          btn.appendChild(badge);
-        }
-        btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
-        btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
-        btn.onclick = () => this.startPlacing(def);
-        items_wrap.appendChild(btn);
-      }
-      root.appendChild(items_wrap);
-    }
+    // Body holds the tier tabs + content + action buttons. Toggled by
+    // the collapse flag.
+    const body = document.createElement("div");
+    Object.assign(body.style, { marginTop: "10px" } as Partial<CSSStyleDeclaration>);
+    root.appendChild(body);
+    this.bodyEl = body;
+
+    // Tier tab strip — 5 buttons, same affordance as MenuPanel's tier
+    // tabs. Re-render the content below whenever the active tier
+    // changes.
+    const tierTabs = document.createElement("div");
+    Object.assign(tierTabs.style, {
+      display: "flex", gap: "3px", marginBottom: "8px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(tierTabs);
+    this.tierTabsEl = tierTabs;
+
+    // Content area populated per tier — categories collapsible inside.
+    const tierContent = document.createElement("div");
+    body.appendChild(tierContent);
+    this.tierContentEl = tierContent;
+
+    this.refreshTitle();
+    this.renderTierTabs();
+    this.renderTierContent();
 
     // Sell + Move buttons live as a pair under the catalog list.
     const actionRow = document.createElement("div");
@@ -308,7 +262,7 @@ export class BuildMenu {
     moveBtn.onclick = () => this.toggleMoveMode();
     actionRow.appendChild(moveBtn);
     this.moveBtn = moveBtn;
-    root.appendChild(actionRow);
+    body.appendChild(actionRow);
 
     // Auto-Arrange + Undo as a second pair of actions.
     const actionRow2 = document.createElement("div");
@@ -351,16 +305,185 @@ export class BuildMenu {
     this.undoBtn.disabled = true;
     this.undoBtn.onclick = () => this.runUndo();
     actionRow2.appendChild(this.undoBtn);
-    root.appendChild(actionRow2);
+    body.appendChild(actionRow2);
 
     const hint = document.createElement("div");
     hint.innerHTML = `Click item → click floor to place. R = rotate. Esc = cancel.<br/>
       Preview tints: <span style="color:#70e070">green</span> = perfect (chair snapped to a table seat),
       <span style="color:#ffd47a">yellow</span> = OK, <span style="color:#ff5050">red</span> = blocked.`;
     Object.assign(hint.style, { marginTop: "8px", opacity: "0.85", fontSize: "10px", lineHeight: "1.35" } as Partial<CSSStyleDeclaration>);
-    root.appendChild(hint);
+    body.appendChild(hint);
 
     return root;
+  }
+
+  /** Toggle the build menu open/closed and refresh the title chevron. */
+  private toggleCollapsed(): void {
+    this.collapsed = !this.collapsed;
+    if (this.bodyEl) this.bodyEl.style.display = this.collapsed ? "none" : "block";
+    this.refreshTitle();
+  }
+
+  /** Sync the title text with the collapse state. */
+  private refreshTitle(): void {
+    if (!this.titleEl) return;
+    const arrow = this.collapsed ? "▾" : "▴";
+    const hint = this.collapsed ? " (click to expand)" : "";
+    this.titleEl.innerHTML = `<span>BUILD ${arrow}${hint}</span>`;
+  }
+
+  /** Re-render the tier tab row, highlighting the active tier. The
+   * tier is purely organisational right now — no items are locked
+   * behind the player's current luxury tier, the tabs just slice the
+   * catalog by quality so the prestige furniture has a dedicated
+   * shelf instead of being lost in a long alphabetical list. */
+  private renderTierTabs(): void {
+    if (!this.tierTabsEl) return;
+    this.tierTabsEl.innerHTML = "";
+    for (let t = 1; t <= 5; t += 1) {
+      const tier = t as LuxuryTier;
+      const active = tier === this.selectedTier;
+      const count = furnitureCatalog.filter((d) => inferQualityTier(d) === tier).length;
+      const btn = document.createElement("button");
+      btn.textContent = `T${t}`;
+      btn.title = `Tier ${t} — ${count} item${count === 1 ? "" : "s"}`;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "5px 0",
+        background: active ? "rgba(120, 200, 120, 0.30)" : "rgba(255,245,220,0.08)",
+        color: "#fff5dc",
+        border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        font: "inherit", fontSize: "11px",
+        fontWeight: active ? "700" : "500",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => {
+        this.selectedTier = tier;
+        this.renderTierTabs();
+        this.renderTierContent();
+      };
+      this.tierTabsEl.appendChild(btn);
+    }
+  }
+
+  /** Re-render the content area for the active tier — categories
+   * with item buttons, hiding categories that have no items in this
+   * tier. The category sections stay collapsible so a tier with lots
+   * of items doesn't dominate the panel. */
+  private renderTierContent(): void {
+    if (!this.tierContentEl) return;
+    this.tierContentEl.innerHTML = "";
+    const categoryOrder: FurnitureDef["category"][] = [
+      "table", "chair", "stove", "counter", "wall", "door", "bathroom",
+      "decoration", "plant", "lamp",
+    ];
+    const categoryLabels: Record<FurnitureDef["category"], string> = {
+      table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
+      wall: "Walls & Partitions", door: "Doors & Windows", bathroom: "Bathroom",
+      decoration: "Decor", plant: "Plants", lamp: "Lighting",
+    };
+    let anyShown = false;
+    for (const cat of categoryOrder) {
+      const items = furnitureCatalog.filter(
+        (d) => d.category === cat && inferQualityTier(d) === this.selectedTier,
+      );
+      if (items.length === 0) continue;
+      anyShown = true;
+      // First non-empty category for this tier auto-opens so the
+      // player sees something useful right away.
+      let open = !this.tierContentEl.firstChild;
+      const header = document.createElement("div");
+      Object.assign(header.style, {
+        marginTop: "8px",
+        marginBottom: "3px",
+        padding: "3px 4px",
+        fontSize: "11px",
+        fontWeight: "700",
+        opacity: "0.85",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        cursor: "pointer",
+        background: "rgba(255,245,220,0.05)",
+        borderRadius: "3px",
+        userSelect: "none",
+      } as Partial<CSSStyleDeclaration>);
+      const itemsWrap = document.createElement("div");
+      itemsWrap.style.display = open ? "block" : "none";
+      const refreshHeader = (): void => {
+        header.textContent = `${open ? "▾" : "▸"} ${categoryLabels[cat]} (${items.length})`;
+      };
+      refreshHeader();
+      header.onclick = () => {
+        open = !open;
+        itemsWrap.style.display = open ? "block" : "none";
+        refreshHeader();
+      };
+      this.tierContentEl.appendChild(header);
+      for (const def of items) this.appendItemButton(itemsWrap, def);
+      this.tierContentEl.appendChild(itemsWrap);
+    }
+    if (!anyShown) {
+      // Empty tier — the player's catalog doesn't have anything in this
+      // quality bracket yet. Show a placeholder so the panel doesn't
+      // look broken when they hop to an empty tab.
+      const empty = document.createElement("div");
+      empty.textContent = "No items in this tier yet.";
+      Object.assign(empty.style, {
+        opacity: "0.55",
+        textAlign: "center",
+        padding: "16px 0",
+        fontSize: "11px",
+      } as Partial<CSSStyleDeclaration>);
+      this.tierContentEl.appendChild(empty);
+    }
+  }
+
+  /** Render a single catalog row inside a category section. Same
+   * button layout the panel had before (name + cost on the left, drink
+   * badge on the right), just factored out so renderTierContent can
+   * reuse it. */
+  private appendItemButton(into: HTMLElement, def: FurnitureDef): void {
+    const btn = document.createElement("button");
+    btn.textContent = "";
+    Object.assign(btn.style, {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "6px",
+      width: "100%",
+      margin: "0 0 3px 0",
+      padding: "5px 8px",
+      background: "rgba(255,245,220,0.08)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.18)",
+      borderRadius: "4px",
+      textAlign: "left",
+      cursor: "pointer",
+      fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = `${def.name} — $${def.cost}`;
+    btn.appendChild(nameSpan);
+    if (def.surface === "drink") {
+      const badge = document.createElement("span");
+      badge.textContent = "🥤 Drinks only";
+      Object.assign(badge.style, {
+        fontSize: "10px",
+        padding: "1px 6px",
+        borderRadius: "999px",
+        background: "rgba(120, 180, 220, 0.18)",
+        border: "1px solid rgba(120, 180, 220, 0.55)",
+        color: "#c8e0f0",
+        whiteSpace: "nowrap",
+        letterSpacing: "0.02em",
+      } as Partial<CSSStyleDeclaration>);
+      btn.appendChild(badge);
+    }
+    btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
+    btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
+    btn.onclick = () => this.startPlacing(def);
+    into.appendChild(btn);
   }
 
   private toggleMoveMode(): void {
