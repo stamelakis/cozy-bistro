@@ -359,7 +359,9 @@ export class StaffRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    a.character.facingY = Math.atan2(dx, dz);
+    // Face direction of motion. Convention: facingY=0 → -Z (toward camera),
+    // π/2 → +X, π → +Z, -π/2 → -X. atan2(dx, -dz) yields the matching angle.
+    a.character.facingY = Math.atan2(dx, -dz);
   }
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {

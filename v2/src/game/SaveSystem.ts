@@ -165,6 +165,8 @@ export class SaveSystem {
       achievements: this.game.achievements.snapshot(),
       themeId: this.game.getCurrentTheme().id,
       dirtyDishCount: this.game.getDirtyDishCount(),
+      autoShopEnabled: this.game.autoShopEnabled,
+      stockTarget: this.game.getStockTarget(),
       lastSavedAt: Date.now(),
       transactionLog: [...this.game.economy.getTransactionLog()],
     };

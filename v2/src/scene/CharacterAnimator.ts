@@ -20,7 +20,9 @@ export interface AnimatedCharacter {
   root: THREE.Object3D;
   /** Where the character's feet should be on the floor (xz). */
   groundPos: THREE.Vector2;
-  /** Current facing in radians around Y (0 = facing +X, π/2 = facing +Z). */
+  /** Current facing in radians around Y. Three.js convention with our
+   * models: 0 = facing -Z, π/2 = facing +X, π = facing +Z, -π/2 = facing
+   * -X. To face a motion vector (dx, dz) use Math.atan2(dx, -dz). */
   facingY: number;
   /** What it's doing right now. */
   action: CharacterAction;

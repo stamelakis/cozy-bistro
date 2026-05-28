@@ -61,20 +61,8 @@ export class Hud {
     this.spawner = spawner;
     this.time = time;
     this.actions = actions;
+    // Inline section — Sidebar provides the position/background/padding.
     this.root = document.createElement("div");
-    Object.assign(this.root.style, {
-      position: "fixed",
-      top: "12px",
-      left: "12px",
-      padding: "10px 12px",
-      background: "rgba(20, 14, 10, 0.82)",
-      color: "#fff5dc",
-      font: "12px/1.3 system-ui, sans-serif",
-      borderRadius: "8px",
-      pointerEvents: "auto",
-      width: "230px",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-    } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
     this.buildTitle();

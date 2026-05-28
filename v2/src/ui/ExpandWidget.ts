@@ -20,21 +20,8 @@ export class ExpandWidget {
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
+    // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
-    Object.assign(this.root.style, {
-      position: "fixed",
-      top: "320px", // sits directly below the HUD (HUD is ~290px tall)
-      left: "12px",
-      width: "254px", // matches HUD width
-      padding: "10px 12px",
-      background: "rgba(20, 14, 10, 0.82)",
-      color: "#fff5dc",
-      font: "12px/1.3 system-ui, sans-serif",
-      borderRadius: "8px",
-      pointerEvents: "auto",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-      borderTop: "2px solid rgba(200, 160, 100, 0.5)",
-    } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
     this.tierLabel = document.createElement("div");

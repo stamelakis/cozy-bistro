@@ -17,22 +17,10 @@ export class StockStatusWidget {
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
+    // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
-      position: "fixed",
-      left: "12px",
-      // Place above the StaffPanel — StaffPanel is at bottom:12 and is
-      // ~190px tall. Leave a small gap.
-      bottom: "210px",
-      width: "254px",
-      padding: "8px 12px",
-      background: "rgba(20, 14, 10, 0.82)",
-      color: "#fff5dc",
       font: "11px/1.3 system-ui, sans-serif",
-      borderRadius: "8px",
-      pointerEvents: "auto",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-      borderTop: "2px solid rgba(220, 160, 80, 0.5)",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 

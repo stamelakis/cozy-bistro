@@ -137,7 +137,8 @@ export class ErrandRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    a.character.facingY = Math.atan2(dx, dz);
+    // facingY=0 → -Z, π/2 → +X, π → +Z, -π/2 → -X. atan2(dx, -dz) maps.
+    a.character.facingY = Math.atan2(dx, -dz);
   }
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {

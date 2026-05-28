@@ -20,20 +20,8 @@ export class StaffPanel {
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
+    // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
-    Object.assign(this.root.style, {
-      position: "fixed",
-      left: "12px",
-      bottom: "12px",
-      padding: "10px 12px",
-      background: "rgba(20, 14, 10, 0.82)",
-      color: "#fff5dc",
-      font: "12px/1.3 system-ui, sans-serif",
-      borderRadius: "8px",
-      width: "254px",
-      pointerEvents: "auto",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-    } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
     const title = document.createElement("div");

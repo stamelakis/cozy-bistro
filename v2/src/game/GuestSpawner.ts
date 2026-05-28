@@ -492,8 +492,9 @@ export class GuestSpawner {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Face the direction of motion (atan2 takes y, x of the screen-aligned vector)
-    g.character.facingY = Math.atan2(dx, dz);
+    // Face the direction of motion. Convention: facingY=0 → -Z, π/2 → +X,
+    // π → +Z, -π/2 → -X. atan2(dx, -dz) maps motion vector to facing.
+    g.character.facingY = Math.atan2(dx, -dz);
     g.character.action = "walk";
   }
 

@@ -71,8 +71,11 @@ const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   dishWashMultiplier: 1,
   rentMultiplier: 1,
 };
-/** Auto-shop tries to keep each ingredient stocked at this level. */
-const STOCK_TARGET = 8;
+/** Auto-shop default target stock level per ingredient. Player can adjust
+ * in the Pantry modal (min 3). */
+const DEFAULT_STOCK_TARGET = 5;
+const MIN_STOCK_TARGET = 3;
+const MAX_STOCK_TARGET = 50;
 /** Auto-shop runs this often (seconds). */
 const AUTOSHOP_INTERVAL = 4;
 /** Max units bought per ingredient per auto-shop tick. Higher = faster
@@ -105,6 +108,9 @@ export class Game {
   private autoShopClock = 0;
   /** Set false to disable auto-shop (player will have to manage stock manually). */
   autoShopEnabled = true;
+  /** Per-ingredient target stock level the auto-shop refills toward.
+   * Player adjustable via PantryModal +/- buttons. */
+  private stockTarget: number = DEFAULT_STOCK_TARGET;
   /** Current luxury tier (1..5). Raised by buyExpansion(); controls which
    * recipes the player can unlock through the menu picker. */
   private luxuryTier: LuxuryTier = 1;
@@ -212,20 +218,21 @@ export class Game {
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
     }
-    // Auto-shop: refill any ingredient below STOCK_TARGET, 1 unit per tick
-    // (so a long shortage costs more money than a brief one and the player
-    // can react before going bankrupt).
+    // Auto-shop: refill any ingredient below the player-set stock target,
+    // 1 unit per tick (so a long shortage costs more money than a brief one
+    // and the player can react before going bankrupt).
     this.autoShopClock += dt;
     if (this.autoShopEnabled && this.autoShopClock >= AUTOSHOP_INTERVAL) {
       this.autoShopClock = 0;
       const pantry = this.cooking.getPantryRaw();
+      const target = this.stockTarget;
       let purchased = false;
       // Smart batched order: each ingredient buys up to BATCH_PER_INGREDIENT
-      // units toward STOCK_TARGET in a single tick. Sort by which is most
+      // units toward the target in a single tick. Sort by which is most
       // depleted first so a near-empty critical ingredient gets serviced
       // before a barely-low one.
       const needs = pantry
-        .map((stock, idx) => ({ stock, deficit: STOCK_TARGET - stock.quantity, idx }))
+        .map((stock, idx) => ({ stock, deficit: target - stock.quantity, idx }))
         .filter((n) => n.deficit > 0)
         .sort((a, b) => b.deficit - a.deficit);
       const costMult = this.admin.ingredientCostMultiplier;
@@ -291,6 +298,12 @@ export class Game {
     }
     if (typeof save.dirtyDishCount === "number") {
       this.dirtyDishCount = Math.max(0, save.dirtyDishCount);
+    }
+    if (typeof save.stockTarget === "number") {
+      this.setStockTarget(save.stockTarget);
+    }
+    if (typeof save.autoShopEnabled === "boolean") {
+      this.autoShopEnabled = save.autoShopEnabled;
     }
   }
 
@@ -401,6 +414,19 @@ export class Game {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     this.cooking.setRecipeUpgradeLevel(recipe.id, level + 1);
     return true;
+  }
+
+  // === Stock target (auto-shop refill level) ===
+  getStockTarget(): number { return this.stockTarget; }
+  getMinStockTarget(): number { return MIN_STOCK_TARGET; }
+  getMaxStockTarget(): number { return MAX_STOCK_TARGET; }
+  setStockTarget(n: number): void {
+    this.stockTarget = Math.max(MIN_STOCK_TARGET, Math.min(MAX_STOCK_TARGET, Math.round(n)));
+  }
+  /** Convenience: +1 or -1 with clamp. Returns the new value. */
+  bumpStockTarget(delta: number): number {
+    this.setStockTarget(this.stockTarget + delta);
+    return this.stockTarget;
   }
 
   /** Daily rent owed this in-game day. Scales with luxury tier and the

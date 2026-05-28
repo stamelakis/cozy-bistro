@@ -12,7 +12,7 @@ export class EconomySystem {
   private dailyRevenueTotal = 0;
   private dailyExpensesTotal = 0;
 
-  constructor(startingMoney = 280) {
+  constructor(startingMoney = 4000) {
     this.money = startingMoney;
   }
 

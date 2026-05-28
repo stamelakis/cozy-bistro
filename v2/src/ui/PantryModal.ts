@@ -12,6 +12,9 @@ export class PantryModal {
   private readonly list: HTMLElement;
   private readonly toggle: HTMLButtonElement;
   private totalLine?: HTMLElement;
+  private targetValueEl?: HTMLElement;
+  private targetMinusBtn?: HTMLButtonElement;
+  private targetPlusBtn?: HTMLButtonElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -102,6 +105,44 @@ export class PantryModal {
     this.toggle.onclick = () => { this.game.autoShopEnabled = !this.game.autoShopEnabled; this.refresh(); };
     body.appendChild(this.toggle);
 
+    // Per-ingredient stock-target selector (min 3, default 5). The auto-shop
+    // refills toward this many units per ingredient.
+    const targetRow = document.createElement("div");
+    Object.assign(targetRow.style, {
+      display: "flex", alignItems: "center", gap: "8px",
+      marginTop: "8px", padding: "6px 10px",
+      background: "rgba(255,245,220,0.06)",
+      border: "1px solid rgba(255,245,220,0.18)",
+      borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const targetLabel = document.createElement("span");
+    targetLabel.textContent = "Stock size per ingredient";
+    Object.assign(targetLabel.style, { flex: "1", fontSize: "11px", opacity: "0.85" } as Partial<CSSStyleDeclaration>);
+    targetRow.appendChild(targetLabel);
+    const mkBumpBtn = (text: string, delta: number): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = text;
+      Object.assign(b.style, {
+        width: "26px", height: "24px",
+        background: "rgba(255,245,220,0.10)", color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.30)", borderRadius: "4px",
+        cursor: "pointer", font: "inherit", fontSize: "14px", fontWeight: "700",
+      } as Partial<CSSStyleDeclaration>);
+      b.onclick = () => { this.game.bumpStockTarget(delta); this.refresh(); };
+      return b;
+    };
+    this.targetMinusBtn = mkBumpBtn("−", -1);
+    targetRow.appendChild(this.targetMinusBtn);
+    this.targetValueEl = document.createElement("span");
+    Object.assign(this.targetValueEl.style, {
+      minWidth: "32px", textAlign: "center", fontWeight: "700",
+      fontSize: "14px", fontVariantNumeric: "tabular-nums",
+    } as Partial<CSSStyleDeclaration>);
+    targetRow.appendChild(this.targetValueEl);
+    this.targetPlusBtn = mkBumpBtn("+", +1);
+    targetRow.appendChild(this.targetPlusBtn);
+    body.appendChild(targetRow);
+
     this.totalLine = document.createElement("div");
     Object.assign(this.totalLine.style, {
       marginTop: "6px", fontSize: "11px", opacity: "0.75",
@@ -151,6 +192,19 @@ export class PantryModal {
     this.toggle.textContent = this.game.autoShopEnabled ? "Auto-shop: ON" : "Auto-shop: OFF";
     this.toggle.style.background = this.game.autoShopEnabled
       ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
+    if (this.targetValueEl) {
+      this.targetValueEl.textContent = String(this.game.getStockTarget());
+    }
+    if (this.targetMinusBtn) {
+      const atMin = this.game.getStockTarget() <= this.game.getMinStockTarget();
+      this.targetMinusBtn.disabled = atMin;
+      this.targetMinusBtn.style.opacity = atMin ? "0.35" : "1";
+    }
+    if (this.targetPlusBtn) {
+      const atMax = this.game.getStockTarget() >= this.game.getMaxStockTarget();
+      this.targetPlusBtn.disabled = atMax;
+      this.targetPlusBtn.style.opacity = atMax ? "0.35" : "1";
+    }
     if (this.totalLine) this.totalLine.textContent = `Inventory value: $${totalValue}`;
   }
 }

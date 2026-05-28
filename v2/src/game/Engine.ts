@@ -6,6 +6,7 @@ import { GuestSpawner } from "./GuestSpawner";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
+import { Sidebar } from "../ui/Sidebar";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
 import { PantryModal } from "../ui/PantryModal";
@@ -47,6 +48,7 @@ export class Engine {
   pedestrians?: PedestrianSpawner;
   trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
+  readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
   readonly pantryModal: PantryModal;
@@ -120,7 +122,10 @@ export class Engine {
     this.cloud = new SpacetimeClient(this.game, this.saver);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
-    this.hud = new Hud(container, this.game, {
+    // Single shared left panel that holds the HUD + tier/boost widget +
+    // stock status + staff panel as stacked sections.
+    this.sidebar = new Sidebar(container);
+    this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,
       setOpen: (open: boolean) => { if (this.spawner) this.spawner.restaurantOpen = open; },
@@ -144,13 +149,17 @@ export class Engine {
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
     });
-    this.staffPanel = new StaffPanel(container, this.game);
+    this.sidebar.addSeparator();
+    this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);
+    this.sidebar.addSeparator();
+    this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
+    this.sidebar.addSeparator();
+    this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
+    // Modals still live on the page-level container so they overlay the world.
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
-    this.expandWidget = new ExpandWidget(container, this.game);
-    this.stockWidget = new StockStatusWidget(container, this.game);
     // Update world visibility whenever the tier changes (player bought an expansion).
     this.game.onLuxuryTierChanged = (tier) => this.scene.setLuxuryTier(tier);
     this.decorModal = new DecorModal(container, this.game);
