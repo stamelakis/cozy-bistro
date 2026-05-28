@@ -140,6 +140,11 @@ export class Game {
    * currently working (non-idle). Used by StaffPanel for the
    * "X working / Y idle" badge. */
   getStaffWorkingCount?: (role: StaffRole) => number;
+  /** Optional accessor wired by Engine — returns the current count of
+   * tickets in each pipeline state. Used by StaffPanel to show "X queued
+   * · Y cooking" so the player can see throughput when staff happens to
+   * be idle right now. */
+  getTicketStats?: () => { queued: number; cooking: number; ready: number; delivering: number };
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */

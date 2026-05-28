@@ -119,9 +119,19 @@ export class StaffPanel {
       totalPayroll += rolePayroll;
     });
     if (this.payrollLine) {
-      this.payrollLine.textContent = totalCount === 0
-        ? "No staff hired — guests wait forever."
-        : `${totalCount} hired · total payroll $${totalPayroll}/min`;
+      if (totalCount === 0) {
+        this.payrollLine.textContent = "No staff hired — guests wait forever.";
+      } else {
+        const stats = this.game.getTicketStats?.();
+        const totalTickets = stats
+          ? stats.queued + stats.cooking + stats.ready + stats.delivering
+          : 0;
+        const queueLine = stats && totalTickets > 0
+          ? ` · 📋 ${stats.queued} queued · 🍳 ${stats.cooking} cooking · 🍽 ${stats.delivering + stats.ready} delivering`
+          : ` · idle — no pending tickets`;
+        this.payrollLine.textContent =
+          `${totalCount} hired · $${totalPayroll}/min${queueLine}`;
+      }
     }
   }
 }

@@ -252,6 +252,19 @@ export class Engine {
       }
       return this.errand?.snapshotStatus().filter((s) => s.label).length ?? 0;
     };
+    // StaffPanel queries this for the "tickets queued" footer — keeps the
+    // panel from looking "0 working" when there's actually work pending.
+    this.game.getTicketStats = () => {
+      const tickets = this.router?.tickets ?? [];
+      let queued = 0, cooking = 0, ready = 0, delivering = 0;
+      for (const t of tickets) {
+        if (t.state === "queued") queued += 1;
+        else if (t.state === "cooking") cooking += 1;
+        else if (t.state === "ready") ready += 1;
+        else if (t.state === "delivering") delivering += 1;
+      }
+      return { queued, cooking, ready, delivering };
+    };
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     buildMenu.seatMarkers = this.seatMarkers;
