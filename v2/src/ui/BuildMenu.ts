@@ -64,7 +64,6 @@ const EXTERIOR_WALL_SEGMENTS: readonly { x1: number; z1: number; x2: number; z2:
  */
 
 export class BuildMenu {
-  private readonly root: HTMLElement;
   private readonly game: Game;
   private readonly loader: ModelLoader;
   private readonly scene: THREE.Scene;
@@ -159,7 +158,7 @@ export class BuildMenu {
     this.camera = camera;
     this.canvas = canvas;
     this.registry = registry;
-    this.root = this.buildPanel(parent);
+    this.buildPanel(parent);
     this.attachInput();
   }
 
@@ -750,26 +749,42 @@ export class BuildMenu {
     this.flashRoot(`Auto-arranged ${moved} chair${moved === 1 ? "" : "s"}`, "success");
   }
 
+  /** Pop a small transient toast under the panel (NOT the whole-panel
+   * background flash that used to live here — that filled the screen
+   * with red/green/blue blocks every time the player took an action,
+   * which was distracting). The toast sits just to the left of the
+   * BuildMenu so its kind-colour reads at a glance without recolouring
+   * the panel itself. */
   private flashRoot(msg: string, kind: "info" | "success" | "error" = "info"): void {
-    const old = this.root.style.background;
     const bg =
-      kind === "success" ? "rgba(40, 110, 50, 0.85)" :
-      kind === "error" ? "rgba(140, 30, 30, 0.85)" :
-      "rgba(50, 80, 110, 0.85)";
+      kind === "success" ? "rgba(40, 110, 50, 0.92)" :
+      kind === "error" ? "rgba(140, 30, 30, 0.92)" :
+      "rgba(50, 80, 110, 0.92)";
     const textColor =
       kind === "success" ? "#d6f0c8" :
       kind === "error" ? "#ffd0d0" :
       "#d4e3ee";
-    this.root.style.background = bg;
-    const note = document.createElement("div");
-    note.textContent = msg;
-    note.style.marginTop = "6px";
-    note.style.color = textColor;
-    this.root.appendChild(note);
-    setTimeout(() => {
-      this.root.style.background = old;
-      note.remove();
-    }, 1200);
+    const toast = document.createElement("div");
+    toast.textContent = msg;
+    Object.assign(toast.style, {
+      position: "fixed",
+      top: "16px",
+      right: "284px", // panel is 260 wide + 12 margin + 12 gap
+      maxWidth: "260px",
+      padding: "8px 12px",
+      background: bg,
+      color: textColor,
+      font: "12px/1.3 system-ui, sans-serif",
+      borderRadius: "6px",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.35)",
+      pointerEvents: "none",
+      zIndex: "950",
+      opacity: "1",
+      transition: "opacity 0.4s ease",
+    } as Partial<CSSStyleDeclaration>);
+    document.body.appendChild(toast);
+    setTimeout(() => { toast.style.opacity = "0"; }, 1000);
+    setTimeout(() => { toast.remove(); }, 1500);
   }
 
   private onPointerMove = (e: PointerEvent): void => {

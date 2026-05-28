@@ -330,7 +330,15 @@ export class UpgradeModal {
         btn.style.opacity = "0.5";
       } else {
         const cost = this.game.getStaffUpgradeCost(r.role);
-        btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+        const requiredTier = this.game.getStaffUpgradeRequiredTier(r.role);
+        const playerTier = this.game.getLuxuryTier();
+        const tierLocked = requiredTier !== null && requiredTier > playerTier;
+        if (tierLocked) {
+          btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+          btn.title = `Requires restaurant tier ${requiredTier} (you're on ${playerTier})`;
+        } else {
+          btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+        }
         const can = this.game.canUpgradeStaff(r.role);
         btn.disabled = !can;
         btn.style.opacity = can ? "1" : "0.5";

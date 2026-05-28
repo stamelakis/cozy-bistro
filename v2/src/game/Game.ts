@@ -435,8 +435,23 @@ export class Game {
     return this.staff.getStaffUpgradeCost(role);
   }
   canUpgradeStaff(role: StaffRole): boolean {
-    if (this.staff.getStaffUpgradeLevel(role) >= STAFF_UPGRADE_MAX) return false;
+    const level = this.staff.getStaffUpgradeLevel(role);
+    if (level >= STAFF_UPGRADE_MAX) return false;
+    // Each training level is gated behind the matching restaurant tier:
+    // L1 needs T1, L5 needs T5. Players need to grow the bistro to
+    // unlock the prestige training.
+    const requiredTier = level + 1;
+    if (requiredTier > this.getLuxuryTier()) return false;
     return this.economy.canAfford(this.staff.getStaffUpgradeCost(role));
+  }
+
+  /** Restaurant tier required for the next training level of this
+   * role. UpgradeModal shows it so players know what to unlock to
+   * progress further. Returns null when the role is already maxed. */
+  getStaffUpgradeRequiredTier(role: StaffRole): LuxuryTier | null {
+    const level = this.staff.getStaffUpgradeLevel(role);
+    if (level >= STAFF_UPGRADE_MAX) return null;
+    return (level + 1) as LuxuryTier;
   }
   upgradeStaff(role: StaffRole): boolean {
     if (!this.canUpgradeStaff(role)) return false;
