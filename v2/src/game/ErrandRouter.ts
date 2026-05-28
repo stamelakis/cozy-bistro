@@ -57,7 +57,7 @@ const ARRIVAL_THRESHOLD = 0.18;
 /** Pause at the supply counter (seconds) to suggest signing for the delivery. */
 const COUNTER_DWELL_SECONDS = 0.8;
 /** How long the helper is invisible "at the shop" before walking back. */
-const OFFSCREEN_SHOP_SECONDS = 20.0;
+const OFFSCREEN_SHOP_SECONDS = 10.0;
 /** Cap on queued trips so a long shortage doesn't queue dozens. */
 const MAX_PENDING_TRIPS = 6;
 /** How far past the pavement (in world units along the road) the helper
@@ -67,6 +67,11 @@ const ROAD_EDGE_X = 13;
 /** Z position of the helper's offscreen walk — roughly the middle of the
  * pavement so the walking-down-the-sidewalk gait reads cleanly. */
 const ROAD_EDGE_Z = 7.5;
+/** Half-width / half-depth of the idle "loitering" zone around the
+ * supply counter. The helper picks a random spot inside this box every
+ * time they return home, so they don't stand at one stiff waypoint. */
+const IDLE_ZONE_HALF_X = 0.7;
+const IDLE_ZONE_HALF_Z = 0.6;
 
 export class ErrandRouter {
   private readonly helpers: ErrandActor[] = [];
@@ -95,15 +100,29 @@ export class ErrandRouter {
   addHelper(char: AnimatedCharacter): void {
     char.action = "idle"; // override the default "carry" pose
     char.root.visible = true; // belt-and-suspenders in case of a recycled char
+    // Snap them to a fresh randomized loiter spot near the counter so
+    // they don't all line up at the same coord when more than one is
+    // hired.
+    const home = this.pickIdleSpot();
+    char.groundPos.copy(home);
     this.helpers.push({
       character: char,
-      home: char.groundPos.clone(),
+      home,
       state: "idle",
-      target: char.groundPos.clone(),
+      target: home.clone(),
       clock: 0,
       payload: null,
       roadEdge: null,
     });
+  }
+
+  /** Random point in the loiter zone near the supply counter. Picked
+   * fresh every trip so the helper doesn't park at exactly the same
+   * coord every time they return — feels more like a person on shift. */
+  private pickIdleSpot(): THREE.Vector2 {
+    const x = this.counterPos.x + (Math.random() - 0.5) * 2 * IDLE_ZONE_HALF_X;
+    const z = this.counterPos.y + (Math.random() - 0.5) * 2 * IDLE_ZONE_HALF_Z;
+    return new THREE.Vector2(x, z);
   }
 
   /** Pop one helper out of the pool. Prefers an idle helper so we don't
@@ -254,6 +273,9 @@ export class ErrandRouter {
             catch (e) { console.warn("[Errand] delivery callback threw:", e); }
           }
           h.payload = null;
+          // Re-randomize the loiter spot so they don't park at exactly
+          // the same coord every cycle.
+          h.home = this.pickIdleSpot();
           h.target = h.home.clone();
           h.state = "returningHome";
           h.clock = 0;

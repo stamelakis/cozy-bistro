@@ -225,13 +225,25 @@ export class Engine {
       // Same dance for the stove + cooking flame: pin the flame to the
       // restored stove model so it sits on the actual burner instead
       // of the default fallback height.
+      //
+      // For stoves we deliberately pick a SINGLE primary stove (the one
+      // closest to the chef's working spot, scene.stovePos). The old
+      // version iterated every stove and let the last one win, which
+      // is why the player saw the flame on a stove the chef wasn't
+      // working at.
       void this.registry.restore(restored).then(() => {
+        let primaryStove: THREE.Object3D | undefined;
+        let bestDist = Infinity;
+        const sx = this.scene.stovePos.x, sz = this.scene.stovePos.y;
         for (const it of this.registry.snapshotItems()) {
           if (it.defId === "door") this.scene.attachDoorPanel(it.model);
           if (it.defId === "stove" || it.defId === "stove-electric") {
-            this.scene.alignStoveFlameToStove(it.model);
+            const dx = it.x - sx, dz = it.z - sz;
+            const d = dx * dx + dz * dz;
+            if (d < bestDist) { bestDist = d; primaryStove = it.model; }
           }
         }
+        if (primaryStove) this.scene.alignStoveFlameToStove(primaryStove);
       });
     }
     this.saver.registry = this.registry;

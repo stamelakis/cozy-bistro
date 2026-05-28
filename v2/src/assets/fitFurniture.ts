@@ -3,28 +3,29 @@ import type { FurnitureDef } from "../data/furnitureCatalog";
 
 /**
  * Scales + recenters a furniture model so it visually respects the grid
- * cell it's been placed into. Kenney meshes ship at wildly different
- * base sizes and arbitrary pivot points, so without this every dining
- * table overhangs its chairs, every stove juts into the next tile, and
- * the seat-slot math goes haywire. The fix has two parts:
+ * cell(s) it's been placed into. Two-axis approach:
  *
- *   1. AUTO-FIT — pick a uniform scale so the model's XZ footprint
- *      fits the assigned cell count (def.size.width × def.size.depth)
- *      with a small visual margin. def.scale acts as a fill ratio:
- *      1.0 means "fill the assigned tiles", 0.7 means "fill 70%".
+ *   1. XZ AUTO-FIT — uniform scale picked so the model's footprint fits
+ *      `def.size.{width, depth}` tiles with a small margin.
+ *      `def.scale` is a fill ratio on top of that.
  *
- *   2. RECENTER — shift the model's direct children so the visual
- *      center sits at the model's local origin (XZ) with feet on the
- *      floor (Y). This way callers can place at world (x, z) and the
- *      visible item lands exactly at that grid coordinate.
+ *   2. Y NON-UNIFORM STRETCH — independently sets the placed model's
+ *      world-space height to `def.targetHeight` if set, else a
+ *      sensible per-category default. Stops Kenney chairs from
+ *      shooting up to 1.8 m tall and Kenney tables from shrinking
+ *      to coffee-table height when their raw aspect is unbalanced.
  *
- * Procedural decor (modelPath starts with "proc:") skips auto-fit —
- * those builders already author geometry at the right size and some
- * have hinged sub-objects (front door panel, etc.) whose math would
- * break if we resized + recentered them.
+ *   3. RECENTER — shift the direct children so the visual XZ centroid
+ *      sits at the model's local origin and the lowest point sits at
+ *      y=0. Callers' subsequent `model.position.set(x, y, z)` then
+ *      lands the visible item exactly at the placement coordinate.
  *
- * Returns the final uniform scale applied (useful for placing
- * attachments like the stove flame in world units).
+ * Procedural decor (`proc:` prefix) skips all of this — those builders
+ * author at exact tile size and may have hand-placed pivots.
+ *
+ * Returns the X (footprint) scale applied — useful for sizing
+ * attached props that should grow with the item's footprint, not its
+ * stretched height.
  */
 
 const TILE = 1.0;
@@ -32,6 +33,20 @@ const TILE = 1.0;
  * neighbouring items don't visibly touch and the grid lines stay
  * faintly readable between placements. */
 const FOOTPRINT_MARGIN = 0.92;
+
+/** Per-category Y-target fallback when a FurnitureDef doesn't pin its
+ * own `targetHeight`. Units are world ≈ metres, matching the 1.7 unit
+ * character height. */
+const DEFAULT_HEIGHTS: Record<FurnitureDef["category"], number> = {
+  table: 0.75,        // realistic dining height — plates land here
+  chair: 0.95,        // chair-back to character chest
+  stove: 0.92,        // appliance height
+  counter: 0.92,
+  decoration: 0.55,   // small props (crates, books, pillows)
+  plant: 0.85,        // potted plant + foliage
+  lamp: 1.55,         // floor lamps tall, table lamps shorter (override per-id)
+  door: 2.3,          // 2m + frame
+};
 
 export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   // Reset transforms before measuring so we get the raw mesh bounds.
@@ -56,43 +71,48 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   const box = new THREE.Box3().setFromObject(model);
   const w = box.max.x - box.min.x;
   const d = box.max.z - box.min.z;
+  const h = box.max.y - box.min.y;
   if (!Number.isFinite(w) || !Number.isFinite(d) || w === 0 || d === 0) {
     // Defensive fallback — model has degenerate bounds (empty / hidden).
     model.scale.setScalar(def.scale);
     return def.scale;
   }
 
-  // === Auto-fit ===
-  // Find the uniform scale that makes the larger XZ extent match the
-  // tile target. Then multiply by def.scale (fill ratio) so the catalog
-  // can intentionally shrink decorative items below cell size.
+  // === XZ auto-fit ===
   const targetW = TILE * def.size.width * FOOTPRINT_MARGIN;
   const targetD = TILE * def.size.depth * FOOTPRINT_MARGIN;
-  const fitScale = Math.min(targetW / w, targetD / d) * def.scale;
-  model.scale.setScalar(fitScale);
+  const fitXZ = Math.min(targetW / w, targetD / d) * def.scale;
+
+  // === Y target ===
+  // Independent height target. Lets a chair be cell-width-fitted while
+  // its height locks to ~0.95m regardless of the raw mesh's aspect.
+  // Without this, narrow Kenney chairs ended up nearly two metres tall
+  // because the XZ uniform scale also stretched Y.
+  let fitY = fitXZ;
+  if (h > 0) {
+    const targetH = def.targetHeight ?? DEFAULT_HEIGHTS[def.category];
+    if (targetH) fitY = targetH / h;
+  }
+
+  model.scale.set(fitXZ, fitY, fitXZ);
   model.updateMatrixWorld(true);
 
   // === Recenter ===
-  // Measure post-scale to find the new visual centroid, then shift the
-  // direct children of the model so their world bottom sits at y=0 and
-  // their XZ center sits at the model's local origin. We shift CHILDREN
-  // (not model.position) so the caller's `model.position.set(x, y, z)`
-  // doesn't clobber the centering — that's why every call site can
-  // still do the same set-position dance.
   const box2 = new THREE.Box3().setFromObject(model);
   const cx = (box2.min.x + box2.max.x) / 2;
   const cz = (box2.min.z + box2.max.z) / 2;
-  // box2 is in world units; convert to model-local by dividing by scale.
-  const localShiftX = -cx / fitScale;
-  const localShiftY = -box2.min.y / fitScale;
-  const localShiftZ = -cz / fitScale;
+  // box2 is in world units; convert to model-local by dividing by the
+  // axis scale that moved it there.
+  const localShiftX = -cx / fitXZ;
+  const localShiftY = -box2.min.y / fitY;
+  const localShiftZ = -cz / fitXZ;
   for (const child of model.children) {
     child.position.x += localShiftX;
     child.position.y += localShiftY;
     child.position.z += localShiftZ;
   }
 
-  return fitScale;
+  return fitXZ;
 }
 
 /** World-space height of a placed model — useful for putting plates on

@@ -46,14 +46,23 @@ export interface FurnitureDef {
   category: "table" | "chair" | "stove" | "counter" | "decoration" | "plant" | "lamp" | "door";
   /** Relative path under v2/public — fed to ModelLoader.load(). */
   modelPath: string;
-  /** Uniform scale applied to the loaded model. */
+  /** Fill ratio used by fitFurniture as a multiplier on top of the
+   * tile-fit scale. 1.0 means "fill the assigned tile(s)"; 0.7 means
+   * "fill 70%". See fitFurniture.ts header for the full semantics. */
   scale: number;
-  /** Footprint in grid cells. */
+  /** Footprint in grid cells. A 2×2 dining table that seats 4 should be
+   * size {width: 2, depth: 2} so it visually covers all four cells. */
   size: { width: number; depth: number };
   /** Cost in coins. */
   cost: number;
   /** Optional rotation offset (radians) if the model points the wrong way. */
   rotationOffset?: number;
+  /** Optional realistic world-space height (in units ≈ metres). When set,
+   * fitFurniture independently stretches Y so the placed item lands at
+   * this height regardless of the raw mesh's proportions. Without it
+   * Kenney chairs look stubby and Kenney tables look like coffee tables
+   * because their XZ-fit uniform scale leaves them too short. */
+  targetHeight?: number;
   /** Tables: the sitting positions around this table. Chairs placed at one
    * of these become functional seats for the dining loop. */
   seatSlots?: readonly SeatSlot[];
@@ -66,18 +75,32 @@ export interface FurnitureDef {
   seatingCapacity?: number;
 }
 
-/** Default 4-side seat slot pattern for a 1×1 dining table. Shared by every
- * dining-style table in the catalog so the build/snap behaviour is
- * consistent regardless of which mesh the player picks. */
+/** Default 4-side seat slot pattern for a 2×2 dining table that seats 4.
+ *
+ * The table anchor is at the cross-section of 4 cells (half-integer
+ * coords in world space). Each chair sits in one of the 4 adjacent
+ * cells; offsets are tuned so chair-center → cell-center under the
+ * half-integer anchor (e.g. dx=-1.5 from anchor 0.5 → chair at -1, a
+ * cell center). The layout is intentionally asymmetric (one chair per
+ * side, all rotated 90° from the next) — that way every chair lands
+ * on a real tile center instead of sitting at a tile border. Looks
+ * like a normal 4-top and respects the per-tile grid the player sees.
+ *
+ * Plate offsets sit ~half-way between the chair and the table center
+ * (closer to the chair) so served food reads as belonging to that
+ * seat. The plate's WORLD Y comes from the placed table's bounding
+ * box at runtime (FurnitureRegistry.getPlateHeightFor or similar), so
+ * different table meshes can have different top heights without the
+ * plate floating. */
 const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
-  // Left side: chair faces +X (toward table center).
-  { dx: -0.9, dz: 0,    facingY:  Math.PI / 2, platePos: { dx: -0.3, dz: 0    } },
-  // Right side: chair faces -X.
-  { dx:  0.9, dz: 0,    facingY: -Math.PI / 2, platePos: { dx:  0.3, dz: 0    } },
-  // Top side (lower z): chair faces +Z.
-  { dx:  0,   dz: -0.9, facingY:  Math.PI,     platePos: { dx:  0,   dz: -0.3 } },
-  // Bottom side (higher z): chair faces -Z (the facingY=0 baseline).
-  { dx:  0,   dz:  0.9, facingY:  0,           platePos: { dx:  0,   dz:  0.3 } },
+  // Top chair: cell at table_anchor + (-0.5, -1.5). Faces +Z.
+  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.3, dz: -0.7 } },
+  // Right chair: cell at (+1.5, -0.5). Faces -X.
+  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.7, dz: -0.3 } },
+  // Bottom chair: cell at (+0.5, +1.5). Faces -Z (facingY=0 baseline).
+  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.3, dz:  0.7 } },
+  // Left chair: cell at (-1.5, +0.5). Faces +X.
+  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.7, dz:  0.3 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
@@ -92,27 +115,37 @@ const S_LAMP = 0.5;    // lamps are slim; auto-fit would otherwise inflate them
 const S_DOOR = 1.0;    // door frame fills its tile
 const S_PROC = 1.0;    // procedurals bypass auto-fit; this is their raw multiplier
 
+/** Realistic dining-table height (≈ 0.75 m). The Y stretch in fitFurniture
+ * lifts the table top here even though the XZ-fit would otherwise leave
+ * it stubby. Plate offsets pick this height up via the registered model's
+ * bounding box, so food doesn't float above an empty void. Other
+ * categories use the per-category defaults in fitFurniture's
+ * DEFAULT_HEIGHTS — no need to repeat them here unless an individual
+ * piece wants to override (e.g. a bar stool vs a dining chair). */
+const H_TABLE = 0.75;
+
 export const furnitureCatalog: readonly FurnitureDef[] = [
-  // Tables (small-table now uses the proper dining table mesh — the old
-  // cabinetBedDrawerTable was a bedside drawer, not a dining piece).
+  // Tables. Dining tables are 2×2 tiles so they have a real seat for
+  // each of the 4 chairs that pack around them. Coffee tables stay 1×1
+  // since they're not dining seating.
   { id: "small-table",   name: "Small Table",   category: "table",
-    modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 24, style: 1,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 24, style: 1,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "round-table",   name: "Round Table",   category: "table",
-    modelPath: "assets/kenney/tableRound.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 32, style: 2,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/tableRound.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 32, style: 2,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "dining-table",  name: "Dining Table",  category: "table",
-    modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 48, style: 3,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 48, style: 3,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "fancy-table",   name: "Linen Table",   category: "table",
-    modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 64, style: 5, ratingBonus: 0.05,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 64, style: 5, ratingBonus: 0.05,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "cloth-table",   name: "Tablecloth Top", category: "table",
-    modelPath: "assets/kenney/tableCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 40, style: 4,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/tableCloth.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 40, style: 4,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "glass-table",   name: "Glass Table",   category: "table",
-    modelPath: "assets/kenney/tableGlass.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 56, style: 4, ratingBonus: 0.04,
-    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    modelPath: "assets/kenney/tableGlass.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 56, style: 4, ratingBonus: 0.04,
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   // Coffee tables are non-dining; intentionally no seatSlots — chairs near
   // them are always "yellow" overflow seating.
   { id: "coffee-table",  name: "Coffee Table",  category: "table",

@@ -595,7 +595,12 @@ export class BuildMenu {
     const point = new THREE.Vector3();
     this.hoverValid = this.raycaster.ray.intersectPlane(groundPlane, point) !== null;
     if (!this.hoverValid) return;
-    this.hoverCell.set(Math.round(point.x), 0, Math.round(point.z));
+    // Snap to tile center for the currently-placing item. Even-sized
+    // items (2×2 etc.) anchor at the cross-section of cells, so they
+    // need a half-integer snap — otherwise their footprint straddles
+    // cells unevenly. Use the placingDef's size to pick the parity.
+    this.hoverCell.set(this.snapAxis(point.x, this.placingDef?.size.width ?? 1), 0,
+                       this.snapAxis(point.z, this.placingDef?.size.depth ?? 1));
 
     // Pickup-mode raycast: while the player is in sell or move-pickup,
     // they're aiming AT items (not floor cells). With an iso camera, a
@@ -635,6 +640,16 @@ export class BuildMenu {
     this.tintPreview(plan.quality);
   };
 
+  /** Snap a single world-axis to the correct cell anchor for an item of
+   * the given size on that axis. Odd sizes (1, 3, ...) anchor at tile
+   * centers (integer coords); even sizes (2, 4) anchor at cross-sections
+   * (half-integer coords). Without the parity split, a 2×2 table would
+   * land on a single tile center and visibly straddle three tiles. */
+  private snapAxis(value: number, size: number): number {
+    if (size % 2 === 0) return Math.round(value - 0.5) + 0.5;
+    return Math.round(value);
+  }
+
   /** Decide where the preview should land and how good that placement is.
    *
    * For chairs near a table seat slot we auto-snap to the slot (overriding
@@ -642,8 +657,8 @@ export class BuildMenu {
    * GREEN. Otherwise we use the integer cell under the cursor and mark
    * YELLOW (or RED if blocked). */
   private computePlacementPlan(def: FurnitureDef, rawPoint: THREE.Vector3): PlacementPlan {
-    const cellX = Math.round(rawPoint.x);
-    const cellZ = Math.round(rawPoint.z);
+    const cellX = this.snapAxis(rawPoint.x, def.size.width);
+    const cellZ = this.snapAxis(rawPoint.z, def.size.depth);
     // When moving an existing item, ignore that item in every overlap /
     // slot-occupancy check — otherwise it would falsely block its own
     // destination.

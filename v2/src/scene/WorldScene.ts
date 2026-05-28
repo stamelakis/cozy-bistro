@@ -379,10 +379,17 @@ export class WorldScene {
     this.threeScene.add(floor);
 
     // Grid overlay so the iso "tile" feel reads (interior only).
+    // Shifted by (+0.5, +0.5) so grid lines fall on the BORDERS of tiles
+    // rather than through their CENTERS. Items are placed at integer
+    // coords (snap function uses Math.round) which are the centers of
+    // tiles in this convention, so the visual lines have to live at
+    // half-integers to enclose each tile cleanly. Without this shift,
+    // every placed item visually sat on the cross-section of four
+    // tiles instead of inside one.
     const grid = new THREE.GridHelper(10, 10, 0xa68969, 0xc4ab85);
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.3;
-    grid.position.y = 0.002;
+    grid.position.set(0.5, 0.002, 0.5);
     this.threeScene.add(grid);
 
     // === Walls ===
@@ -554,12 +561,21 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
-      // One starter dining table with its 4 chairs.
-      { id: "small-table",  x:  0, z:  1, tier: 1 },
-      { id: "wooden-chair", x: -0.9, z: 1,    rotY:  Math.PI / 2, tier: 1 },
-      { id: "wooden-chair", x:  0.9, z: 1,    rotY: -Math.PI / 2, tier: 1 },
-      { id: "wooden-chair", x:  0,   z: 0.1,  rotY: 0,            tier: 1 },
-      { id: "wooden-chair", x:  0,   z: 1.9,  rotY: Math.PI,      tier: 1 },
+      // Starter 4-top: the small-table is 2×2 so its anchor is at the
+      // cross-section of four cells (0.5, 1.5), covering cells (0,1)
+      // (1,1) (0,2) (1,2). The four chairs sit on the four adjacent
+      // tiles, one per side, each facing toward the table center —
+      // every chair lands on an integer cell coord so they read as
+      // properly centered in their own tiles.
+      { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
+      // Top chair: cell (0, 0), faces +Z (toward table).
+      { id: "wooden-chair", x:  0,   z:  0,   rotY: Math.PI,     tier: 1 },
+      // Right chair: cell (2, 1), faces -X.
+      { id: "wooden-chair", x:  2,   z:  1,   rotY: -Math.PI / 2, tier: 1 },
+      // Bottom chair: cell (1, 3), faces -Z (the facingY=0 baseline).
+      { id: "wooden-chair", x:  1,   z:  3,   rotY: 0,            tier: 1 },
+      // Left chair: cell (-1, 2), faces +X.
+      { id: "wooden-chair", x: -1,   z:  2,   rotY:  Math.PI / 2, tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {
