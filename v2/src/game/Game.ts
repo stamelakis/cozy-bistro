@@ -418,21 +418,22 @@ export class Game {
   }
 
   // === Stock target (auto-shop refill level) ===
-  /** Stock target per ingredient. Combines the player's manually-set
-   * baseline with bonuses from placed fridges / shelves (FurnitureDef
-   * .stockCapacity). A bare restaurant defaults to MIN_STOCK_TARGET;
-   * a fridge adds +4, a walk-in adds +12, etc. Capped so the auto-shop
-   * never tries to stockpile more than MAX_STOCK_TARGET per item. */
+  /** What the auto-shop refills toward — the player's manually-chosen
+   * target, clamped to the current effective max. Fridges only RAISE
+   * THE CEILING (how high the player is allowed to set it), they
+   * don't push the target up automatically. Default sits at
+   * DEFAULT_STOCK_TARGET (5) and only changes when the player clicks
+   * the +/- buttons. */
   getStockTarget(): number {
-    const cap = Math.min(MAX_STOCK_TARGET, this.stockTarget + this.getFridgeStockBonus());
-    return Math.max(MIN_STOCK_TARGET, cap);
+    const cap = this.getMaxStockTarget();
+    return Math.max(MIN_STOCK_TARGET, Math.min(cap, this.stockTarget));
   }
-  /** Manually-set baseline, before fridge bonuses. Exposed so the +/-
-   * UI can show "X (+Y from fridges)" instead of pretending the bonus
-   * is part of the user's choice. */
+  /** Manually-set baseline — what the +/- UI displays. Same as
+   * getStockTarget() in normal use; exists for symmetry with the cap. */
   getBaseStockTarget(): number { return this.stockTarget; }
-  /** Sum of stockCapacity across all placed furniture. Recomputed each
-   * call — cheap because the registry is in-memory. */
+  /** Sum of stockCapacity across all placed furniture (fridges,
+   * pantries, etc.). Adds onto the no-fridge base cap of
+   * DEFAULT_STOCK_TARGET to produce the effective max. */
   getFridgeStockBonus(): number {
     if (!this.registry) return 0;
     let sum = 0;
@@ -443,12 +444,19 @@ export class Game {
     return sum;
   }
   getMinStockTarget(): number { return MIN_STOCK_TARGET; }
-  getMaxStockTarget(): number { return MAX_STOCK_TARGET; }
-  setStockTarget(n: number): void {
-    this.stockTarget = Math.max(MIN_STOCK_TARGET, Math.min(MAX_STOCK_TARGET, Math.round(n)));
+  /** Highest value the player is allowed to set the stock target to —
+   * DEFAULT_STOCK_TARGET (5) plus the total fridge stockCapacity
+   * bonus, capped at MAX_STOCK_TARGET (50). Without any fridges the
+   * cap is just the default 5; a single regular fridge raises it to 7;
+   * a walk-in to 11; etc. */
+  getMaxStockTarget(): number {
+    return Math.min(MAX_STOCK_TARGET, DEFAULT_STOCK_TARGET + this.getFridgeStockBonus());
   }
-  /** Convenience: +1 or -1 with clamp. Returns the new value (manual
-   * baseline, not the fridge-augmented effective target). */
+  setStockTarget(n: number): void {
+    const cap = this.getMaxStockTarget();
+    this.stockTarget = Math.max(MIN_STOCK_TARGET, Math.min(cap, Math.round(n)));
+  }
+  /** Convenience: +1 or -1 with clamp. Returns the new value. */
   bumpStockTarget(delta: number): number {
     this.setStockTarget(this.stockTarget + delta);
     return this.stockTarget;

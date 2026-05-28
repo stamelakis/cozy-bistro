@@ -653,7 +653,10 @@ export class BuildMenu {
     const plan = this.computePlacementPlan(this.placingDef, point);
     this.currentPlan = plan;
     // Apply the plan's pose to the preview so the user sees the snap.
-    this.preview.position.set(plan.x, 0, plan.z);
+    // Wall-mounted items show at chest height (matches where they'll
+    // land on the wall) instead of dropping the ghost to the floor.
+    const previewY = this.placingDef?.placement === "wall" ? 1.5 : 0;
+    this.preview.position.set(plan.x, previewY, plan.z);
     this.preview.rotation.y = plan.rotY;
     this.tintPreview(plan.quality);
   };

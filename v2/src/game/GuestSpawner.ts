@@ -554,7 +554,7 @@ export class GuestSpawner {
         // Spawn outside the building; the walkingIn handler will route us
         // via the door before continuing on to the seat.
         groundPos: new THREE.Vector2(ENTRY_SPAWN.x, ENTRY_SPAWN.y),
-        facingY: Math.PI / 2, // π/2 → -Z (north, into the room) under the corrected GLB-front=+X convention
+        facingY: Math.PI, // into the room — reverted to original value
         action: "walk",
         phase: Math.random() * 5,
         // Seat surface height (Kenney chair at S_CHAIR=1.7).
@@ -797,10 +797,8 @@ export class GuestSpawner {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // GLBs face +X by default → use atan2(-dz, dx) so the visible
-    // front aligns with the motion vector. Previous atan2(dx, -dz)
-    // gave guests a 90° crab walk on every step.
-    g.character.facingY = Math.atan2(-dz, dx);
+    // Reverted to original formula — see StaffRouter.
+    g.character.facingY = Math.atan2(dx, -dz);
     g.character.action = "walk";
   }
 

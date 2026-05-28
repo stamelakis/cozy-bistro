@@ -53,10 +53,10 @@ export class PedestrianSpawner {
     for (let i = this.people.length - 1; i >= 0; i -= 1) {
       const p = this.people[i];
       p.character.groundPos.x += p.dir * PEDESTRIAN_SPEED * dt;
-      // GLBs face +X by default, so a pedestrian walking east (+X)
-      // wants no rotation (facingY = 0) and walking west (-X) wants
-      // a 180° flip (facingY = π).
-      p.character.facingY = p.dir > 0 ? 0 : Math.PI;
+      // Reverted to the post-"backward fix" values — east → -π/2,
+      // west → π/2. Crab-walking is a known open issue but the various
+      // "fix" attempts kept making it worse, so leaving as it was.
+      p.character.facingY = p.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       const x = p.character.groundPos.x;
       if (x > PAVEMENT_X_RANGE + 1 || x < -PAVEMENT_X_RANGE - 1) {
         this.scene.remove(p.character.root);
@@ -83,8 +83,8 @@ export class PedestrianSpawner {
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(startX, z),
-        // Match update() — GLB faces +X, so east = 0, west = π.
-        facingY: dir > 0 ? 0 : Math.PI,
+        // Match update() — reverted to the post-backward-fix values.
+        facingY: dir > 0 ? -Math.PI / 2 : Math.PI / 2,
         action: "walk",
         phase: Math.random() * 5,
       };

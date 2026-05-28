@@ -124,21 +124,17 @@ const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   // For a table anchored at (0.5, 1.5), the resulting chair world
   // coords are (0, 0), (2, 1), (1, 3), (-1, 2) — all integer cell
   // centers.
-  // Facing values reflect the corrected convention: GLB front is +X by
-  // default, so for the visible front of a SEATED character to point
-  // toward the table:
-  //   face south (+Z, top chair) → facingY = -π/2
-  //   face west  (-X, right chair) → facingY = π
-  //   face north (-Z, bottom chair) → facingY = π/2
-  //   face east  (+X, left chair) → facingY = 0
-  // Top-left chair: looking south toward table.
-  { dx: -0.5, dz: -1.5, facingY: -Math.PI / 2, platePos: { dx: -0.5, dz: -0.8 } },
-  // Top-right chair: looking west toward table.
-  { dx:  1.5, dz: -0.5, facingY:  Math.PI,     platePos: { dx:  0.8, dz: -0.5 } },
-  // Bottom-right chair: looking north toward table.
-  { dx:  0.5, dz:  1.5, facingY:  Math.PI / 2, platePos: { dx:  0.5, dz:  0.8 } },
-  // Bottom-left chair: looking east toward table.
-  { dx: -1.5, dz:  0.5, facingY:  0,           platePos: { dx: -0.8, dz:  0.5 } },
+  // Facing values reverted to the original convention so the chairs
+  // look the way they did before all the facingY changes. Crab
+  // walking is still on the open list.
+  // Top-left chair: facing +Z (toward table).
+  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.5, dz: -0.8 } },
+  // Top-right chair: facing -X.
+  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
+  // Bottom-right chair: facing -Z (facingY=0 baseline).
+  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.5, dz:  0.8 } },
+  // Bottom-left chair: facing +X.
+  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
