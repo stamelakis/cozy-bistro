@@ -171,6 +171,14 @@ export class Game {
       if (this.cooking.getMenuRecipeIds().length === 0) {
         this.cooking.addToMenu("toast");
       }
+      // Starter staff: one of each role so the chef/waiter/errand bodies
+      // visible in the world (placed by WorldScene.populateCharacters) are
+      // actually accounted for in the panel — previously they would work
+      // but the panel said 0 hired, which confused players. Payroll is $0
+      // by default so this is a "free starter pack", not a cost.
+      this.staff.addStaff("chef");
+      this.staff.addStaff("waiter");
+      this.staff.addStaff("errand");
     }
     this.seedPantryIfEmpty();
   }

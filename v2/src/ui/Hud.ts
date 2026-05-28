@@ -29,6 +29,7 @@ export interface HudActions {
   openDecor: () => void;
   openExpand: () => void;
   openPantry: () => void;
+  openCloud: () => void;
   resetSave: () => void;
   isMuted: () => boolean;
   toggleMute: () => boolean;
@@ -181,13 +182,14 @@ export class Hud {
     ];
     const row2 = document.createElement("div");
     Object.assign(row2.style, {
-      display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
       gap: "4px", marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
     const buttons2: IconBtn[] = [
       { icon: "🏆 Awards",     title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.18)" },
       { icon: "📓 Ledger",     title: "Transaction ledger",  click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.18)" },
-      { icon: "💾 Slots",      title: "Save slots",          click: this.actions.openSlots,      tint: "rgba(160, 180, 140, 0.18)" },
+      { icon: "☁ Cloud",       title: "Cloud: leaderboards, friends, restaurants", click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.22)" },
+      { icon: "💾 Slots",      title: "Save slots + cloud save", click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.18)" },
       { icon: "? Help",        title: "How to play",         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.18)" },
     ];
     const row3 = document.createElement("div");

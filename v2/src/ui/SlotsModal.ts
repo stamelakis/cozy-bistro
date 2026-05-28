@@ -1,19 +1,27 @@
 import { SaveSystem, type SlotInfo } from "../game/SaveSystem";
+import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 
 /**
  * Save-slots picker. Shows the 3 slots with their stored money / day /
  * last-saved timestamp. Switching slots reloads the page so the new
  * slot becomes active. Deleting a slot wipes its key but does NOT
  * reload (so the current game in another slot keeps running).
+ *
+ * Bottom of the modal: a "Cloud save" section that shows the latest
+ * snapshot from SpacetimeDB and offers a Load button. Loading overwrites
+ * the active slot and reloads.
  */
 
 export class SlotsModal {
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
+  private cloudSection?: HTMLElement;
   private readonly currentSlot: number;
+  private readonly cloud?: SpacetimeClient;
 
-  constructor(parent: HTMLElement, currentSlot: number) {
+  constructor(parent: HTMLElement, currentSlot: number, cloud?: SpacetimeClient) {
     this.currentSlot = currentSlot;
+    this.cloud = cloud;
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
@@ -65,6 +73,17 @@ export class SlotsModal {
     this.body = document.createElement("div");
     Object.assign(this.body.style, { display: "flex", flexDirection: "column", gap: "8px" } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.body);
+
+    // Cloud-save panel.
+    if (this.cloud) {
+      this.cloudSection = document.createElement("div");
+      Object.assign(this.cloudSection.style, {
+        marginTop: "12px",
+        paddingTop: "12px",
+        borderTop: "1px solid rgba(255,245,220,0.18)",
+      } as Partial<CSSStyleDeclaration>);
+      body.appendChild(this.cloudSection);
+    }
   }
 
   show(): void { this.refresh(); this.root.style.display = "flex"; }
@@ -76,6 +95,71 @@ export class SlotsModal {
     for (const slot of slots) {
       this.body.appendChild(this.renderSlot(slot));
     }
+    this.renderCloudSection();
+  }
+
+  /** Render the "Cloud save" footer. Shows snapshot meta + Load button. */
+  private renderCloudSection(): void {
+    if (!this.cloudSection || !this.cloud) return;
+    this.cloudSection.innerHTML = "";
+    const title = document.createElement("div");
+    title.textContent = "☁ CLOUD SAVE";
+    Object.assign(title.style, {
+      fontWeight: "700", fontSize: "12px", letterSpacing: "0.04em",
+      marginBottom: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    this.cloudSection.appendChild(title);
+    const summary = this.cloud.getCloudSummary();
+    const info = document.createElement("div");
+    Object.assign(info.style, { fontSize: "11px", opacity: "0.85", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    if (!summary) {
+      info.textContent = "No cloud save yet — autosave will mirror to the cloud after the next save tick.";
+      this.cloudSection.appendChild(info);
+      return;
+    }
+    const stamp = summary.savedAtMs > 0 ? new Date(summary.savedAtMs).toLocaleString() : "unknown";
+    info.textContent = `Day ${summary.dayNumber} · $${summary.money} · ★${summary.ratingAvg.toFixed(1)} · tier ${summary.luxuryTier} · saved ${stamp}`;
+    this.cloudSection.appendChild(info);
+    const loadBtn = document.createElement("button");
+    loadBtn.textContent = `↓ Load cloud save into slot ${this.currentSlot}`;
+    Object.assign(loadBtn.style, {
+      padding: "6px 10px", width: "100%",
+      background: "rgba(120, 180, 200, 0.25)", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.35)", borderRadius: "4px",
+      cursor: "pointer", font: "inherit", fontSize: "12px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    loadBtn.onclick = () => this.onLoadCloud();
+    this.cloudSection.appendChild(loadBtn);
+  }
+
+  /** Pull the cloud payload, validate, write to active slot, reload. */
+  private onLoadCloud(): void {
+    if (!this.cloud) return;
+    const payload = this.cloud.getCloudSavePayload();
+    if (!payload) {
+      window.alert("No cloud save found to load.");
+      return;
+    }
+    try {
+      JSON.parse(payload); // validate it parses
+    } catch {
+      window.alert("Cloud save is corrupt and can't be loaded.");
+      return;
+    }
+    const ok = window.confirm(
+      `Overwrite slot ${this.currentSlot} with the cloud save? This wipes the current local game and reloads the page.`,
+    );
+    if (!ok) return;
+    try {
+      // Slot keys: slot 1 reuses the legacy key (mirrors SaveSystem.slotKey).
+      const key = this.currentSlot === 1 ? "cozy-bistro-3d-save" : `cozy-bistro-3d-save-${this.currentSlot}`;
+      localStorage.setItem(key, payload);
+    } catch (e) {
+      console.warn("Failed to write cloud save to local storage:", e);
+      window.alert("Couldn't write the cloud save locally (quota?). Try clearing some space.");
+      return;
+    }
+    window.location.reload();
   }
 
   private renderSlot(info: SlotInfo): HTMLElement {

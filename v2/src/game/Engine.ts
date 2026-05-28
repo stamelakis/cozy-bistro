@@ -23,6 +23,7 @@ import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
 import { SlotsModal } from "../ui/SlotsModal";
 import { AdminModal } from "../ui/AdminModal";
+import { CloudModal } from "../ui/CloudModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { SfxPlayer } from "../ui/SfxPlayer";
@@ -65,6 +66,7 @@ export class Engine {
   readonly achievementsModal: AchievementsModal;
   readonly slotsModal: SlotsModal;
   readonly adminModal: AdminModal;
+  readonly cloudModal: CloudModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly sfx: SfxPlayer;
@@ -145,6 +147,7 @@ export class Engine {
       openDecor: () => this.decorModal.show(),
       openExpand: () => this.expandModal.show(),
       openPantry: () => this.pantryModal.show(),
+      openCloud: () => this.cloudModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
@@ -175,8 +178,9 @@ export class Engine {
     this.helpModal = new HelpModal(container);
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
-    this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot());
+    this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
     this.adminModal = new AdminModal(container, this.game);
+    this.cloudModal = new CloudModal(container, this.cloud);
     // Pop a toast above the door whenever an achievement unlocks.
     this.game.achievements.onUnlock = (a) => {
       // Floating text and sound; player can open the AchievementsModal for details.
