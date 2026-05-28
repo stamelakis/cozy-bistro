@@ -423,60 +423,79 @@ export class Game {
     return true;
   }
 
-  // === Staff training upgrades ===
-  // Cook speed / serve speed / carry capacity. Each is a separate
-  // currency-only upgrade purchased from the UpgradeModal "Staff" tab.
-
-  /** Convenience pass-through to StaffSystem. */
-  getStaffUpgradeLevel(role: StaffRole): number {
-    return this.staff.getStaffUpgradeLevel(role);
-  }
-  getStaffUpgradeCost(role: StaffRole): number {
-    return this.staff.getStaffUpgradeCost(role);
-  }
-  canUpgradeStaff(role: StaffRole): boolean {
-    const level = this.staff.getStaffUpgradeLevel(role);
-    if (level >= STAFF_UPGRADE_MAX) return false;
-    // Each training level is gated behind the matching restaurant tier:
-    // L1 needs T1, L5 needs T5. Players need to grow the bistro to
-    // unlock the prestige training.
-    const requiredTier = level + 1;
-    if (requiredTier > this.getLuxuryTier()) return false;
-    return this.economy.canAfford(this.staff.getStaffUpgradeCost(role));
+  /** Roll a recipe back one level. Used by the dev-tools "Manage
+   * Upgrades" panel — doesn't refund money or materials. */
+  demoteRecipe(recipe: RecipeDefinition): boolean {
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    if (level <= 1) return false;
+    this.cooking.setRecipeUpgradeLevel(recipe.id, level - 1);
+    return true;
   }
 
-  /** Restaurant tier required for the next training level of this
-   * role. UpgradeModal shows it so players know what to unlock to
-   * progress further. Returns null when the role is already maxed. */
-  getStaffUpgradeRequiredTier(role: StaffRole): LuxuryTier | null {
-    const level = this.staff.getStaffUpgradeLevel(role);
+  // === Staff training upgrades (per-member) ===
+  // Cook speed / serve speed / carry capacity. Each member trains
+  // independently — the player picks a specific chef or waiter to
+  // mentor instead of buffing the whole role.
+
+  /** Per-member training level. */
+  getMemberUpgradeLevel(id: string): number {
+    return this.staff.getMemberUpgradeLevel(id);
+  }
+  /** Cost to train THIS member one more level. */
+  getMemberUpgradeCost(id: string): number {
+    return this.staff.getMemberUpgradeCost(id);
+  }
+  /** Restaurant tier required for the next training level on this
+   * member. UpgradeModal surfaces it so players know what to unlock
+   * to keep training. */
+  getMemberUpgradeRequiredTier(id: string): LuxuryTier | null {
+    const level = this.staff.getMemberUpgradeLevel(id);
     if (level >= STAFF_UPGRADE_MAX) return null;
     return (level + 1) as LuxuryTier;
   }
-  upgradeStaff(role: StaffRole): boolean {
-    if (!this.canUpgradeStaff(role)) return false;
-    const cost = this.staff.getStaffUpgradeCost(role);
+  canUpgradeMember(id: string): boolean {
+    const m = this.staff.getMember(id);
+    if (!m) return false;
+    if (m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
+    // Each training level is gated behind the matching restaurant
+    // tier: L1 needs T1, L5 needs T5.
+    if (m.upgradeLevel + 1 > this.getLuxuryTier()) return false;
+    return this.economy.canAfford(this.staff.getMemberUpgradeCost(id));
+  }
+  upgradeMember(id: string): boolean {
+    if (!this.canUpgradeMember(id)) return false;
+    const cost = this.staff.getMemberUpgradeCost(id);
     if (!this.economy.spendMoney(cost, "unlock")) return false;
-    return this.staff.upgradeStaffLevel(role);
+    return this.staff.upgradeMember(id);
+  }
+  /** Roll a member back one training level. Used by the dev-tools
+   * "Manage Upgrades" window. Doesn't refund the money — the dev
+   * panel can add a refund if it wants one. */
+  demoteMember(id: string): boolean {
+    return this.staff.demoteMember(id);
   }
 
-  /** Effective cook time for a recipe with the chef training bonus
-   * applied. GuestSpawner uses this when enqueuing a ticket so the
-   * timer the chef actually counts down matches the player's chef
-   * training.
-   *
-   * COOK_TIME_GLOBAL_MULT bumps every recipe's base prep time up so
-   * the kitchen reads as "doing real work" instead of insta-cooking.
-   * A fully trained L5 chef cuts the multiplier in half, so the effect
-   * curve is base × 1.5 untrained → base × 0.75 max trained. */
-  getEffectiveCookSeconds(recipe: RecipeDefinition): number {
-    return Math.max(1, recipe.preparationTimeSeconds * COOK_TIME_GLOBAL_MULT * this.staff.getChefCookMultiplier());
+  /** Effective cook time for a recipe with a SPECIFIC chef's training
+   * applied. StaffRouter calls this with the chef who's about to
+   * start cooking. COOK_TIME_GLOBAL_MULT bumps base prep up so an
+   * untrained kitchen reads as "doing real work"; a maxed L5 chef
+   * still ends up faster than the legacy timing. */
+  getEffectiveCookSecondsForChef(recipe: RecipeDefinition, chefMemberId: string): number {
+    const mult = this.staff.getChefCookMultiplier(chefMemberId);
+    return Math.max(1, recipe.preparationTimeSeconds * COOK_TIME_GLOBAL_MULT * mult);
   }
-  /** Effective walk speed multiplier for waiters. */
-  getWaiterSpeedMultiplier(): number {
-    return this.staff.getWaiterSpeedMultiplier();
+  /** Base cook-seconds (no chef adjustment). GuestSpawner enqueues
+   * this so the ticket carries a stable "base" the chef can then
+   * scale by their own multiplier on pickup. */
+  getBaseCookSeconds(recipe: RecipeDefinition): number {
+    return Math.max(1, recipe.preparationTimeSeconds * COOK_TIME_GLOBAL_MULT);
   }
-  /** Effective per-trip carry cap for the auto-shop dispatcher. */
+  /** Walk-speed multiplier for a specific waiter. */
+  getWaiterSpeedMultiplier(memberId: string): number {
+    return this.staff.getWaiterSpeedMultiplier(memberId);
+  }
+  /** Per-trip carry cap for the auto-shop dispatcher (uses the
+   * best-trained helper). */
   getHelperCarryCapacity(): number {
     return this.staff.getHelperCarryCapacity();
   }
@@ -727,9 +746,12 @@ export class Game {
   hireStaff(role: StaffRole): boolean {
     const cost = this.staff.getStaffHireCost(role);
     if (!this.economy.spendMoney(cost, "staff")) return false;
-    const idx = this.staff.addStaff(role);
-    this.onStaffHired?.(role, idx);
-    return true;
+    const member = this.staff.addStaff(role);
+    // Index is just for backward-compat with existing callback shape —
+    // the router looks up the new member by polling the StaffSystem,
+    // not by id, so the actual id is consulted there.
+    this.onStaffHired?.(role, this.staff.getStaffCount(role) - 1);
+    return member.upgradeLevel === 0;
   }
 
   /** Try to fire a staff member. Returns true if there was someone to fire

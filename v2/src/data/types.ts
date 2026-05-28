@@ -81,6 +81,18 @@ export interface HiredStaff {
   errandBoys?: number;
 }
 
+/** A single hired staff member. The aggregate {@link HiredStaff}
+ * counts are derived from filtering this list by role — this is the
+ * source of truth. Each member has their own training level so the
+ * player can mentor specific stars instead of buffing the whole role
+ * at once. */
+export interface HiredStaffMember {
+  id: string;
+  role: "chef" | "waiter" | "errand";
+  name: string;
+  upgradeLevel: number;
+}
+
 export interface AdminSettings {
   payrollPerStaffPerMinute?: number;
   ingredientUnitCost?: number;
@@ -145,9 +157,15 @@ export interface SaveGameState {
   dirtySeatUids?: string[];
   dirtyDishCount?: number;
   staff?: HiredStaff;
-  /** Per-role training upgrade levels (0..STAFF_UPGRADE_MAX). Chef →
-   * cook speed, Waiter → serve speed, Errand helper → carry capacity. */
+  /** Per-role training upgrade levels (legacy / fallback for saves
+   * predating per-member training). Used only if staffMembers is
+   * absent. Each level applied to the corresponding role's roster
+   * when the save loads. */
   staffUpgrades?: { chef?: number; waiter?: number; errand?: number };
+  /** Source of truth for hired staff — one record per member with
+   * their own id, name, and training level. {@link staff} counts are
+   * derived from this list when present. */
+  staffMembers?: HiredStaffMember[];
   adminSettings?: AdminSettings;
   restaurantOpen?: boolean;
   autoShopEnabled?: boolean;

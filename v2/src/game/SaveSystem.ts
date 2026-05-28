@@ -204,7 +204,7 @@ export class SaveSystem {
       ingredients: this.game.cooking.getPantrySnapshot(),
       preparedServings: this.game.cooking.getPreparedServingsSnapshot(),
       staff: this.game.staff.getStaff(),
-      staffUpgrades: this.game.staff.snapshotUpgrades(),
+      staffMembers: this.game.staff.snapshotMembers(),
       ratingTotal: this.game.reputation.getRatingTotal(),
       ratingCount: this.game.reputation.getRatingCount(),
       ratingHistory: this.game.reputation.getRatingHistorySnapshot(),

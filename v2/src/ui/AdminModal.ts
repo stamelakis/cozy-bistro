@@ -1,4 +1,5 @@
 import type { Game } from "../game/Game";
+import { recipes } from "../data/recipes";
 
 /**
  * Dev-mode tuning sliders. Mutates Game.admin live so changes take
@@ -119,6 +120,105 @@ export class AdminModal {
       this.refreshControls();
     };
     body.appendChild(resetBtn);
+
+    // Upgrade rollback panel. Lets the developer drop any upgraded
+    // recipe or staff member back a level for live testing without
+    // having to restart from a fresh save. No refunds — this is a
+    // debugging affordance, not gameplay.
+    const upgradesSection = document.createElement("div");
+    Object.assign(upgradesSection.style, {
+      marginTop: "16px", paddingTop: "12px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
+      display: "flex", flexDirection: "column", gap: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    const upgradesTitle = document.createElement("div");
+    upgradesTitle.textContent = "MANAGE UPGRADES (rollback)";
+    Object.assign(upgradesTitle.style, {
+      fontSize: "12px", fontWeight: "700",
+      letterSpacing: "0.04em", opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    upgradesSection.appendChild(upgradesTitle);
+    this.upgradesBody = document.createElement("div");
+    Object.assign(this.upgradesBody.style, {
+      maxHeight: "30vh", overflowY: "auto",
+      display: "flex", flexDirection: "column", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    upgradesSection.appendChild(this.upgradesBody);
+    body.appendChild(upgradesSection);
+  }
+
+  /** Container for the dynamic rollback rows — repopulated each show. */
+  private upgradesBody!: HTMLElement;
+
+  /** Populate the rollback section with one row per upgraded recipe +
+   * one row per upgraded staff member. Each row has a "↓" button that
+   * drops the level by 1. */
+  private renderUpgradesPanel(): void {
+    this.upgradesBody.innerHTML = "";
+    // Recipes with level > 1 (level 1 = no upgrades bought yet).
+    const upgradedRecipes = recipes
+      .map((r) => ({ recipe: r, level: this.game.cooking.getRecipeUpgradeLevel(r) }))
+      .filter((e) => e.level > 1)
+      .sort((a, b) => b.level - a.level || a.recipe.name.localeCompare(b.recipe.name));
+    for (const { recipe, level } of upgradedRecipes) {
+      this.upgradesBody.appendChild(
+        this.renderUpgradeRow(`🍽️ ${recipe.name}`, level, () => {
+          if (this.game.demoteRecipe(recipe)) this.renderUpgradesPanel();
+        }),
+      );
+    }
+    // Staff members with level > 0.
+    const trainedMembers = this.game.staff
+      .getMembers()
+      .filter((m) => m.upgradeLevel > 0)
+      .slice()
+      .sort((a, b) => b.upgradeLevel - a.upgradeLevel || a.name.localeCompare(b.name));
+    for (const m of trainedMembers) {
+      const roleEmoji = m.role === "chef" ? "🧑‍🍳" : m.role === "waiter" ? "🍽️" : "📦";
+      this.upgradesBody.appendChild(
+        this.renderUpgradeRow(`${roleEmoji} ${m.name}`, m.upgradeLevel, () => {
+          if (this.game.demoteMember(m.id)) this.renderUpgradesPanel();
+        }),
+      );
+    }
+    if (this.upgradesBody.childElementCount === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No upgrades to roll back.";
+      Object.assign(empty.style, {
+        opacity: "0.55", fontSize: "11px",
+        padding: "8px 0", textAlign: "center",
+      } as Partial<CSSStyleDeclaration>);
+      this.upgradesBody.appendChild(empty);
+    }
+  }
+
+  private renderUpgradeRow(label: string, level: number, onDemote: () => void): HTMLElement {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", alignItems: "center", gap: "8px",
+      padding: "4px 6px",
+      background: "rgba(255,245,220,0.04)",
+      borderRadius: "4px",
+      fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    const labelEl = document.createElement("span");
+    labelEl.innerHTML = `<b>${label}</b> <span style="opacity:0.7">— L${level}</span>`;
+    labelEl.style.flex = "1";
+    row.appendChild(labelEl);
+    const btn = document.createElement("button");
+    btn.textContent = "↓ L" + (level - 1);
+    btn.title = "Drop one level (no refund)";
+    Object.assign(btn.style, {
+      padding: "3px 8px",
+      background: "rgba(200, 120, 120, 0.22)",
+      color: "#fff5dc",
+      border: "1px solid rgba(200, 120, 120, 0.45)",
+      borderRadius: "3px",
+      cursor: "pointer", font: "inherit", fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = onDemote;
+    row.appendChild(btn);
+    return row;
   }
 
   private readonly controls: { input: HTMLInputElement; valueEl: HTMLElement; key: string }[] = [];
@@ -164,6 +264,10 @@ export class AdminModal {
     }
   }
 
-  show(): void { this.refreshControls(); this.root.style.display = "flex"; }
+  show(): void {
+    this.refreshControls();
+    this.renderUpgradesPanel();
+    this.root.style.display = "flex";
+  }
   hide(): void { this.root.style.display = "none"; }
 }

@@ -44,6 +44,11 @@ type ErrandState =
 
 interface ErrandActor {
   character: AnimatedCharacter;
+  /** Linked HiredStaffMember id. The auto-shop trip's carry capacity
+   * uses the best-trained helper across the pool, so the helpers
+   * don't need a per-actor lookup hook today — but the id lets the
+   * UI surface "Helper Foo is on a trip" later. */
+  memberId: string;
   home: THREE.Vector2;
   state: ErrandState;
   target: THREE.Vector2;
@@ -110,7 +115,7 @@ export class ErrandRouter {
    * (they're outside the playable grid). */
   private readonly pathfind?: Pathfinding;
 
-  constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
+  constructor(helperChar: AnimatedCharacter, helperMemberId: string, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
     this.doorInteriorPos = doorPos.clone();
     // Exterior anchor sits 1 tile out from the interior point along the
     // door's normal (+Z, toward the front of the building). Front door
@@ -118,7 +123,7 @@ export class ErrandRouter {
     this.doorExteriorPos = new THREE.Vector2(doorPos.x, doorPos.y + 1);
     this.counterPos = counterPos.clone();
     this.pathfind = pathfind;
-    this.addHelper(helperChar);
+    this.addHelper(helperChar, helperMemberId);
   }
 
   /** Plan the helper's path from current position to target. Falls
@@ -132,7 +137,7 @@ export class ErrandRouter {
     if (h.path.length === 0) h.path = [h.target.clone()];
   }
 
-  addHelper(char: AnimatedCharacter): void {
+  addHelper(char: AnimatedCharacter, memberId: string): void {
     char.action = "idle"; // override the default "carry" pose
     char.root.visible = true; // belt-and-suspenders in case of a recycled char
     // Snap them to a fresh randomized loiter spot near the counter so
@@ -142,6 +147,7 @@ export class ErrandRouter {
     char.groundPos.copy(home);
     this.helpers.push({
       character: char,
+      memberId,
       home,
       state: "idle",
       target: home.clone(),

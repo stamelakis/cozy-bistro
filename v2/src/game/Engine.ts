@@ -347,16 +347,29 @@ export class Engine {
         );
         this.usingStubRouter = true;
       } else {
+        // Make sure the StaffSystem has a roster entry for every base
+        // staff character the world spawned (1 chef, 1 waiter, 1
+        // errand). A fresh save has an empty roster; a loaded save
+        // may already have the records. ensureBaseHeadcount pads
+        // missing ones with auto-named members so we can attach
+        // training to them.
+        const baseCounts = { chef: 1, waiter: 1, errand: this.scene.errandChar ? 1 : 0 };
+        this.game.staff.ensureBaseHeadcount(baseCounts);
+        // First member of each role is the base char.
+        const chefId = this.game.staff.getMembers("chef")[0]!.id;
+        const waiterId = this.game.staff.getMembers("waiter")[0]!.id;
         this.router = new StaffRouter(
-          this.scene.chefChar!, this.scene.waiterChar!,
+          this.scene.chefChar!, chefId,
+          this.scene.waiterChar!, waiterId,
           this.scene.stovePos, this.scene.pickupPos,
           this.pathfind,
           () => this.registry.getStoves(),
-          // Per-role training multiplier — read live so an upgrade
+          // Per-MEMBER multipliers — read live so a training upgrade
           // bought mid-shift takes effect immediately.
-          (role) => role === "waiter" ? this.game.getWaiterSpeedMultiplier() : 1,
+          (memberId) => this.game.getWaiterSpeedMultiplier(memberId),
+          (memberId) => this.game.staff.getChefCookMultiplier(memberId),
         );
-        console.log("[Engine] real StaffRouter created with 1 chef + 1 waiter");
+        console.log("[Engine] real StaffRouter created with chef + waiter members", chefId, waiterId);
       }
       this.spawner = new GuestSpawner(
         this.scene.threeScene, this.scene.characterLoader, this.scene.animator,
@@ -376,8 +389,10 @@ export class Engine {
         //   edge → door → supply counter → home
         // The ErrandRouter needs both anchors: the door (entry/exit
         // waypoint) and the supply counter (drop-off point).
+        const errandId = this.game.staff.getMembers("errand")[0]?.id ?? this.game.staff.addStaff("errand").id;
         this.errand = new ErrandRouter(
           this.scene.errandChar,
+          errandId,
           this.scene.doorPos,
           this.scene.supplyCounterPos,
           this.pathfind,
@@ -512,28 +527,29 @@ export class Engine {
         console.warn("[syncStaff] no errand router — skipping errand restore");
         continue;
       }
-      const want = this.game.staff.getStaffCount(role);
+      const members = this.game.staff.getMembers(role);
       const have = role === "chef"
         ? this.router.getChefCount()
         : role === "waiter"
           ? this.router.getWaiterCount()
           : this.errand!.getHelperCount();
-      console.log(`[syncStaff] ${role}: want=${want}, have=${have} (will spawn ${Math.max(0, Math.max(want, 1) - have)})`);
-      for (let i = have; i < Math.max(want, 1); i += 1) {
+      console.log(`[syncStaff] ${role}: want=${members.length}, have=${have} (will spawn ${Math.max(0, members.length - have)})`);
+      // Members 0..have-1 are already attached to actors (the base
+      // char + any earlier extras). Spawn extras for the remaining
+      // members and link each to its HiredStaffMember.id.
+      for (let i = have; i < members.length; i += 1) {
+        const member = members[i];
         const char = await this.scene.spawnExtraStaff(role, i);
         if (!char) {
-          console.warn(`[syncStaff] ${role} extra #${i} failed to load`);
+          console.warn(`[syncStaff] ${role} extra #${i} (${member.name}) failed to load`);
           continue;
         }
-        console.log(`[syncStaff] ${role} extra #${i} spawned at (${char.groundPos.x.toFixed(2)}, ${char.groundPos.y.toFixed(2)})`);
-        // Pop a visible toast too so the player has a visual anchor
-        // for each restored extra (otherwise they appear in a cluster
-        // at the kitchen line and are easy to miss).
+        console.log(`[syncStaff] ${role} extra #${i} (${member.name}) spawned at (${char.groundPos.x.toFixed(2)}, ${char.groundPos.y.toFixed(2)})`);
         this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
-          `+1 ${this.labelForRole(role)}`, "#a8e2a8");
-        if (role === "chef") this.router.addChef(char);
-        else if (role === "waiter") this.router.addWaiter(char);
-        else this.errand!.addHelper(char);
+          `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
+        if (role === "chef") this.router.addChef(char, member.id);
+        else if (role === "waiter") this.router.addWaiter(char, member.id);
+        else this.errand!.addHelper(char, member.id);
       }
     }
   }
@@ -549,18 +565,26 @@ export class Engine {
         ? (this.router?.getWaiterCount() ?? 0)
         : (this.errand?.getHelperCount() ?? 0);
     const offsetSlot = currentInRouter;
+    // Game.hireStaff already appended the new member record. Grab the
+    // tail of the roster so we have the auto-generated name + id.
+    const members = this.game.staff.getMembers(role);
+    const member = members[members.length - 1];
+    if (!member) {
+      console.warn(`[Engine] handleStaffHired: no roster member found for ${role}`);
+      return;
+    }
     // Spawn the model first so we know its actual world pose for the toast.
     const char = await this.scene.spawnExtraStaff(role, offsetSlot);
     if (!char) {
       // Loading failed — still tell the player something visible.
-      this.floatingText?.pop(0, -2.2, `+1 ${this.labelForRole(role)} (load failed)`, "#ff9a9a");
+      this.floatingText?.pop(0, -2.2, `+1 ${this.labelForRole(role)}: ${member.name} (load failed)`, "#ff9a9a");
       return;
     }
     this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
-      `+1 ${this.labelForRole(role)}`, "#a8e2a8");
-    if (role === "chef") this.router?.addChef(char);
-    else if (role === "waiter") this.router?.addWaiter(char);
-    else this.errand?.addHelper(char);
+      `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
+    if (role === "chef") this.router?.addChef(char, member.id);
+    else if (role === "waiter") this.router?.addWaiter(char, member.id);
+    else this.errand?.addHelper(char, member.id);
   }
 
   private labelForRole(role: "chef" | "waiter" | "errand"): string {

@@ -46,6 +46,10 @@ interface StaffActor {
   /** Which pool this actor belongs to. Used by moveActor to apply the
    * right training-upgrade speed multiplier. */
   role: "chef" | "waiter";
+  /** HiredStaffMember id this actor represents — links the physical
+   * character in the world to the trainable record in StaffSystem.
+   * Multiplier callbacks key off this. */
+  memberId: string;
   home: THREE.Vector2; // where they return to when idle
   state: "idle" | "movingToWork" | "working" | "returningHome";
   /** What they're working on (a ticket id). */
@@ -134,11 +138,16 @@ export class StaffRouter {
    * fall back to the legacy shared {@link stovePos}. */
   private readonly getStoves?: () => readonly StoveInfo[];
 
-  /** Optional per-role walking speed multiplier, applied each tick in
-   * moveActor. Used to apply the waiter training upgrade ("Serve
-   * speed") without having to re-create the actor. Returns 1.0 by
+  /** Per-MEMBER walking speed multiplier (was per-role before the
+   * per-staff refactor). Applied each tick in moveActor so a waiter
+   * trained mid-shift speeds up on the next frame. Returns 1.0 by
    * default — the base CHEF_SPEED / WAITER_SPEED constants stand. */
-  private readonly getSpeedMultiplier?: (role: "chef" | "waiter") => number;
+  private readonly getSpeedMultiplier?: (memberId: string) => number;
+
+  /** Per-MEMBER chef cook-time multiplier — applied to the ticket the
+   * moment a chef picks it up so the chef counting down the timer
+   * matches THAT chef's training. */
+  private readonly getChefCookMultiplier?: (memberId: string) => number;
 
   /** uids of stoves currently reserved by a chef in cooking flight.
    * Cleared when the chef leaves the "working" state OR when they're
@@ -147,20 +156,24 @@ export class StaffRouter {
 
   constructor(
     chefChar: AnimatedCharacter,
+    chefMemberId: string,
     waiterChar: AnimatedCharacter,
+    waiterMemberId: string,
     stovePos: THREE.Vector2,
     pickupPos: THREE.Vector2,
     pathfind?: Pathfinding,
     getStoves?: () => readonly StoveInfo[],
-    getSpeedMultiplier?: (role: "chef" | "waiter") => number,
+    getSpeedMultiplier?: (memberId: string) => number,
+    getChefCookMultiplier?: (memberId: string) => number,
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
     this.pathfind = pathfind;
     this.getStoves = getStoves;
     this.getSpeedMultiplier = getSpeedMultiplier;
-    this.addChef(chefChar);
-    this.addWaiter(waiterChar);
+    this.getChefCookMultiplier = getChefCookMultiplier;
+    this.addChef(chefChar, chefMemberId);
+    this.addWaiter(waiterChar, waiterMemberId);
   }
 
   /** Compute the chef's standing position one tile in front of a stove.
@@ -228,10 +241,11 @@ export class StaffRouter {
   }
 
   /** Append a chef to the pool. Their current ground position becomes home. */
-  addChef(char: AnimatedCharacter): void {
+  addChef(char: AnimatedCharacter, memberId: string): void {
     this.chefs.push({
       character: char,
       role: "chef",
+      memberId,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -244,10 +258,11 @@ export class StaffRouter {
     });
   }
 
-  addWaiter(char: AnimatedCharacter): void {
+  addWaiter(char: AnimatedCharacter, memberId: string): void {
     this.waiters.push({
       character: char,
       role: "waiter",
+      memberId,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -411,13 +426,18 @@ export class StaffRouter {
         }
         ticket.state = "cooking";
         ticket.clock = 0;
+        // Apply THIS chef's cook-time multiplier on pickup so the
+        // timer the kitchen counts down matches the chef who's
+        // actually doing the work.
+        const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
+        ticket.cookSeconds = Math.max(1, ticket.cookSeconds * chefMult);
         c.ticketId = ticket.id;
         c.target = target;
         this.planPath(c);
         c.state = "movingToWork";
         c.clock = 0;
         c.character.action = "walk";
-        console.log(`[Router] chef picked up ${ticket.id} → walking to ${stove ? `stove ${stove.uid}` : "fallback stovePos"}`);
+        console.log(`[Router] chef picked up ${ticket.id} → walking to ${stove ? `stove ${stove.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
         break;
       }
       case "movingToWork": {
@@ -577,10 +597,11 @@ export class StaffRouter {
     const dz = wp.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
-    // Apply the per-role training multiplier (chef cook speed isn't a
-    // walk multiplier, but waiter serve speed IS). Both go through
-    // the same hook so adding "chef hustle" later is one-line.
-    const speedMult = this.getSpeedMultiplier?.(a.role) ?? 1;
+    // Apply this MEMBER's training multiplier (waiter serve speed,
+    // for now — chef cook speed is applied to ticket.cookSeconds when
+    // they pick up). The getSpeedMultiplier callback returns 1.0 for
+    // unknown ids so an unwired actor still moves at base speed.
+    const speedMult = this.getSpeedMultiplier?.(a.memberId) ?? 1;
     const step = Math.min(dist, a.speed * speedMult * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
