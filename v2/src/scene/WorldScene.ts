@@ -54,17 +54,35 @@ export class WorldScene {
   /** Where the errand helper walks to when fetching ingredients (front door). */
   readonly doorPos = new THREE.Vector2(0, 5);
   /** Resolves once the staff characters are loaded — so Engine can build
-   * the StaffRouter at the right moment. */
-  staffReady: Promise<void> = Promise.resolve();
+   * the StaffRouter at the right moment. Created synchronously in the
+   * constructor so any code that grabs the reference right after
+   * `new WorldScene()` waits for the REAL load, not an already-resolved
+   * sentinel. (We hit this exact bug — Engine's `.then(...)` was firing
+   * on the resolved placeholder before chefChar/waiterChar even existed,
+   * leaving the stub router active forever.) */
+  staffReady!: Promise<void>;
+  private resolveStaffReady!: () => void;
   /** Resolves once the demo restaurant furniture is in the scene — so
    * Engine can register every demo piece in the FurnitureRegistry and
-   * therefore make them moveable / sellable like player-placed items. */
-  demoReady: Promise<void> = Promise.resolve();
+   * therefore make them moveable / sellable like player-placed items.
+   * Same constructor-init pattern as staffReady — see above. */
+  demoReady!: Promise<void>;
+  private resolveDemoReady!: () => void;
   /** Snapshot of the demo placements (id + cell + rotation + model)
    * filled in by populateDemoRestaurant. */
   readonly demoPlacements: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D }[] = [];
 
   constructor() {
+    // Create the staff/demo "ready" promises SYNCHRONOUSLY here, before
+    // any other code can grab a reference. The async populate functions
+    // resolve them when their work is done. We used to lazily assign new
+    // promises inside the async functions, which left any synchronous
+    // consumer holding a permanently-resolved `Promise.resolve()` sentinel
+    // — Engine then fired its staffReady.then(...) immediately, found no
+    // chefChar/waiterChar yet, and pinned itself to the stub router.
+    this.staffReady = new Promise((r) => { this.resolveStaffReady = r; });
+    this.demoReady = new Promise((r) => { this.resolveDemoReady = r; });
+
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
     this.addBuilding();
@@ -430,8 +448,9 @@ export class WorldScene {
   private currentTierVisible = 5;
 
   private async populateDemoRestaurant(): Promise<void> {
-    let resolveDemoReady: () => void = () => {};
-    this.demoReady = new Promise((r) => { resolveDemoReady = r; });
+    // NOTE: demoReady/staffReady promises are created in the constructor
+    // — see the field declarations. We only RESOLVE them here, never
+    // re-create them, so the engine's `.then(...)` references stay live.
     // Bare-minimum starter restaurant: front door, one cooking station,
     // one sink (so dishwashing has a baseline), one 4-top dining table.
     // Everything else — extra tables, fridge / microwave / counters,
@@ -481,7 +500,7 @@ export class WorldScene {
     }));
 
     this.buildTierMarkers();
-    resolveDemoReady();
+    this.resolveDemoReady();
     await this.populateCharacters();
   }
 
@@ -560,8 +579,10 @@ export class WorldScene {
       { id: "errand", x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle"  },
     ];
 
-    let resolveStaffReady: () => void = () => {};
-    this.staffReady = new Promise((r) => { resolveStaffReady = r; });
+    // staffReady promise is created in the constructor (above) so any
+    // synchronous consumer that grabbed the reference up-front waits for
+    // this resolution rather than the initial sentinel. We only resolve
+    // it here.
 
     await Promise.all(staff.map(async (c) => {
       try {
@@ -583,6 +604,7 @@ export class WorldScene {
         console.warn(`Character ${c.id} unavailable:`, err);
       }
     }));
-    resolveStaffReady();
+    console.log(`[WorldScene] populateCharacters done: chef=${this.chefChar ? "OK" : "MISSING"} waiter=${this.waiterChar ? "OK" : "MISSING"} errand=${this.errandChar ? "OK" : "MISSING"} — resolving staffReady`);
+    this.resolveStaffReady();
   }
 }
