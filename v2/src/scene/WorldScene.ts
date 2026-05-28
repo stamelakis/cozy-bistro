@@ -257,15 +257,33 @@ export class WorldScene {
    * model so it actually illuminates the area at night. Returns silently
    * if the same model is already registered.
    *
-   * Wall sconces (placement="wall") are anchored at chest height by
-   * BuildMenu; floor / table / ceiling lamps land with feet at y=0,
-   * so we put the light a meter and a half above the model's local
-   * origin — splits the difference and reads as "bulb-level" for all
-   * lamp types without needing per-id offsets. */
+   * Critical: the bulb + light are children of the model, which already
+   * has fitFurniture's non-uniform scale baked in (often 3-8x for the
+   * small Kenney lamp GLBs). A hardcoded local Y of 1.5 would get
+   * multiplied by that scale and throw the bulb 5-12 units into the
+   * sky. We instead anchor the bulb just below the model's measured
+   * top in WORLD units and translate that back into the model's local
+   * frame, and inverse-scale the bulb mesh so it stays the authored
+   * 0.08 radius regardless of how stretched the parent model is. */
   registerLamp(model: THREE.Object3D): void {
     if (this.placedLamps.some((lp) => lp.model === model)) return;
+    // Measure the lamp's world-space top so we know where "bulb height"
+    // really is for THIS model. Wall sconces are mounted at y≈1.5
+    // (BuildMenu pre-positions them), floor lamps have their feet at
+    // y=0; either way the top of the model is the natural bulb anchor.
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const worldTopY = Number.isFinite(box.max.y) ? box.max.y : 1.5;
+    const bulbWorldY = Math.max(0.3, worldTopY - 0.12);
+    const sx = model.scale.x || 1;
+    const sy = model.scale.y || 1;
+    const sz = model.scale.z || 1;
+    // Convert the desired WORLD Y back into the model's LOCAL frame so
+    // the child transform composes correctly through model.scale.
+    const localY = (bulbWorldY - model.position.y) / sy;
+
     const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
-    light.position.set(0, 1.5, 0);
+    light.position.set(0, localY, 0);
     light.castShadow = false; // shadow maps for many lamps tank perf
     model.add(light);
     // A tiny emissive sphere makes the bulb itself visibly "lit" at
@@ -277,7 +295,10 @@ export class WorldScene {
         transparent: true, opacity: 0.0,
       }),
     );
-    bulb.position.set(0, 1.5, 0);
+    bulb.position.set(0, localY, 0);
+    // Inverse-scale so the bulb's WORLD radius stays at 0.08 even when
+    // the parent lamp is stretched 8x vertically by fitFurniture.
+    bulb.scale.set(1 / sx, 1 / sy, 1 / sz);
     model.add(bulb);
     this.placedLamps.push({ model, light, bulb });
     // Apply current darkness immediately so newly placed lamps come on
