@@ -63,6 +63,10 @@ export class BuildMenu {
   /** Snapped world position the preview is hovering over. */
   private readonly hoverCell = new THREE.Vector3();
   private hoverValid = false;
+  /** Latest furniture item the cursor is pointing AT (not the cell beneath
+   * it). Sell/move pickup uses this so a click on a chair from an iso
+   * angle hits the chair, not the floor patch past it. */
+  private hoveredItemUid: string | null = null;
   /** Latest evaluated placement plan — populated by onPointerMove, consumed
    * by onClick. Lets the quality tint, snap pose and click placement stay
    * in lockstep (no chance of clicking before the tint updates). */
@@ -367,7 +371,7 @@ export class BuildMenu {
           this.restoreMoveOriginal();
           this.holdingUid = null;
           this.holdingFrom = null;
-          this.flashRoot("Move cancelled");
+          this.flashRoot("Move cancelled", "info");
         } else {
           this.cancelPlacing();
         }
@@ -383,7 +387,7 @@ export class BuildMenu {
 
   private async startPlacing(def: FurnitureDef): Promise<void> {
     if (this.game.economy.canAfford(def.cost) === false) {
-      this.flashRoot("Not enough money");
+      this.flashRoot("Not enough money", "error");
       return;
     }
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
@@ -398,6 +402,28 @@ export class BuildMenu {
     this.scene.add(this.preview);
     // Surface seat-slot markers as a placement aid.
     this.seatMarkers?.setEnabled(true);
+  }
+
+  /** Synchronously clone an already-placed model into a translucent ghost.
+   * Used for move-pickup so the ghost appears the same frame the original
+   * hides — no async-load race that could leave the player staring at an
+   * empty floor. */
+  private cloneModelAsGhost(source: THREE.Object3D): THREE.Object3D {
+    const ghost = source.clone(true);
+    ghost.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const cloneOne = (m: THREE.Material): THREE.Material => {
+          const c = m.clone();
+          c.transparent = true;
+          c.opacity = 0.55;
+          (c as THREE.Material).depthWrite = false;
+          return c;
+        };
+        o.material = Array.isArray(o.material) ? o.material.map(cloneOne) : cloneOne(o.material);
+        o.castShadow = false;
+      }
+    });
+    return ghost;
   }
 
   /** Build a translucent ghost copy of the given item def for use as a
@@ -466,7 +492,7 @@ export class BuildMenu {
       const removed = this.registry.removeAtByUid(entry.uid);
       if (removed) {
         this.game.economy.earnMoney(entry.refundCost, "refund");
-        this.flashRoot(`Undid place — refunded $${entry.refundCost}`);
+        this.flashRoot(`Undid place — refunded $${entry.refundCost}`, "info");
       }
       return;
     }
@@ -482,19 +508,19 @@ export class BuildMenu {
         this.scene.add(solid);
         this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid);
       });
-      this.flashRoot(`Undid sell — paid back $${entry.refundPaid}`);
+      this.flashRoot(`Undid sell — paid back $${entry.refundPaid}`, "info");
       return;
     }
     if (entry.kind === "move") {
       this.registry.setPose(entry.uid, entry.fromX, entry.fromZ, entry.fromRotY);
-      this.flashRoot("Undid move");
+      this.flashRoot("Undid move", "info");
       return;
     }
     if (entry.kind === "auto-arrange") {
       for (const m of entry.moves) {
         this.registry.setPose(m.uid, m.fromX, m.fromZ, m.fromRotY);
       }
-      this.flashRoot(`Undid auto-arrange (${entry.moves.length} chairs)`);
+      this.flashRoot(`Undid auto-arrange (${entry.moves.length} chairs)`, "info");
       return;
     }
   }
@@ -509,7 +535,7 @@ export class BuildMenu {
     }
     const moved = this.registry.autoArrangeChairs(2.0);
     if (moved === 0) {
-      this.flashRoot("Every chair is already at a seat slot");
+      this.flashRoot("Every chair is already at a seat slot", "info");
       return;
     }
     // Diff: keep only the items that actually moved.
@@ -524,16 +550,24 @@ export class BuildMenu {
     if (moves.length > 0) {
       this.pushUndo({ kind: "auto-arrange", moves });
     }
-    this.flashRoot(`Auto-arranged ${moved} chair${moved === 1 ? "" : "s"}`);
+    this.flashRoot(`Auto-arranged ${moved} chair${moved === 1 ? "" : "s"}`, "success");
   }
 
-  private flashRoot(msg: string): void {
+  private flashRoot(msg: string, kind: "info" | "success" | "error" = "info"): void {
     const old = this.root.style.background;
-    this.root.style.background = "rgba(140, 30, 30, 0.85)";
+    const bg =
+      kind === "success" ? "rgba(40, 110, 50, 0.85)" :
+      kind === "error" ? "rgba(140, 30, 30, 0.85)" :
+      "rgba(50, 80, 110, 0.85)";
+    const textColor =
+      kind === "success" ? "#d6f0c8" :
+      kind === "error" ? "#ffd0d0" :
+      "#d4e3ee";
+    this.root.style.background = bg;
     const note = document.createElement("div");
     note.textContent = msg;
     note.style.marginTop = "6px";
-    note.style.color = "#ffd0d0";
+    note.style.color = textColor;
     this.root.appendChild(note);
     setTimeout(() => {
       this.root.style.background = old;
@@ -549,13 +583,42 @@ export class BuildMenu {
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
-    // Intersect with the y=0 ground plane.
+    // Intersect with the y=0 ground plane (used for placement + drop).
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const point = new THREE.Vector3();
     this.hoverValid = this.raycaster.ray.intersectPlane(groundPlane, point) !== null;
     if (!this.hoverValid) return;
-    // Snap to integer cells (1 cell = 1 world unit) for non-chair placement.
     this.hoverCell.set(Math.round(point.x), 0, Math.round(point.z));
+
+    // Pickup-mode raycast: while the player is in sell or move-pickup,
+    // they're aiming AT items (not floor cells). With an iso camera, a
+    // ground-plane hit lands past the chair the user clicked, so a strict
+    // findAt(floor-x, floor-z) misses by a wide margin. Instead, raycast
+    // against placed furniture meshes directly.
+    this.hoveredItemUid = null;
+    const wantsItem = this.sellMode || (this.moveMode && !this.holdingUid);
+    if (wantsItem) {
+      const items = this.registry.snapshotItems();
+      if (items.length > 0) {
+        const roots = items.map((it) => it.model);
+        const hits = this.raycaster.intersectObjects(roots, true);
+        if (hits.length > 0) {
+          let hitRoot: THREE.Object3D | null = hits[0].object;
+          while (hitRoot && !roots.includes(hitRoot)) hitRoot = hitRoot.parent;
+          if (hitRoot) {
+            const matched = items.find((it) => it.model === hitRoot);
+            if (matched) {
+              this.hoveredItemUid = matched.uid;
+              // Pretend the hover-cell is the item's own center so the
+              // visual placement-quality tint of the existing ghost (if
+              // any) tracks the would-be pickup.
+              this.hoverCell.set(matched.x, 0, matched.z);
+            }
+          }
+        }
+      }
+    }
+
     if (!this.preview || !this.placingDef) return;
     const plan = this.computePlacementPlan(this.placingDef, point);
     this.currentPlan = plan;
@@ -630,57 +693,58 @@ export class BuildMenu {
   private onClick = (e: MouseEvent): void => {
     if (e.button !== 0) return;
     if (this.sellMode && this.hoverValid) {
-      const x = Math.round(this.hoverCell.x);
-      const z = Math.round(this.hoverCell.z);
-      // Look up the item first so we can snapshot it for undo.
-      const item = this.registry.findAt(x, z);
+      // Prefer the item under the cursor (raycaster hit) over a floor-cell
+      // search, since iso-projection often misses by 1-2 cells.
+      const item = this.hoveredItemUid
+        ? this.registry.snapshotItems().find((it) => it.uid === this.hoveredItemUid) ?? null
+        : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z));
       if (!item) {
-        this.flashRoot("Nothing to sell there");
+        this.flashRoot("Nothing to sell there", "error");
         return;
       }
       const snapshot = { defId: item.defId, x: item.x, z: item.z, rotY: item.rotY };
-      const removed = this.registry.removeAt(x, z);
+      const removed = this.registry.removeAtByUid(item.uid);
       if (!removed) {
-        this.flashRoot("Nothing to sell there");
+        this.flashRoot("Nothing to sell there", "error");
         return;
       }
       this.game.economy.earnMoney(removed.refund, "payment");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
-      this.flashRoot(`Sold for $${removed.refund}`);
+      this.flashRoot(`Sold for $${removed.refund}`, "success");
       return;
     }
     if (this.moveMode && this.hoverValid) {
-      const x = Math.round(this.hoverCell.x);
-      const z = Math.round(this.hoverCell.z);
       if (!this.holdingUid) {
-        // First click: pick up whatever's here.
-        const item = this.registry.findAt(x, z);
-        if (!item) { this.flashRoot("Nothing to move there"); return; }
+        // First click: pick up whatever's under the cursor (raycaster hit
+        // takes priority over the floor-cell fallback for iso angles).
+        const item = this.hoveredItemUid
+          ? this.registry.snapshotItems().find((it) => it.uid === this.hoveredItemUid) ?? null
+          : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z));
+        if (!item) { this.flashRoot("Nothing to move there", "error"); return; }
         this.holdingUid = item.uid;
         this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
-        // Hide the actual placed model while it's being "carried" so the
-        // player sees only the ghost preview following the cursor.
         this.movingOriginalModel = item.model;
         item.model.visible = false;
-        // Build a transparent preview for the same def + initial pose.
         const def = furnitureCatalog.find((d) => d.id === item.defId);
         if (def) {
           this.placingDef = def;
           this.rotationY = item.rotY;
-          this.makeGhostPreview(def).then((ghost) => {
-            if (!ghost || !this.holdingUid) return; // cancelled
-            this.preview = ghost;
-            this.preview.position.set(item.x, this.preview.position.y, item.z);
-            this.preview.rotation.y = item.rotY;
-            this.scene.add(this.preview);
-          });
+          // Build the ghost SYNCHRONOUSLY from the actual placed model so
+          // it appears immediately — no async load race that could leave
+          // the original hidden with no preview.
+          const ghost = this.cloneModelAsGhost(item.model);
+          this.preview = ghost;
+          this.preview.position.set(item.x, this.preview.position.y, item.z);
+          this.preview.rotation.y = item.rotY;
+          this.scene.add(this.preview);
+          this.tintPreview("snap-perfect"); // at start, sits at its current valid pose
         }
-        this.flashRoot(`Picked up — click destination`);
+        this.flashRoot(`Picked up — click destination`, "success");
       } else {
         // Second click: drop using the latest plan from pointermove.
         const plan = this.currentPlan;
         if (!plan || plan.quality === "blocked") {
-          this.flashRoot("Destination is blocked");
+          this.flashRoot("Destination is blocked", "error");
           return;
         }
         const fromPose = this.holdingFrom!;
@@ -693,7 +757,7 @@ export class BuildMenu {
         this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY });
         this.holdingUid = null;
         this.holdingFrom = null;
-        this.flashRoot(plan.quality === "snap-perfect" ? "Moved — perfect seat!" : "Moved");
+        this.flashRoot(plan.quality === "snap-perfect" ? "Moved — perfect seat!" : "Moved", "success");
       }
       return;
     }
@@ -701,11 +765,11 @@ export class BuildMenu {
     const def = this.placingDef;
     const plan = this.currentPlan;
     if (!plan || plan.quality === "blocked") {
-      this.flashRoot("Cell already occupied");
+      this.flashRoot("Cell already occupied", "error");
       return;
     }
     if (!this.game.economy.spendMoney(def.cost, "decor")) {
-      this.flashRoot("Not enough money");
+      this.flashRoot("Not enough money", "error");
       return;
     }
     // Bake the preview into the scene using the plan's final pose (which
@@ -721,7 +785,7 @@ export class BuildMenu {
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
     });
     if (plan.quality === "snap-perfect") {
-      this.flashRoot("Perfect placement!");
+      this.flashRoot("Perfect placement!", "success");
     }
     // Keep placing more of the same — many people want to drop multiples
     // (e.g. 4 chairs around a table). Esc / right-click to stop.
