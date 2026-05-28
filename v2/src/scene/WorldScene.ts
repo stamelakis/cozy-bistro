@@ -351,6 +351,67 @@ export class WorldScene {
     const frontRight = new THREE.Mesh(new THREE.BoxGeometry(4.5, 3, 0.2), ghostMat);
     frontRight.position.set(2.75, 1.5, 5);
     this.threeScene.add(frontRight);
+    // Door lintel — fills the gap above the doorway so the front wall
+    // reads as enclosed (door panel is 2 units tall; lintel runs from
+    // y=2 to y=3). 1.0 wide so it exactly meets frontLeft/frontRight.
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), ghostMat);
+    lintel.position.set(0, 2.5, 5);
+    this.threeScene.add(lintel);
+    // Restaurant rating sign mounted on the lintel — a small marquee
+    // that shows the current ★ rating, just like a real bistro
+    // entrance. Hooked up by updateRatingSign() from Engine.
+    this.buildRatingSign();
+  }
+
+  // === Rating sign on the door lintel ===
+
+  /** The 5 mounted star mini-meshes — each is "lit" (gold + emissive) or
+   * "off" (slate). updateRatingSign sets which are lit based on the
+   * current average rating. */
+  private ratingStars: { mesh: THREE.Mesh; litMat: THREE.MeshStandardMaterial; offMat: THREE.MeshStandardMaterial }[] = [];
+
+  private buildRatingSign(): void {
+    // Backboard — a small dark plaque on the lintel, slightly proud of
+    // the wall so it casts a shadow and reads as physical.
+    const boardMat = new THREE.MeshStandardMaterial({ color: 0x1d1813, roughness: 0.75 });
+    const board = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.45, 0.04), boardMat);
+    board.position.set(0, 2.5, 5.13);
+    board.castShadow = true;
+    this.threeScene.add(board);
+    // 5 star slots evenly spaced. Each star is a thin disc with a gold
+    // material when lit, slate when off, so updateRatingSign can flip
+    // them as the rating changes.
+    const litMatTemplate = new THREE.MeshStandardMaterial({
+      color: 0xf5c14a, roughness: 0.4, metalness: 0.4,
+      emissive: 0xf5c14a, emissiveIntensity: 0.5,
+    });
+    const offMatTemplate = new THREE.MeshStandardMaterial({
+      color: 0x474039, roughness: 0.85,
+    });
+    for (let i = 0; i < 5; i += 1) {
+      const litMat = litMatTemplate.clone();
+      const offMat = offMatTemplate.clone();
+      const star = new THREE.Mesh(new THREE.CircleGeometry(0.06, 16), offMat);
+      // Star x positions evenly across the board's 0.8 usable width.
+      star.position.set(-0.32 + i * 0.16, 2.5, 5.16);
+      this.threeScene.add(star);
+      this.ratingStars.push({ mesh: star, litMat, offMat });
+    }
+  }
+
+  /** Update the rating-sign lit-count from a 1-5 average. Called by
+   * Engine on every HUD tick — cheap enough (5 ref swaps max). */
+  updateRatingSign(rating: number): void {
+    // A 4.3 rating lights 4 full stars + the 5th stays off (we treat
+    // half-stars as off so the sign reads cleanly). Cap at 1..5.
+    const litCount = Math.max(0, Math.min(5, Math.round(rating)));
+    for (let i = 0; i < this.ratingStars.length; i += 1) {
+      const s = this.ratingStars[i];
+      const wantLit = i < litCount;
+      const cur = s.mesh.material as THREE.Material;
+      const want = wantLit ? s.litMat : s.offMat;
+      if (cur !== want) s.mesh.material = want;
+    }
   }
 
   /** Apply a theme color set to the existing wall + floor materials.

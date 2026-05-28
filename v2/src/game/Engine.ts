@@ -582,6 +582,9 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
+      // Rating sign mounted on the door lintel — keeps the visible star
+      // count in sync with the actual restaurant rating.
+      this.scene.updateRatingSign(this.game.reputation.getAverageRating());
       // Spawner diagnostic line — defaults to "waiting on world" until
       // the spawner is constructed (post-staffReady).
       if (this.spawner) {
