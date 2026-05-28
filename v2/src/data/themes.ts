@@ -22,12 +22,20 @@ export interface RestaurantTheme {
 
 export const RESTAURANT_THEMES: readonly RestaurantTheme[] = [
   {
+    id: "plain-white",
+    name: "Plain White",
+    wallColor: 0xfafafa,
+    floorColor: 0xf2f2f0,
+    cost: 0,
+    description: "Blank canvas walls + floor (default starter).",
+  },
+  {
     id: "cozy-default",
     name: "Cozy Cottage",
     wallColor: 0xe8a98a,
     floorColor: 0xe7d4ad,
-    cost: 0,
-    description: "Warm peach walls, tan floor (default).",
+    cost: 180,
+    description: "Warm peach walls, tan floor.",
   },
   {
     id: "modern-monochrome",

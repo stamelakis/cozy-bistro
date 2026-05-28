@@ -284,7 +284,10 @@ export class WorldScene {
     this.threeScene.add(curb);
 
     // === Interior floor ===
-    this.floorMat = new THREE.MeshStandardMaterial({ color: 0xe7d4ad, roughness: 0.95, metalness: 0 });
+    // Default starter colors are intentionally bare white — the warm
+    // tones moved into purchasable themes the player picks in the Decor
+    // menu. See data/themes.ts.
+    this.floorMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.95, metalness: 0 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = 0.0; // sits above grass
@@ -300,7 +303,7 @@ export class WorldScene {
 
     // === Walls ===
     // Solid back + left walls.
-    this.wallMat = new THREE.MeshStandardMaterial({ color: 0xe8a98a, roughness: 0.85 });
+    this.wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85 });
     const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
     wallBack.position.set(0, 1.5, -5);
     wallBack.castShadow = true;
@@ -345,74 +348,29 @@ export class WorldScene {
    * Tier 1 = the starter dining (tables 1 + 2). Tier 2..4 = the
    * progressively-unlocked dining tables. */
   private readonly tierGroups = new Map<number, THREE.Object3D[]>();
-  private readonly tierMarkers = new Map<number, THREE.Object3D[]>();
   private currentTierVisible = 5;
 
   private async populateDemoRestaurant(): Promise<void> {
     let resolveDemoReady: () => void = () => {};
     this.demoReady = new Promise((r) => { resolveDemoReady = r; });
-    // Place a few Kenney pieces to verify loading + look. Positions are in
-    // world units (1 unit = 1 grid cell). Coords are (x, z) on the ground.
-    // `tier` field controls when each piece becomes visible (0 = always).
+    // Bare-minimum starter restaurant: front door, one cooking station,
+    // one sink (so dishwashing has a baseline), one 4-top dining table.
+    // Everything else — extra tables, fridge / microwave / counters,
+    // plants, lamps, decor, sidewalk props — is something the player
+    // earns and chooses from the build menu. This keeps a fresh save's
+    // canvas clean instead of pre-populating it with an entire bistro.
     const placements: { id: string; x: number; z: number; rotY?: number; tier?: number }[] = [
-      // Kitchen line along the back wall
-      { id: "fridge",     x: -3,   z: -4 },
-      { id: "counter",    x: -2,   z: -4 },
-      { id: "sink",       x: -1,   z: -4 },
-      { id: "stove",      x:  0,   z: -4 },
-      { id: "counter",    x:  1,   z: -4 },
-      { id: "microwave",  x:  2,   z: -4 },
-
-      // Starter dining (tables 1 + 2) — always available.
-      { id: "small-table",   x: -2,    z: 1,    tier: 1 },
-      { id: "wooden-chair",  x: -2.9,  z: 1,    rotY: Math.PI / 2, tier: 1 },
-      { id: "wooden-chair",  x: -1.1,  z: 1,    rotY: -Math.PI / 2, tier: 1 },
-      { id: "wooden-chair",  x: -2,    z: 0.1,  rotY: 0, tier: 1 },
-      { id: "wooden-chair",  x: -2,    z: 1.9,  rotY: Math.PI, tier: 1 },
-
-      { id: "small-table",   x: 2,     z: 1,    tier: 1 },
-      { id: "cushion-chair", x: 1.1,   z: 1,    rotY: -Math.PI / 2, tier: 1 },
-      { id: "cushion-chair", x: 2.9,   z: 1,    rotY: Math.PI / 2, tier: 1 },
-      { id: "cushion-chair", x: 2,     z: 0.1,  rotY: 0, tier: 1 },
-      { id: "cushion-chair", x: 2,     z: 1.9,  rotY: Math.PI, tier: 1 },
-
-      // Table 3 — unlocked at tier 2.
-      { id: "small-table",   x: 0,     z: 3,    tier: 2 },
-      { id: "modern-chair",  x: -0.9,  z: 3,    rotY: Math.PI / 2, tier: 2 },
-      { id: "modern-chair",  x:  0.9,  z: 3,    rotY: -Math.PI / 2, tier: 2 },
-      { id: "modern-chair",  x:  0,    z: 2.1,  rotY: 0, tier: 2 },
-      { id: "modern-chair",  x:  0,    z: 3.9,  rotY: Math.PI, tier: 2 },
-
-      // Table 4 — unlocked at tier 3.
-      { id: "small-table",   x: -4,    z: 0,    tier: 3 },
-      { id: "cushion-chair", x: -4.9,  z: 0,    rotY: Math.PI / 2, tier: 3 },
-      { id: "cushion-chair", x: -3.1,  z: 0,    rotY: -Math.PI / 2, tier: 3 },
-      { id: "cushion-chair", x: -4,    z: -0.9, rotY: 0, tier: 3 },
-      { id: "cushion-chair", x: -4,    z: 0.9,  rotY: Math.PI, tier: 3 },
-
-      // Table 5 — unlocked at tier 4.
-      { id: "small-table",   x: 4,     z: 0,    tier: 4 },
-      { id: "cushion-chair", x: 4.9,   z: 0,    rotY: -Math.PI / 2, tier: 4 },
-      { id: "cushion-chair", x: 3.1,   z: 0,    rotY: Math.PI / 2, tier: 4 },
-      { id: "cushion-chair", x: 4,     z: -0.9, rotY: 0, tier: 4 },
-      { id: "cushion-chair", x: 4,     z: 0.9,  rotY: Math.PI, tier: 4 },
-
-      // Decor
-      { id: "plant-medium",  x: -4.5, z: -4 },
-      { id: "plant-small",   x:  4,   z: -4 },
-      { id: "floor-lamp",    x: -4,   z:  3 },
-      { id: "floor-lamp",    x:  4,   z:  3 },
-      { id: "door",          x:  0,   z:  5, rotY: Math.PI },
-
-      // Street props (z > 5 is outside the building) — sidewalk life.
-      { id: "floor-lamp",    x: -7,   z:  7 },
-      { id: "floor-lamp",    x:  7,   z:  7 },
-      { id: "potted-plant",  x: -2.5, z:  6 },
-      { id: "potted-plant",  x:  2.5, z:  6 },
-      { id: "bench-plain",   x: -4,   z:  7, rotY: Math.PI },
-      { id: "bench-plain",   x:  4,   z:  7, rotY: Math.PI },
-      { id: "trashcan",      x:  6,   z:  6.5 },
-      { id: "cardboard-box", x: -6,   z:  6.5 },
+      // Front door (entrance — guests spawn outside and walk through it).
+      { id: "door",         x:  0, z:  5, rotY: Math.PI },
+      // Essential appliances — stove + sink along the back wall.
+      { id: "stove",        x:  0, z: -4 },
+      { id: "sink",         x: -1, z: -4 },
+      // One starter dining table with its 4 chairs.
+      { id: "small-table",  x:  0, z:  1, tier: 1 },
+      { id: "wooden-chair", x: -0.9, z: 1,    rotY:  Math.PI / 2, tier: 1 },
+      { id: "wooden-chair", x:  0.9, z: 1,    rotY: -Math.PI / 2, tier: 1 },
+      { id: "wooden-chair", x:  0,   z: 0.1,  rotY: 0,            tier: 1 },
+      { id: "wooden-chair", x:  0,   z: 1.9,  rotY: Math.PI,      tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {
@@ -448,57 +406,23 @@ export class WorldScene {
     await this.populateCharacters();
   }
 
-  /** Build a translucent "🔒 LOCKED — buy expansion" disc on the floor
-   * for each tier section. Hidden when the section is unlocked. */
+  /** Tier-lock markers (the colored discs + glowing pillars) were removed
+   * in the starter-restaurant revamp — they only made sense alongside
+   * the pre-placed demo dining sections, which no longer exist. The
+   * field is kept (empty) for save-time backwards compatibility, but
+   * nothing is rendered. */
   private buildTierMarkers(): void {
-    const sections: { tier: number; x: number; z: number; color: number }[] = [
-      { tier: 2, x: 0,  z: 3, color: 0xe0a050 },
-      { tier: 3, x: -4, z: 0, color: 0xe07050 },
-      { tier: 4, x: 4,  z: 0, color: 0xa050e0 },
-    ];
-    for (const s of sections) {
-      const group: THREE.Object3D[] = [];
-      // Floor disc.
-      const disc = new THREE.Mesh(
-        new THREE.CircleGeometry(0.9, 24),
-        new THREE.MeshStandardMaterial({
-          color: s.color, transparent: true, opacity: 0.35,
-          emissive: s.color, emissiveIntensity: 0.25,
-          depthWrite: false, side: THREE.DoubleSide,
-        }),
-      );
-      disc.rotation.x = -Math.PI / 2;
-      disc.position.set(s.x, 0.01, s.z);
-      this.threeScene.add(disc);
-      group.push(disc);
-      // Vertical "🔒" beacon — emissive box that pulses (we just leave it static).
-      const beacon = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 1.6, 8),
-        new THREE.MeshStandardMaterial({
-          color: s.color, emissive: s.color, emissiveIntensity: 0.6,
-          transparent: true, opacity: 0.55,
-        }),
-      );
-      beacon.position.set(s.x, 0.8, s.z);
-      this.threeScene.add(beacon);
-      group.push(beacon);
-      this.tierMarkers.set(s.tier, group);
-    }
+    // Intentionally empty.
   }
 
-  /** Show/hide tier-locked dining sections + their lock markers based on
-   * the player's current expansion. Called by Engine on init and after
-   * Game.buyExpansion. */
+  /** Show/hide tier-locked dining sections based on the player's current
+   * expansion. Called by Engine on init and after Game.buyExpansion. */
   setLuxuryTier(tier: number): void {
     this.currentTierVisible = tier;
     for (const [tierKey, items] of this.tierGroups) {
       if (tierKey === 0) continue;
       const visible = tierKey <= tier;
       for (const obj of items) obj.visible = visible;
-    }
-    for (const [tierKey, markers] of this.tierMarkers) {
-      const visible = tierKey > tier;
-      for (const obj of markers) obj.visible = visible;
     }
   }
 
