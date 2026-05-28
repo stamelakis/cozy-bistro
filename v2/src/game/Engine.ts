@@ -249,16 +249,24 @@ export class Engine {
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     buildMenu.seatMarkers = this.seatMarkers;
 
-    // Spawner + router need the staff characters. Wait until WorldScene
-    // finishes loading them, then construct.
+    // Spawner + routers + per-event hooks. Wait until WorldScene finishes
+    // loading staff characters, then construct. Critically, all "common"
+    // spawner hooks (registry, floatingText, sfx, hire/fire callbacks)
+    // are wired regardless of whether the full router pair came up — a
+    // previous version of this block returned early on missing chef/
+    // waiter, which meant spawner.registry stayed null and the room
+    // reported "0/0 seats" forever.
     void this.scene.staffReady.then(() => {
-      if (!this.scene.chefChar || !this.scene.waiterChar) {
-        console.warn("Staff characters unavailable — spawner running without staff routing");
-        this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.buildStubRouter());
-        return;
+      const haveStaffPair = !!(this.scene.chefChar && this.scene.waiterChar);
+      if (!haveStaffPair) {
+        console.warn("Staff characters unavailable — spawner running with stub router");
+      } else {
+        this.router = new StaffRouter(this.scene.chefChar!, this.scene.waiterChar!, this.scene.stovePos, this.scene.pickupPos);
       }
-      this.router = new StaffRouter(this.scene.chefChar, this.scene.waiterChar, this.scene.stovePos, this.scene.pickupPos);
-      this.spawner = new GuestSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator, this.game, this.router);
+      this.spawner = new GuestSpawner(
+        this.scene.threeScene, this.scene.characterLoader, this.scene.animator,
+        this.game, this.router ?? this.buildStubRouter(),
+      );
       this.spawner.floatingText = this.floatingText;
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
@@ -269,21 +277,21 @@ export class Engine {
         this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
         this.game.onAutoShop = () => this.errand?.triggerRun();
       }
-      // Wire hire/fire callbacks now that the routers exist. The first
-      // staff member of each role is already part of populateCharacters
-      // and was added to the router by the constructor; hiring extras
-      // spawns brand-new characters that get added to the pool.
+      // Hire / fire callbacks. We wire these even when staff is missing
+      // so future hires can attempt to load (handleStaffHired falls back
+      // gracefully when this.router is undefined).
       this.game.onStaffHired = (role) => {
         void this.handleStaffHired(role);
       };
       this.game.onStaffFired = (role) => {
         this.handleStaffFired(role);
       };
-      // Restore any extra hired staff from the save. The base 3 characters
-      // (1 chef, 1 waiter, 1 errand) are already in the world; if the save
-      // shows more, spawn the difference so what the player sees matches
-      // what they're paying payroll for.
-      void this.syncStaffToHeadcount();
+      if (haveStaffPair) {
+        // Restore any extra hired staff from the save. The base 3
+        // characters (1 chef, 1 waiter, 1 errand) are already in the
+        // world; if the save shows more, spawn the difference.
+        void this.syncStaffToHeadcount();
+      }
     });
 
     // Save on tab close.

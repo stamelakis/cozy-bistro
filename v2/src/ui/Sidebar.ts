@@ -99,7 +99,9 @@ export class Sidebar {
 
   /** Render the spawner diagnostic line. Color flips amber if no spawn
    * is happening despite seats existing, red if seats are zero, green
-   * when customers are present. */
+   * when customers are present. Surfaces tables/chairs counts so we can
+   * tell whether the issue is "no items in registry" vs "items present
+   * but chairs not at slots". */
   updateSpawnerStatus(stats: {
     customers: number;
     waiting: number;
@@ -108,7 +110,17 @@ export class Sidebar {
     overflow: number;
     spawnInSec: number;
     open: boolean;
+    tables: number;
+    chairs: number;
+    rawSlots: number;
+    hasRegistry: boolean;
   }): void {
+    if (!stats.hasRegistry) {
+      this.spawnerStatus.textContent = "⚠ no registry wired to spawner";
+      this.spawnerStatus.style.color = "#ff9a9a";
+      this.spawnerStatus.style.opacity = "1";
+      return;
+    }
     if (!stats.open) {
       this.spawnerStatus.textContent = "🔒 closed — no spawning";
       this.spawnerStatus.style.color = "#fff5dc";
@@ -119,10 +131,9 @@ export class Sidebar {
     const parts: string[] = [];
     parts.push(`👥 ${stats.customers}${stats.waiting > 0 ? `+${stats.waiting}🪑` : ""}`);
     parts.push(`💺 ${stats.seatsAvail}/${stats.seatsTotal}`);
-    if (stats.overflow > 0) parts.push(`🪑${stats.overflow}`);
+    parts.push(`🪑${stats.chairs}|🏠${stats.tables}|◯${stats.rawSlots}`);
     parts.push(`⏱ ${Math.max(0, stats.spawnInSec).toFixed(1)}s`);
     this.spawnerStatus.textContent = parts.join(" · ");
-    // Color signals: red if no seats, amber if seats but no customers, green when alive.
     this.spawnerStatus.style.color =
       stats.seatsTotal === 0 ? "#ff9a9a" :
       stats.customers === 0 && stats.waiting === 0 ? "#ffd47a" :

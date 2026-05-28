@@ -7,6 +7,7 @@ import type { FloatingText } from "../ui/FloatingText";
 import type { SfxPlayer } from "../ui/SfxPlayer";
 import type { FurnitureRegistry, ResolvedSeatSlot } from "./FurnitureRegistry";
 import { recipes } from "../data/recipes";
+import { getFurnitureDef } from "../data/furnitureCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
@@ -327,9 +328,21 @@ export class GuestSpawner {
     customers: number; waiting: number;
     seatsAvail: number; seatsTotal: number;
     overflow: number; spawnInSec: number; open: boolean;
+    tables: number; chairs: number; rawSlots: number;
+    hasRegistry: boolean;
   } {
     let waiting = 0;
     for (const g of this.guests) if (g.waiting) waiting += 1;
+    let tables = 0, chairs = 0, rawSlots = 0;
+    if (this.registry) {
+      const items = this.registry.snapshotItems();
+      for (const it of items) {
+        const cat = getFurnitureDef(it.defId)?.category;
+        if (cat === "table") tables += 1;
+        else if (cat === "chair") chairs += 1;
+      }
+      rawSlots = this.registry.getResolvedSeatSlots(false).length;
+    }
     const total = this.listFunctionalSeats().length;
     return {
       customers: this.guests.length - waiting,
@@ -339,6 +352,8 @@ export class GuestSpawner {
       overflow: this.registry?.getOverflowChairs().length ?? 0,
       spawnInSec: Math.max(0, this.spawnCooldown),
       open: this.restaurantOpen,
+      tables, chairs, rawSlots,
+      hasRegistry: this.registry != null,
     };
   }
 
