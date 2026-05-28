@@ -44,10 +44,10 @@ const EXTERIOR_WALL_SEGMENTS: readonly { x1: number; z1: number; x2: number; z2:
   { x1: -4.5, z1: -4.5, x2: -4.5, z2:  5.5, rotY: Math.PI / 2 },
   // Right side wall (vertical, along Z at x=5.5).
   { x1:  5.5, z1: -4.5, x2:  5.5, z2:  5.5, rotY: Math.PI / 2 },
-  // Front-left segment (horizontal, along X at z=5.5, x from -5 to -0.5).
-  { x1: -5.0, z1:  5.5, x2: -0.5, z2:  5.5, rotY: 0 },
-  // Front-right segment (horizontal, along X at z=5.5, x from 0.5 to 6).
-  { x1:  0.5, z1:  5.5, x2:  6.0, z2:  5.5, rotY: 0 },
+  // Front-left segment (horizontal, along X at z=5.5, x from -4.5 to -0.5).
+  { x1: -4.5, z1:  5.5, x2: -0.5, z2:  5.5, rotY: 0 },
+  // Front-right segment (horizontal, along X at z=5.5, x from 0.5 to 5.5).
+  { x1:  0.5, z1:  5.5, x2:  5.5, z2:  5.5, rotY: 0 },
 ];
 
 /**
