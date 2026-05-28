@@ -170,7 +170,13 @@ const TIME_TO_EAT = 8.0;
  * can cycle the same fixture among multiple guests, long enough that
  * the trip reads as deliberate when you watch a single guest do it. */
 const TIME_AT_TOILET = 6.0;
-const SPAWN_INTERVAL_SECONDS = 6.0; // a new guest every N seconds if seats free
+/** Base wait between guest spawns. Was 6s — that meant a half-empty
+ * starter restaurant filled up before the player could think. Bumped
+ * to 18s so the early-game pace is "a new face every now and then"
+ * rather than a constant queue; attractiveness, the boost mode, and
+ * the admin spawn-rate slider all multiply this so a well-decorated
+ * mid-game bistro still spawns nearly as often as before. */
+const SPAWN_INTERVAL_SECONDS = 18.0;
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
 const PATIENCE_BASE_SECONDS = 35;
