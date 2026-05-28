@@ -77,11 +77,14 @@ export interface FurnitureDef {
   /** Tables: the sitting positions around this table. Chairs placed at one
    * of these become functional seats for the dining loop. */
   seatSlots?: readonly SeatSlot[];
-  /** Tables only: what kind of orders this table accepts.
+  /** What kind of orders this item serves.
    *   - "food" (default): full menu — appetizer + main + dessert
-   *   - "drink": drinks-only. Coffee tables are tiny lounge tables for
-   *     coffee / smoothies / cocoa; guests seated here order from the
-   *     drinks category. Lower revenue per seat but faster turnover. */
+   *   - "drink": drinks-only. On TABLES it changes the order pool
+   *     (coffee tables seat 4 around a shared tabletop for drinks only).
+   *     On CHAIRS it's a UI hint — the build menu shows a "🥤 Drinks
+   *     only" badge so players know sofas / benches / corner sofas
+   *     belong in a lounge setup. Chair behavior is identical
+   *     regardless. */
   surface?: "food" | "drink";
   /** Optional explicit per-cell footprint mask in the def's NATURAL
    * orientation (rotY = 0). Rows index Z (depth), columns index X
@@ -254,11 +257,14 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "lounge-chair",   name: "Lounge Chair",  category: "chair",
     modelPath: "assets/kenney/loungeChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 56, comfort: 4, style: 3 },
   { id: "bench-cushion",  name: "Cushion Bench", category: "chair",
-    modelPath: "assets/kenney/benchCushion.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 64, comfort: 3, style: 2, seatingCapacity: 2 },
+    modelPath: "assets/kenney/benchCushion.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 64, comfort: 3, style: 2, seatingCapacity: 2,
+    surface: "drink" },
   { id: "bench-cushion-low", name: "Low Cushion Bench", category: "chair",
-    modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 2, style: 2, seatingCapacity: 2 },
+    modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 2, style: 2, seatingCapacity: 2,
+    surface: "drink" },
   { id: "bench-plain",    name: "Wooden Bench",  category: "chair",
-    modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 40, comfort: 1, style: 1, seatingCapacity: 2 },
+    modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 40, comfort: 1, style: 1, seatingCapacity: 2,
+    surface: "drink" },
   { id: "bar-stool-sq",   name: "Square Bar Stool", category: "chair",
     modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 22, comfort: 1, style: 2 },
   { id: "lounge-relax",   name: "Relax Lounge",  category: "chair",
@@ -266,9 +272,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "lounge-design",  name: "Designer Lounge", category: "chair",
     modelPath: "assets/kenney/loungeDesignChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 88, comfort: 4, style: 5, ratingBonus: 0.05 },
   { id: "sofa",           name: "Sofa",          category: "chair",
-    modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 120, comfort: 5, style: 3, seatingCapacity: 2 },
+    modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 120, comfort: 5, style: 3, seatingCapacity: 2,
+    surface: "drink" },
   { id: "sofa-long",      name: "Long Sofa",     category: "chair",
-    modelPath: "assets/kenney/loungeSofaLong.glb", scale: S_SOFA_WIDE, size: { width: 3, depth: 1 }, cost: 170, comfort: 5, style: 3, seatingCapacity: 3 },
+    modelPath: "assets/kenney/loungeSofaLong.glb", scale: S_SOFA_WIDE, size: { width: 3, depth: 1 }, cost: 170, comfort: 5, style: 3, seatingCapacity: 3,
+    surface: "drink" },
   // Corner sofa is an L — 3 of 4 tiles in a 2×2 footprint are occupied,
   // the 4th (the inner elbow of the L) is intentionally open so the
   // player can drop a coffee table inside it. Same 2-customer capacity
@@ -276,9 +284,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // it the showpiece of a lounge corner.
   { id: "sofa-corner",    name: "Corner Sofa",   category: "chair",
     modelPath: "assets/kenney/loungeSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 200, comfort: 6, style: 4, seatingCapacity: 2,
-    footprint: [[1, 1], [1, 0]] },
+    footprint: [[1, 1], [1, 0]], surface: "drink" },
   { id: "sofa-design",    name: "Designer Sofa", category: "chair",
-    modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 240, comfort: 5, style: 6, ratingBonus: 0.08, seatingCapacity: 2 },
+    modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 240, comfort: 5, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
+    surface: "drink" },
 
   // Kitchen / cooking
   { id: "stove",          name: "Gas Stove",       category: "stove",
@@ -490,7 +499,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/loungeSofaOttoman.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 70, comfort: 4, style: 3 },
   { id: "sofa-design-c",  name: "Designer Corner Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 280, comfort: 6, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
-    footprint: [[1, 1], [1, 0]] },
+    footprint: [[1, 1], [1, 0]], surface: "drink" },
 
   // === More kitchen cabinets + corner pieces. ===
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "counter",

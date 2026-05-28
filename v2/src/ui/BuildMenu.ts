@@ -219,9 +219,15 @@ export class BuildMenu {
       root.appendChild(header);
       for (const def of items) {
         const btn = document.createElement("button");
-        btn.textContent = `${def.name} — $${def.cost}`;
+        // Clear the text content; we lay out name+cost on the left and
+        // an optional badge on the right via inline child spans so the
+        // button stays scannable for the player.
+        btn.textContent = "";
         Object.assign(btn.style, {
-          display: "block",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "6px",
           width: "100%",
           margin: "0 0 3px 0",
           padding: "5px 8px",
@@ -233,6 +239,28 @@ export class BuildMenu {
           cursor: "pointer",
           fontSize: "12px",
         } as Partial<CSSStyleDeclaration>);
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = `${def.name} — $${def.cost}`;
+        btn.appendChild(nameSpan);
+        if (def.surface === "drink") {
+          // Coffee tables behave drinks-only; sofas / benches / corner
+          // sofas are flagged purely so the player knows they belong in
+          // a lounge setup. Either way the chip-style badge gives a
+          // glance-read of "this is for the drink side".
+          const badge = document.createElement("span");
+          badge.textContent = "🥤 Drinks only";
+          Object.assign(badge.style, {
+            fontSize: "10px",
+            padding: "1px 6px",
+            borderRadius: "999px",
+            background: "rgba(120, 180, 220, 0.18)",
+            border: "1px solid rgba(120, 180, 220, 0.55)",
+            color: "#c8e0f0",
+            whiteSpace: "nowrap",
+            letterSpacing: "0.02em",
+          } as Partial<CSSStyleDeclaration>);
+          btn.appendChild(badge);
+        }
         btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
         btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
         btn.onclick = () => this.startPlacing(def);
