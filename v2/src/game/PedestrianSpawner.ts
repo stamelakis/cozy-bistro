@@ -53,8 +53,11 @@ export class PedestrianSpawner {
     for (let i = this.people.length - 1; i >= 0; i -= 1) {
       const p = this.people[i];
       p.character.groundPos.x += p.dir * PEDESTRIAN_SPEED * dt;
-      // facingY: +X = π/2, -X = -π/2 (since facingY=0 looks down +Z)
-      p.character.facingY = p.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      // Pedestrians were empirically walking backwards under the previous
+      // (+π/2 east, -π/2 west) hardcode — the character model's true
+      // default forward is the opposite of what those values assume.
+      // Swap the signs so eastbound walkers face east.
+      p.character.facingY = p.dir > 0 ? -Math.PI / 2 : Math.PI / 2;
       const x = p.character.groundPos.x;
       if (x > PAVEMENT_X_RANGE + 1 || x < -PAVEMENT_X_RANGE - 1) {
         this.scene.remove(p.character.root);
@@ -81,7 +84,8 @@ export class PedestrianSpawner {
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(startX, z),
-        facingY: dir > 0 ? Math.PI / 2 : -Math.PI / 2,
+        // Sign-flipped from the obvious mapping — see update() comment.
+        facingY: dir > 0 ? -Math.PI / 2 : Math.PI / 2,
         action: "walk",
         phase: Math.random() * 5,
       };

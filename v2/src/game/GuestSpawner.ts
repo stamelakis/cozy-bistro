@@ -96,10 +96,15 @@ interface ActiveGuest {
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
 
-// Where guests enter the room from (just outside the door)
-const DOOR_POSITION = new THREE.Vector2(0, 5);
-// Where guests exit to when leaving
-const EXIT_POSITION = new THREE.Vector2(0, 6.5);
+// Where guests enter the room from. Was (0, 5) — right ON the door —
+// which made arriving guests appear to materialize inside the wall and
+// made an outgoing guest visually overlap with the very next spawn. The
+// door panel sits at z=5; spawn/exit at z=8 puts them clearly outside,
+// so they walk in through the door instead of "popping in".
+const DOOR_POSITION = new THREE.Vector2(0, 8);
+// Where guests exit to when leaving — pushed even further south so a
+// departing guest is clearly off-frame before the next arrival appears.
+const EXIT_POSITION = new THREE.Vector2(0, 10);
 
 /** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
 const TABLE_HEIGHT_Y = 0.95;

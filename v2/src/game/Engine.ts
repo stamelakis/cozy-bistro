@@ -289,8 +289,11 @@ export class Engine {
       if (haveStaffPair) {
         // Restore any extra hired staff from the save. The base 3
         // characters (1 chef, 1 waiter, 1 errand) are already in the
-        // world; if the save shows more, spawn the difference.
+        // world; if the save shows more, spawn the difference. Sync
+        // tolerates a missing errand router internally.
         void this.syncStaffToHeadcount();
+      } else {
+        console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
       }
     });
 
@@ -368,28 +371,43 @@ export class Engine {
 
   /** Match world characters to the saved StaffSystem headcount. The base
    * 3 characters from populateCharacters cover "1 of each"; this fills
-   * in the rest on load. */
+   * in the rest on load. Diagnostic logs per role so we can see in
+   * DevTools which spawn calls landed and which failed. */
   private async syncStaffToHeadcount(): Promise<void> {
-    if (!this.router || !this.errand) return;
+    if (!this.router) {
+      console.warn("[syncStaff] no router — skipping all roles");
+      return;
+    }
     const roles: ("chef" | "waiter" | "errand")[] = ["chef", "waiter", "errand"];
     for (const role of roles) {
+      // Errand role needs its own router; skip cleanly if absent rather
+      // than blocking chef/waiter restoration.
+      if (role === "errand" && !this.errand) {
+        console.warn("[syncStaff] no errand router — skipping errand restore");
+        continue;
+      }
       const want = this.game.staff.getStaffCount(role);
-      // The starter character counts as 1 if hired. If StaffSystem says 0,
-      // we leave the starter standing (cosmetic only — it won't grab tickets
-      // because we'd remove it, but for simplicity keep the body around).
       const have = role === "chef"
         ? this.router.getChefCount()
         : role === "waiter"
           ? this.router.getWaiterCount()
-          : this.errand.getHelperCount();
-      // Spawn missing extras. We bypass handleStaffHired because that one
-      // is for player-triggered hires; here we're just restoring visuals.
+          : this.errand!.getHelperCount();
+      console.log(`[syncStaff] ${role}: want=${want}, have=${have} (will spawn ${Math.max(0, Math.max(want, 1) - have)})`);
       for (let i = have; i < Math.max(want, 1); i += 1) {
         const char = await this.scene.spawnExtraStaff(role, i);
-        if (!char) continue;
+        if (!char) {
+          console.warn(`[syncStaff] ${role} extra #${i} failed to load`);
+          continue;
+        }
+        console.log(`[syncStaff] ${role} extra #${i} spawned at (${char.groundPos.x.toFixed(2)}, ${char.groundPos.y.toFixed(2)})`);
+        // Pop a visible toast too so the player has a visual anchor
+        // for each restored extra (otherwise they appear in a cluster
+        // at the kitchen line and are easy to miss).
+        this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
+          `+1 ${this.labelForRole(role)}`, "#a8e2a8");
         if (role === "chef") this.router.addChef(char);
         else if (role === "waiter") this.router.addWaiter(char);
-        else this.errand.addHelper(char);
+        else this.errand!.addHelper(char);
       }
     }
   }
