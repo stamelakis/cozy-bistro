@@ -243,11 +243,63 @@ export class GuestSpawner {
       const g = this.guests[i];
       this.tickPatience(g, dt);
       this.tickGuest(g, dt);
-      // Remove guest if they finished walking out.
-      if (g.state === "walkingOut" && this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+      // Remove guest if they finished walking out — OR if they've been
+      // trying to leave for an absurd amount of time (got stuck in a
+      // crowd, target unreachable, etc.). Without this safety, a stuck
+      // walker holds their seat in `occupiedSeats` forever and the
+      // restaurant slowly seizes up.
+      const stuckLeaving =
+        (g.state === "walkingOut" || g.state === "walkingToDoor") && g.stateClock > 30;
+      if (stuckLeaving ||
+          (g.state === "walkingOut" && this.distanceToTarget(g) < ARRIVAL_THRESHOLD)) {
         this.despawnGuest(i);
       }
     }
+    // Garbage-collect any stale occupiedSeats / claimedWaitingChairs
+    // entries left behind by a crashed despawn or invalidated state. This
+    // is what lets the restaurant recover on its own after long sessions.
+    this.reconcileOccupancy();
+    this.logSpawnDiagnosticIfDue();
+  }
+
+  /** Drop seat-occupancy entries that don't correspond to any live guest,
+   * and drop waiting-chair claims with no matching guest. Cheap to run
+   * every tick — these sets are tiny. */
+  private reconcileOccupancy(): void {
+    if (this.occupiedSeats.size > 0) {
+      const live = new Set<SeatId>();
+      for (const g of this.guests) if (g.seatId) live.add(g.seatId);
+      for (const id of this.occupiedSeats) {
+        if (!live.has(id)) this.occupiedSeats.delete(id);
+      }
+    }
+    if (this.claimedWaitingChairs.size > 0) {
+      const liveChairs = new Set<string>();
+      for (const g of this.guests) if (g.waiting) liveChairs.add(g.waiting.chairUid);
+      for (const chairUid of this.claimedWaitingChairs.keys()) {
+        if (!liveChairs.has(chairUid)) this.claimedWaitingChairs.delete(chairUid);
+      }
+    }
+  }
+
+  /** Once every ~10s, dump a single-line summary of the spawn loop so a
+   * player who's confused why no customers show up can see the state in
+   * DevTools. Cheap (one console.log + a tiny aggregation). */
+  private lastSpawnLogElapsed = 0;
+  private logSpawnDiagnosticIfDue(): void {
+    if (this.elapsed - this.lastSpawnLogElapsed < 10) return;
+    this.lastSpawnLogElapsed = this.elapsed;
+    if (!this.registry) return;
+    const functional = this.listFunctionalSeats().length;
+    const avail = this.countAvailableSeats();
+    const overflow = this.registry.getOverflowChairs().length;
+    const attractiveness = this.game.getAttractiveness();
+    const open = this.restaurantOpen ? "open" : "closed";
+    console.log(
+      `[Spawner] ${open} · ${this.guests.length} guest(s) · ` +
+      `functional seats: ${avail}/${functional} avail (${this.occupiedSeats.size} occ, ${this.dirtyUntil.size} dirty) · ` +
+      `${overflow} overflow chair(s) · attractiveness ${attractiveness.toFixed(2)} · cooldown ${this.spawnCooldown.toFixed(1)}s`,
+    );
   }
 
   /** Count down patience while the guest is waiting. If it hits zero they
