@@ -38,7 +38,13 @@ function makeSeatId(slot: ResolvedSeatSlot): SeatId {
  * with the gameplay-tuning phase.
  */
 
-type GuestState = "walkingIn" | "seated" | "waitingForFood" | "eating" | "walkingOut" | "walkingToDoor";
+type GuestState =
+  | "walkingIn"
+  /** Walking to an overflow / "yellow" chair while waiting for a real seat. */
+  | "walkingToWait"
+  /** Sitting at an overflow chair, watching for a real seat to open up. */
+  | "waitingForSeat"
+  | "seated" | "waitingForFood" | "eating" | "walkingOut" | "walkingToDoor";
 
 interface ActiveGuest {
   id: string;
@@ -53,6 +59,16 @@ interface ActiveGuest {
   seatPos: THREE.Vector2;
   seatFacingY: number;
   platePos: THREE.Vector2;
+  /** If true, the guest entered the restaurant but no functional seat was
+   * free, so they're parked at a yellow overflow chair until a real seat
+   * opens up. They migrate to a real seat as soon as one becomes free. */
+  waiting?: {
+    chairUid: string;
+    chairPos: THREE.Vector2;
+    chairFacingY: number;
+    /** Seconds left before they give up and walk out angry. */
+    timeLeft: number;
+  };
   // Target world position for walking. Reached when we get within
   // arrivalThreshold of it.
   target: THREE.Vector2;
@@ -107,6 +123,11 @@ function guestLabel(g: ActiveGuest): string {
   const prefix = g.archetype.shortLabel;
   switch (g.state) {
     case "walkingIn":      return "";
+    case "walkingToWait":  return `${prefix} ⏳`;
+    case "waitingForSeat": {
+      const secs = g.waiting ? Math.max(0, Math.ceil(g.waiting.timeLeft)) : 0;
+      return `${prefix} 🪑 ${secs}s`;
+    }
     case "seated":         return g.order.length === 0 ? `${prefix} 📋` : `${prefix} ⏳`;
     case "waitingForFood": {
       // Show patience countdown so the player feels the urgency.
@@ -144,6 +165,9 @@ export class GuestSpawner {
   private occupiedSeats = new Set<SeatId>();
   /** seatId → wall-clock seconds when the seat becomes clean again. */
   private dirtyUntil = new Map<SeatId, number>();
+  /** chairUid → guestId that's currently waiting at it. Cleared when the
+   * waiting guest either takes a real seat or gives up. */
+  private claimedWaitingChairs = new Map<string, string>();
   /** guestId → live Object3D for the plate sitting on their table.
    * Spawned when food is delivered, removed when the guest stands up. */
   private readonly tablePlates = new Map<string, THREE.Object3D>();
@@ -197,7 +221,9 @@ export class GuestSpawner {
     // player moves a table mid-meal. If a seat disappeared entirely (table
     // sold) the guest will walk away on their next tick via missingSeatExit.
     this.refreshSeatedGuestPoses();
-    if (this.restaurantOpen && this.spawnCooldown <= 0 && this.countAvailableSeats() > 0) {
+    // Walk waiting guests into real seats as those become available.
+    this.promoteWaitingGuests();
+    if (this.restaurantOpen && this.spawnCooldown <= 0 && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
       void this.spawnGuest();
       // Apply weather multiplier first, then halve if a paid boost is on.
       // Weather values >1 slow spawning (rainy), <1 speed it up (festival).
@@ -259,7 +285,7 @@ export class GuestSpawner {
   snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
     return this.guests.map((g) => ({
       character: g.character,
-      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating",
+      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating" || g.state === "waitingForSeat",
     }));
   }
 
@@ -309,15 +335,96 @@ export class GuestSpawner {
     }
   }
 
+  /** Vibe params for the waiting queue. Scales by Game.getAttractiveness()
+   * so a starter bistro has nobody queueing, a decked-out fancy place
+   * gets a steady line. */
+  private waitingPolicy(): { maxCount: number; maxSeconds: number } {
+    const a = this.game.getAttractiveness();
+    // Below 1.5 vibe → nobody waits. From 1.5 up, count grows steadily,
+    // and willingness-to-wait time scales too.
+    const span = Math.max(0, a - 1.5);
+    const maxCount = Math.floor(span * 2.5);            // 0 at 1.5, 5 at 3.5, 8 at 4.7
+    const maxSeconds = span <= 0 ? 0 : 15 + span * 15;  // 15s at 1.5, 30s at 2.5, 60s at 4.5
+    return { maxCount, maxSeconds };
+  }
+
+  /** True if at least one yellow chair is free AND attractiveness allows
+   * for at least one more waiter beyond what's already queued. */
+  private canAcceptWaitingGuest(): boolean {
+    const policy = this.waitingPolicy();
+    if (policy.maxCount <= 0) return false;
+    if (this.guests.filter((g) => g.waiting != null).length >= policy.maxCount) return false;
+    return this.findFreeOverflowChair() != null;
+  }
+
+  /** Pick the first overflow chair not already claimed by another waiter. */
+  private findFreeOverflowChair(): { uid: string; x: number; z: number; rotY: number } | null {
+    if (!this.registry) return null;
+    for (const c of this.registry.getOverflowChairs()) {
+      if (!this.claimedWaitingChairs.has(c.uid)) {
+        return { uid: c.uid, x: c.x, z: c.z, rotY: c.rotY };
+      }
+    }
+    return null;
+  }
+
+  /** Each tick, look for waiting guests whose real seat just became free
+   * and route them over. Also expire waiting guests whose timer ran out. */
+  private promoteWaitingGuests(): void {
+    for (const g of this.guests) {
+      if (!g.waiting) continue;
+      // Time-out → angry exit.
+      if (g.waiting.timeLeft <= 0 && g.state === "waitingForSeat") {
+        this.claimedWaitingChairs.delete(g.waiting.chairUid);
+        g.waiting = undefined;
+        this.game.customers.recordLost(1);
+        this.game.reputation.recordRating(1);
+        this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a");
+        g.character.action = "walk";
+        g.target = DOOR_POSITION.clone();
+        g.state = "walkingToDoor";
+        g.stateClock = 0;
+        continue;
+      }
+      // Only promote once the guest is actually parked at the chair.
+      if (g.state !== "waitingForSeat") continue;
+      const available = this.listFunctionalSeats().find((s) => {
+        const id = makeSeatId(s);
+        return !this.occupiedSeats.has(id) && !this.dirtyUntil.has(id);
+      });
+      if (!available) continue;
+      // Free their yellow chair, claim the real seat, walk over.
+      this.claimedWaitingChairs.delete(g.waiting.chairUid);
+      g.waiting = undefined;
+      const seatId = makeSeatId(available);
+      this.occupiedSeats.add(seatId);
+      g.seatId = seatId;
+      g.seatPos.set(available.x, available.z);
+      g.seatFacingY = available.facingY;
+      g.platePos.set(available.platePos.x, available.platePos.z);
+      g.target = new THREE.Vector2(available.x, available.z);
+      g.state = "walkingIn"; // reuse the existing walk-to-seat handler
+      g.character.action = "walk";
+      g.stateClock = 0;
+    }
+  }
+
   private async spawnGuest(): Promise<void> {
-    // Pick the first functional seat that's idle (not occupied, not dirty).
+    // Prefer a real functional seat. If none, fall back to an overflow
+    // chair (yellow) when attractiveness allows.
     const available = this.listFunctionalSeats().find((s) => {
       const id = makeSeatId(s);
       return !this.occupiedSeats.has(id) && !this.dirtyUntil.has(id);
     });
-    if (!available) return;
-    const seatId = makeSeatId(available);
-    this.occupiedSeats.add(seatId);
+    const waitingChair = available ? null : this.findFreeOverflowChair();
+    if (!available && !waitingChair) return;
+    let seatId: SeatId = "";
+    if (available) {
+      seatId = makeSeatId(available);
+      this.occupiedSeats.add(seatId);
+    } else if (waitingChair) {
+      this.claimedWaitingChairs.set(waitingChair.uid, "pending");
+    }
 
     const variantId = pick(GUEST_VARIANT_IDS);
     const id = `guest-${this.nextGuestNum++}`;
@@ -343,16 +450,25 @@ export class GuestSpawner {
       } else {
         this.sfx?.ding();
       }
-      this.guests.push({
+      const policy = this.waitingPolicy();
+      const seatPos = available
+        ? new THREE.Vector2(available.x, available.z)
+        : new THREE.Vector2(waitingChair!.x, waitingChair!.z);
+      const seatFacing = available ? available.facingY : waitingChair!.rotY;
+      const platePos = available
+        ? new THREE.Vector2(available.platePos.x, available.platePos.z)
+        : seatPos.clone();
+      const targetPos = seatPos.clone();
+      const guest: ActiveGuest = {
         id,
         variantId,
-        state: "walkingIn",
+        state: available ? "walkingIn" : "walkingToWait",
         character,
         seatId,
-        seatPos: new THREE.Vector2(available.x, available.z),
-        seatFacingY: available.facingY,
-        platePos: new THREE.Vector2(available.platePos.x, available.platePos.z),
-        target: new THREE.Vector2(available.x, available.z),
+        seatPos,
+        seatFacingY: seatFacing,
+        platePos,
+        target: targetPos,
         stateClock: 0,
         order: [],
         orderIndex: 0,
@@ -361,10 +477,22 @@ export class GuestSpawner {
         totalPaid: 0,
         totalSatisfaction: 0,
         archetype,
-      });
+      };
+      if (!available && waitingChair) {
+        guest.waiting = {
+          chairUid: waitingChair.uid,
+          chairPos: new THREE.Vector2(waitingChair.x, waitingChair.z),
+          chairFacingY: waitingChair.rotY,
+          timeLeft: policy.maxSeconds,
+        };
+        // Re-tag the claim with the real guest id (replacing the "pending" placeholder).
+        this.claimedWaitingChairs.set(waitingChair.uid, id);
+      }
+      this.guests.push(guest);
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
-      this.occupiedSeats.delete(seatId);
+      if (seatId) this.occupiedSeats.delete(seatId);
+      if (waitingChair) this.claimedWaitingChairs.delete(waitingChair.uid);
     }
   }
 
@@ -372,13 +500,17 @@ export class GuestSpawner {
     const g = this.guests[idx];
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
-    this.occupiedSeats.delete(g.seatId);
+    if (g.waiting) {
+      // Waiting-overflow guests free their yellow chair, not a real seat.
+      this.claimedWaitingChairs.delete(g.waiting.chairUid);
+    } else if (g.seatId) {
+      this.occupiedSeats.delete(g.seatId);
+      // Real seat needs cleanup before the next guest can use it.
+      this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
+      this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
+    }
     // Clear any plate left on their table when they walk out.
     this.removePlateForGuest(g.id);
-    // Seat needs cleanup before the next guest can use it. Pop a small
-    // marker above the seat to show the player why it's not taking guests.
-    this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
-    this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
     this.guests.splice(idx, 1);
   }
 
@@ -428,6 +560,29 @@ export class GuestSpawner {
           g.character.action = "sit";
           g.state = "seated";
           g.stateClock = 0;
+        }
+        break;
+      }
+      case "walkingToWait": {
+        // Walking to a yellow / overflow chair.
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD && g.waiting) {
+          g.character.groundPos.copy(g.waiting.chairPos);
+          // Yellow chairs aren't ideally oriented; flip the chair's rotation
+          // through the seat-direction relation so the guest faces "outward"
+          // from the chair (good enough — they're just waiting).
+          g.character.facingY = Math.PI - g.waiting.chairFacingY;
+          g.character.action = "sit";
+          g.state = "waitingForSeat";
+          g.stateClock = 0;
+        }
+        break;
+      }
+      case "waitingForSeat": {
+        // Just sit and tick down the patience timer. Promotion to a real
+        // seat is handled centrally in promoteWaitingGuests().
+        if (g.waiting) {
+          g.waiting.timeLeft -= dt;
         }
         break;
       }

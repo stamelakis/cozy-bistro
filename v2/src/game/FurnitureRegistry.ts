@@ -253,6 +253,21 @@ export class FurnitureRegistry {
     return true;
   }
 
+  /** Chairs not currently aligned with any table seat slot. These are the
+   * "yellow" overflow chairs the waiting queue uses when no proper seat
+   * is free. Only visible (non-locked) chairs are returned. */
+  getOverflowChairs(): PlacedFurnitureItem[] {
+    const out: PlacedFurnitureItem[] = [];
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "chair") continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      if (this.isChairAtAnySlot(it)) continue;
+      out.push(it);
+    }
+    return out;
+  }
+
   /** Find the seat slot closest to (x, z) within snap range. Returns null if
    * nothing in range. Used by BuildMenu's chair auto-snap behaviour. */
   findNearestSeatSlot(x: number, z: number, range = 1.4): ResolvedSeatSlot | null {
@@ -267,21 +282,36 @@ export class FurnitureRegistry {
     return best;
   }
 
-  /** Internal: find the uid of a chair whose pose matches a slot. */
+  /** Internal: find the uid of a chair whose pose matches a slot. The
+   * Kenney chair model has its default seat opening toward +Z, which is
+   * the CUSTOMER's facingY=π in our animator convention. So the chair's
+   * own rotY relates to the slot's customer-facing-direction by:
+   *   chair.rotY = π - slot.facingY
+   * Detection has to use that relationship — comparing rotY to facingY
+   * directly works for left/right seats by coincidence, but never for
+   * top/bottom seats (they end up π apart). */
   private findChairAtSlot(slotX: number, slotZ: number, slotFacing: number): string | null {
     const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
     const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
+    const expectedRotY = Math.PI - slotFacing;
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "chair") continue;
       const dx = it.x - slotX;
       const dz = it.z - slotZ;
       if (Math.abs(dx) > TOL || Math.abs(dz) > TOL) continue;
-      const dFacing = Math.abs(this.normalizeAngle(it.rotY - slotFacing));
+      const dFacing = Math.abs(this.normalizeAngle(it.rotY - expectedRotY));
       if (dFacing > FTOL) continue;
       return it.uid;
     }
     return null;
+  }
+
+  /** Required chair.rotY to make the customer face slot.facingY. Exposed
+   * so BuildMenu auto-snap and auto-arrange can place the chair so that
+   * the customer sitting in it faces the right way. */
+  static chairRotForSlot(slotFacingY: number): number {
+    return Math.PI - slotFacingY;
   }
 
   /** Snap each placed chair to its nearest empty seat slot within range.
@@ -307,11 +337,12 @@ export class FurnitureRegistry {
       const target = this.findNearestEmptySlot(it.x, it.z, range, claimed);
       if (!target) continue;
       const newKey = `${target.tableUid}#${target.slotIndex}`;
+      const chairRotY = FurnitureRegistry.chairRotForSlot(target.facingY);
       it.x = target.x;
       it.z = target.z;
-      it.rotY = target.facingY;
+      it.rotY = chairRotY;
       it.model.position.set(target.x, it.model.position.y, target.z);
-      it.model.rotation.y = target.facingY;
+      it.model.rotation.y = chairRotY;
       claimed.add(newKey);
       moved += 1;
     }
@@ -325,7 +356,8 @@ export class FurnitureRegistry {
     for (const slot of this.getResolvedSeatSlots()) {
       if (Math.abs(slot.x - chair.x) > TOL) continue;
       if (Math.abs(slot.z - chair.z) > TOL) continue;
-      const dFacing = Math.abs(this.normalizeAngle(chair.rotY - slot.facingY));
+      const expectedRotY = Math.PI - slot.facingY;
+      const dFacing = Math.abs(this.normalizeAngle(chair.rotY - expectedRotY));
       if (dFacing <= FTOL) return true;
     }
     return false;

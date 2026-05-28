@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
-import type { FurnitureRegistry } from "../game/FurnitureRegistry";
+import { FurnitureRegistry } from "../game/FurnitureRegistry";
 import { fitFurniture } from "../assets/fitFurniture";
 
 /** A single user action that can be undone. The BuildMenu records one of
@@ -512,8 +512,14 @@ export class BuildMenu {
     if (def.category === "chair") {
       const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4);
       if (slot && slot.chairUid == null) {
-        // Snap! Override rotationY so click places at the perfect pose.
-        return { quality: "snap-perfect", x: slot.x, z: slot.z, rotY: slot.facingY };
+        // Snap! Convert the slot's customer-facing direction into the
+        // chair model's required rotY so the seat actually opens toward
+        // the customer's correct facing.
+        return {
+          quality: "snap-perfect",
+          x: slot.x, z: slot.z,
+          rotY: FurnitureRegistry.chairRotForSlot(slot.facingY),
+        };
       }
     }
 

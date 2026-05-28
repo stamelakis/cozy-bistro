@@ -437,6 +437,28 @@ export class Game {
     return this.stockTarget;
   }
 
+  /** A 0..5 vibe score that drives how willing customers are to wait
+   * in an overflow chair. Combines the rolling average rating with a
+   * decor contribution from placed furniture (style + attractionBonus).
+   *
+   * A starter restaurant (no decor, default rating 3.0) sits around 1.8
+   * — well below the wait threshold, so nobody queues. As the player
+   * decorates + earns higher ratings the score climbs and the queue
+   * grows. */
+  getAttractiveness(): number {
+    const rating = this.reputation.getAverageRating(); // 1..5, defaults to 3.0
+    const decor = this.registry
+      ? this.registry.getAggregateStats().style + this.registry.getAggregateStats().attractionBonus
+      : 0;
+    // Lift decor onto the same ~1..5 scale, soft-capped.
+    const decorScore = Math.min(5, 1 + decor / 18);
+    return Math.max(0, Math.min(5, rating * 0.55 + decorScore * 0.45));
+  }
+
+  /** Optional accessor to the placed-furniture registry — set by Engine
+   * once the world is ready. Used by getAttractiveness to read decor. */
+  registry?: { getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number } };
+
   /** Daily rent owed this in-game day. Scales with luxury tier and the
    * admin.rentMultiplier knob. */
   getDailyRent(): number {
