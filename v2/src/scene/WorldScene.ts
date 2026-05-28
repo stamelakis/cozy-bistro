@@ -566,7 +566,11 @@ export class WorldScene {
     // canvas clean instead of pre-populating it with an entire bistro.
     const placements: { id: string; x: number; z: number; rotY?: number; tier?: number }[] = [
       // Front door (entrance — guests spawn outside and walk through it).
-      { id: "door",         x:  0, z:  5, rotY: Math.PI },
+      // z=5.5 lines up with the (+0.5, +0.5)-shifted front wall.
+      // Anchored at half-integer here because the door mesh's frame is
+      // centered at its local origin and needs to sit ON the wall plane
+      // rather than half a tile inside the building.
+      { id: "door",         x:  0, z:  5.5, rotY: Math.PI },
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
@@ -576,14 +580,18 @@ export class WorldScene {
       // borders. Each chair gets its own corner of the table top for
       // the plate, so there's no plate conflict between adjacent seats.
       { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
-      // Top-left corner chair (cell (0, 0), faces +Z toward table).
+      // Top-left corner chair (cell (0, 0), customer faces +Z toward table).
       { id: "wooden-chair", x:  0,   z:  0,   rotY: Math.PI,      tier: 1 },
-      // Top-right corner chair (cell (2, 1), faces -X).
-      { id: "wooden-chair", x:  2,   z:  1,   rotY: -Math.PI / 2, tier: 1 },
-      // Bottom-right corner chair (cell (1, 3), faces -Z baseline).
+      // Top-right corner chair (cell (2, 1), customer faces -X). rotY π/2
+      // (not -π/2 as before — that left the chair back pointing AT the
+      // table instead of away from it).
+      { id: "wooden-chair", x:  2,   z:  1,   rotY:  Math.PI / 2, tier: 1 },
+      // Bottom-right corner chair (cell (1, 3), customer faces -Z baseline).
       { id: "wooden-chair", x:  1,   z:  3,   rotY: 0,            tier: 1 },
-      // Bottom-left corner chair (cell (-1, 2), faces +X).
-      { id: "wooden-chair", x: -1,   z:  2,   rotY:  Math.PI / 2, tier: 1 },
+      // Bottom-left corner chair (cell (-1, 2), customer faces +X). rotY
+      // -π/2 (not π/2 as before — same back-toward-table issue as the
+      // top-right chair).
+      { id: "wooden-chair", x: -1,   z:  2,   rotY: -Math.PI / 2, tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {
@@ -605,7 +613,7 @@ export class WorldScene {
         this.tierGroups.get(tier)!.push(model);
         // Capture the front-door's hinge sub-object for open/close animation.
         // The procedural front-door exposes the panel hinge via userData.panel.
-        if (p.id === "door" && p.x === 0 && p.z === 5) {
+        if (p.id === "door" && p.x === 0 && p.z === 5.5) {
           const panel = model.userData?.panel as THREE.Object3D | undefined;
           if (panel) this.doorPanel = panel;
         }

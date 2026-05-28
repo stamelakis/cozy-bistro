@@ -124,17 +124,25 @@ const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   // For a table anchored at (0.5, 1.5), the resulting chair world
   // coords are (0, 0), (2, 1), (1, 3), (-1, 2) — all integer cell
   // centers.
-  // Facing values reverted to the original convention so the chairs
-  // look the way they did before all the facingY changes. Crab
-  // walking is still on the open list.
-  // Top-left chair: facing +Z (toward table).
+  // Facing values for seated customers. With customer GLB defaulting
+  // to look -Z (three.js standard forward), a customer with
+  // rotation.y = θ faces direction R_y(θ) * (-Z) = (-sin θ, 0, -cos θ).
+  // The four target facings for the corner pinwheel are:
+  //   top-left  → +Z (south, toward table) → θ = π
+  //   top-right → -X (west)                → θ = π/2
+  //   bottom-right → -Z (north)            → θ = 0
+  //   bottom-left → +X (east)              → θ = -π/2
+  // The top-right and bottom-left values were previously the WRONG
+  // signs (-π/2 and π/2) which made those two seated customers face
+  // AWAY from the table.
+  // Top-left chair: customer facing +Z (south toward table).
   { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.5, dz: -0.8 } },
-  // Top-right chair: facing -X.
-  { dx:  1.5, dz: -0.5, facingY: -Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
-  // Bottom-right chair: facing -Z (facingY=0 baseline).
+  // Top-right chair: customer facing -X (west toward table).
+  { dx:  1.5, dz: -0.5, facingY:  Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
+  // Bottom-right chair: customer facing -Z (north toward table).
   { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.5, dz:  0.8 } },
-  // Bottom-left chair: facing +X.
-  { dx: -1.5, dz:  0.5, facingY:  Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
+  // Bottom-left chair: customer facing +X (east toward table).
+  { dx: -1.5, dz:  0.5, facingY: -Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —

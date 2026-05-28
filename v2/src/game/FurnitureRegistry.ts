@@ -312,11 +312,19 @@ export class FurnitureRegistry {
     return null;
   }
 
-  /** Required chair.rotY to make the customer face slot.facingY. Exposed
-   * so BuildMenu auto-snap and auto-arrange can place the chair so that
-   * the customer sitting in it faces the right way. */
+  /** Required chair.rotY for a chair to sit at a slot with the
+   * customer facing toward slot.facingY. The chair GLB's back is at +Z
+   * by default; rotating by the customer's facing direction puts the
+   * back behind the customer (away from the table). So chair.rotY ===
+   * slot.facingY for the four cardinal directions.
+   *
+   * Previously this returned `π - slotFacingY`, which was correct for
+   * top-left + bottom-right chairs but flipped top-right + bottom-left
+   * by 180°, leaving those two chair backs pointing AT the table. The
+   * demo placements had to be authored asymmetrically to compensate;
+   * the corrected formula is symmetric and matches all four. */
   static chairRotForSlot(slotFacingY: number): number {
-    return Math.PI - slotFacingY;
+    return slotFacingY;
   }
 
   /** Snap each placed chair to its nearest empty seat slot within range.
