@@ -78,30 +78,30 @@ const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 //   tier 5 → 20 seats  (max)
 // Locked tables visually exist but seatsAvailableForTier() filters them.
 const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
-  // Tables 1 + 2 — unlocked from tier 1.
-  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.45, 1.0) },
-  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.55, 1.0) },
-  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.55) },
-  { pos: new THREE.Vector2(-2,   1.9), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.45) },
-  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.55, 1.0) },
-  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.45, 1.0) },
-  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.55) },
-  { pos: new THREE.Vector2( 2,   1.9), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.45) },
+  // Tables 1 + 2 — chairs at 0.7 offset, plates at 0.35 (between chair + table).
+  { pos: new THREE.Vector2(-2.7, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.35, 1.0) },
+  { pos: new THREE.Vector2(-1.3, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.65, 1.0) },
+  { pos: new THREE.Vector2(-2,   0.3), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.65) },
+  { pos: new THREE.Vector2(-2,   1.7), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.35) },
+  { pos: new THREE.Vector2( 1.3, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.65, 1.0) },
+  { pos: new THREE.Vector2( 2.7, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.35, 1.0) },
+  { pos: new THREE.Vector2( 2,   0.3), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.65) },
+  { pos: new THREE.Vector2( 2,   1.7), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.35) },
   // Front (table 3) — unlocked from tier 2.
-  { pos: new THREE.Vector2(-0.9, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.45, 3.0) },
-  { pos: new THREE.Vector2( 0.9, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.45, 3.0) },
-  { pos: new THREE.Vector2( 0,   2.1), facingY:  Math.PI,     platePos: new THREE.Vector2( 0,    2.55) },
-  { pos: new THREE.Vector2( 0,   3.9), facingY:  0,           platePos: new THREE.Vector2( 0,    3.45) },
+  { pos: new THREE.Vector2(-0.7, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.35, 3.0) },
+  { pos: new THREE.Vector2( 0.7, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.35, 3.0) },
+  { pos: new THREE.Vector2( 0,   2.3), facingY:  Math.PI,     platePos: new THREE.Vector2( 0,    2.65) },
+  { pos: new THREE.Vector2( 0,   3.7), facingY:  0,           platePos: new THREE.Vector2( 0,    3.35) },
   // Left side (table 4) — unlocked from tier 3.
-  { pos: new THREE.Vector2(-4.9, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.45, 0.0) },
-  { pos: new THREE.Vector2(-3.1, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.55, 0.0) },
-  { pos: new THREE.Vector2(-4,  -0.9), facingY:  Math.PI,     platePos: new THREE.Vector2(-4,   -0.45) },
-  { pos: new THREE.Vector2(-4,   0.9), facingY:  0,           platePos: new THREE.Vector2(-4,    0.45) },
+  { pos: new THREE.Vector2(-4.7, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.35, 0.0) },
+  { pos: new THREE.Vector2(-3.3, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.65, 0.0) },
+  { pos: new THREE.Vector2(-4,  -0.7), facingY:  Math.PI,     platePos: new THREE.Vector2(-4,   -0.35) },
+  { pos: new THREE.Vector2(-4,   0.7), facingY:  0,           platePos: new THREE.Vector2(-4,    0.35) },
   // Right side (table 5) — unlocked from tier 4.
-  { pos: new THREE.Vector2( 3.1, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.55, 0.0) },
-  { pos: new THREE.Vector2( 4.9, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.45, 0.0) },
-  { pos: new THREE.Vector2( 4,  -0.9), facingY:  Math.PI,     platePos: new THREE.Vector2( 4,   -0.45) },
-  { pos: new THREE.Vector2( 4,   0.9), facingY:  0,           platePos: new THREE.Vector2( 4,    0.45) },
+  { pos: new THREE.Vector2( 3.3, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.65, 0.0) },
+  { pos: new THREE.Vector2( 4.7, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.35, 0.0) },
+  { pos: new THREE.Vector2( 4,  -0.7), facingY:  Math.PI,     platePos: new THREE.Vector2( 4,   -0.35) },
+  { pos: new THREE.Vector2( 4,   0.7), facingY:  0,           platePos: new THREE.Vector2( 4,    0.35) },
 ];
 
 /** Number of seats unlocked at a given luxury tier. */
@@ -109,8 +109,8 @@ function seatsAvailableForTier(tier: number): number {
   // tier 1: 8, tier 2: 12, tier 3: 16, tier 4+: 20
   return Math.min(SEATS.length, 4 + tier * 4);
 }
-/** Approximate table-surface height (Kenney small-table) used for plate Y. */
-const TABLE_HEIGHT_Y = 0.52;
+/** Approximate table-surface height (Kenney small-table at 1.3× scale). */
+const TABLE_HEIGHT_Y = 0.68;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -316,7 +316,8 @@ export class GuestSpawner {
         facingY: Math.PI, // facing into the room (negative Z)
         action: "walk",
         phase: Math.random() * 5,
-        seatHeight: 0.5,
+        // Seat surface height after chair scale-up (Kenney chair at 1.3×).
+        seatHeight: 0.55,
       };
       this.animator.add(character);
 

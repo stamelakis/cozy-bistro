@@ -215,40 +215,40 @@ export class WorldScene {
       { id: "counter",    x:  1,   z: -4 },
       { id: "microwave",  x:  2,   z: -4 },
 
-      // Dining: 2 tables with chairs around each
+      // Dining: 2 tables with chairs tucked in (0.7 offset from table center).
       { id: "small-table",   x: -2,   z: 1 },
-      { id: "wooden-chair",  x: -2.9, z: 1, rotY: Math.PI / 2 },
-      { id: "wooden-chair",  x: -1.1, z: 1, rotY: -Math.PI / 2 },
-      { id: "wooden-chair",  x: -2,   z: 0.1, rotY: 0 },
-      { id: "wooden-chair",  x: -2,   z: 1.9, rotY: Math.PI },
+      { id: "wooden-chair",  x: -2.7, z: 1, rotY: Math.PI / 2 },
+      { id: "wooden-chair",  x: -1.3, z: 1, rotY: -Math.PI / 2 },
+      { id: "wooden-chair",  x: -2,   z: 0.3, rotY: 0 },
+      { id: "wooden-chair",  x: -2,   z: 1.7, rotY: Math.PI },
 
       { id: "small-table",   x: 2,    z: 1 },
-      { id: "cushion-chair", x: 1.1,  z: 1, rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 2.9,  z: 1, rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 2,    z: 0.1, rotY: 0 },
-      { id: "cushion-chair", x: 2,    z: 1.9, rotY: Math.PI },
+      { id: "cushion-chair", x: 1.3,  z: 1, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 2.7,  z: 1, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 2,    z: 0.3, rotY: 0 },
+      { id: "cushion-chair", x: 2,    z: 1.7, rotY: Math.PI },
 
       // Third table near the front so the restaurant doesn't feel half-empty.
       { id: "small-table",   x: 0,    z: 3 },
-      { id: "modern-chair",  x: -0.9, z: 3, rotY: Math.PI / 2 },
-      { id: "modern-chair",  x:  0.9, z: 3, rotY: -Math.PI / 2 },
-      { id: "modern-chair",  x:  0,   z: 2.1, rotY: 0 },
-      { id: "modern-chair",  x:  0,   z: 3.9, rotY: Math.PI },
+      { id: "modern-chair",  x: -0.7, z: 3, rotY: Math.PI / 2 },
+      { id: "modern-chair",  x:  0.7, z: 3, rotY: -Math.PI / 2 },
+      { id: "modern-chair",  x:  0,   z: 2.3, rotY: 0 },
+      { id: "modern-chair",  x:  0,   z: 3.7, rotY: Math.PI },
 
       // Tier 3+ tables — placed to the sides, near the walls. GuestSpawner
       // gates seat availability by tier so these visually exist but only
       // start taking guests once luxury tier ≥ the unlock threshold.
       { id: "small-table",   x: -4,   z: 0 },
-      { id: "cushion-chair", x: -4.9, z: 0, rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: -3.1, z: 0, rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: -4,   z: -0.9, rotY: 0 },
-      { id: "cushion-chair", x: -4,   z: 0.9, rotY: Math.PI },
+      { id: "cushion-chair", x: -4.7, z: 0, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: -3.3, z: 0, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: -4,   z: -0.7, rotY: 0 },
+      { id: "cushion-chair", x: -4,   z: 0.7, rotY: Math.PI },
 
       { id: "small-table",   x: 4,    z: 0 },
-      { id: "cushion-chair", x: 4.9,  z: 0, rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 3.1,  z: 0, rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 4,    z: -0.9, rotY: 0 },
-      { id: "cushion-chair", x: 4,    z: 0.9, rotY: Math.PI },
+      { id: "cushion-chair", x: 4.7,  z: 0, rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 3.3,  z: 0, rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 4,    z: -0.7, rotY: 0 },
+      { id: "cushion-chair", x: 4,    z: 0.7, rotY: Math.PI },
 
       // Decor
       { id: "plant-medium",  x: -4.5, z: -4 },
