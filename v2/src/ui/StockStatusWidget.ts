@@ -3,12 +3,14 @@ import { getIngredientCost } from "../data/ingredients";
 
 /**
  * Compact at-a-glance ingredient warning panel that sits attached
- * directly above the StaffPanel. Shows: ingredients currently out of
- * stock (red), ingredients running low (amber), and a hint about
- * what the auto-shop is buying right now.
+ * directly above the StaffPanel. Mirrors the three "right tab" sections
+ * the 2D version had: In Need, Stock On Hand, Kitchen Tickets — plus a
+ * compact "auto-shop status" footer.
  *
- * Like the StaffPanel + ExpandWidget, this is always visible — the
- * goal is to surface critical state without an extra click.
+ * Like the StaffPanel + ExpandWidget, this is always visible — the goal
+ * is to surface critical state without an extra click. Section headers
+ * always render so the layout stays stable even when the pantry is
+ * fully topped up.
  */
 export class StockStatusWidget {
   private readonly game: Game;
@@ -43,7 +45,7 @@ export class StockStatusWidget {
     const pantry = this.game.cooking.getPantry();
     const target = this.game.getStockTarget();
 
-    // === Top status line — out / low / all-stocked ===
+    // === Top status line — out / low / all-stocked summary ===
     const out = pantry.filter((s) => s.quantity === 0)
       .sort((a, b) => getIngredientCost(b.id) - getIngredientCost(a.id));
     const low = pantry.filter((s) => s.quantity > 0 && s.quantity <= 2)
@@ -71,11 +73,13 @@ export class StockStatusWidget {
       }
     }
 
-    // === In Need section (revived from the 2D version) ===
+    // === In Need section (always shown — mirrors 2D layout) ===
     // Lists every ingredient below target with the format
     //   "Bread: need 2 (have 3, way 1)"
     // …where "way" is how many units the errand helper is bringing.
-    // Hidden when nothing is below target.
+    // When pantry is at target shows a dim "All at target." line so the
+    // section header doesn't render with empty content (which looked
+    // broken in playtest).
     const needRows: string[] = [];
     for (const s of pantry) {
       const way = this.game.cooking.getPendingForIngredient(s.id);
@@ -84,23 +88,50 @@ export class StockStatusWidget {
       const wayStr = way > 0 ? `, way ${way}` : "";
       needRows.push(`<div>${s.name}: need ${need} <span style="opacity:0.7">(have ${s.quantity}${wayStr})</span></div>`);
     }
-    if (needRows.length > 0) {
-      const header = document.createElement("div");
-      header.textContent = "📋 In Need";
-      Object.assign(header.style, {
-        marginTop: "6px", fontWeight: "700", fontSize: "10px",
-        opacity: "0.75", letterSpacing: "0.04em",
-      } as Partial<CSSStyleDeclaration>);
-      this.body.appendChild(header);
+    this.appendSectionHeader("📋 In Need");
+    {
       const list = document.createElement("div");
-      list.style.maxHeight = "84px";
-      list.style.overflowY = "auto";
-      list.style.fontSize = "10px";
-      list.innerHTML = needRows.slice(0, 12).join("");
-      if (needRows.length > 12) {
-        list.innerHTML += `<div style="opacity:0.6">+${needRows.length - 12} more…</div>`;
+      Object.assign(list.style, {
+        maxHeight: "84px", overflowY: "auto", fontSize: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      if (needRows.length === 0) {
+        list.innerHTML = `<div style="opacity:0.6">All at target.</div>`;
+      } else {
+        list.innerHTML = needRows.slice(0, 12).join("");
+        if (needRows.length > 12) {
+          list.innerHTML += `<div style="opacity:0.6">+${needRows.length - 12} more…</div>`;
+        }
       }
       this.body.appendChild(list);
+    }
+
+    // === Stock On Hand section (always shown — full pantry list) ===
+    // Two-column grid so 30+ ingredients still fit in a compact widget,
+    // scrollable past ~110px. Colors mirror the OUT/LOW alert so a glance
+    // tells the player which line items are red/amber/green.
+    this.appendSectionHeader("📦 Stock On Hand");
+    {
+      const grid = document.createElement("div");
+      Object.assign(grid.style, {
+        display: "grid", gridTemplateColumns: "1fr 1fr",
+        rowGap: "1px", columnGap: "6px",
+        maxHeight: "110px", overflowY: "auto",
+        fontSize: "10px", padding: "1px 0",
+      } as Partial<CSSStyleDeclaration>);
+      const sorted = [...pantry].sort((a, b) => a.name.localeCompare(b.name));
+      for (const s of sorted) {
+        const color = s.quantity === 0 ? "#ff9a9a"
+          : s.quantity <= 2 ? "#ffd47a"
+          : "#dcdcd8";
+        const cell = document.createElement("div");
+        // Truncate long names so the qty column stays aligned.
+        cell.innerHTML = `<span style="color:${color}">${s.name}</span>: <span style="color:${color};font-weight:600">${s.quantity}</span>`;
+        cell.style.whiteSpace = "nowrap";
+        cell.style.overflow = "hidden";
+        cell.style.textOverflow = "ellipsis";
+        grid.appendChild(cell);
+      }
+      this.body.appendChild(grid);
     }
 
     // === Auto-shop + in-transit summary ===
@@ -123,6 +154,9 @@ export class StockStatusWidget {
     this.body.appendChild(auto);
 
     // === Kitchen ticket pipeline (also revived from 2D) ===
+    // Always shown — empty pipeline reads "Kitchen idle — no tickets"
+    // so the player has a clear "nothing's cooking" anchor when the
+    // restaurant is quiet.
     const ts = this.game.getTicketStats?.();
     if (ts) {
       const totalTickets = ts.queued + ts.cooking + ts.ready + ts.delivering;
@@ -137,5 +171,16 @@ export class StockStatusWidget {
         : "🍳 Kitchen idle — no tickets";
       this.body.appendChild(pipeline);
     }
+  }
+
+  /** Small bold dimmed header used at the top of every sub-section. */
+  private appendSectionHeader(label: string): void {
+    const header = document.createElement("div");
+    header.textContent = label;
+    Object.assign(header.style, {
+      marginTop: "6px", fontWeight: "700", fontSize: "10px",
+      opacity: "0.75", letterSpacing: "0.04em",
+    } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(header);
   }
 }
