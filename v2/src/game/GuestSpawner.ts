@@ -47,17 +47,30 @@ type GuestState =
   | "walkingToWait"
   /** Sitting at an overflow chair, watching for a real seat to open up. */
   | "waitingForSeat"
-  | "seated" | "waitingForFood" | "eating" | "walkingOut" | "walkingToDoor";
+  | "seated" | "waitingForFood" | "eating"
+  /** Headed for the interior side of the door before leaving. */
+  | "walkingToDoor"
+  /** Quick straight hop along the door axis from interior → exterior,
+   * so the guest passes through the 1-tile front-wall gap instead of
+   * cutting diagonally across a solid wall when nudged off-axis. */
+  | "exitingDoor"
+  /** Walking off-screen to despawn. */
+  | "walkingOut";
 
 interface ActiveGuest {
   id: string;
   variantId: string; // "guest-v0".."guest-v6"
   state: GuestState;
   character: AnimatedCharacter;
-  /** True once a walkingIn guest has reached the door waypoint — their
-   * target then flips from DOOR_POSITION to the seat so the walk routes
-   * through the door instead of cutting through the wall. */
+  /** True once a walkingIn guest has reached the door INTERIOR — their
+   * target then flips to the seat. (Set after passing through the door
+   * inward.) */
   passedDoor?: boolean;
+  /** True once a walkingIn guest has reached the door EXTERIOR. From
+   * there they hop straight through the wall to the interior anchor.
+   * Distinct from passedDoor so we can tell "outside on the pavement"
+   * from "already through the gap". */
+  passedExterior?: boolean;
   /** Stable id of the seat slot this guest is assigned to (or empty if
    * no functional seat was available and they were waitlisted). */
   seatId: SeatId;
@@ -105,15 +118,25 @@ interface ActiveGuest {
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
 
-/** Actual door opening in the front wall — used as the only valid entry/exit
- * waypoint so customers don't cut across walls. */
+/** Interior anchor of the front door — guests step onto this cell
+ * either right after passing through the door from outside, or right
+ * before stepping out. */
 const DOOR_POSITION = new THREE.Vector2(0, 5);
+/** Exterior anchor of the front door, 1 unit outside the wall along
+ * the door's +Z normal. Guests always pass through this point as the
+ * 2nd waypoint of a 2-step door crossing so the actual movement
+ * through the front-wall gap is a STRAIGHT 1-unit line — pathfinding
+ * + personal-space can nudge them off the x=0 axis, and without this
+ * anchor the corrective diagonal back to the interior cuts through
+ * the solid wall next to the door. */
+const DOOR_EXTERIOR_POSITION = new THREE.Vector2(0, 6);
 /** Outside the building where new arrivals spawn. They first walk to
- * DOOR_POSITION, then on to their seat — so they actually enter through
- * the door instead of crossing the front wall diagonally. */
+ * DOOR_EXTERIOR_POSITION, then straight through to DOOR_POSITION, then
+ * on to their seat. */
 const ENTRY_SPAWN = new THREE.Vector2(0, 8);
 /** Off-frame target for departing guests after they've cleared the door.
- * walkingToDoor → DOOR_POSITION → walkingOut → EXIT_POSITION → despawn. */
+ * walkingToDoor → DOOR_POSITION → exitingDoor → DOOR_EXTERIOR_POSITION →
+ * walkingOut → EXIT_POSITION → despawn. */
 const EXIT_POSITION = new THREE.Vector2(0, 10);
 
 /** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
@@ -159,6 +182,7 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
     }
     case "eating":         return `${prefix} ${drinkTable ? "🥤" : "🍴"}`;
     case "walkingToDoor":  return "";
+    case "exitingDoor":    return "";
     case "walkingOut":     return "";
   }
 }
@@ -294,7 +318,7 @@ export class GuestSpawner {
       // walker holds their seat in `occupiedSeats` forever and the
       // restaurant slowly seizes up.
       const stuckLeaving =
-        (g.state === "walkingOut" || g.state === "walkingToDoor") && g.stateClock > 30;
+        (g.state === "walkingOut" || g.state === "walkingToDoor" || g.state === "exitingDoor") && g.stateClock > 30;
       if (stuckLeaving ||
           (g.state === "walkingOut" && this.distanceToTarget(g) < ARRIVAL_THRESHOLD)) {
         this.despawnGuest(i);
@@ -552,6 +576,12 @@ export class GuestSpawner {
       g.platePos.set(available.platePos.x, available.platePos.z);
       g.target = new THREE.Vector2(available.x, available.z);
       this.planPath(g);
+      // Reuse walkingIn for the chair-walk leg. The guest is already
+      // inside the building, so mark both door waypoints as passed —
+      // walkingIn will skip the door dance and head straight to the
+      // seat.
+      g.passedExterior = true;
+      g.passedDoor = true;
       g.state = "walkingIn"; // reuse the existing walk-to-seat handler
       g.character.action = "walk";
       g.stateClock = 0;
@@ -613,12 +643,12 @@ export class GuestSpawner {
       const platePos = available
         ? new THREE.Vector2(available.platePos.x, available.platePos.z)
         : seatPos.clone();
-      // Initial target is the door waypoint — walkingIn flips to the seat
-      // once the guest reaches the door. Waiting guests skip this and head
-      // straight to their overflow chair (we accept that overflow chairs
-      // can be near the door; they're on the dining-area side of the wall
-      // by definition).
-      const targetPos = available ? DOOR_POSITION.clone() : seatPos.clone();
+      // Initial target is the door EXTERIOR waypoint. walkingIn then
+      // advances exterior → interior → seat, so the actual step through
+      // the front-wall gap is a straight 1-unit hop. Waiting guests
+      // skip the door dance entirely and head straight to their
+      // overflow chair (overflow chairs are dining-side by definition).
+      const targetPos = available ? DOOR_EXTERIOR_POSITION.clone() : seatPos.clone();
       const guest: ActiveGuest = {
         id,
         variantId,
@@ -630,6 +660,7 @@ export class GuestSpawner {
         platePos,
         target: targetPos,
         passedDoor: false,
+        passedExterior: false,
         stateClock: 0,
         order: [],
         orderIndex: 0,
@@ -723,8 +754,15 @@ export class GuestSpawner {
       case "walkingIn": {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
-          if (!g.passedDoor) {
-            // Reached the door — now head to the seat. Stay in walkingIn.
+          if (!g.passedExterior) {
+            // Reached the door exterior — straight hop along the door
+            // axis to the interior anchor, threading the 1-tile gap.
+            g.passedExterior = true;
+            g.target = DOOR_POSITION.clone();
+            this.planPath(g);
+            g.stateClock = 0;
+          } else if (!g.passedDoor) {
+            // Now inside the building. Head to the assigned seat.
             g.passedDoor = true;
             g.target = g.seatPos.clone();
             this.planPath(g);
@@ -814,10 +852,24 @@ export class GuestSpawner {
         break;
       }
       case "walkingToDoor": {
-        // Walk to the door cell first so the guest passes through the
-        // 1-tile gap in the front wall, then switch to walking-out.
+        // First leg of leaving — walk to the INTERIOR side of the door
+        // from wherever the seat was. Pathfinding handles routing past
+        // furniture; the line into the door anchor stays inside.
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          // Now thread the actual gap with a straight 1-unit hop to
+          // the exterior anchor. Same trick as the errand helper.
+          g.target = DOOR_EXTERIOR_POSITION.clone();
+          this.planPath(g);
+          g.state = "exitingDoor";
+          g.stateClock = 0;
+        }
+        break;
+      }
+      case "exitingDoor": {
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          // Through the gap. Now walk off-screen.
           g.target = EXIT_POSITION.clone();
           this.planPath(g);
           g.state = "walkingOut";

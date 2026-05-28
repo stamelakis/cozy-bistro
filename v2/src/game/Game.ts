@@ -78,6 +78,12 @@ const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
 /** Auto-shop default target stock level per ingredient. Player can adjust
  * in the Pantry modal (min 3). */
 const DEFAULT_STOCK_TARGET = 5;
+/** Global multiplier applied to every recipe's prep time before the
+ * chef training bonus. >1 makes the kitchen feel busier; the chef
+ * training upgrade then claws some of it back. Patience is unaffected
+ * — the customer cap is the same, you just need a more trained chef
+ * (or more chefs) to keep up. */
+const COOK_TIME_GLOBAL_MULT = 1.5;
 const MIN_STOCK_TARGET = 3;
 const MAX_STOCK_TARGET = 50;
 /** Auto-shop runs this often (seconds). */
@@ -442,9 +448,14 @@ export class Game {
   /** Effective cook time for a recipe with the chef training bonus
    * applied. GuestSpawner uses this when enqueuing a ticket so the
    * timer the chef actually counts down matches the player's chef
-   * training. */
+   * training.
+   *
+   * COOK_TIME_GLOBAL_MULT bumps every recipe's base prep time up so
+   * the kitchen reads as "doing real work" instead of insta-cooking.
+   * A fully trained L5 chef cuts the multiplier in half, so the effect
+   * curve is base × 1.5 untrained → base × 0.75 max trained. */
   getEffectiveCookSeconds(recipe: RecipeDefinition): number {
-    return Math.max(1, recipe.preparationTimeSeconds * this.staff.getChefCookMultiplier());
+    return Math.max(1, recipe.preparationTimeSeconds * COOK_TIME_GLOBAL_MULT * this.staff.getChefCookMultiplier());
   }
   /** Effective walk speed multiplier for waiters. */
   getWaiterSpeedMultiplier(): number {
