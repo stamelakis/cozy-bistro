@@ -99,6 +99,24 @@ export class WorldScene {
     this.doorOpenTarget = open ? 1 : 0;
   }
 
+  /** Re-capture the door panel reference from a freshly-loaded door
+   * model. Needed when a save is restored: the demo's door (and its
+   * panel) is removed from the scene, and the save's restored door
+   * comes in without going through populateDemoRestaurant — so without
+   * this call, setDoorOpen mutates an orphaned mesh and the door looks
+   * stuck shut. */
+  attachDoorPanel(model: THREE.Object3D): void {
+    const panel = model.userData?.panel as THREE.Object3D | undefined;
+    if (panel) {
+      this.doorPanel = panel;
+      // Reset open state so the new panel doesn't snap to whatever
+      // angle the previous one was at.
+      this.doorOpenAmount = 0;
+      this.doorOpenTarget = 0;
+      panel.rotation.y = 0;
+    }
+  }
+
   /** Show or hide the cooking flame above the stove. Engine calls this
    * every frame based on whether any chef is in "working" state. */
   setStoveFlame(visible: boolean): void {

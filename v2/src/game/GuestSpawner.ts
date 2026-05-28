@@ -52,6 +52,10 @@ interface ActiveGuest {
   variantId: string; // "guest-v0".."guest-v6"
   state: GuestState;
   character: AnimatedCharacter;
+  /** True once a walkingIn guest has reached the door waypoint — their
+   * target then flips from DOOR_POSITION to the seat so the walk routes
+   * through the door instead of cutting through the wall. */
+  passedDoor?: boolean;
   /** Stable id of the seat slot this guest is assigned to (or empty if
    * no functional seat was available and they were waitlisted). */
   seatId: SeatId;
@@ -96,14 +100,15 @@ interface ActiveGuest {
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
 
-// Where guests enter the room from. Was (0, 5) — right ON the door —
-// which made arriving guests appear to materialize inside the wall and
-// made an outgoing guest visually overlap with the very next spawn. The
-// door panel sits at z=5; spawn/exit at z=8 puts them clearly outside,
-// so they walk in through the door instead of "popping in".
-const DOOR_POSITION = new THREE.Vector2(0, 8);
-// Where guests exit to when leaving — pushed even further south so a
-// departing guest is clearly off-frame before the next arrival appears.
+/** Actual door opening in the front wall — used as the only valid entry/exit
+ * waypoint so customers don't cut across walls. */
+const DOOR_POSITION = new THREE.Vector2(0, 5);
+/** Outside the building where new arrivals spawn. They first walk to
+ * DOOR_POSITION, then on to their seat — so they actually enter through
+ * the door instead of crossing the front wall diagonally. */
+const ENTRY_SPAWN = new THREE.Vector2(0, 8);
+/** Off-frame target for departing guests after they've cleared the door.
+ * walkingToDoor → DOOR_POSITION → walkingOut → EXIT_POSITION → despawn. */
 const EXIT_POSITION = new THREE.Vector2(0, 10);
 
 /** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
@@ -546,7 +551,9 @@ export class GuestSpawner {
       this.scene.add(model);
       const character: AnimatedCharacter = {
         root: model,
-        groundPos: new THREE.Vector2(DOOR_POSITION.x, DOOR_POSITION.y),
+        // Spawn outside the building; the walkingIn handler will route us
+        // via the door before continuing on to the seat.
+        groundPos: new THREE.Vector2(ENTRY_SPAWN.x, ENTRY_SPAWN.y),
         facingY: Math.PI, // facing into the room (negative Z)
         action: "walk",
         phase: Math.random() * 5,
@@ -571,7 +578,12 @@ export class GuestSpawner {
       const platePos = available
         ? new THREE.Vector2(available.platePos.x, available.platePos.z)
         : seatPos.clone();
-      const targetPos = seatPos.clone();
+      // Initial target is the door waypoint — walkingIn flips to the seat
+      // once the guest reaches the door. Waiting guests skip this and head
+      // straight to their overflow chair (we accept that overflow chairs
+      // can be near the door; they're on the dining-area side of the wall
+      // by definition).
+      const targetPos = available ? DOOR_POSITION.clone() : seatPos.clone();
       const guest: ActiveGuest = {
         id,
         variantId,
@@ -582,6 +594,7 @@ export class GuestSpawner {
         seatFacingY: seatFacing,
         platePos,
         target: targetPos,
+        passedDoor: false,
         stateClock: 0,
         order: [],
         orderIndex: 0,
@@ -673,11 +686,19 @@ export class GuestSpawner {
       case "walkingIn": {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
-          g.character.groundPos.copy(g.seatPos);
-          g.character.facingY = g.seatFacingY;
-          g.character.action = "sit";
-          g.state = "seated";
-          g.stateClock = 0;
+          if (!g.passedDoor) {
+            // Reached the door — now head to the seat. Stay in walkingIn.
+            g.passedDoor = true;
+            g.target = g.seatPos.clone();
+            g.stateClock = 0;
+          } else {
+            // Reached the seat.
+            g.character.groundPos.copy(g.seatPos);
+            g.character.facingY = g.seatFacingY;
+            g.character.action = "sit";
+            g.state = "seated";
+            g.stateClock = 0;
+          }
         }
         break;
       }

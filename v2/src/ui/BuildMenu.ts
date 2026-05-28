@@ -93,6 +93,10 @@ export class BuildMenu {
   /** Optional: gates the seat-slot markers so they only appear during
    * active place/move modes. Engine wires this in after construction. */
   seatMarkers?: SeatMarkers;
+  /** Optional callback fired when the player places a door — Engine
+   * uses this to re-capture the hinge panel ref for the open/close
+   * animation. */
+  onDoorPlaced?: (model: THREE.Object3D) => void;
 
   constructor(
     parent: HTMLElement,
@@ -783,6 +787,7 @@ export class BuildMenu {
       this.scene.add(solid);
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
+      if (def.id === "door") this.onDoorPlaced?.(solid);
     });
     if (plan.quality === "snap-perfect") {
       this.flashRoot("Perfect placement!", "success");

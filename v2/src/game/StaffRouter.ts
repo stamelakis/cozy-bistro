@@ -174,6 +174,7 @@ export class StaffRouter {
       id, guestId, recipeId, state: "queued",
       seatPos: seatPos.clone(), clock: 0, cookSeconds,
     });
+    console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
     return id;
   }
 
@@ -228,6 +229,7 @@ export class StaffRouter {
           c.state = "movingToWork";
           c.clock = 0;
           c.character.action = "walk";
+          console.log(`[Router] chef picked up ${ticket.id} → walking to stove`);
         }
         break;
       }
@@ -289,6 +291,7 @@ export class StaffRouter {
           w.state = "movingToWork"; // movingToWork = first goes to kitchen, then to seat
           w.clock = 0;
           w.character.action = "walk";
+          console.log(`[Router] waiter picked up ${ticket.id} → walking to pickup`);
         }
         break;
       }
