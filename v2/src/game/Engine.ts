@@ -352,6 +352,9 @@ export class Engine {
           this.scene.stovePos, this.scene.pickupPos,
           this.pathfind,
           () => this.registry.getStoves(),
+          // Per-role training multiplier — read live so an upgrade
+          // bought mid-shift takes effect immediately.
+          (role) => role === "waiter" ? this.game.getWaiterSpeedMultiplier() : 1,
         );
         console.log("[Engine] real StaffRouter created with 1 chef + 1 waiter");
       }

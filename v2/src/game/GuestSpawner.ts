@@ -952,8 +952,10 @@ export class GuestSpawner {
       return;
     }
     this.game.cooking.consumeIngredients(recipe);
+    // Cook time honours the chef training upgrade — a fully trained
+    // L5 chef does each dish in 50% of the base recipe time.
     g.ticketId = this.router.enqueueOrder(
-      g.id, recipe.id, g.seatPos, recipe.preparationTimeSeconds,
+      g.id, recipe.id, g.seatPos, this.game.getEffectiveCookSeconds(recipe),
     );
     g.state = "waitingForFood";
     g.stateClock = 0;

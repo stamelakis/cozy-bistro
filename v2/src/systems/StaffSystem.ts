@@ -23,9 +23,23 @@ export interface SalaryTickResult {
  * Phaser-coupled actor management (sprites, animation, station assignment) stays in the
  * scene because it touches the rendering layer; this class only tracks counts.
  */
+/** Cap on staff training levels — 0 = base, STAFF_UPGRADE_MAX = fully
+ * trained. 5 feels right for a casual sim: each level is a meaningful
+ * but not overwhelming bump and the player has a clear endpoint. */
+export const STAFF_UPGRADE_MAX = 5;
+
 export class StaffSystem {
   private staff: HiredStaff = { chefs: 0, waiters: 0, errandBoys: 0 };
   private pendingStaffFirings: Record<StaffRole, number> = { chef: 0, waiter: 0, errand: 0 };
+  /** Training level per role. Effects:
+   *   chef    → multiplies cookSeconds by (1 - 0.10*level), so L5 cooks
+   *             in 50% of the base time.
+   *   waiter  → multiplies walk speed by (1 + 0.10*level), so L5 moves
+   *             50% faster.
+   *   errand  → adds +2 units to the per-trip carry cap, so L5 brings
+   *             20 instead of 10. (No speed effect — the helper's
+   *             value is throughput per trip, not legs-per-second.) */
+  private staffUpgrades: Record<StaffRole, number> = { chef: 0, waiter: 0, errand: 0 };
   private lastSalaryChargeAt = 0;
   private salaryRemainder = 0;
 
@@ -107,6 +121,47 @@ export class StaffSystem {
     return role === "chef" ? chefFireCost : role === "waiter" ? waiterFireCost : errandFireCost;
   }
 
+  // === Training upgrades ===
+
+  getStaffUpgradeLevel(role: StaffRole): number {
+    return this.staffUpgrades[role] ?? 0;
+  }
+
+  /** Money cost to move from the current level to the next. Ramps
+   * linearly — cheap to start training, ~$1500 to fully max one role
+   * which feels like a goal but not a slog. */
+  getStaffUpgradeCost(role: StaffRole): number {
+    const level = this.getStaffUpgradeLevel(role);
+    if (level >= STAFF_UPGRADE_MAX) return 0;
+    return 250 * (level + 1);
+  }
+
+  /** Advance the training level by one. Caller checks affordability +
+   * applies the money side effect. Returns true if the level actually
+   * advanced. */
+  upgradeStaffLevel(role: StaffRole): boolean {
+    const level = this.getStaffUpgradeLevel(role);
+    if (level >= STAFF_UPGRADE_MAX) return false;
+    this.staffUpgrades[role] = level + 1;
+    return true;
+  }
+
+  /** Chef cook-time multiplier. Recipe prep times are multiplied by
+   * this — lower is faster. */
+  getChefCookMultiplier(): number {
+    return Math.max(0.1, 1 - 0.10 * this.staffUpgrades.chef);
+  }
+
+  /** Waiter walk-speed multiplier. Higher = faster. */
+  getWaiterSpeedMultiplier(): number {
+    return 1 + 0.10 * this.staffUpgrades.waiter;
+  }
+
+  /** Per-trip carry capacity in units. Base 10 + 2 per training level. */
+  getHelperCarryCapacity(): number {
+    return 10 + 2 * this.staffUpgrades.errand;
+  }
+
   // === Salary tick ===
 
   /**
@@ -160,9 +215,28 @@ export class StaffSystem {
       waiters: save?.staff?.waiters ?? 0,
       errandBoys: save?.staff?.errandBoys ?? 0,
     };
+    this.staffUpgrades = {
+      chef: clampLevel(save?.staffUpgrades?.chef),
+      waiter: clampLevel(save?.staffUpgrades?.waiter),
+      errand: clampLevel(save?.staffUpgrades?.errand),
+    };
     this.pendingStaffFirings = { chef: 0, waiter: 0, errand: 0 };
     this.resetSalaryTick();
   }
+
+  /** Snapshot for save. */
+  snapshotUpgrades(): { chef: number; waiter: number; errand: number } {
+    return {
+      chef: this.staffUpgrades.chef,
+      waiter: this.staffUpgrades.waiter,
+      errand: this.staffUpgrades.errand,
+    };
+  }
+}
+
+function clampLevel(v: number | undefined): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return 0;
+  return Math.max(0, Math.min(STAFF_UPGRADE_MAX, Math.floor(v)));
 }
 
 /** Pure helper: round payroll/hire costs up to the nearest $5, minimum $1. */

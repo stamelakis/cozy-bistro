@@ -43,6 +43,9 @@ export interface Ticket {
 
 interface StaffActor {
   character: AnimatedCharacter;
+  /** Which pool this actor belongs to. Used by moveActor to apply the
+   * right training-upgrade speed multiplier. */
+  role: "chef" | "waiter";
   home: THREE.Vector2; // where they return to when idle
   state: "idle" | "movingToWork" | "working" | "returningHome";
   /** What they're working on (a ticket id). */
@@ -131,6 +134,12 @@ export class StaffRouter {
    * fall back to the legacy shared {@link stovePos}. */
   private readonly getStoves?: () => readonly StoveInfo[];
 
+  /** Optional per-role walking speed multiplier, applied each tick in
+   * moveActor. Used to apply the waiter training upgrade ("Serve
+   * speed") without having to re-create the actor. Returns 1.0 by
+   * default — the base CHEF_SPEED / WAITER_SPEED constants stand. */
+  private readonly getSpeedMultiplier?: (role: "chef" | "waiter") => number;
+
   /** uids of stoves currently reserved by a chef in cooking flight.
    * Cleared when the chef leaves the "working" state OR when they're
    * fired mid-cook. */
@@ -143,11 +152,13 @@ export class StaffRouter {
     pickupPos: THREE.Vector2,
     pathfind?: Pathfinding,
     getStoves?: () => readonly StoveInfo[],
+    getSpeedMultiplier?: (role: "chef" | "waiter") => number,
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
     this.pathfind = pathfind;
     this.getStoves = getStoves;
+    this.getSpeedMultiplier = getSpeedMultiplier;
     this.addChef(chefChar);
     this.addWaiter(waiterChar);
   }
@@ -220,6 +231,7 @@ export class StaffRouter {
   addChef(char: AnimatedCharacter): void {
     this.chefs.push({
       character: char,
+      role: "chef",
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -235,6 +247,7 @@ export class StaffRouter {
   addWaiter(char: AnimatedCharacter): void {
     this.waiters.push({
       character: char,
+      role: "waiter",
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -564,7 +577,11 @@ export class StaffRouter {
     const dz = wp.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
-    const step = Math.min(dist, a.speed * dt);
+    // Apply the per-role training multiplier (chef cook speed isn't a
+    // walk multiplier, but waiter serve speed IS). Both go through
+    // the same hook so adding "chef hustle" later is one-line.
+    const speedMult = this.getSpeedMultiplier?.(a.role) ?? 1;
+    const step = Math.min(dist, a.speed * speedMult * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
     // GLB default forward is -Z (three.js standard) — confirmed by the

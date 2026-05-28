@@ -2,19 +2,29 @@ import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { LuxuryTier } from "../data/types";
+import { STAFF_UPGRADE_MAX, type StaffRole } from "../systems/StaffSystem";
 
 /**
- * Recipe upgrade browser, mirrors the MenuPanel's tier-tab layout.
- * Each tab shows that tier's recipes with current level + materials
- * needed + button. Locked tiers grey out and disable buying.
+ * Upgrades browser. Outer tabs split the modal into:
+ *   - "Recipes": tier-tab grid of recipe upgrades (cook level + mats).
+ *   - "Staff":   per-role training upgrades — Chef cook speed,
+ *                Waiter serve speed, Helper carry capacity.
+ *
+ * The recipes side mirrors MenuPanel's tier-tab layout. The staff side
+ * is three big level rows with currency-only cost (no mats).
  */
+
+type Section = "recipes" | "staff";
 
 export class UpgradeModal {
   private readonly game: Game;
   private readonly root: HTMLElement;
+  private readonly title: HTMLElement;
+  private readonly sectionTabs: HTMLElement;
   private readonly body: HTMLElement;
   private readonly tabs: HTMLElement;
   private selectedTier: LuxuryTier = 1;
+  private selectedSection: Section = "recipes";
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -51,10 +61,10 @@ export class UpgradeModal {
       display: "flex", justifyContent: "space-between", alignItems: "center",
       marginBottom: "10px",
     } as Partial<CSSStyleDeclaration>);
-    const title = document.createElement("div");
-    title.textContent = "RECIPE UPGRADES";
-    Object.assign(title.style, { fontSize: "16px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
-    header.appendChild(title);
+    this.title = document.createElement("div");
+    this.title.textContent = "RECIPE UPGRADES";
+    Object.assign(this.title.style, { fontSize: "16px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
+    header.appendChild(this.title);
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
     Object.assign(closeBtn.style, {
@@ -67,6 +77,18 @@ export class UpgradeModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
+    // Outer section tabs — Recipes vs Staff. Slightly larger / bolder
+    // than the inner tier-tab strip so the player perceives the split
+    // as the top-level switch.
+    this.sectionTabs = document.createElement("div");
+    Object.assign(this.sectionTabs.style, {
+      display: "flex", gap: "4px", marginBottom: "10px",
+      borderBottom: "1px solid rgba(255,245,220,0.18)",
+      paddingBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.sectionTabs);
+
+    // Inner tabs (tier strip for Recipes; hidden in Staff).
     this.tabs = document.createElement("div");
     Object.assign(this.tabs.style, { display: "flex", gap: "4px", marginBottom: "10px" } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.tabs);
@@ -80,8 +102,41 @@ export class UpgradeModal {
   hide(): void { this.root.style.display = "none"; }
 
   private refresh(): void {
-    this.renderTabs();
-    this.renderContent();
+    this.renderSectionTabs();
+    if (this.selectedSection === "recipes") {
+      this.title.textContent = "RECIPE UPGRADES";
+      this.tabs.style.display = "flex";
+      this.renderTabs();
+      this.renderContent();
+    } else {
+      this.title.textContent = "STAFF TRAINING";
+      this.tabs.style.display = "none";
+      this.renderStaffContent();
+    }
+  }
+
+  private renderSectionTabs(): void {
+    this.sectionTabs.innerHTML = "";
+    const mk = (key: Section, label: string): HTMLButtonElement => {
+      const active = key === this.selectedSection;
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "8px 8px",
+        background: active ? "rgba(120, 200, 120, 0.22)" : "rgba(255,245,220,0.05)",
+        color: "#fff5dc",
+        border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "4px",
+        cursor: "pointer",
+        font: "inherit", fontSize: "13px",
+        fontWeight: active ? "700" : "500",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => { this.selectedSection = key; this.refresh(); };
+      return btn;
+    };
+    this.sectionTabs.appendChild(mk("recipes", "🍽️ Recipes"));
+    this.sectionTabs.appendChild(mk("staff", "👥 Staff"));
   }
 
   private renderTabs(): void {
@@ -198,6 +253,108 @@ export class UpgradeModal {
       row.appendChild(btn);
       this.body.appendChild(row);
     }
+  }
+
+  /** Render the Staff tab: 3 rows (Chef / Waiter / Errand helper) each
+   * with the current training level, the next-level effect preview,
+   * the cost, and an Upgrade button. No materials — staff training
+   * costs money only. */
+  private renderStaffContent(): void {
+    this.body.innerHTML = "";
+    const rows: { role: StaffRole; emoji: string; name: string; stat: string;
+                  currentText: (level: number) => string;
+                  nextText: (level: number) => string }[] = [
+      {
+        role: "chef", emoji: "🧑‍🍳", name: "Chef", stat: "cook speed",
+        currentText: (lv) => `Cook time: ${(lv === 0 ? 100 : 100 - 10 * lv)}% of base`,
+        nextText: (lv) => `→ ${100 - 10 * (lv + 1)}% (-10% cook time)`,
+      },
+      {
+        role: "waiter", emoji: "🍽️", name: "Waiter", stat: "serve speed",
+        currentText: (lv) => `Walk speed: ${100 + 10 * lv}% of base`,
+        nextText: (lv) => `→ ${100 + 10 * (lv + 1)}% (+10% serve speed)`,
+      },
+      {
+        role: "errand", emoji: "📦", name: "Errand Helper", stat: "carry capacity",
+        currentText: (lv) => `Carries ${10 + 2 * lv} units per trip`,
+        nextText: (lv) => `→ ${10 + 2 * (lv + 1)} units per trip (+2)`,
+      },
+    ];
+
+    for (const r of rows) {
+      const level = this.game.getStaffUpgradeLevel(r.role);
+      const headcount = this.game.staff.getStaffCount(r.role);
+      const maxed = level >= STAFF_UPGRADE_MAX;
+
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex", alignItems: "center", gap: "12px",
+        padding: "12px 8px",
+        borderBottom: "1px solid rgba(255,245,220,0.08)",
+      } as Partial<CSSStyleDeclaration>);
+
+      const label = document.createElement("div");
+      label.style.flex = "1";
+      const lvlBg = level >= STAFF_UPGRADE_MAX ? "#f5c14a" : level > 0 ? "#7a9a6a" : "#4a4137";
+      const lvlColor = level > 0 ? "#fff" : "#cbb";
+      const head = document.createElement("div");
+      head.innerHTML =
+        `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;background:${lvlBg};color:${lvlColor};font-weight:800;margin-right:6px;">L${level}/${STAFF_UPGRADE_MAX}</span>` +
+        `<b>${r.emoji} ${r.name} — ${r.stat}</b>` +
+        ` &nbsp; <span style="opacity:0.7">${headcount} on staff</span>`;
+      label.appendChild(head);
+
+      const detail = document.createElement("div");
+      Object.assign(detail.style, { fontSize: "11px", marginTop: "4px", opacity: "0.9" } as Partial<CSSStyleDeclaration>);
+      const currentLine = `<span style="opacity:0.7">Now:</span> ${r.currentText(level)}`;
+      const nextLine = maxed
+        ? `<span style="color:#f5c14a">Fully trained</span>`
+        : `<span style="color:#a8e2a8">${r.nextText(level)}</span>`;
+      detail.innerHTML = `${currentLine} &nbsp; · &nbsp; ${nextLine}`;
+      label.appendChild(detail);
+      row.appendChild(label);
+
+      const btn = document.createElement("button");
+      Object.assign(btn.style, {
+        padding: "8px 14px",
+        background: "rgba(120, 200, 120, 0.22)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.25)",
+        borderRadius: "4px",
+        cursor: "pointer", font: "inherit", fontSize: "11px",
+        minWidth: "110px", textAlign: "center",
+      } as Partial<CSSStyleDeclaration>);
+      if (maxed) {
+        btn.textContent = "MAX";
+        btn.disabled = true;
+        btn.style.opacity = "0.5";
+      } else {
+        const cost = this.game.getStaffUpgradeCost(r.role);
+        btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+        const can = this.game.canUpgradeStaff(r.role);
+        btn.disabled = !can;
+        btn.style.opacity = can ? "1" : "0.5";
+        btn.onclick = () => { if (this.game.upgradeStaff(r.role)) this.refresh(); };
+      }
+      row.appendChild(btn);
+      this.body.appendChild(row);
+    }
+
+    // Quick footer: total training cost remaining + an explanation
+    // for the carry stat (which isn't a speed bump).
+    const footer = document.createElement("div");
+    Object.assign(footer.style, {
+      marginTop: "14px", padding: "10px",
+      background: "rgba(255,245,220,0.04)",
+      border: "1px solid rgba(255,245,220,0.10)",
+      borderRadius: "4px",
+      fontSize: "11px", lineHeight: "1.5", opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    footer.innerHTML =
+      `Training applies to <b>every</b> staff member of that role you've hired, ` +
+      `including future hires. The Errand Helper's training raises how much they can ` +
+      `bring back in a single auto-shop trip — it's about throughput, not speed.`;
+    this.body.appendChild(footer);
   }
 
   private pretty(id: string): string { return id.replace(/[-_]/g, " "); }

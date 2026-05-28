@@ -145,6 +145,9 @@ export interface SaveGameState {
   dirtySeatUids?: string[];
   dirtyDishCount?: number;
   staff?: HiredStaff;
+  /** Per-role training upgrade levels (0..STAFF_UPGRADE_MAX). Chef →
+   * cook speed, Waiter → serve speed, Errand helper → carry capacity. */
+  staffUpgrades?: { chef?: number; waiter?: number; errand?: number };
   adminSettings?: AdminSettings;
   restaurantOpen?: boolean;
   autoShopEnabled?: boolean;

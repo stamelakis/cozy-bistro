@@ -3,7 +3,7 @@ import { ReputationSystem } from "../systems/ReputationSystem";
 import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
-import { StaffSystem, type StaffRole } from "../systems/StaffSystem";
+import { StaffSystem, STAFF_UPGRADE_MAX, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
 import { AchievementSystem } from "./AchievementSystem";
@@ -417,6 +417,44 @@ export class Game {
     return true;
   }
 
+  // === Staff training upgrades ===
+  // Cook speed / serve speed / carry capacity. Each is a separate
+  // currency-only upgrade purchased from the UpgradeModal "Staff" tab.
+
+  /** Convenience pass-through to StaffSystem. */
+  getStaffUpgradeLevel(role: StaffRole): number {
+    return this.staff.getStaffUpgradeLevel(role);
+  }
+  getStaffUpgradeCost(role: StaffRole): number {
+    return this.staff.getStaffUpgradeCost(role);
+  }
+  canUpgradeStaff(role: StaffRole): boolean {
+    if (this.staff.getStaffUpgradeLevel(role) >= STAFF_UPGRADE_MAX) return false;
+    return this.economy.canAfford(this.staff.getStaffUpgradeCost(role));
+  }
+  upgradeStaff(role: StaffRole): boolean {
+    if (!this.canUpgradeStaff(role)) return false;
+    const cost = this.staff.getStaffUpgradeCost(role);
+    if (!this.economy.spendMoney(cost, "unlock")) return false;
+    return this.staff.upgradeStaffLevel(role);
+  }
+
+  /** Effective cook time for a recipe with the chef training bonus
+   * applied. GuestSpawner uses this when enqueuing a ticket so the
+   * timer the chef actually counts down matches the player's chef
+   * training. */
+  getEffectiveCookSeconds(recipe: RecipeDefinition): number {
+    return Math.max(1, recipe.preparationTimeSeconds * this.staff.getChefCookMultiplier());
+  }
+  /** Effective walk speed multiplier for waiters. */
+  getWaiterSpeedMultiplier(): number {
+    return this.staff.getWaiterSpeedMultiplier();
+  }
+  /** Effective per-trip carry cap for the auto-shop dispatcher. */
+  getHelperCarryCapacity(): number {
+    return this.staff.getHelperCarryCapacity();
+  }
+
   // === Stock target (auto-shop refill level) ===
   /** What the auto-shop refills toward — the player's manually-chosen
    * target, clamped to the current effective max. Fridges only RAISE
@@ -494,12 +532,15 @@ export class Game {
       .filter((n) => n.deficit > 0)
       .sort((a, b) => b.deficit - a.deficit);
     if (needs.length === 0) return;
-    // Greedy fill of an AUTOSHOP_MAX_PER_TRIP-unit trip.
+    // Greedy fill of a trip up to the helper's carry capacity. The
+    // base cap is AUTOSHOP_MAX_PER_TRIP; the errand-helper training
+    // upgrade lifts it +2 per level (so L5 = 20).
+    const carryCap = Math.max(AUTOSHOP_MAX_PER_TRIP, this.getHelperCarryCapacity());
     const list = new Map<string, number>();
     let total = 0;
     for (const n of needs) {
-      if (total >= AUTOSHOP_MAX_PER_TRIP) break;
-      const take = Math.min(n.deficit, AUTOSHOP_MAX_PER_TRIP - total);
+      if (total >= carryCap) break;
+      const take = Math.min(n.deficit, carryCap - total);
       if (take > 0) {
         list.set(n.id, take);
         total += take;
