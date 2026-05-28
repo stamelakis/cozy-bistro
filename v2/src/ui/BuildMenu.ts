@@ -72,8 +72,9 @@ export class BuildMenu {
       position: "fixed",
       top: "12px",
       right: "12px",
-      width: "220px",
-      maxHeight: "calc(100vh - 24px)",
+      width: "230px",
+      // Leave room for the PantryPanel at bottom-right (~35vh).
+      maxHeight: "calc(60vh)",
       overflowY: "auto",
       padding: "12px",
       background: "rgba(20, 14, 10, 0.78)",

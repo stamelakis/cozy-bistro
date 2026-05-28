@@ -78,30 +78,33 @@ const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 //   tier 5 → 20 seats  (max)
 // Locked tables visually exist but seatsAvailableForTier() filters them.
 const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
-  // Tables 1 + 2 — chairs at 0.7 offset, plates at 0.35 (between chair + table).
-  { pos: new THREE.Vector2(-2.7, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.35, 1.0) },
-  { pos: new THREE.Vector2(-1.3, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.65, 1.0) },
-  { pos: new THREE.Vector2(-2,   0.3), facingY:  Math.PI,     platePos: new THREE.Vector2(-2.0,  0.65) },
-  { pos: new THREE.Vector2(-2,   1.7), facingY:  0,           platePos: new THREE.Vector2(-2.0,  1.35) },
-  { pos: new THREE.Vector2( 1.3, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.65, 1.0) },
-  { pos: new THREE.Vector2( 2.7, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.35, 1.0) },
-  { pos: new THREE.Vector2( 2,   0.3), facingY:  Math.PI,     platePos: new THREE.Vector2( 2.0,  0.65) },
-  { pos: new THREE.Vector2( 2,   1.7), facingY:  0,           platePos: new THREE.Vector2( 2.0,  1.35) },
+  // Chair center is 1.05 from table center (table half-width ~0.95 at scale 1.9
+  // + chair half-depth ~0.1 gap). Plate sits ~0.4 from table center (on the
+  // table surface itself).
+  // Tables 1 + 2 — unlocked from tier 1.
+  { pos: new THREE.Vector2(-3.05, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.4, 1.0) },
+  { pos: new THREE.Vector2(-0.95, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.6, 1.0) },
+  { pos: new THREE.Vector2(-2,   -0.05), facingY:  Math.PI,    platePos: new THREE.Vector2(-2.0, 0.6) },
+  { pos: new THREE.Vector2(-2,    2.05), facingY:  0,          platePos: new THREE.Vector2(-2.0, 1.4) },
+  { pos: new THREE.Vector2( 0.95, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.6, 1.0) },
+  { pos: new THREE.Vector2( 3.05, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.4, 1.0) },
+  { pos: new THREE.Vector2( 2,   -0.05), facingY:  Math.PI,    platePos: new THREE.Vector2( 2.0, 0.6) },
+  { pos: new THREE.Vector2( 2,    2.05), facingY:  0,          platePos: new THREE.Vector2( 2.0, 1.4) },
   // Front (table 3) — unlocked from tier 2.
-  { pos: new THREE.Vector2(-0.7, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.35, 3.0) },
-  { pos: new THREE.Vector2( 0.7, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.35, 3.0) },
-  { pos: new THREE.Vector2( 0,   2.3), facingY:  Math.PI,     platePos: new THREE.Vector2( 0,    2.65) },
-  { pos: new THREE.Vector2( 0,   3.7), facingY:  0,           platePos: new THREE.Vector2( 0,    3.35) },
-  // Left side (table 4) — unlocked from tier 3.
-  { pos: new THREE.Vector2(-4.7, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.35, 0.0) },
-  { pos: new THREE.Vector2(-3.3, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.65, 0.0) },
-  { pos: new THREE.Vector2(-4,  -0.7), facingY:  Math.PI,     platePos: new THREE.Vector2(-4,   -0.35) },
-  { pos: new THREE.Vector2(-4,   0.7), facingY:  0,           platePos: new THREE.Vector2(-4,    0.35) },
+  { pos: new THREE.Vector2(-1.05, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.4, 3.0) },
+  { pos: new THREE.Vector2( 1.05, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.4, 3.0) },
+  { pos: new THREE.Vector2( 0,    1.95), facingY:  Math.PI,    platePos: new THREE.Vector2( 0,   2.6) },
+  { pos: new THREE.Vector2( 0,    4.05), facingY:  0,          platePos: new THREE.Vector2( 0,   3.4) },
+  // Left side (table 4) — unlocked from tier 3.  Chair "west" is at x=-5.05 → clipped to -4.95 to stay inside the left wall at x=-5.
+  { pos: new THREE.Vector2(-4.95, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.4, 0.0) },
+  { pos: new THREE.Vector2(-2.95, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.6, 0.0) },
+  { pos: new THREE.Vector2(-4,   -1.05), facingY:  Math.PI,    platePos: new THREE.Vector2(-4,  -0.4) },
+  { pos: new THREE.Vector2(-4,    1.05), facingY:  0,          platePos: new THREE.Vector2(-4,   0.4) },
   // Right side (table 5) — unlocked from tier 4.
-  { pos: new THREE.Vector2( 3.3, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.65, 0.0) },
-  { pos: new THREE.Vector2( 4.7, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.35, 0.0) },
-  { pos: new THREE.Vector2( 4,  -0.7), facingY:  Math.PI,     platePos: new THREE.Vector2( 4,   -0.35) },
-  { pos: new THREE.Vector2( 4,   0.7), facingY:  0,           platePos: new THREE.Vector2( 4,    0.35) },
+  { pos: new THREE.Vector2( 2.95, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.6, 0.0) },
+  { pos: new THREE.Vector2( 4.95, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.4, 0.0) },
+  { pos: new THREE.Vector2( 4,   -1.05), facingY:  Math.PI,    platePos: new THREE.Vector2( 4,  -0.4) },
+  { pos: new THREE.Vector2( 4,    1.05), facingY:  0,          platePos: new THREE.Vector2( 4,   0.4) },
 ];
 
 /** Number of seats unlocked at a given luxury tier. */
@@ -109,8 +112,8 @@ function seatsAvailableForTier(tier: number): number {
   // tier 1: 8, tier 2: 12, tier 3: 16, tier 4+: 20
   return Math.min(SEATS.length, 4 + tier * 4);
 }
-/** Approximate table-surface height (Kenney small-table at 1.3× scale). */
-const TABLE_HEIGHT_Y = 0.68;
+/** Approximate table-surface height (Kenney table.glb at scale 1.9). */
+const TABLE_HEIGHT_Y = 0.95;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -316,8 +319,8 @@ export class GuestSpawner {
         facingY: Math.PI, // facing into the room (negative Z)
         action: "walk",
         phase: Math.random() * 5,
-        // Seat surface height after chair scale-up (Kenney chair at 1.3×).
-        seatHeight: 0.55,
+        // Seat surface height (Kenney chair at scale 1.7).
+        seatHeight: 0.62,
       };
       this.animator.add(character);
 

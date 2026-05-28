@@ -1,18 +1,20 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
-import { getIngredientCost } from "../data/ingredients";
+import { getRecipeLuxuryTier } from "../systems/CookingSystem";
+import type { LuxuryTier } from "../data/types";
 
 /**
- * Recipe upgrade browser. Replaces the always-visible UpgradePanel
- * with a modal opened from the HUD's icon row. Same upgrade math
- * as before (cost = level² × $30, +30% sell + 1.5 satisfaction per
- * level, max L10).
+ * Recipe upgrade browser, mirrors the MenuPanel's tier-tab layout.
+ * Each tab shows that tier's recipes with current level + materials
+ * needed + button. Locked tiers grey out and disable buying.
  */
 
 export class UpgradeModal {
   private readonly game: Game;
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
+  private readonly tabs: HTMLElement;
+  private selectedTier: LuxuryTier = 1;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -31,7 +33,7 @@ export class UpgradeModal {
 
     const body = document.createElement("div");
     Object.assign(body.style, {
-      width: "min(560px, calc(100vw - 40px))",
+      width: "min(620px, calc(100vw - 40px))",
       maxHeight: "84vh",
       display: "flex", flexDirection: "column",
       padding: "18px 22px",
@@ -65,6 +67,10 @@ export class UpgradeModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
+    this.tabs = document.createElement("div");
+    Object.assign(this.tabs.style, { display: "flex", gap: "4px", marginBottom: "10px" } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.tabs);
+
     this.body = document.createElement("div");
     Object.assign(this.body.style, { flex: "1", overflowY: "auto" } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.body);
@@ -73,23 +79,61 @@ export class UpgradeModal {
   show(): void { this.refresh(); this.root.style.display = "flex"; }
   hide(): void { this.root.style.display = "none"; }
 
-  private pretty(id: string): string { return id.replace(/[-_]/g, " "); }
-
   private refresh(): void {
+    this.renderTabs();
+    this.renderContent();
+  }
+
+  private renderTabs(): void {
+    this.tabs.innerHTML = "";
+    const playerTier = this.game.getLuxuryTier();
+    const baseProfits = [3, 4, 5, 6, 7];
+    for (let t = 1; t <= 5; t += 1) {
+      const tier = t as LuxuryTier;
+      const locked = tier > playerTier;
+      const active = tier === this.selectedTier;
+      const btn = document.createElement("button");
+      btn.textContent = `Tier ${t}${locked ? " 🔒" : ""}  ·  $${baseProfits[t - 1]}/dish`;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "6px 4px",
+        background: active
+          ? "rgba(120, 200, 120, 0.30)"
+          : locked
+            ? "rgba(255,245,220,0.04)"
+            : "rgba(255,245,220,0.10)",
+        color: locked ? "rgba(255,245,220,0.4)" : "#fff5dc",
+        border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "4px",
+        cursor: locked ? "not-allowed" : "pointer",
+        font: "inherit", fontSize: "11px",
+        fontWeight: active ? "700" : "500",
+      } as Partial<CSSStyleDeclaration>);
+      btn.disabled = locked;
+      btn.onclick = () => { if (locked) return; this.selectedTier = tier; this.refresh(); };
+      this.tabs.appendChild(btn);
+    }
+  }
+
+  private renderContent(): void {
     this.body.innerHTML = "";
-    const unlocked = this.game.cooking.getUnlockedRecipeIds();
-    if (unlocked.length === 0) {
+    const unlocked = new Set(this.game.cooking.getUnlockedRecipeIds());
+    const inTier = recipes
+      .filter((r) => getRecipeLuxuryTier(r) === this.selectedTier)
+      .filter((r) => unlocked.has(r.id));
+    if (inTier.length === 0) {
       const empty = document.createElement("div");
-      empty.textContent = "No recipes unlocked yet.";
+      empty.textContent = "No unlocked recipes in this tier yet.";
       empty.style.opacity = "0.6";
       empty.style.textAlign = "center";
-      empty.style.padding = "20px";
+      empty.style.padding = "30px";
       this.body.appendChild(empty);
       return;
     }
-    for (const id of unlocked) {
-      const recipe = recipes.find((r) => r.id === id);
-      if (!recipe) continue;
+    // Sort within tier by category then name.
+    const order = { appetizer: 0, main: 1, dessert: 2, drink: 3, side: 4 } as const;
+    inTier.sort((a, b) => (order[a.category] - order[b.category]) || a.name.localeCompare(b.name));
+    for (const recipe of inTier) {
       const row = document.createElement("div");
       Object.assign(row.style, {
         display: "flex", alignItems: "center", gap: "10px",
@@ -106,7 +150,6 @@ export class UpgradeModal {
       head.innerHTML = `<b>${recipe.name}</b> &nbsp; L${level} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
       label.appendChild(head);
       if (level < 10) {
-        // Show material cost preview.
         const mats = this.game.getRecipeUpgradeMaterials(recipe);
         const matText = mats.map((m) => {
           const have = this.game.cooking.getIngredientQuantity(m.id);
@@ -128,8 +171,7 @@ export class UpgradeModal {
         color: "#fff5dc",
         border: "1px solid rgba(255,245,220,0.25)",
         borderRadius: "4px",
-        cursor: "pointer",
-        font: "inherit", fontSize: "11px",
+        cursor: "pointer", font: "inherit", fontSize: "11px",
         minWidth: "100px",
       } as Partial<CSSStyleDeclaration>);
       if (level >= 10) {
@@ -146,8 +188,8 @@ export class UpgradeModal {
       }
       row.appendChild(btn);
       this.body.appendChild(row);
-      // Suppress an unused warning on cost preview helper.
-      void getIngredientCost;
     }
   }
+
+  private pretty(id: string): string { return id.replace(/[-_]/g, " "); }
 }

@@ -11,7 +11,7 @@ import { StaffPanel } from "../ui/StaffPanel";
 import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
-import { ExpandPanel } from "../ui/ExpandPanel";
+import { ExpandModal } from "../ui/ExpandModal";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
@@ -49,7 +49,7 @@ export class Engine {
   readonly pantryPanel: PantryPanel;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
-  readonly expandPanel: ExpandPanel;
+  readonly expandModal: ExpandModal;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
@@ -126,6 +126,7 @@ export class Engine {
       openAdmin: () => this.adminModal.show(),
       openUpgrades: () => this.upgradeModal.show(),
       openDecor: () => this.decorModal.show(),
+      openExpand: () => this.expandModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
@@ -134,7 +135,7 @@ export class Engine {
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradeModal = new UpgradeModal(container, this.game);
-    this.expandPanel = new ExpandPanel(container, this.game);
+    this.expandModal = new ExpandModal(container, this.game);
     this.decorModal = new DecorModal(container, this.game);
     // Wire theme changes to the live scene + restore the saved theme.
     this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
@@ -430,7 +431,6 @@ export class Engine {
       this.staffPanel.update();
       this.pantryPanel.update();
       this.menuPanel.update();
-      this.expandPanel.update();
       this.hudAccumulator = 0;
     }
 

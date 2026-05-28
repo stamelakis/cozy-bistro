@@ -27,6 +27,7 @@ export interface HudActions {
   openAdmin: () => void;
   openUpgrades: () => void;
   openDecor: () => void;
+  openExpand: () => void;
   resetSave: () => void;
   isMuted: () => boolean;
   toggleMute: () => boolean;
@@ -179,10 +180,11 @@ export class Hud {
   private buildModalIconRow(): void {
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "repeat(8, 1fr)",
+      display: "grid", gridTemplateColumns: "repeat(9, 1fr)",
       gap: "3px", marginTop: "5px",
     } as Partial<CSSStyleDeclaration>);
     const buttons: IconBtn[] = [
+      { icon: "🏛", title: "Restaurant tier + boost", click: this.actions.openExpand,   tint: "rgba(200, 160, 100, 0.18)" },
       { icon: "⚡", title: "Recipe upgrades",     click: this.actions.openUpgrades, tint: "rgba(140, 200, 140, 0.18)" },
       { icon: "🎨", title: "Interior theme",      click: this.actions.openDecor,    tint: "rgba(220, 150, 200, 0.18)" },
       { icon: "📓", title: "Transaction ledger",  click: this.actions.openLedger,   tint: "rgba(200, 180, 120, 0.18)" },
