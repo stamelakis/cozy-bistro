@@ -9,6 +9,8 @@ import { DayHistory } from "./DayHistory";
 import { AchievementSystem } from "./AchievementSystem";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
+import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
+import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
 /** Highest luxury tier the player can unlock. */
@@ -76,10 +78,12 @@ const AUTOSHOP_INTERVAL = 4;
 /** Max units bought per ingredient per auto-shop tick. Higher = faster
  * recovery from a depleted pantry but bigger spending spikes. */
 const AUTOSHOP_BATCH_PER_INGREDIENT = 3;
-/** Each recipe-upgrade level multiplies sellPrice by 1 + this. */
-const UPGRADE_PRICE_BONUS_PER_LEVEL = 0.30;
 /** Each recipe-upgrade level adds this much to satisfactionEffect. */
 const UPGRADE_SATISFACTION_PER_LEVEL = 1.5;
+/** Base profit per tier per upgrade level. Sell price = base * level + ingredient cost.
+ *  Indexed by tier 1..5 (index 0 unused). So tier 1 dish at L1 → $3 profit,
+ *  tier 5 dish at L10 → $70 profit. */
+const TIER_BASE_PROFIT = [0, 3, 4, 5, 6, 7];
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -220,8 +224,11 @@ export class Game {
         .map((stock, idx) => ({ stock, deficit: STOCK_TARGET - stock.quantity, idx }))
         .filter((n) => n.deficit > 0)
         .sort((a, b) => b.deficit - a.deficit);
-      const unitCost = Math.max(0, Math.round(INGREDIENT_UNIT_COST * this.admin.ingredientCostMultiplier));
+      const costMult = this.admin.ingredientCostMultiplier;
       for (const need of needs) {
+        // Per-ingredient real cost × admin multiplier (so truffles cost
+        // more than bread, just like in real life).
+        const unitCost = Math.max(0, Math.round(getIngredientCost(need.stock.id) * costMult));
         const units = Math.min(AUTOSHOP_BATCH_PER_INGREDIENT, need.deficit);
         let bought = 0;
         for (let i = 0; i < units; i += 1) {
@@ -317,12 +324,30 @@ export class Game {
     this.weather.rollForNewDay();
   }
 
-  // === Recipe upgrade math (used by GuestSpawner + UpgradePanel) ===
+  // === Recipe pricing / upgrades (rewritten in batch 49) ===
 
-  /** Sell price after upgrade level: +30% per level above 1. */
-  getEffectiveSellPrice(recipe: RecipeDefinition): number {
+  /** Sum of per-unit costs of every ingredient this recipe needs. */
+  getRecipeIngredientCost(recipe: RecipeDefinition): number {
+    return getRecipeIngredientCost(recipe.ingredients);
+  }
+
+  /** Per-tier base profit (the dollar amount a level-1 dish nets above
+   * ingredient cost). Tier 1 → $3, Tier 5 → $7. */
+  getTierBaseProfit(tier: LuxuryTier): number {
+    return TIER_BASE_PROFIT[tier] ?? TIER_BASE_PROFIT[1];
+  }
+
+  /** Effective profit for one serving of a recipe at its current upgrade
+   * level: base * level. */
+  getEffectiveProfit(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
-    return Math.round(recipe.sellPrice * (1 + (level - 1) * UPGRADE_PRICE_BONUS_PER_LEVEL));
+    const tier = getRecipeLuxuryTier(recipe);
+    return this.getTierBaseProfit(tier) * level;
+  }
+
+  /** Final price the guest pays: profit + ingredient cost. */
+  getEffectiveSellPrice(recipe: RecipeDefinition): number {
+    return this.getEffectiveProfit(recipe) + this.getRecipeIngredientCost(recipe);
   }
 
   /** Satisfaction after upgrade level: +1.5 per level above 1. */
@@ -331,10 +356,46 @@ export class Game {
     return recipe.satisfactionEffect + (level - 1) * UPGRADE_SATISFACTION_PER_LEVEL;
   }
 
-  /** Cost in money to take this recipe to next level. Grows quadratically. */
+  /** Money cost to take this recipe to the next level. */
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     return level * level * 30;
+  }
+
+  /** Material cost to upgrade — L units of each ingredient, where L is
+   * the CURRENT level. Returns the list as { id, qty }. */
+  getRecipeUpgradeMaterials(recipe: RecipeDefinition): { id: string; qty: number }[] {
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    return recipe.ingredients.map((id) => ({ id, qty: level }));
+  }
+
+  /** True if the player has both the money AND the materials to upgrade. */
+  canUpgradeRecipe(recipe: RecipeDefinition): boolean {
+    if (this.cooking.getRecipeUpgradeLevel(recipe) >= 10) return false;
+    if (!this.economy.canAfford(this.getRecipeUpgradeCost(recipe))) return false;
+    const needed = this.getRecipeUpgradeMaterials(recipe);
+    for (const n of needed) {
+      if (this.cooking.getIngredientQuantity(n.id) < n.qty) return false;
+    }
+    return true;
+  }
+
+  /** Spend money + ingredients, bump the recipe to next level. Returns
+   * true on success. */
+  upgradeRecipe(recipe: RecipeDefinition): boolean {
+    if (!this.canUpgradeRecipe(recipe)) return false;
+    const cost = this.getRecipeUpgradeCost(recipe);
+    if (!this.economy.spendMoney(cost, "unlock")) return false;
+    // Pull the ingredients out of the pantry.
+    const pantry = this.cooking.getPantryRaw();
+    const needed = this.getRecipeUpgradeMaterials(recipe);
+    for (const n of needed) {
+      const stock = pantry.find((s) => s.id === n.id);
+      if (stock) stock.quantity = Math.max(0, stock.quantity - n.qty);
+    }
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    this.cooking.setRecipeUpgradeLevel(recipe.id, level + 1);
+    return true;
   }
 
   /** Daily rent owed this in-game day. Scales with luxury tier and the

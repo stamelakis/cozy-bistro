@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
+import { getIngredientCost } from "../data/ingredients";
 
 /**
  * Recipe upgrade browser. Replaces the always-visible UpgradePanel
@@ -72,6 +73,8 @@ export class UpgradeModal {
   show(): void { this.refresh(); this.root.style.display = "flex"; }
   hide(): void { this.root.style.display = "none"; }
 
+  private pretty(id: string): string { return id.replace(/[-_]/g, " "); }
+
   private refresh(): void {
     this.body.innerHTML = "";
     const unlocked = this.game.cooking.getUnlockedRecipeIds();
@@ -90,45 +93,61 @@ export class UpgradeModal {
       const row = document.createElement("div");
       Object.assign(row.style, {
         display: "flex", alignItems: "center", gap: "10px",
-        padding: "6px 8px",
+        padding: "8px 8px",
         borderBottom: "1px solid rgba(255,245,220,0.08)",
       } as Partial<CSSStyleDeclaration>);
-      const label = document.createElement("span");
+      const label = document.createElement("div");
       label.style.flex = "1";
       const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
       const price = this.game.getEffectiveSellPrice(recipe);
+      const profit = this.game.getEffectiveProfit(recipe);
       const sat = this.game.getEffectiveSatisfaction(recipe).toFixed(0);
-      label.textContent = `${recipe.name} — L${level} · $${price} · ${sat}😋`;
+      const head = document.createElement("div");
+      head.innerHTML = `<b>${recipe.name}</b> &nbsp; L${level} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
+      label.appendChild(head);
+      if (level < 10) {
+        // Show material cost preview.
+        const mats = this.game.getRecipeUpgradeMaterials(recipe);
+        const matText = mats.map((m) => {
+          const have = this.game.cooking.getIngredientQuantity(m.id);
+          const short = have >= m.qty ? "" : ` (need ${m.qty - have})`;
+          const color = have >= m.qty ? "#9be09b" : "#ff9a9a";
+          return `<span style="color:${color}">${this.pretty(m.id)}×${m.qty}${short}</span>`;
+        }).join(" + ");
+        const matLine = document.createElement("div");
+        matLine.innerHTML = `<span style="opacity:0.6">Materials:</span> ${matText}`;
+        Object.assign(matLine.style, { fontSize: "11px", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+        label.appendChild(matLine);
+      }
       row.appendChild(label);
+
       const btn = document.createElement("button");
       Object.assign(btn.style, {
-        padding: "4px 10px",
-        background: "rgba(120, 200, 120, 0.18)",
+        padding: "6px 12px",
+        background: "rgba(120, 200, 120, 0.22)",
         color: "#fff5dc",
         border: "1px solid rgba(255,245,220,0.25)",
         borderRadius: "4px",
         cursor: "pointer",
         font: "inherit", fontSize: "11px",
+        minWidth: "100px",
       } as Partial<CSSStyleDeclaration>);
       if (level >= 10) {
         btn.textContent = "MAX";
         btn.disabled = true;
         btn.style.opacity = "0.5";
       } else {
-        const cost = this.game.getRecipeUpgradeCost(recipe);
-        btn.textContent = `Upgrade ($${cost})`;
-        const can = this.game.economy.canAfford(cost);
+        const moneyCost = this.game.getRecipeUpgradeCost(recipe);
+        btn.innerHTML = `Upgrade<br><span style="font-size:10px;opacity:0.85">$${moneyCost} + mats</span>`;
+        const can = this.game.canUpgradeRecipe(recipe);
         btn.disabled = !can;
         btn.style.opacity = can ? "1" : "0.5";
-        btn.onclick = () => {
-          if (this.game.economy.spendMoney(cost, "unlock")) {
-            this.game.cooking.setRecipeUpgradeLevel(id, level + 1);
-            this.refresh();
-          }
-        };
+        btn.onclick = () => { if (this.game.upgradeRecipe(recipe)) this.refresh(); };
       }
       row.appendChild(btn);
       this.body.appendChild(row);
+      // Suppress an unused warning on cost preview helper.
+      void getIngredientCost;
     }
   }
 }
