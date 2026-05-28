@@ -61,6 +61,10 @@ interface ErrandActor {
   payload: ShoppingList | null;
   /** Remaining waypoints from the most recent pathfind. */
   path: PathStep[];
+  /** Seconds since the last replan. moveActor refreshes the path every
+   * ~0.8s of movement so a piece of furniture placed mid-trip doesn't
+   * leave the helper following stale waypoints right through it. */
+  replanAccum: number;
 }
 
 const WALK_SPEED = 2.88; // +20% over the previous 2.4
@@ -155,6 +159,7 @@ export class ErrandRouter {
       payload: null,
       roadEdge: null,
       path: [],
+      replanAccum: 0,
     });
   }
 
@@ -385,6 +390,13 @@ export class ErrandRouter {
     // normally have been planned at state entry, but new helpers and
     // hot-reload paths can land here without one).
     if (a.path.length === 0 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+      this.planPath(a);
+    }
+    // Periodic replan so a new wall or table placed during this trip
+    // gets routed around within ~1s instead of being walked through.
+    a.replanAccum += dt;
+    if (a.replanAccum >= 0.8 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+      a.replanAccum = 0;
       this.planPath(a);
     }
     // Consume waypoints we've already reached.

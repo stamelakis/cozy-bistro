@@ -69,6 +69,12 @@ interface StaffActor {
    * pathfind to a.target. Empty array = no plan; moveActor falls back
    * to direct movement so the actor still does SOMETHING. */
   path: PathStep[];
+  /** Seconds accumulated since the last replan. Drives the periodic
+   * re-route in moveActor so a stale path computed before the player
+   * placed an obstacle gets refreshed on the next tick — without this,
+   * a waiter mid-delivery follows their original waypoints straight
+   * through a newly-placed wall or table. */
+  replanAccum: number;
   /** Chef only: uid of the stove this chef is currently reserving while
    * cooking. Released on finish/abandon/fire so another chef can take
    * it. null between cooks. */
@@ -253,6 +259,7 @@ export class StaffRouter {
       clock: 0,
       speed: CHEF_SPEED,
       path: [],
+      replanAccum: 0,
       assignedStoveUid: null,
       lastStoveUid: null,
     });
@@ -270,6 +277,7 @@ export class StaffRouter {
       clock: 0,
       speed: WAITER_SPEED,
       path: [],
+      replanAccum: 0,
     });
   }
 
@@ -596,6 +604,18 @@ export class StaffRouter {
     if (a.path.length === 0 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
       // Re-plan if we lost our path mid-step (e.g. obstacles changed
       // mid-frame). Cheap and self-correcting.
+      this.planPath(a);
+    }
+    // Periodic replan: a path was computed at state-transition time
+    // and stays cached until the actor reaches its target. If the
+    // player drops a wall or table in the middle of that path, the
+    // cached waypoints take the actor straight through it. Re-plan
+    // every ~0.8s while in motion so a fresh obstacle is picked up
+    // within one second. Cheap (sub-ms over a 10×10 grid) and only
+    // runs while actually walking somewhere.
+    a.replanAccum += dt;
+    if (a.replanAccum >= 0.8 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+      a.replanAccum = 0;
       this.planPath(a);
     }
     while (a.path.length > 0 && this.distance(pos, a.path[0]) < PATH_ARRIVAL_THRESHOLD) {

@@ -52,7 +52,12 @@ type GuestState =
   | "walkingToToilet"
   /** Standing at the toilet, on the dwell timer. */
   | "atToilet"
-  /** Walking back to their seat from the toilet. */
+  /** Heading to a bathroom sink to wash hands after the toilet. */
+  | "walkingToSink"
+  /** Standing at the sink on the wash dwell timer. */
+  | "atSink"
+  /** Walking back to their seat from the toilet (after washing, or
+   * straight from the toilet if no sink was available). */
   | "returningFromToilet"
   /** Headed for the interior side of the door before leaving. */
   | "walkingToDoor"
@@ -120,6 +125,11 @@ interface ActiveGuest {
   /** Remaining waypoints from the most recent pathfind. Re-planned each
    * time the guest's target changes. */
   path: PathStep[];
+  /** Seconds since the last replan. moveToward refreshes the path every
+   * ~0.8s while moving so an obstacle placed mid-walk (a fresh wall,
+   * table, etc.) gets routed around within a second instead of being
+   * walked through to the cached target. */
+  replanAccum: number;
   /** Rolled at spawn from the archetype's wcUseChance. Heavy users
    * trigger the bathroom-visit detour after sitting (between seated
    * and ordering); their final rating is significantly shaped by the
@@ -132,6 +142,23 @@ interface ActiveGuest {
   /** uid of the toilet they reserved while in walkingToToilet /
    * atToilet states. Cleared on visit complete or abandonment. */
   toiletUid?: string;
+  /** uid of the sink they reserved while in walkingToSink / atSink.
+   * Cleared after the wash dwell or on despawn. */
+  sinkUid?: string;
+  /** Set true after they successfully wash at a sink. Feeds back into
+   * finalizeVisit so the cleanliness of the bathroom also shows up
+   * in the rating, not just the toilet step. */
+  washedHands?: boolean;
+  /** Patience clock (seconds) for waiting for a free toilet. When >0
+   * and every toilet is busy they stay seated and retry next tick.
+   * On 0 they give up and proceed to ordering — finalizeVisit still
+   * applies the "wanted to go" penalty. */
+  toiletWaitRemaining?: number;
+  /** Set true after the guest either successfully visited the toilet
+   * OR gave up waiting. Keeps the seated block from re-entering the
+   * "wait for a toilet" beat every tick, while leaving `willUseToilet`
+   * untouched so finalizeVisit can still tell that they wanted to go. */
+  toiletAttemptComplete?: boolean;
   /** Pre-visit seat pose so they snap back to it after returning. */
   returnSeatPos?: THREE.Vector2;
 }
@@ -170,6 +197,13 @@ const TIME_TO_EAT = 8.0;
  * can cycle the same fixture among multiple guests, long enough that
  * the trip reads as deliberate when you watch a single guest do it. */
 const TIME_AT_TOILET = 6.0;
+/** Dwell at a sink (in seconds). Quick handwash beat — the visual is
+ * just "stop and stand at the sink" so 3s is enough. */
+const TIME_AT_SINK = 3.0;
+/** How long a WC-needing customer will wait for a busy toilet to free
+ * up before giving up. Short on purpose — annoyance reads as a real
+ * restaurant queue, not a 30s standoff. */
+const WC_PATIENCE_SECONDS = 10.0;
 /** Base wait between guest spawns. Was 6s — that meant a half-empty
  * starter restaurant filled up before the player could think. Bumped
  * to 18s so the early-game pace is "a new face every now and then"
@@ -213,6 +247,8 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
     case "eating":         return `${prefix} ${drinkTable ? "🥤" : "🍴"}`;
     case "walkingToToilet": return `${prefix} 🚻`;
     case "atToilet":        return `${prefix} 🚻`;
+    case "walkingToSink":   return `${prefix} 🧼`;
+    case "atSink":          return `${prefix} 🧼`;
     case "returningFromToilet": return `${prefix} 🚻`;
     case "walkingToDoor":  return "";
     case "exitingDoor":    return "";
@@ -257,6 +293,9 @@ export class GuestSpawner {
   /** Toilet reservations — one guest per toilet uid. Cleared when the
    * guest returns to their seat or abandons the trip. */
   private reservedToilets = new Set<string>();
+  /** Sink reservations — same pattern. Cleared on wash complete /
+   * despawn so a fired guest doesn't deadlock the bathroom. */
+  private reservedSinks = new Set<string>();
   /** Same protection for overflow-chair reservations during await. */
   private inFlightSpawnChairs = new Set<string>();
   /** guestId → live Object3D for the plate sitting on their table.
@@ -488,7 +527,7 @@ export class GuestSpawner {
   snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
     return this.guests.map((g) => ({
       character: g.character,
-      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating" || g.state === "waitingForSeat" || g.state === "atToilet",
+      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating" || g.state === "waitingForSeat" || g.state === "atToilet" || g.state === "atSink",
     }));
   }
 
@@ -573,6 +612,18 @@ export class GuestSpawner {
     for (const t of toilets) {
       if (this.reservedToilets.has(t.uid)) continue;
       return { uid: t.uid, standPos: t.standPos.clone() };
+    }
+    return null;
+  }
+
+  /** First placed bathroom sink not currently reserved. Mirrors
+   * findFreeToilet. */
+  private findFreeSink(): { uid: string; standPos: THREE.Vector2 } | null {
+    if (!this.registry) return null;
+    const sinks = this.registry.getBathroomSinks();
+    for (const s of sinks) {
+      if (this.reservedSinks.has(s.uid)) continue;
+      return { uid: s.uid, standPos: s.standPos.clone() };
     }
     return null;
   }
@@ -719,9 +770,11 @@ export class GuestSpawner {
         totalSatisfaction: 0,
         archetype,
         path: [],
+        replanAccum: 0,
         willUseToilet: Math.random() < archetype.wcUseChance,
         usedToilet: false,
       };
+      console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
       this.planPath(guest);
       if (!available && waitingChair) {
         guest.waiting = {
@@ -759,8 +812,10 @@ export class GuestSpawner {
       this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
       this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
     }
-    // Release any toilet reservation they were holding.
+    // Release any toilet / sink reservation they were holding so
+    // a guest fired mid-trip doesn't deadlock the bathroom.
     if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
+    if (g.sinkUid) this.reservedSinks.delete(g.sinkUid);
     // Clear any plate left on their table when they walk out.
     this.removePlateForGuest(g.id);
     this.guests.splice(idx, 1);
@@ -856,10 +911,20 @@ export class GuestSpawner {
       }
       case "seated": {
         // First-thing-after-sitting: WC users excuse themselves to
-        // the bathroom before ordering. Only triggers ONCE per visit
-        // and only if a free toilet exists right now.
-        if (g.willUseToilet && !g.usedToilet) {
+        // the bathroom before ordering. Only triggers ONCE per visit.
+        // toiletAttemptComplete latches once we've either gone OR
+        // given up waiting — we DON'T clear willUseToilet on give-up
+        // because finalizeVisit needs to know they wanted to go.
+        if (g.willUseToilet && !g.usedToilet && !g.toiletAttemptComplete) {
           const toilet = this.findFreeToilet();
+          // Log once per attempt — the first time we enter this block.
+          // toiletWaitRemaining is only set on busy retries, so its
+          // undefined state is a clean "first attempt" signal.
+          if (g.toiletWaitRemaining === undefined) {
+            const toiletCountTotal = this.registry?.getToilets().length ?? 0;
+            const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
+            console.log(`[Guest ${g.id}] WC user — toilet search: ${toilet ? `uid=${toilet.uid}` : `null (${toiletCountTotal} toilets placed, ${this.reservedToilets.size} reserved)`} · sinks placed: ${sinkCountTotal}`);
+          }
           if (toilet) {
             this.reservedToilets.add(toilet.uid);
             g.toiletUid = toilet.uid;
@@ -869,13 +934,26 @@ export class GuestSpawner {
             g.character.action = "walk";
             g.state = "walkingToToilet";
             g.stateClock = 0;
+            g.toiletWaitRemaining = undefined;
             break;
           }
-          // No toilet free right now — skip the trip but remember
-          // they didn't get to use it. finalizeVisit reads this so
-          // the missing-bathroom penalty still lands.
-          g.usedToilet = false;
-          g.willUseToilet = false; // don't keep retrying every tick
+          // Every toilet busy (or none placed) — start / continue the
+          // patience clock and retry next tick. If nothing frees up
+          // within WC_PATIENCE_SECONDS they give up; finalizeVisit
+          // still applies the "wanted to go but couldn't" penalty.
+          if (g.toiletWaitRemaining === undefined) {
+            g.toiletWaitRemaining = WC_PATIENCE_SECONDS;
+          }
+          g.toiletWaitRemaining -= dt;
+          if (g.toiletWaitRemaining > 0) {
+            // Hold here — don't fall through to the order-building
+            // block below.
+            break;
+          }
+          // Time up. Latch attempt-complete (willUseToilet stays true
+          // so finalizeVisit can apply the "wanted but couldn't" hit)
+          // and let the rest of the seated block run.
+          g.toiletAttemptComplete = true;
         }
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
@@ -899,21 +977,77 @@ export class GuestSpawner {
           g.character.action = "idle";
           g.state = "atToilet";
           g.stateClock = 0;
+          console.log(`[Guest ${g.id}] arrived at toilet → atToilet (dwell ${TIME_AT_TOILET}s)`);
         }
         break;
       }
       case "atToilet": {
         if (g.stateClock >= TIME_AT_TOILET) {
-          // Done — release the reservation and head back to the seat.
+          // Done with the toilet — release the reservation, then try
+          // to chain a handwash at a free sink. If no sink is free,
+          // skip straight back to the seat (washedHands stays false
+          // so finalizeVisit can dock the rating for it).
           if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
           g.toiletUid = undefined;
           g.usedToilet = true;
+          g.toiletAttemptComplete = true;
+          const sink = this.findFreeSink();
+          // Diagnostic — log the sink search result so the player can
+          // tell from the console whether the sink visit was skipped
+          // because no sink was placed vs. some other issue.
+          const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
+          console.log(`[Guest ${g.id}] left toilet → findFreeSink: ${sink ? `uid=${sink.uid} at (${sink.standPos.x.toFixed(2)}, ${sink.standPos.y.toFixed(2)})` : `null (${sinkCountTotal} placed, ${this.reservedSinks.size} reserved)`}`);
+          if (sink) {
+            this.reservedSinks.add(sink.uid);
+            g.sinkUid = sink.uid;
+            g.target = sink.standPos.clone();
+            this.planPath(g);
+            g.character.action = "walk";
+            g.state = "walkingToSink";
+            g.stateClock = 0;
+          } else {
+            g.target = (g.returnSeatPos ?? g.seatPos).clone();
+            g.returnSeatPos = undefined;
+            this.planPath(g);
+            g.character.action = "walk";
+            g.state = "returningFromToilet";
+            g.stateClock = 0;
+          }
+        }
+        break;
+      }
+      case "walkingToSink": {
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          // Snap the guest exactly to the sink stand position and
+          // freeze them there for the wash dwell. Without the snap,
+          // a near-but-not-equal arrival left them ~0.1 units off the
+          // sink and PersonalSpace nudges could push them around even
+          // before the pin took effect, making the pause invisible.
+          g.character.groundPos.copy(g.target);
+          g.character.action = "idle";
+          g.state = "atSink";
+          g.stateClock = 0;
+          this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "🧼 washing…", "#a8d8f0");
+          console.log(`[Guest ${g.id}] arrived at sink → atSink (dwell ${TIME_AT_SINK}s)`);
+        }
+        break;
+      }
+      case "atSink": {
+        if (g.stateClock >= TIME_AT_SINK) {
+          // Wash done — release the sink, flag washedHands so the
+          // final rating folds in the cleanliness step, and head
+          // back to the seat via the existing return path.
+          if (g.sinkUid) this.reservedSinks.delete(g.sinkUid);
+          g.sinkUid = undefined;
+          g.washedHands = true;
           g.target = (g.returnSeatPos ?? g.seatPos).clone();
           g.returnSeatPos = undefined;
           this.planPath(g);
           g.character.action = "walk";
           g.state = "returningFromToilet";
           g.stateClock = 0;
+          console.log(`[Guest ${g.id}] washed hands → returning to seat`);
         }
         break;
       }
@@ -1002,6 +1136,16 @@ export class GuestSpawner {
     // still have ground to cover. Normally planPath() has run at the
     // state transition that set this target.
     if (g.path.length === 0 && this.distanceToTarget(g) >= ARRIVAL_THRESHOLD) {
+      this.planPath(g);
+    }
+    // Periodic replan — same idea as StaffRouter.moveActor. The state
+    // machine plans a path once per transition; if the player places a
+    // chair or wall in the middle of the planned route, the cached
+    // waypoints take the guest straight through it. Refreshing every
+    // ~0.8s while in motion picks up the new obstacle within a second.
+    g.replanAccum += dt;
+    if (g.replanAccum >= 0.8 && this.distanceToTarget(g) >= ARRIVAL_THRESHOLD) {
+      g.replanAccum = 0;
       this.planPath(g);
     }
     // Consume waypoints we're already within range of.
@@ -1182,13 +1326,13 @@ export class GuestSpawner {
       base = clamp(base + Math.min(1.0, vibe) + stats.ratingBonus, 1, 5);
     }
     // Bathroom adjustment. WC users care strongly: their final rating
-    // can swing by ±0.6 stars based on the bathroom score. Non-users
-    // still pick up a light bonus from a nice bathroom (the door is
-    // visible from the floor) capped at +0.2.
-    const bathroom = this.registry?.getBathroomScore() ?? { toiletCount: 0, quality: 0 };
-    // Normalize quality on roughly 0..20: a basic toilet+sink scores
+    // can swing meaningfully based on toilet quality + handwash. Non-
+    // users still pick up a light bonus from a nice bathroom (the door
+    // is visible from the floor) capped at ~+0.25.
+    const bathroom = this.registry?.getBathroomScore() ?? { toiletCount: 0, sinkCount: 0, quality: 0 };
+    // Normalize quality on roughly 0..18: a basic toilet+sink scores
     // ~4, a luxe bathroom (mirror + bathtub + shower-round + cabinet
-    // + designer toilet) tops ~20.
+    // + designer toilet) tops ~18+.
     const qNorm = Math.min(1, bathroom.quality / 18);
     let toiletDelta = 0;
     if (g.willUseToilet || g.usedToilet) {
@@ -1196,16 +1340,26 @@ export class GuestSpawner {
         // Wanted to go and there wasn't one — significant negative.
         toiletDelta = -0.8;
       } else if (!g.usedToilet) {
-        // Wanted to go, but every toilet was busy — moderate negative.
-        toiletDelta = -0.3;
+        // Wanted to go, but every toilet was busy long enough that
+        // they gave up — moderate negative.
+        toiletDelta = -0.35;
       } else {
-        // Actually used it. Quality drives a -0.2..+0.6 swing.
-        toiletDelta = -0.2 + qNorm * 0.8;
+        // Actually used it. Quality drives a -0.2..+0.6 swing,
+        // handwash modifies on top:
+        //   washed         → +0.15 (clean place vibe)
+        //   no sink at all → -0.25 (player didn't provide)
+        //   sink busy      → 0     (bad luck, not the venue's fault)
+        let delta = -0.2 + qNorm * 0.8;
+        if (g.washedHands) delta += 0.15;
+        else if (bathroom.sinkCount === 0) delta -= 0.25;
+        toiletDelta = delta;
       }
     } else if (bathroom.toiletCount > 0) {
       // Didn't visit, but a tidy bathroom is still part of the
-      // overall impression. Light bonus.
+      // overall impression. Light bonus; bumped slightly if the
+      // bathroom is fully equipped (toilet + sink).
       toiletDelta = qNorm * 0.2;
+      if (bathroom.sinkCount > 0) toiletDelta += 0.05;
     }
     base = clamp(base + toiletDelta, 1, 5);
     const jitter = (Math.random() - 0.5) * 0.8;

@@ -63,11 +63,15 @@ export class Pathfinding {
 
     if (startX === goalX && startZ === goalZ) return [finalTarget];
 
-    const blocked = this.computeBlockedSet();
+    const { cells: blocked, edges: blockedEdges } = this.computeBlocked();
     // Direct-line shortcut: if the two cells are colinear and the
     // intermediate cells are clear, skip A* entirely. Common case for
-    // short trips with no obstacles between.
-    if (this.directLineClear(startX, startZ, goalX, goalZ, blocked)) {
+    // short trips with no obstacles between. We disable it whenever
+    // any partition wall is in play — Bresenham steps can cross wall
+    // edges diagonally and there's no safe way to interrogate that
+    // without re-implementing the neighbour loop here, so we just
+    // fall through to A* in that case.
+    if (blockedEdges.size === 0 && this.directLineClear(startX, startZ, goalX, goalZ, blocked)) {
       return [finalTarget];
     }
 
@@ -106,6 +110,12 @@ export class Pathfinding {
         // Goal cell is always traversable so callers can route TO a
         // chair, stove, counter, etc.
         if (!isGoal && blocked.has(nKey)) continue;
+        // Internal partition wall sitting on the EDGE between the two
+        // cells? Reject the step — only int-doorway pieces allow
+        // crossing. (For the goal-edge case we still respect the wall
+        // — you can't end your path on the other side of a wall
+        // unless there's a doorway.)
+        if (blockedEdges.has(edgeKey(current.x, current.z, nx, nz))) continue;
         const tentativeG = (gScore.get(currKey) ?? Infinity) + 1;
         if (tentativeG < (gScore.get(nKey) ?? Infinity)) {
           gScore.set(nKey, tentativeG);
@@ -143,25 +153,65 @@ export class Pathfinding {
   }
 
   /** Walk the registry and collect every cell occupied by a blocking
-   * item. Multi-tile items expand to all their cells; L-shaped items
+   * item, plus every edge (grid line) blocked by an internal partition
+   * wall. Multi-tile items expand to all their cells; L-shaped items
    * (corner sofas) honour their explicit footprint mask so the open
-   * elbow stays walkable. */
-  private computeBlockedSet(): Set<string> {
-    const blocked = new Set<string>();
+   * elbow stays walkable. Internal walls / windows live on edges and
+   * never claim a tile — only the doorway piece allows crossing. */
+  private computeBlocked(): { cells: Set<string>; edges: Set<string> } {
+    const cells = new Set<string>();
+    const edges = new Set<string>();
     for (const it of this.getItems()) {
       const def = getFurnitureDef(it.defId);
       if (!def) continue;
-      if (!isBlockingCategory(def.category, def.placement)) continue;
-      // Need rotY for footprintCells; PlacedItem may not carry it (the
-      // pathfinding interface only mandates defId/x/z). Read it if
-      // present, else assume 0.
       const rotY = (it as { rotY?: number }).rotY ?? 0;
+      // Edge-placed partition walls + windows block the grid line
+      // they sit on. Doorways stay passable so the partition has a
+      // way through.
+      if (def.placement === "edge" && isBlockingEdgeWall(it.defId)) {
+        edges.add(edgeKeyFromWall(it.x, it.z, rotY));
+        continue;
+      }
+      if (!isBlockingCategory(def.category, def.placement)) continue;
       for (const cell of footprintCells({ x: it.x, z: it.z, rotY }, def)) {
-        blocked.add(`${cell.x},${cell.z}`);
+        cells.add(`${cell.x},${cell.z}`);
       }
     }
-    return blocked;
+    return { cells, edges };
   }
+}
+
+/** Key for the edge between two 4-neighbour cells. We tag horizontal
+ * vs vertical so the encoding is unique even if the two cells are
+ * swapped, and so it lines up 1:1 with edgeKeyFromWall() below.
+ * Horizontal step → vertical wall on the midpoint x; vertical step →
+ * horizontal wall on the midpoint z. */
+function edgeKey(ax: number, az: number, bx: number, bz: number): string {
+  if (ax !== bx) {
+    // East/west step. Vertical wall at midpoint x, same z.
+    const midX = (ax + bx) / 2;
+    return `v:${midX},${az}`;
+  }
+  // North/south step. Horizontal wall at midpoint z, same x.
+  const midZ = (az + bz) / 2;
+  return `h:${ax},${midZ}`;
+}
+
+/** Key for the edge a wall sits on. Walls placed by BuildMenu.snapToEdge
+ * always land at exactly rotY=0 (runs along X — half-integer z, blocks
+ * north-south movement) or rotY=π/2 (runs along Z — half-integer x,
+ * blocks east-west movement). Reading sin/cos rather than === keeps us
+ * tolerant if rotY ever gets an extra full turn from a move operation. */
+function edgeKeyFromWall(wx: number, wz: number, rotY: number): string {
+  const isVertical = Math.abs(Math.sin(rotY)) > 0.5;
+  return isVertical ? `v:${wx},${wz}` : `h:${wx},${wz}`;
+}
+
+/** True if this edge-placed item should block movement across the
+ * grid line it sits on. Doorways always allow passage; walls,
+ * half-walls and windows all block. */
+function isBlockingEdgeWall(defId: string): boolean {
+  return defId === "int-wall" || defId === "int-wall-half" || defId === "int-window";
 }
 
 const NEIGHBOURS: readonly (readonly [number, number])[] = [

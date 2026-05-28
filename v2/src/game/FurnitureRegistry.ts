@@ -503,31 +503,48 @@ export class FurnitureRegistry {
     return out;
   }
 
-  /** A "quality" snapshot of the placed bathroom. `toiletCount` is the
-   * raw availability (used by routing); `quality` is a heuristic
-   * blend of every bathroom item's style / comfort / attractionBonus
-   * / ratingBonus that GuestSpawner.finalizeVisit folds into the
-   * star rating. A plain 1-toilet + 1-sink bathroom scores ~4;
-   * a full setup (toilet-sq + sink-sq + mirror + shower + cabinet)
-   * scores ~18-22. */
-  getBathroomScore(): { toiletCount: number; quality: number } {
+  /** Every visible placed bathroom sink (id starting with
+   * "bathroom-sink"). GuestSpawner routes WC visitors to a free sink
+   * after the toilet step so the wash-hands quality also feeds back
+   * into the rating. Same +Z-stand-spot convention as toilets. */
+  getBathroomSinks(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] {
+    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] = [];
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "bathroom") continue;
+      if (!def.id.startsWith("bathroom-sink")) continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      const standPos = new THREE.Vector2(
+        it.x + Math.sin(it.rotY),
+        it.z + Math.cos(it.rotY),
+      );
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos });
+    }
+    return out;
+  }
+
+  /** A "quality" snapshot of the placed bathroom. Tracks toilet AND
+   * sink counts separately so GuestSpawner.finalizeVisit can blend
+   * the wash-hands step into the rating alongside the toilet step.
+   * `quality` is a heuristic across every bathroom-category item. A
+   * plain 1-toilet + 1-sink bathroom scores ~4 quality; a full setup
+   * (toilet-sq + sink-sq + mirror + shower + cabinet) scores ~18-22. */
+  getBathroomScore(): { toiletCount: number; sinkCount: number; quality: number } {
     let toiletCount = 0;
+    let sinkCount = 0;
     let quality = 0;
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (!def) continue;
-      // Toilets are the core fixture. Bathroom-category items (sinks,
-      // mirrors, bathtubs, showers, cabinets) all contribute to
-      // quality whether they're placed inside the partition or not —
-      // the player gets to decide the room layout themselves.
       if (def.category !== "bathroom") continue;
       if (!this.isVisibleInScene(it.model)) continue;
       if (def.id.startsWith("toilet")) toiletCount += 1;
+      if (def.id.startsWith("bathroom-sink")) sinkCount += 1;
       quality += (def.style ?? 0) + (def.comfort ?? 0) +
                  (def.attractionBonus ?? 0) * 2 +
                  (def.ratingBonus ?? 0) * 20;
     }
-    return { toiletCount, quality };
+    return { toiletCount, sinkCount, quality };
   }
 
   /** Every visible placed stove. StaffRouter uses this to assign chefs
