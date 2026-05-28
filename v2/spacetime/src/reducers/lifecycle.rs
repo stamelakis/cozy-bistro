@@ -1,0 +1,56 @@
+//! Init + connect/disconnect hooks. These are special lifecycle reducers
+//! called automatically by SpacetimeDB; they don't need a client RPC.
+
+use spacetimedb::{reducer, ReducerContext, Table};
+use crate::tables::{player, Player};
+
+/// Runs once when the module is first published. Anything that needs a
+/// seed (default values, system messages, etc) goes here. For now —
+/// nothing to seed.
+#[reducer(init)]
+pub fn init(_ctx: &ReducerContext) {
+    log::info!("Cozy Bistro module initialized");
+}
+
+/// Called automatically whenever a client connects (after the WebSocket
+/// handshake but before they send any reducer). We use it to create the
+/// Player row on first sight and bump last_seen_at otherwise.
+#[reducer(client_connected)]
+pub fn on_client_connected(ctx: &ReducerContext) {
+    let identity = ctx.sender;
+    let now = ctx.timestamp;
+    if let Some(p) = ctx.db.player().identity().find(identity) {
+        // Returning player — bump last_seen_at.
+        ctx.db.player().identity().update(Player {
+            last_seen_at: now,
+            ..p
+        });
+    } else {
+        // First connect — generate a default name from the identity hash.
+        let short = identity.to_hex().chars().take(6).collect::<String>();
+        ctx.db.player().insert(Player {
+            identity,
+            name: format!("Chef #{short}"),
+            created_at: now,
+            last_seen_at: now,
+        });
+        log::info!("New player joined: {identity}");
+    }
+}
+
+/// Player updates their own display name. Anyone else's identity is
+/// silently rejected.
+#[reducer]
+pub fn set_player_name(ctx: &ReducerContext, name: String) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > 32 {
+        return Err("Name must be 1-32 characters".into());
+    }
+    let me = ctx.db.player().identity().find(ctx.sender)
+        .ok_or_else(|| "Player row missing — reconnect first".to_string())?;
+    ctx.db.player().identity().update(Player {
+        name: trimmed.to_string(),
+        ..me
+    });
+    Ok(())
+}
