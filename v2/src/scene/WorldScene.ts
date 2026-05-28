@@ -515,10 +515,12 @@ export class WorldScene {
    * overlap. Returns the AnimatedCharacter, or null if the GLB failed
    * to load. */
   async spawnExtraStaff(role: "chef" | "waiter" | "errand", offsetSlot: number): Promise<AnimatedCharacter | null> {
+    // Matches the new starter homes in populateCharacters — further south
+    // so the walking distance to the kitchen line is large enough to read.
     const homeByRole: Record<"chef" | "waiter" | "errand", { x: number; z: number; facingY: number; action: CharacterAction }> = {
-      chef:   { x: -0.5, z: -2.6, facingY: 0,            action: "idle" },
-      waiter: { x:  1.5, z: -2.6, facingY: 0,            action: "idle" },
-      errand: { x:  3.5, z: -2.6, facingY: -Math.PI / 2, action: "idle" },
+      chef:   { x: -1.5, z: -1.0, facingY: 0,            action: "idle" },
+      waiter: { x:  1.5, z: -1.0, facingY: 0,            action: "idle" },
+      errand: { x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle" },
     };
     const base = homeByRole[role];
     // Stagger each new hire 0.6 units further along the kitchen line.
@@ -546,10 +548,16 @@ export class WorldScene {
    * line. Guests are spawned dynamically by GuestSpawner — they're not
    * placed here. */
   private async populateCharacters(): Promise<void> {
+    // Spread the kitchen crew further apart and out into the dining-side
+    // of the room. With everyone clustered at z=-2.6 (one row away from
+    // the stove at z=-3) the chef's working walks were ~0.6 units, easy
+    // to miss. New home positions put the chef ~2 units south of the
+    // stove and the waiter ~2.5 from the pickup point — every ticket now
+    // forces a clearly visible cross-kitchen trip.
     const staff: { id: string; x: number; z: number; facingY: number; action: CharacterAction }[] = [
-      { id: "chef",   x: -0.5, z: -2.6, facingY: 0,            action: "idle"  },
-      { id: "waiter", x:  1.5, z: -2.6, facingY: 0,            action: "idle"  },
-      { id: "errand", x:  3.5, z: -2.6, facingY: -Math.PI / 2, action: "carry" },
+      { id: "chef",   x: -1.5, z: -1.0, facingY: 0,            action: "idle"  },
+      { id: "waiter", x:  1.5, z: -1.0, facingY: 0,            action: "idle"  },
+      { id: "errand", x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle"  },
     ];
 
     let resolveStaffReady: () => void = () => {};

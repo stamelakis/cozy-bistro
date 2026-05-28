@@ -200,20 +200,24 @@ export class StaffRouter {
   }
 
   /** Every 5 sim-seconds, dump one line summarizing what the kitchen is
-   * actually doing right now. Catches the case where a chef is stuck in
-   * a state (e.g. "working" with no matching ticket) — they'd show as
-   * non-idle but never produce a ticket transition log. */
+   * actually doing right now. Includes each staffer's CURRENT world
+   * position so we can tell the difference between "stuck in idle" and
+   * "moving but the player's eye missed it". */
   private heartbeatElapsed = 0;
   private logHeartbeatIfDue(dt: number): void {
     this.heartbeatElapsed += dt;
     if (this.heartbeatElapsed < 5) return;
     this.heartbeatElapsed = 0;
-    const chefStates = this.chefs.map((c) => c.state).join("/");
-    const waiterStates = this.waiters.map((w) => w.state).join("/");
+    const fmt = (a: StaffActor): string => {
+      const p = a.character.groundPos;
+      return `${a.state}@(${p.x.toFixed(2)},${p.y.toFixed(2)})`;
+    };
+    const chefs = this.chefs.map(fmt).join(" | ");
+    const waiters = this.waiters.map(fmt).join(" | ");
     const ticketStates: Record<string, number> = {};
     for (const t of this.tickets) ticketStates[t.state] = (ticketStates[t.state] ?? 0) + 1;
     const ticketSummary = Object.entries(ticketStates).map(([s, n]) => `${n} ${s}`).join(", ") || "none";
-    console.log(`[Router/💓] chefs:[${chefStates}] waiters:[${waiterStates}] tickets:{${ticketSummary}}`);
+    console.log(`[Router/💓] chefs:[${chefs}] · waiters:[${waiters}] · tickets:{${ticketSummary}}`);
   }
 
   /** Re-queue tickets that are stuck in a transient state because the
