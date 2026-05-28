@@ -99,6 +99,15 @@ export interface FurnitureDef {
    * footprint defaults to a solid rectangle of size.width × size.depth.
    * The mask rotates with the placed item (axis-aligned only). */
   footprint?: readonly (readonly (0 | 1)[])[];
+  /** Force fitFurniture to scale X and Z independently so the model
+   * fills its full footprint even when the raw mesh's aspect ratio
+   * doesn't match. Used on the Long Sofa — the Kenney mesh is roughly
+   * 1:1 in XZ but we want it to span 2 tiles wide; without this flag
+   * the uniform-XZ "min" rule compresses it down to a single tile. The
+   * model gets visibly stretched horizontally, but a 1.7× horizontal
+   * stretch on cushion meshes is way better than a sofa that reads as
+   * a regular sofa. */
+  stretchFootprint?: boolean;
 
   // === Gameplay stats (Game.getFurnitureBonuses sums these across all placed) ===
   style?: number;
@@ -278,17 +287,26 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "sofa",           name: "Sofa",          category: "chair",
     modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 120, comfort: 5, style: 3, seatingCapacity: 2,
     surface: "drink" },
+  // Long sofa: the Kenney raw mesh is almost square (0.98 W × 0.82 D)
+  // so uniform-XZ auto-fit was compressing it down to a single tile.
+  // stretchFootprint lets fitFurniture scale X independently so the
+  // sofa actually spans 2 tiles wide, like a proper bench sofa.
   { id: "sofa-long",      name: "Long Sofa",     category: "chair",
-    modelPath: "assets/kenney/loungeSofaLong.glb", scale: S_SOFA_WIDE, size: { width: 3, depth: 1 }, cost: 170, comfort: 5, style: 3, seatingCapacity: 3,
-    surface: "drink" },
+    modelPath: "assets/kenney/loungeSofaLong.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 170, comfort: 5, style: 3, seatingCapacity: 2,
+    stretchFootprint: true, surface: "drink" },
   // Corner sofa is an L — 3 of 4 tiles in a 2×2 footprint are occupied,
   // the 4th (the inner elbow of the L) is intentionally open so the
   // player can drop a coffee table inside it. Same 2-customer capacity
   // as a regular sofa, but the extra style + comfort + attraction make
   // it the showpiece of a lounge corner.
+  // Mask orientation: the Kenney mesh has the L extending into the +X
+  // and -Z quadrant from its origin, so after fitFurniture's recenter
+  // the visual open elbow lands at (mi=1, mj=0) — i.e. the +X half of
+  // the back row. Mask is authored as [[ row z=0 ], [ row z=1 ]] and
+  // each row is [ x=0, x=1 ], so the open cell is mask[0][1] = 0.
   { id: "sofa-corner",    name: "Corner Sofa",   category: "chair",
     modelPath: "assets/kenney/loungeSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 200, comfort: 6, style: 4, seatingCapacity: 2,
-    footprint: [[1, 1], [1, 0]], surface: "drink" },
+    footprint: [[1, 0], [1, 1]], surface: "drink" },
   { id: "sofa-design",    name: "Designer Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 240, comfort: 5, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
     surface: "drink" },
@@ -505,7 +523,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/loungeSofaOttoman.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 70, comfort: 4, style: 3 },
   { id: "sofa-design-c",  name: "Designer Corner Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 280, comfort: 6, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
-    footprint: [[1, 1], [1, 0]], surface: "drink" },
+    footprint: [[1, 0], [1, 1]], surface: "drink" },
 
   // === More kitchen cabinets + corner pieces. ===
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "counter",

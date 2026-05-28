@@ -83,20 +83,33 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   // === XZ auto-fit ===
   const targetW = TILE * def.size.width * FOOTPRINT_MARGIN;
   const targetD = TILE * def.size.depth * FOOTPRINT_MARGIN;
-  const fitXZ = Math.min(targetW / w, targetD / d) * def.scale;
+  // Default: uniform XZ scale, sized so the mesh fits ENTIRELY inside
+  // its footprint (use MIN of the two axis ratios). When def.stretchFoot­
+  // print is on, scale X and Z independently so the mesh fills the
+  // whole footprint — used when the raw aspect doesn't match the
+  // catalog footprint (Long Sofa).
+  let fitX: number, fitZ: number;
+  if (def.stretchFootprint) {
+    fitX = (targetW / w) * def.scale;
+    fitZ = (targetD / d) * def.scale;
+  } else {
+    const fitXZ = Math.min(targetW / w, targetD / d) * def.scale;
+    fitX = fitXZ;
+    fitZ = fitXZ;
+  }
 
   // === Y target ===
   // Independent height target. Lets a chair be cell-width-fitted while
   // its height locks to ~0.95m regardless of the raw mesh's aspect.
   // Without this, narrow Kenney chairs ended up nearly two metres tall
   // because the XZ uniform scale also stretched Y.
-  let fitY = fitXZ;
+  let fitY = fitX;
   if (h > 0) {
     const targetH = def.targetHeight ?? DEFAULT_HEIGHTS[def.category];
     if (targetH) fitY = targetH / h;
   }
 
-  model.scale.set(fitXZ, fitY, fitXZ);
+  model.scale.set(fitX, fitY, fitZ);
   model.updateMatrixWorld(true);
 
   // === Recenter ===
@@ -104,17 +117,22 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   const cx = (box2.min.x + box2.max.x) / 2;
   const cz = (box2.min.z + box2.max.z) / 2;
   // box2 is in world units; convert to model-local by dividing by the
-  // axis scale that moved it there.
-  const localShiftX = -cx / fitXZ;
+  // axis scale that moved it there. With independent X/Z scales each
+  // axis needs its own divisor.
+  const localShiftX = -cx / fitX;
   const localShiftY = -box2.min.y / fitY;
-  const localShiftZ = -cz / fitXZ;
+  const localShiftZ = -cz / fitZ;
   for (const child of model.children) {
     child.position.x += localShiftX;
     child.position.y += localShiftY;
     child.position.z += localShiftZ;
   }
 
-  return fitXZ;
+  // Return the X-axis fit factor — callers (e.g. anchored props)
+  // historically used this as a uniform reference. They'll match
+  // along the width direction, which is the relevant one for
+  // bench-style attached props.
+  return fitX;
 }
 
 /** World-space height of a placed model — useful for putting plates on
