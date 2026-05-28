@@ -758,7 +758,11 @@ export class GuestSpawner {
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
         if (g.stateClock >= TIME_TO_ORDER && g.order.length === 0) {
-          g.order = this.buildOrder(g.archetype);
+          // Look up the table's surface so drink-only coffee tables
+          // get a drinks-only short order. Falls back to "food" if the
+          // seat is somehow detached from a known table.
+          const surface = this.tableSurfaceForGuest(g);
+          g.order = this.buildOrder(g.archetype, surface);
           if (g.order.length === 0) {
             this.markLostAndExit(g);
             break;
@@ -852,13 +856,39 @@ export class GuestSpawner {
   /** Pick a multi-course order (1-3 dishes) based on the guest's category
    * expectation. Tries to include an appetizer + main + dessert pattern when
    * possible; falls back to whatever's on menu. The archetype's orderSizeBias
-   * shifts appetizer/dessert chances up (foodies, dates) or down (quick lunch). */
-  private buildOrder(archetype: CustomerArchetype): RecipeDefinition[] {
+   * shifts appetizer/dessert chances up (foodies, dates) or down (quick lunch).
+   *
+   * `surface` controls the menu shape:
+   *   - "food" (default): the classic appetizer + main + dessert run.
+   *   - "drink": 1-2 drinks, no kitchen courses. Coffee tables seat
+   *     guests for a quick beverage with much faster turnover. */
+  private buildOrder(archetype: CustomerArchetype, surface: "food" | "drink" = "food"): RecipeDefinition[] {
     const menu = this.game.cooking.getMenuRecipeIds();
     const onMenu = menu.length > 0
       ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
       : recipes.filter((r) => r.unlockedByDefault);
     if (onMenu.length === 0) return [];
+
+    if (surface === "drink") {
+      // Drink-only short order: 1 guaranteed drink, with a small chance
+      // of a second one (foodies / dates get an extra). No kitchen
+      // course, no dessert — those go on food tables.
+      const drinks = onMenu.filter((r) => r.category === "drink");
+      if (drinks.length === 0) {
+        // No drinks on the menu yet — drink table can't serve anyone.
+        // Returning empty marks the guest as lost (markLostAndExit
+        // handles the rating ding), which is the right signal: the
+        // player needs at least one drink recipe enabled.
+        return [];
+      }
+      const order: RecipeDefinition[] = [drinks[between(0, drinks.length - 1)]];
+      const secondChance = 0.25 + archetype.orderSizeBias * 0.2;
+      if (Math.random() < secondChance) {
+        order.push(drinks[between(0, drinks.length - 1)]);
+      }
+      return order;
+    }
+
     const expectation = this.game.customers.rollCustomerExpectation();
     const order: RecipeDefinition[] = [];
     // Bias-shifted appetizer chance: 0.4 for -1, 0.6 for 0, 0.8 for +1.
@@ -879,6 +909,18 @@ export class GuestSpawner {
       if (desserts.length > 0) order.push(desserts[between(0, desserts.length - 1)]);
     }
     return order;
+  }
+
+  /** Look up the surface (food vs drink) of the table this guest is
+   * seated at. `g.seatId` is "tableUid#slotIndex"; the table uid is
+   * everything before the #. Defaults to "food" when we can't resolve
+   * (guest at an overflow chair, save-load races, etc.). */
+  private tableSurfaceForGuest(g: ActiveGuest): "food" | "drink" {
+    if (!this.registry || !g.seatId) return "food";
+    const hashIdx = g.seatId.indexOf("#");
+    if (hashIdx < 0) return "food";
+    const tableUid = g.seatId.substring(0, hashIdx);
+    return this.registry.getTableSurface(tableUid) ?? "food";
   }
 
   /** Kick off the (next) course: consume ingredients + queue a ticket. */

@@ -745,10 +745,15 @@ export class BuildMenu {
     // destination.
     const excludeUid = this.holdingUid ?? undefined;
 
-    // Chair-specific: try to snap to the nearest empty seat slot. Use the
-    // raw (unsnapped) pointer position so the chair "magnets" toward the
-    // ideal pose even while the cursor is over the table itself.
-    if (def.category === "chair") {
+    // Chair-specific: try to snap a 1×1 chair to the nearest empty seat
+    // slot. Use the raw (unsnapped) pointer position so the chair
+    // "magnets" toward the ideal pose even while the cursor is over the
+    // table itself. Multi-tile chairs (sofas, benches) deliberately
+    // skip this — their footprint anchor is a half-integer cross and
+    // snapping to a slot's integer position would make them visually
+    // overhang into the table. The player drops them on the grid and
+    // the footprint-aware slot detection picks up the seats they cover.
+    if (def.category === "chair" && def.size.width === 1 && def.size.depth === 1) {
       const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4, excludeUid);
       if (slot && slot.chairUid == null) {
         return {

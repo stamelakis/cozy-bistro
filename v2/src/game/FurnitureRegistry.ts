@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
-import { getFurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
+import { getFurnitureDef, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
 import { fitFurniture } from "../assets/fitFurniture";
 
 /**
@@ -226,11 +226,6 @@ export class FurnitureRegistry {
 
   // === Seat-slot integration ===
 
-  /** Tolerance for matching a chair to its table's seat slot. Position-
-   * only — see findChairAtSlot for why we intentionally don't gate on
-   * chair rotation. */
-  private static readonly SEAT_POSITION_TOL = 0.35;
-
   /** Return every placed table, resolved with its seat slots in world space
    * and whether each slot is filled by a correctly-oriented chair. Pass
    * `onlyVisible: true` to skip slots whose table is currently hidden by
@@ -301,30 +296,44 @@ export class FurnitureRegistry {
     return best;
   }
 
-  /** Internal: find the uid of a chair AT a slot. Position-only — we
-   * deliberately don't gate on chair rotation here. Many saved chairs
-   * were placed with the old auto-snap logic at the "wrong" rotation
-   * (the chair model's seat faces the customer correctly only when
-   * chair.rotY = π - slot.facingY, but a lot of pre-fix chairs are stuck
-   * at slot.facingY). Requiring an exact rotation match would silently
-   * mark all of them non-functional and customers stop spawning.
-   *
-   * The seated customer's facing comes from slot.facingY (not the chair),
-   * so they still look correctly oriented even when the chair behind
-   * them is rotated 180° off — and the player can run AUTO-ARRANGE to
-   * fix the visual whenever they want. */
+  /** Internal: find the uid of a chair AT a slot. We check whether the
+   * chair's FOOTPRINT covers the slot's tile — that way a 2-tile sofa
+   * placed across two adjacent slots fills BOTH of them with the same
+   * sofa uid (so 2 customers can sit on a single sofa). For 1×1 chairs
+   * this reduces to a position match like before. The footprint check
+   * honours the chair's rotation and any explicit footprint mask (e.g.
+   * the L-shape corner sofa). Position-only — we deliberately don't
+   * gate on chair rotation orientation, see the long comment in
+   * isChairAtAnySlot. */
   private findChairAtSlot(slotX: number, slotZ: number, _slotFacing: number, excludeUid?: string): string | null {
-    const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
+    const cellX = Math.round(slotX);
+    const cellZ = Math.round(slotZ);
     for (const it of this.items) {
       if (excludeUid && it.uid === excludeUid) continue;
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "chair") continue;
-      const dx = it.x - slotX;
-      const dz = it.z - slotZ;
-      if (Math.abs(dx) > TOL || Math.abs(dz) > TOL) continue;
-      return it.uid;
+      if (footprintCoversCell(it, def, cellX, cellZ)) return it.uid;
     }
     return null;
+  }
+
+  /** Which kind of orders a placed TABLE accepts. Returns null for
+   * non-tables or unknown ids. Used by GuestSpawner.buildOrder to
+   * restrict drink-only coffee tables to the drink menu. */
+  getTableSurface(tableUid: string): "food" | "drink" | null {
+    const it = this.items.find((x) => x.uid === tableUid);
+    if (!it) return null;
+    const def = getFurnitureDef(it.defId);
+    if (def?.category !== "table") return null;
+    return def.surface ?? "food";
+  }
+
+  /** All integer cells this placed item's footprint actually occupies.
+   * Multi-tile items expand to all their cells; L-shaped items honour
+   * their explicit footprint mask. Caller cares about the cells either
+   * for blocking (pathfinding) or for slot matching (chair detection). */
+  getFootprintCells(item: PlacedFurnitureItem, def: FurnitureDef): { x: number; z: number }[] {
+    return footprintCells(item, def);
   }
 
   /** Required chair.rotY for a chair to sit at a slot with the
@@ -356,6 +365,9 @@ export class FurnitureRegistry {
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "chair") continue;
+      // Multi-tile sofas/benches don't snap to a single slot — see the
+      // matching gate in BuildMenu. Leave them where the player put them.
+      if (def.size.width > 1 || def.size.depth > 1) continue;
       // Skip chairs already correctly seated.
       if (this.isChairAtAnySlot(it)) continue;
       // Find nearest empty slot.
@@ -374,15 +386,14 @@ export class FurnitureRegistry {
     return moved;
   }
 
-  /** Is this chair currently within tolerance of any of its tables' slots?
-   * Position-only — see findChairAtSlot for why rotation is intentionally
-   * ignored. */
+  /** Is this chair currently filling any of its tables' slots? Uses the
+   * footprint check so a 2-tile sofa parked across two slots reports
+   * "yes, I'm at a slot" even when its anchor sits between them. */
   private isChairAtAnySlot(chair: PlacedFurnitureItem): boolean {
-    const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
+    const def = getFurnitureDef(chair.defId);
+    if (!def) return false;
     for (const slot of this.getResolvedSeatSlots()) {
-      if (Math.abs(slot.x - chair.x) > TOL) continue;
-      if (Math.abs(slot.z - chair.z) > TOL) continue;
-      return true;
+      if (footprintCoversCell(chair, def, Math.round(slot.x), Math.round(slot.z))) return true;
     }
     return false;
   }
@@ -478,4 +489,81 @@ export class FurnitureRegistry {
       }
     }));
   }
+}
+
+// === Footprint helpers ===================================================
+// A placed item's "footprint" is the set of integer floor cells it
+// covers. By default it's a solid rectangle of def.size.{width, depth};
+// items with an explicit def.footprint mask (L-shaped corner sofas) opt
+// into a per-cell pattern. The mask is authored at rotY=0 with rows
+// indexing Z and columns indexing X; it rotates with the item for
+// axis-aligned rotations.
+
+/** Bucket the item's rotation into one of {0°, 90°, 180°, 270°} for
+ * footprint math. Players rotate by π/2 increments via R, so this is
+ * lossless in practice. */
+function axisAlignedSinCos(rotY: number): { sin: -1 | 0 | 1; cos: -1 | 0 | 1 } {
+  const sin = Math.round(Math.sin(rotY));
+  const cos = Math.round(Math.cos(rotY));
+  // Math.round handles ±0; clamp to the three expected magnitudes.
+  return {
+    sin: (sin === 0 ? 0 : sin > 0 ? 1 : -1) as -1 | 0 | 1,
+    cos: (cos === 0 ? 0 : cos > 0 ? 1 : -1) as -1 | 0 | 1,
+  };
+}
+
+/** True if the integer cell (cellX, cellZ) lies inside this item's
+ * footprint, after rotation. Handles both the default solid rectangle
+ * and the optional def.footprint mask. Exported so Pathfinding can
+ * mark blocked cells without re-implementing the L-shape math. */
+export function footprintCoversCell(item: { x: number; z: number; rotY: number }, def: FurnitureDef, cellX: number, cellZ: number): boolean {
+  const { sin, cos } = axisAlignedSinCos(item.rotY);
+  const swapped = sin !== 0;
+  const W = def.size.width;
+  const D = def.size.depth;
+  const effW = swapped ? D : W;
+  const effD = swapped ? W : D;
+  // Integer-cell extents covered by the rotated footprint rectangle.
+  const minX = Math.round(item.x - effW / 2 + 0.5);
+  const maxX = Math.round(item.x + effW / 2 - 0.5);
+  const minZ = Math.round(item.z - effD / 2 + 0.5);
+  const maxZ = Math.round(item.z + effD / 2 - 0.5);
+  if (cellX < minX || cellX > maxX) return false;
+  if (cellZ < minZ || cellZ > maxZ) return false;
+  if (!def.footprint) return true;
+  // (i, j) is the cell's position WITHIN the rotated effective grid;
+  // translate back into the original (rotY=0) mask coordinates.
+  const i = cellX - minX;
+  const j = cellZ - minZ;
+  let mi: number, mj: number;
+  if (sin === 0 && cos === 1) {        // 0°
+    mi = i;          mj = j;
+  } else if (sin === 1 && cos === 0) { // R_y(+π/2) — sin = +1
+    mi = W - 1 - j;  mj = i;
+  } else if (sin === 0 && cos === -1) {// 180°
+    mi = W - 1 - i;  mj = D - 1 - j;
+  } else {                              // R_y(-π/2) — sin = -1
+    mi = j;          mj = D - 1 - i;
+  }
+  return def.footprint[mj]?.[mi] !== 0;
+}
+
+/** Every integer cell this item's footprint covers, honouring rotation
+ * + mask. Used by Pathfinding to mark blocked cells for A*. */
+export function footprintCells(item: { x: number; z: number; rotY: number }, def: FurnitureDef): { x: number; z: number }[] {
+  const { sin } = axisAlignedSinCos(item.rotY);
+  const swapped = sin !== 0;
+  const effW = swapped ? def.size.depth : def.size.width;
+  const effD = swapped ? def.size.width : def.size.depth;
+  const minX = Math.round(item.x - effW / 2 + 0.5);
+  const maxX = Math.round(item.x + effW / 2 - 0.5);
+  const minZ = Math.round(item.z - effD / 2 + 0.5);
+  const maxZ = Math.round(item.z + effD / 2 - 0.5);
+  const out: { x: number; z: number }[] = [];
+  for (let cx = minX; cx <= maxX; cx += 1) {
+    for (let cz = minZ; cz <= maxZ; cz += 1) {
+      if (footprintCoversCell(item, def, cx, cz)) out.push({ x: cx, z: cz });
+    }
+  }
+  return out;
 }

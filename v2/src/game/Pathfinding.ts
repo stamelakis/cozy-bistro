@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import { footprintCells } from "./FurnitureRegistry";
 
 /**
  * Tile-based A* pathfinding so staff and customers walk around placed
@@ -142,33 +143,21 @@ export class Pathfinding {
   }
 
   /** Walk the registry and collect every cell occupied by a blocking
-   * item. Multi-tile items expand to all their cells. */
+   * item. Multi-tile items expand to all their cells; L-shaped items
+   * (corner sofas) honour their explicit footprint mask so the open
+   * elbow stays walkable. */
   private computeBlockedSet(): Set<string> {
     const blocked = new Set<string>();
     for (const it of this.getItems()) {
       const def = getFurnitureDef(it.defId);
       if (!def) continue;
       if (!isBlockingCategory(def.category, def.placement)) continue;
-      // Item footprint expansion. The anchor coord is the visual
-      // center; for an even width the anchor is a half-integer and
-      // the item covers width/2 cells in each direction; for odd
-      // width the anchor is integer and the item is centred on a
-      // single cell. We expand both axes generically.
-      const halfW = def.size.width / 2;
-      const halfD = def.size.depth / 2;
-      // Inclusive cell index range. Add a small inset (0.5 - epsilon)
-      // before rounding so cells the item only TOUCHES at the edge
-      // don't get marked blocked. The 0.4 here covers the 0.04 default
-      // margin in fitFurniture.
-      const inset = 0.4;
-      const xMin = Math.round(it.x - halfW + inset);
-      const xMax = Math.round(it.x + halfW - inset);
-      const zMin = Math.round(it.z - halfD + inset);
-      const zMax = Math.round(it.z + halfD - inset);
-      for (let cx = xMin; cx <= xMax; cx += 1) {
-        for (let cz = zMin; cz <= zMax; cz += 1) {
-          blocked.add(`${cx},${cz}`);
-        }
+      // Need rotY for footprintCells; PlacedItem may not carry it (the
+      // pathfinding interface only mandates defId/x/z). Read it if
+      // present, else assume 0.
+      const rotY = (it as { rotY?: number }).rotY ?? 0;
+      for (const cell of footprintCells({ x: it.x, z: it.z, rotY }, def)) {
+        blocked.add(`${cell.x},${cell.z}`);
       }
     }
     return blocked;
