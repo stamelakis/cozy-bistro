@@ -48,10 +48,20 @@ export class WorldScene {
   private doorOpenAmount = 0;
   private doorOpenTarget = 0;
   /** World position of the stove and the plate-pickup spot. Used by the
-   * StaffRouter to send chef/waiter to the right places. */
+   * StaffRouter to send chef/waiter to the right places. The chef stands
+   * here (z=-3, one tile in front of the stove furniture) to "cook". */
   readonly stovePos = new THREE.Vector2(0, -3.0);
   readonly pickupPos = new THREE.Vector2(0.5, -2.8);
-  /** Where the errand helper walks to when fetching ingredients (front door). */
+  /** The actual stove furniture's world position (z=-4, back wall). Used
+   * to position the cooking flame ON the stove, not in front of where
+   * the chef stands. */
+  readonly stoveFurniturePos = new THREE.Vector2(0, -4);
+  /** Where the errand helper reports to receive deliveries. A small
+   * supply counter at the back-left of the room (see addBuilding). */
+  readonly supplyCounterPos = new THREE.Vector2(-3, -3.2);
+  /** Legacy: front door world spot. Engine still uses it for the
+   * "anyone near door" check, but the errand helper no longer walks
+   * here — they go to supplyCounterPos instead. */
   readonly doorPos = new THREE.Vector2(0, 5);
   /** Resolves once the staff characters are loaded — so Engine can build
    * the StaffRouter at the right moment. Created synchronously in the
@@ -141,14 +151,25 @@ export class WorldScene {
     if (this.stoveFlameGroup) this.stoveFlameGroup.visible = visible;
   }
 
-  /** Build the stove flame (orange emissive sphere + point light) once.
-   * Default hidden — Engine toggles visibility based on chef state. */
+  /** Build the stove flame (small orange emissive bead + point light) once.
+   * Sits on top of the stove furniture's burner area, not where the chef
+   * stands — we used to anchor it to stovePos (the chef's standing spot)
+   * which made the flame visibly float between the chef and the stove.
+   * Default hidden — Engine toggles visibility based on chef state.
+   *
+   * TODO: differentiate per stove type (gas vs electric → blue vs orange
+   * glow, plus different sound). For now the starter restaurant only has
+   * the gas stove so a single flame is fine. */
   private addStoveFlame(): void {
     const group = new THREE.Group();
-    group.position.set(this.stovePos.x, 0.55, this.stovePos.y);
+    // y=0.85 sits roughly on top of the scaled stove (1.6 scale, model
+    // ~0.55 tall raw → ~0.88 tall scaled). z=-3.85 pulls slightly forward
+    // so the flame reads as the front burner, not buried in the back of
+    // the cabinet.
+    group.position.set(this.stoveFurniturePos.x, 0.85, this.stoveFurniturePos.y + 0.15);
     group.visible = false;
     const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 12, 12),
+      new THREE.SphereGeometry(0.08, 12, 12),
       new THREE.MeshStandardMaterial({
         color: 0xff7a3c,
         emissive: 0xff5500,
@@ -158,7 +179,7 @@ export class WorldScene {
       }),
     );
     group.add(mesh);
-    const light = new THREE.PointLight(0xff8844, 1.6, 4, 2);
+    const light = new THREE.PointLight(0xff8844, 1.2, 2.5, 2);
     light.position.set(0, 0.05, 0);
     group.add(light);
     this.threeScene.add(group);
@@ -379,6 +400,49 @@ export class WorldScene {
     // that shows the current ★ rating, just like a real bistro
     // entrance. Hooked up by updateRatingSign() from Engine.
     this.buildRatingSign();
+
+    // Supply / receiving counter at the back-left wall — the errand
+    // helper reports here with each delivery instead of walking out
+    // the front door (which got in the customers' way and didn't read
+    // as the back-of-house workflow it actually is). Procedural so it
+    // shows for both new and existing saves regardless of registry state.
+    this.buildSupplyCounter();
+  }
+
+  /** Wood-and-metal "back of house" counter where the errand helper
+   * drops off groceries. Static — not registered, not sellable. */
+  private buildSupplyCounter(): void {
+    const counter = new THREE.Group();
+    counter.position.set(this.stoveFurniturePos.x - 3, 0, this.stoveFurniturePos.y);
+    // Cabinet body — 1 unit wide, ~0.85 tall, 0.7 deep, hugging the back wall.
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(1.0, 0.85, 0.7),
+      new THREE.MeshStandardMaterial({ color: 0x9a7a55, roughness: 0.85 }),
+    );
+    body.position.set(0, 0.425, 0.15); // back face against wall (wall at z=-5)
+    body.castShadow = true;
+    body.receiveShadow = true;
+    counter.add(body);
+    // Lighter top — looks like a worn worktop where bags get dropped.
+    const top = new THREE.Mesh(
+      new THREE.BoxGeometry(1.05, 0.06, 0.75),
+      new THREE.MeshStandardMaterial({ color: 0xcfb48a, roughness: 0.6 }),
+    );
+    top.position.set(0, 0.88, 0.15);
+    top.castShadow = true;
+    counter.add(top);
+    // A couple of small crates on top so the player can tell at a
+    // glance "this is the supply counter".
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x8c6a40, roughness: 0.9 });
+    const crate1 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 0.28), crateMat);
+    crate1.position.set(-0.25, 1.02, 0.10);
+    crate1.castShadow = true;
+    counter.add(crate1);
+    const crate2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.22), crateMat);
+    crate2.position.set(0.20, 1.00, 0.20);
+    crate2.castShadow = true;
+    counter.add(crate2);
+    this.threeScene.add(counter);
   }
 
   // === Rating sign on the door lintel ===

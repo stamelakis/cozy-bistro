@@ -308,7 +308,12 @@ export class Engine {
       // Errand helper — carries the shopping list out the door, then back.
       // The frozen list is delivered to the pantry the moment they're home.
       if (this.scene.errandChar) {
-        this.errand = new ErrandRouter(this.scene.errandChar, this.scene.doorPos);
+        // Errand helper reports to the back-of-house supply counter to
+        // receive deliveries — not the front door. The "trip" still
+        // covers the same ingredient-fetch time, but visually they're
+        // working a delivery hand-off rather than walking through the
+        // dining room.
+        this.errand = new ErrandRouter(this.scene.errandChar, this.scene.supplyCounterPos);
         this.errand.onDelivery = (list) => this.game.completeErrandDelivery(list);
         this.game.onAutoShopDispatch = (list) => this.errand?.triggerRun(list);
       }
@@ -567,8 +572,13 @@ export class Engine {
       PersonalSpace.apply(actors, dt);
     }
     // Stove flame mirrors chef working state. Drive it before scene.update
-    // so the flame's flicker animation runs this frame.
-    this.scene.setStoveFlame(this.router?.isAnyChefCooking() ?? false);
+    // so the flame's flicker animation runs this frame. The cooking sizzle
+    // tracks the same flag (per-stove-type profile to come once we wire
+    // chefs to specific stoves).
+    const cooking = this.router?.isAnyChefCooking() ?? false;
+    this.scene.setStoveFlame(cooking);
+    if (cooking) this.sfx.startCookingLoop("stove");
+    else this.sfx.stopCookingLoop();
     // Open the door when a guest, errand helper, or pedestrian is close.
     this.scene.setDoorOpen(this.anyoneNearDoor());
     // Day/night lighting follows the in-game day timer.

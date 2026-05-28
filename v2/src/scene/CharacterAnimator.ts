@@ -97,13 +97,13 @@ export class CharacterAnimator {
         break;
       }
       case "carry": {
-        // Cooking / carrying pose. Add a clear side-to-side sway + small
-        // bob so a stationary chef at the stove still looks busy ("stirring")
-        // rather than frozen in place.
-        const bob = Math.abs(Math.sin(t * 4.5)) * 0.06;
-        c.root.position.y += bob;
-        c.root.rotation.z = Math.sin(t * 3.2) * 0.10; // sway L-R
-        c.root.rotation.x = 0.10 + Math.sin(t * 3.2) * 0.04; // pitch + small bob
+        // Cooking / carrying pose. Subtle forward lean with slight
+        // breathing-rate variation — reads as "leaning over the stove"
+        // or "holding a tray with focus". No bob: feet stay planted on
+        // the ground. Used to bob + sway heavily and looked like the
+        // chef was riding a pogo stick.
+        c.root.rotation.x = 0.09 + Math.sin(t * 1.4) * 0.02;
+        c.root.rotation.z = Math.sin(t * 1.1) * 0.015;
         break;
       }
       case "sit": {

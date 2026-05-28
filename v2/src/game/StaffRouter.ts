@@ -72,8 +72,12 @@ function makePlate(): THREE.Mesh {
     sharedPlateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
   }
   const plate = new THREE.Mesh(sharedPlateGeo, sharedPlateMat!);
-  // Sit roughly at chest height, slightly forward of body center.
-  plate.position.set(0, 1.0, 0.15);
+  // Carry the plate roughly at belly height, slightly forward of the
+  // body — like someone holding a tray with two hands. We used to put
+  // it at y=1.0 but the parent character has scale 1.7, so the plate
+  // ended up floating well above the waiter's head. y=0.55 puts it
+  // around scaled-belly height (0.55 * 1.7 ≈ 0.93 in world units).
+  plate.position.set(0, 0.55, 0.18);
   plate.castShadow = true;
   plate.visible = false;
   return plate;

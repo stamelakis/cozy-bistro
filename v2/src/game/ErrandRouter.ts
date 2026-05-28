@@ -5,8 +5,8 @@ import type { AnimatedCharacter } from "../scene/CharacterAnimator";
  * Drives the errand-helper characters so the auto-shop has a visible
  * "someone is doing the work" beat. Whenever the kitchen restocks an
  * ingredient, the next idle helper walks from their home position to
- * the front door, pauses briefly (as if collecting the delivery), then
- * walks back.
+ * the back-of-house supply counter, pauses briefly (as if signing for
+ * and unboxing the delivery), then walks back.
  *
  * Trips are queued — many auto-shop events fired in quick succession
  * stack into a single visible trip rather than spamming overlapping
@@ -22,7 +22,7 @@ type ShoppingList = Map<string, number>;
 interface ErrandActor {
   character: AnimatedCharacter;
   home: THREE.Vector2;
-  state: "idle" | "walkingToDoor" | "atDoor" | "returningHome";
+  state: "idle" | "walkingToCounter" | "atCounter" | "returningHome";
   target: THREE.Vector2;
   clock: number;
   /** What this helper is currently fetching — set when they leave home,
@@ -32,14 +32,17 @@ interface ErrandActor {
 
 const WALK_SPEED = 2.4; // a hair faster than other staff
 const ARRIVAL_THRESHOLD = 0.18;
-/** Pause at door (seconds) to suggest picking up the delivery. */
-const DOOR_DWELL_SECONDS = 0.8;
+/** Pause at the counter (seconds) to suggest signing for the delivery. */
+const COUNTER_DWELL_SECONDS = 0.8;
 /** Cap on queued trips so a long shortage doesn't queue dozens. */
 const MAX_PENDING_TRIPS = 6;
 
 export class ErrandRouter {
   private readonly helpers: ErrandActor[] = [];
-  private readonly doorPos: THREE.Vector2;
+  /** Where the helper walks to pick up each delivery — see WorldScene
+   * .supplyCounterPos. Renamed from "doorPos" when we moved the
+   * receiving spot to the back-of-house. */
+  private readonly counterPos: THREE.Vector2;
   /** Queue of shopping lists waiting for a helper. Each idle helper
    * peels one off per tick. Capped at MAX_PENDING_TRIPS — the Game's
    * auto-shop dispatcher knows to back off rather than queueing
@@ -50,8 +53,8 @@ export class ErrandRouter {
    * actually land on the pantry shelves. */
   onDelivery?: (list: ShoppingList) => void;
 
-  constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2) {
-    this.doorPos = doorPos.clone();
+  constructor(helperChar: AnimatedCharacter, counterPos: THREE.Vector2) {
+    this.counterPos = counterPos.clone();
     this.addHelper(helperChar);
   }
 
@@ -117,24 +120,24 @@ export class ErrandRouter {
       case "idle": {
         if (this.pendingTrips.length > 0) {
           h.payload = this.pendingTrips.shift() ?? null;
-          h.target = this.doorPos.clone();
-          h.state = "walkingToDoor";
+          h.target = this.counterPos.clone();
+          h.state = "walkingToCounter";
           h.clock = 0;
           h.character.action = "walk";
         }
         break;
       }
-      case "walkingToDoor": {
+      case "walkingToCounter": {
         this.moveActor(h, dt);
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
-          h.state = "atDoor";
+          h.state = "atCounter";
           h.clock = 0;
           h.character.action = "idle";
         }
         break;
       }
-      case "atDoor": {
-        if (h.clock >= DOOR_DWELL_SECONDS) {
+      case "atCounter": {
+        if (h.clock >= COUNTER_DWELL_SECONDS) {
           h.target = h.home.clone();
           h.state = "returningHome";
           h.clock = 0;
@@ -181,9 +184,9 @@ export class ErrandRouter {
 
 function errandLabel(state: ErrandActor["state"]): string {
   switch (state) {
-    case "walkingToDoor": return "📦 fetching";
-    case "atDoor":        return "📦 at door";
-    case "returningHome": return "📦 returning";
-    default:              return "";
+    case "walkingToCounter": return "📦 fetching";
+    case "atCounter":        return "📦 at counter";
+    case "returningHome":    return "📦 returning";
+    default:                 return "";
   }
 }
