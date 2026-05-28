@@ -524,6 +524,10 @@ export class Game {
     return Math.round(EXPANSION_BASE_COST * EXPANSION_GROWTH ** (this.luxuryTier - 1));
   }
 
+  /** Fired when the tier changes — Engine wires WorldScene.setLuxuryTier
+   * to this so locked sections become visible (or stay hidden). */
+  onLuxuryTierChanged?: (tier: LuxuryTier) => void;
+
   /** Try to bump luxury tier by 1. Spends money, syncs recipe unlocks.
    * Returns true on success. */
   buyExpansion(): boolean {
@@ -532,6 +536,7 @@ export class Game {
     if (!this.economy.spendMoney(cost, "unlock")) return false;
     this.luxuryTier = (this.luxuryTier + 1) as LuxuryTier;
     this.cooking.syncLuxuryUnlocks(this.luxuryTier);
+    this.onLuxuryTierChanged?.(this.luxuryTier);
     return true;
   }
 }

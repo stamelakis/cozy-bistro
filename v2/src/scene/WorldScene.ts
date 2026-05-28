@@ -162,28 +162,26 @@ export class WorldScene {
   applyDayNight(progress: number): { skyColor: number } {
     // Sun follows an arc: low/warm at dawn (0) and dusk (1), high/bright at noon (0.5).
     const noonish = 1 - Math.abs(progress - 0.5) * 2; // 0 at edges, 1 at noon
-    // Sun: peaks at noon, drops at edges, but never fully zero so
-    // we don't go pitch-black at "night" (the bistro stays operating).
+    // Sun: bright all day (0.9 → 1.8), softer at dawn/dusk but never dim,
+    // and a calmer moonlight at night (0.35) so the bistro looks lit.
     const sunIntensity = progress < 0.92
-      ? 0.25 + noonish * 1.0
-      : Math.max(0.25, 0.25 - (progress - 0.92) * 0.5);
+      ? 0.9 + noonish * 0.9
+      : Math.max(0.35, 0.35);
     this.sunLight.intensity = sunIntensity;
-    // Sun color: warm orange at low elevation, white at high, cool blue at deep night.
     const sunColor = progress < 0.92
       ? mixColors(0xffa860, 0xfff4d8, noonish)
-      : mixColors(0xffa860, 0x9aaacc, (progress - 0.92) / 0.08);
+      : mixColors(0xffa860, 0xaab8d6, (progress - 0.92) / 0.08);
     this.sunLight.color.setHex(sunColor);
-    // Ambient: cool at night (but still bright enough to see), warm during day.
+    // Ambient: warm bright during day, cool blue at night.
     if (progress < 0.92) {
       this.ambientLight.color.setHex(mixColors(0xffd6a8, 0xfff1d6, noonish));
-      this.ambientLight.intensity = 0.4 + noonish * 0.4;
+      this.ambientLight.intensity = 0.65 + noonish * 0.35;
     } else {
-      // Night: bright moonlight rather than dim void.
-      this.ambientLight.color.setHex(0x7a88a8);
-      this.ambientLight.intensity = 0.55;
+      this.ambientLight.color.setHex(0x8898b8);
+      this.ambientLight.intensity = 0.6;
     }
-    // Fill (sky bounce) — cooler at noon, warmer at edges, stays on at night.
-    this.fillLight.intensity = Math.max(0.18, 0.18 + noonish * 0.15);
+    // Fill (sky bounce) — adds color and softens shadows.
+    this.fillLight.intensity = Math.max(0.3, 0.3 + noonish * 0.15);
     // Sky color (engine sets renderer clear color from this).
     let skyColor: number;
     if (progress < 0.1) skyColor = mixColors(0xf7c08a, 0xd8c4a3, progress / 0.1); // dawn → day
@@ -341,12 +339,21 @@ export class WorldScene {
     if (this.floorMat) this.floorMat.color.setHex(theme.floorColor);
   }
 
+  /** Map demo placements → their tier section so we can show / hide as
+   * the player expands. Tier 0 = always visible (kitchen, door, decor).
+   * Tier 1 = the starter dining (tables 1 + 2). Tier 2..4 = the
+   * progressively-unlocked dining tables. */
+  private readonly tierGroups = new Map<number, THREE.Object3D[]>();
+  private readonly tierMarkers = new Map<number, THREE.Object3D[]>();
+  private currentTierVisible = 5;
+
   private async populateDemoRestaurant(): Promise<void> {
     let resolveDemoReady: () => void = () => {};
     this.demoReady = new Promise((r) => { resolveDemoReady = r; });
     // Place a few Kenney pieces to verify loading + look. Positions are in
     // world units (1 unit = 1 grid cell). Coords are (x, z) on the ground.
-    const placements: { id: string; x: number; z: number; rotY?: number }[] = [
+    // `tier` field controls when each piece becomes visible (0 = always).
+    const placements: { id: string; x: number; z: number; rotY?: number; tier?: number }[] = [
       // Kitchen line along the back wall
       { id: "fridge",     x: -3,   z: -4 },
       { id: "counter",    x: -2,   z: -4 },
@@ -355,39 +362,39 @@ export class WorldScene {
       { id: "counter",    x:  1,   z: -4 },
       { id: "microwave",  x:  2,   z: -4 },
 
-      // Tables sit on a 1×1 cell; chairs go 0.9 from table center so the
-      // seat-front edge meets the table-edge after fitFurniture.
-      { id: "small-table",   x: -2,    z: 1 },
-      { id: "wooden-chair",  x: -2.9,  z: 1,    rotY: Math.PI / 2 },
-      { id: "wooden-chair",  x: -1.1,  z: 1,    rotY: -Math.PI / 2 },
-      { id: "wooden-chair",  x: -2,    z: 0.1,  rotY: 0 },
-      { id: "wooden-chair",  x: -2,    z: 1.9,  rotY: Math.PI },
+      // Starter dining (tables 1 + 2) — always available.
+      { id: "small-table",   x: -2,    z: 1,    tier: 1 },
+      { id: "wooden-chair",  x: -2.9,  z: 1,    rotY: Math.PI / 2, tier: 1 },
+      { id: "wooden-chair",  x: -1.1,  z: 1,    rotY: -Math.PI / 2, tier: 1 },
+      { id: "wooden-chair",  x: -2,    z: 0.1,  rotY: 0, tier: 1 },
+      { id: "wooden-chair",  x: -2,    z: 1.9,  rotY: Math.PI, tier: 1 },
 
-      { id: "small-table",   x: 2,     z: 1 },
-      { id: "cushion-chair", x: 1.1,   z: 1,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 2.9,   z: 1,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 2,     z: 0.1,  rotY: 0 },
-      { id: "cushion-chair", x: 2,     z: 1.9,  rotY: Math.PI },
+      { id: "small-table",   x: 2,     z: 1,    tier: 1 },
+      { id: "cushion-chair", x: 1.1,   z: 1,    rotY: -Math.PI / 2, tier: 1 },
+      { id: "cushion-chair", x: 2.9,   z: 1,    rotY: Math.PI / 2, tier: 1 },
+      { id: "cushion-chair", x: 2,     z: 0.1,  rotY: 0, tier: 1 },
+      { id: "cushion-chair", x: 2,     z: 1.9,  rotY: Math.PI, tier: 1 },
 
-      // Third table near the front so the restaurant doesn't feel half-empty.
-      { id: "small-table",   x: 0,     z: 3 },
-      { id: "modern-chair",  x: -0.9,  z: 3,    rotY: Math.PI / 2 },
-      { id: "modern-chair",  x:  0.9,  z: 3,    rotY: -Math.PI / 2 },
-      { id: "modern-chair",  x:  0,    z: 2.1,  rotY: 0 },
-      { id: "modern-chair",  x:  0,    z: 3.9,  rotY: Math.PI },
+      // Table 3 — unlocked at tier 2.
+      { id: "small-table",   x: 0,     z: 3,    tier: 2 },
+      { id: "modern-chair",  x: -0.9,  z: 3,    rotY: Math.PI / 2, tier: 2 },
+      { id: "modern-chair",  x:  0.9,  z: 3,    rotY: -Math.PI / 2, tier: 2 },
+      { id: "modern-chair",  x:  0,    z: 2.1,  rotY: 0, tier: 2 },
+      { id: "modern-chair",  x:  0,    z: 3.9,  rotY: Math.PI, tier: 2 },
 
-      // Tier 3+ tables — sides.
-      { id: "small-table",   x: -4,    z: 0 },
-      { id: "cushion-chair", x: -4.9,  z: 0,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: -3.1,  z: 0,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: -4,    z: -0.9, rotY: 0 },
-      { id: "cushion-chair", x: -4,    z: 0.9,  rotY: Math.PI },
+      // Table 4 — unlocked at tier 3.
+      { id: "small-table",   x: -4,    z: 0,    tier: 3 },
+      { id: "cushion-chair", x: -4.9,  z: 0,    rotY: Math.PI / 2, tier: 3 },
+      { id: "cushion-chair", x: -3.1,  z: 0,    rotY: -Math.PI / 2, tier: 3 },
+      { id: "cushion-chair", x: -4,    z: -0.9, rotY: 0, tier: 3 },
+      { id: "cushion-chair", x: -4,    z: 0.9,  rotY: Math.PI, tier: 3 },
 
-      { id: "small-table",   x: 4,     z: 0 },
-      { id: "cushion-chair", x: 4.9,   z: 0,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 3.1,   z: 0,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 4,     z: -0.9, rotY: 0 },
-      { id: "cushion-chair", x: 4,     z: 0.9,  rotY: Math.PI },
+      // Table 5 — unlocked at tier 4.
+      { id: "small-table",   x: 4,     z: 0,    tier: 4 },
+      { id: "cushion-chair", x: 4.9,   z: 0,    rotY: -Math.PI / 2, tier: 4 },
+      { id: "cushion-chair", x: 3.1,   z: 0,    rotY: Math.PI / 2, tier: 4 },
+      { id: "cushion-chair", x: 4,     z: -0.9, rotY: 0, tier: 4 },
+      { id: "cushion-chair", x: 4,     z: 0.9,  rotY: Math.PI, tier: 4 },
 
       // Decor
       { id: "plant-medium",  x: -4.5, z: -4 },
@@ -420,6 +427,10 @@ export class WorldScene {
         if (p.rotY != null) model.rotation.y = p.rotY;
         this.threeScene.add(model);
         this.demoPlacements.push({ defId: p.id, x: p.x, z: p.z, rotY: p.rotY ?? 0, model });
+        // Group by tier so we can hide locked sections.
+        const tier = p.tier ?? 0;
+        if (!this.tierGroups.has(tier)) this.tierGroups.set(tier, []);
+        this.tierGroups.get(tier)!.push(model);
         // Capture the front-door reference for open/close animation.
         if (p.id === "door" && p.x === 0 && p.z === 5) {
           this.doorObj = model;
@@ -430,8 +441,68 @@ export class WorldScene {
       }
     }));
 
+    this.buildTierMarkers();
     resolveDemoReady();
     await this.populateCharacters();
+  }
+
+  /** Build a translucent "🔒 LOCKED — buy expansion" disc on the floor
+   * for each tier section. Hidden when the section is unlocked. */
+  private buildTierMarkers(): void {
+    const sections: { tier: number; x: number; z: number; color: number }[] = [
+      { tier: 2, x: 0,  z: 3, color: 0xe0a050 },
+      { tier: 3, x: -4, z: 0, color: 0xe07050 },
+      { tier: 4, x: 4,  z: 0, color: 0xa050e0 },
+    ];
+    for (const s of sections) {
+      const group: THREE.Object3D[] = [];
+      // Floor disc.
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(0.9, 24),
+        new THREE.MeshStandardMaterial({
+          color: s.color, transparent: true, opacity: 0.35,
+          emissive: s.color, emissiveIntensity: 0.25,
+          depthWrite: false, side: THREE.DoubleSide,
+        }),
+      );
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.set(s.x, 0.01, s.z);
+      this.threeScene.add(disc);
+      group.push(disc);
+      // Vertical "🔒" beacon — emissive box that pulses (we just leave it static).
+      const beacon = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 1.6, 8),
+        new THREE.MeshStandardMaterial({
+          color: s.color, emissive: s.color, emissiveIntensity: 0.6,
+          transparent: true, opacity: 0.55,
+        }),
+      );
+      beacon.position.set(s.x, 0.8, s.z);
+      this.threeScene.add(beacon);
+      group.push(beacon);
+      this.tierMarkers.set(s.tier, group);
+    }
+  }
+
+  /** Show/hide tier-locked dining sections + their lock markers based on
+   * the player's current expansion. Called by Engine on init and after
+   * Game.buyExpansion. */
+  setLuxuryTier(tier: number): void {
+    this.currentTierVisible = tier;
+    for (const [tierKey, items] of this.tierGroups) {
+      if (tierKey === 0) continue;
+      const visible = tierKey <= tier;
+      for (const obj of items) obj.visible = visible;
+    }
+    for (const [tierKey, markers] of this.tierMarkers) {
+      const visible = tierKey > tier;
+      for (const obj of markers) obj.visible = visible;
+    }
+  }
+
+  /** Current applied tier (used by the door animator). */
+  getLuxuryTier(): number {
+    return this.currentTierVisible;
   }
 
   /** Spawn an extra staff character at runtime (when player hires another).

@@ -179,55 +179,63 @@ export class Hud {
 
   /** Single icon row for opening all the modals. Tooltips on hover. */
   private buildModalIconRow(): void {
+    // Two rows of 2 large labeled buttons + their secondary row.
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)",
       gap: "5px", marginTop: "6px",
     } as Partial<CSSStyleDeclaration>);
-    // Important / often-used modals get a bigger button each. The tier
-    // and boost actions are NOT here — they live in the always-visible
-    // ExpandWidget directly below this HUD.
     const buttons: IconBtn[] = [
-      { icon: "⚡ Upgrades",  title: "Recipe upgrades",        click: this.actions.openUpgrades,    tint: "rgba(140, 200, 140, 0.22)" },
-      { icon: "🧺 Pantry",   title: "Pantry + auto-shop",     click: this.actions.openPantry,      tint: "rgba(220, 200, 120, 0.22)" },
-      { icon: "🎨 Decor",    title: "Interior theme",          click: this.actions.openDecor,       tint: "rgba(220, 150, 200, 0.22)" },
-      { icon: "📊 Trends",   title: "Daily trends",            click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
-      { icon: "🏆 Awards",   title: "Achievements",            click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "⚡ Upgrades",   title: "Recipe upgrades",     click: this.actions.openUpgrades,    tint: "rgba(140, 200, 140, 0.22)" },
+      { icon: "🧺 Pantry",     title: "Pantry + auto-shop",  click: this.actions.openPantry,      tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "🎨 Decor",      title: "Interior theme",      click: this.actions.openDecor,       tint: "rgba(220, 150, 200, 0.22)" },
+      { icon: "📊 Trends",     title: "Daily trends",        click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
     ];
-    // Second row for less-used items.
     const row2 = document.createElement("div");
     Object.assign(row2.style, {
-      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
-      gap: "5px", marginTop: "4px",
+      display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
+      gap: "4px", marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
     const buttons2: IconBtn[] = [
-      { icon: "📓 Ledger",   title: "Transaction ledger",     click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.18)" },
-      { icon: "💾 Slots",    title: "Save slots",             click: this.actions.openSlots,      tint: "rgba(160, 180, 140, 0.18)" },
-      { icon: "? Help",      title: "How to play",            click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.18)" },
-      { icon: "⚙ Dev",       title: "Dev tools",              click: () => this.toggleDev(),      tint: "rgba(180, 180, 180, 0.18)" },
-      { icon: "🏛 Tier",     title: "Restaurant tier + boost (also in widget below)", click: this.actions.openExpand, tint: "rgba(200, 160, 100, 0.18)" },
+      { icon: "🏆 Awards",     title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.18)" },
+      { icon: "📓 Ledger",     title: "Transaction ledger",  click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.18)" },
+      { icon: "💾 Slots",      title: "Save slots",          click: this.actions.openSlots,      tint: "rgba(160, 180, 140, 0.18)" },
+      { icon: "? Help",        title: "How to play",         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.18)" },
     ];
-    const mkBtn = (b: IconBtn, big: boolean): HTMLButtonElement => {
+    const row3 = document.createElement("div");
+    Object.assign(row3.style, {
+      display: "grid", gridTemplateColumns: "1fr",
+      marginTop: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const buttons3: IconBtn[] = [
+      { icon: "⚙ Dev tools",   title: "Dev tools (admin sliders / reset save / starter grant)",
+        click: () => this.toggleDev(),    tint: "rgba(180, 180, 180, 0.18)" },
+    ];
+    const mkBtn = (b: IconBtn, size: "big" | "med" | "small"): HTMLButtonElement => {
       const btn = document.createElement("button");
       btn.textContent = b.icon;
       btn.title = b.title;
+      const pad = size === "big" ? "8px 4px" : size === "med" ? "5px 3px" : "4px 2px";
+      const fs = size === "big" ? "13px" : size === "med" ? "11px" : "10px";
       Object.assign(btn.style, {
-        padding: big ? "6px 2px" : "4px 2px",
+        padding: pad,
         background: b.tint ?? "rgba(255,245,220,0.08)",
         color: "#fff5dc",
         border: "1px solid rgba(255,245,220,0.18)",
         borderRadius: "4px", cursor: "pointer", font: "inherit",
-        fontSize: big ? "11px" : "10px",
-        fontWeight: big ? "600" : "500",
+        fontSize: fs,
+        fontWeight: size === "big" ? "700" : "500",
         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       } as Partial<CSSStyleDeclaration>);
       btn.onclick = b.click;
       return btn;
     };
-    for (const b of buttons) row.appendChild(mkBtn(b, true));
-    for (const b of buttons2) row2.appendChild(mkBtn(b, false));
+    for (const b of buttons) row.appendChild(mkBtn(b, "big"));
+    for (const b of buttons2) row2.appendChild(mkBtn(b, "med"));
+    for (const b of buttons3) row3.appendChild(mkBtn(b, "small"));
     this.root.appendChild(row);
     this.root.appendChild(row2);
+    this.root.appendChild(row3);
   }
 
   private buildDevSection(): void {

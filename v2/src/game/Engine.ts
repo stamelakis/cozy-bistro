@@ -13,6 +13,7 @@ import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
 import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
+import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
@@ -52,6 +53,7 @@ export class Engine {
   readonly upgradeModal: UpgradeModal;
   readonly expandModal: ExpandModal;
   readonly expandWidget: ExpandWidget;
+  readonly stockWidget: StockStatusWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
@@ -140,6 +142,9 @@ export class Engine {
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
     this.expandWidget = new ExpandWidget(container, this.game);
+    this.stockWidget = new StockStatusWidget(container, this.game);
+    // Update world visibility whenever the tier changes (player bought an expansion).
+    this.game.onLuxuryTierChanged = (tier) => this.scene.setLuxuryTier(tier);
     this.decorModal = new DecorModal(container, this.game);
     // Wire theme changes to the live scene + restore the saved theme.
     this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
@@ -183,10 +188,20 @@ export class Engine {
       void this.registry.restore(restored);
     }
     this.saver.registry = this.registry;
-    // Once the demo restaurant finishes loading, register every demo
-    // placement so MOVE / SELL can target them too.
+    // Demo placements: only register on a brand-new save (registry empty
+    // after the restore above). Otherwise the save IS the source of
+    // truth — re-registering demo would resurrect items the player sold.
+    const hasSavedFurniture = !!(savedState?.furniture && savedState.furniture.length > 0);
     void this.scene.demoReady.then(() => {
-      this.registry.registerExisting(this.scene.demoPlacements);
+      if (!hasSavedFurniture) {
+        this.registry.registerExisting(this.scene.demoPlacements);
+      } else {
+        for (const dp of this.scene.demoPlacements) {
+          this.scene.threeScene.remove(dp.model);
+        }
+      }
+      // Apply tier visibility so locked sections show their marker.
+      this.scene.setLuxuryTier(this.game.getLuxuryTier());
     });
     // Let the Game read counts of placed sinks/dishwashers when scaling
     // the dish-wash interval.
@@ -478,6 +493,7 @@ export class Engine {
       this.staffPanel.update();
       this.menuPanel.update();
       this.expandWidget.update();
+      this.stockWidget.update();
       this.hudAccumulator = 0;
     }
 

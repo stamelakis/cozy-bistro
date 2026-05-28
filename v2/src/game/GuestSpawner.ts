@@ -30,7 +30,7 @@ import { type CustomerArchetype, rollArchetype } from "../data/customerArchetype
  * with the gameplay-tuning phase.
  */
 
-type GuestState = "walkingIn" | "seated" | "waitingForFood" | "eating" | "walkingOut";
+type GuestState = "walkingIn" | "seated" | "waitingForFood" | "eating" | "walkingOut" | "walkingToDoor";
 
 interface ActiveGuest {
   id: string;
@@ -112,10 +112,8 @@ function seatsAvailableForTier(tier: number): number {
   // tier 1: 8, tier 2: 12, tier 3: 16, tier 4+: 20
   return Math.min(SEATS.length, 4 + tier * 4);
 }
-/** Approximate table-surface height after fitFurniture's auto-scale
- * (table fills 0.95 of a 1×1 cell, so ~0.78m for the typical Kenney
- * table mesh). Iterated visually. */
-const TABLE_HEIGHT_Y = 0.78;
+/** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
+const TABLE_HEIGHT_Y = 0.95;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -144,6 +142,7 @@ function guestLabel(g: ActiveGuest): string {
       return `${prefix} ⏳ ${secs}s`;
     }
     case "eating":         return `${prefix} 🍴`;
+    case "walkingToDoor":  return "";
     case "walkingOut":     return "";
   }
 }
@@ -254,12 +253,12 @@ export class GuestSpawner {
     if (g.state !== "seated" && g.state !== "waitingForFood") return;
     g.patience -= dt;
     if (g.patience > 0) return;
-    // Patience exhausted — angry exit.
+    // Patience exhausted — angry exit. Route via the door.
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
     g.character.action = "walk";
-    g.target = EXIT_POSITION.clone();
-    g.state = "walkingOut";
+    g.target = DOOR_POSITION.clone();
+    g.state = "walkingToDoor";
     g.stateClock = 0;
   }
 
@@ -321,8 +320,8 @@ export class GuestSpawner {
         facingY: Math.PI, // facing into the room (negative Z)
         action: "walk",
         phase: Math.random() * 5,
-        // Seat surface height (Kenney chair after fitFurniture: ~0.45m).
-        seatHeight: 0.45,
+        // Seat surface height (Kenney chair at S_CHAIR=1.7).
+        seatHeight: 0.62,
       };
       this.animator.add(character);
 
@@ -456,13 +455,24 @@ export class GuestSpawner {
             g.patience = PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
             this.beginNextCourse(g);
           } else {
-            // Full order complete — leave a single averaged rating + walk out.
+            // Full order complete — leave a single averaged rating + walk out via the door.
             this.finalizeVisit(g);
             g.character.action = "walk";
-            g.target = EXIT_POSITION.clone();
-            g.state = "walkingOut";
+            g.target = DOOR_POSITION.clone();
+            g.state = "walkingToDoor";
             g.stateClock = 0;
           }
+        }
+        break;
+      }
+      case "walkingToDoor": {
+        // Walk to the door cell first so the guest passes through the
+        // 1-tile gap in the front wall, then switch to walking-out.
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          g.target = EXIT_POSITION.clone();
+          g.state = "walkingOut";
+          g.stateClock = 0;
         }
         break;
       }
@@ -535,8 +545,8 @@ export class GuestSpawner {
       } else {
         this.finalizeVisit(g);
         g.character.action = "walk";
-        g.target = EXIT_POSITION.clone();
-        g.state = "walkingOut";
+        g.target = DOOR_POSITION.clone();
+        g.state = "walkingToDoor";
         g.stateClock = 0;
       }
       return;
@@ -558,8 +568,8 @@ export class GuestSpawner {
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
     this.sfx?.thud();
     g.character.action = "walk";
-    g.target = EXIT_POSITION.clone();
-    g.state = "walkingOut";
+    g.target = DOOR_POSITION.clone();
+    g.state = "walkingToDoor";
     g.stateClock = 0;
   }
 
