@@ -356,20 +356,33 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "door",         name: "Front Door",    category: "door",
     modelPath: "proc:front-door", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60,
     placement: "edge" },
+  // All door + window variants are edge-placed: they sit on a grid
+  // line (between two tiles) so the frame lands ON the wall plane,
+  // not in the middle of a tile. Items in the "door" category also
+  // trigger the front-wall rebuild and are gated to perimeter walls;
+  // windows stay decoration so they can be dropped on any wall
+  // (internal partitions included) without punching a hole.
   { id: "door-kenney",  name: "Kenney Doorway", category: "door",
-    modelPath: "assets/kenney/doorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 60 },
+    modelPath: "assets/kenney/doorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 60,
+    placement: "edge" },
   { id: "door-open",    name: "Open Doorway",  category: "door",
-    modelPath: "assets/kenney/doorwayOpen.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 70 },
+    modelPath: "assets/kenney/doorwayOpen.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 70,
+    placement: "edge" },
   { id: "door-front",   name: "Front Door",    category: "door",
-    modelPath: "assets/kenney/doorwayFront.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 90 },
+    modelPath: "assets/kenney/doorwayFront.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 90,
+    placement: "edge" },
   { id: "wall-doorway", name: "Wall Doorway",  category: "door",
-    modelPath: "assets/kenney/wallDoorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 110 },
+    modelPath: "assets/kenney/wallDoorway.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 110,
+    placement: "edge" },
   { id: "wall-doorway-w", name: "Wide Doorway", category: "door",
-    modelPath: "assets/kenney/wallDoorwayWide.glb", scale: S_DOOR, size: { width: 2, depth: 1 }, cost: 140 },
+    modelPath: "assets/kenney/wallDoorwayWide.glb", scale: S_DOOR, size: { width: 2, depth: 1 }, cost: 140,
+    placement: "edge" },
   { id: "window",       name: "Window",        category: "decoration",
-    modelPath: "assets/kenney/wallWindow.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 75 },
+    modelPath: "assets/kenney/wallWindow.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 75,
+    placement: "edge" },
   { id: "window-slide", name: "Sliding Window", category: "decoration",
-    modelPath: "assets/kenney/wallWindowSlide.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 95 },
+    modelPath: "assets/kenney/wallWindowSlide.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 95,
+    placement: "edge" },
 
   // === Bathroom — needed for the toilet-use customer loop. ===
   // Toilets sit in a small partitioned room; sinks for handwashing.

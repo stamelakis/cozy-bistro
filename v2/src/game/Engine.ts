@@ -452,12 +452,15 @@ export class Engine {
   }
 
   /** Current X-coords of doors sitting on the front wall (z=5.5). The
-   * scene rebuilds its front-wall geometry from this list, so each
-   * door visibly punches a 1-tile gap with a lintel above. */
+   * scene rebuilds its front-wall geometry from this list so each door
+   * visibly punches a 1-tile gap with a lintel above. Looks up by
+   * CATEGORY so all door variants (the procedural one, Kenney
+   * doorways, wall doorways, etc.) count, not just the "door" id. */
   private frontWallDoorXs(): number[] {
     const out: number[] = [];
     for (const it of this.registry.snapshotItems()) {
-      if (it.defId === "door" && Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
+      const def = getFurnitureDef(it.defId);
+      if (def?.category === "door" && Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
     }
     return out;
   }

@@ -1027,7 +1027,7 @@ export class BuildMenu {
       this.scene.add(solid);
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
-      if (def.id === "door") this.onDoorPlaced?.(solid);
+      if (def.category === "door") this.onDoorPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
       if (def.category === "lamp") this.onLampPlaced?.(solid);
     });
