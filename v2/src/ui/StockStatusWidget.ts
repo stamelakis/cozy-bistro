@@ -47,8 +47,11 @@ export class StockStatusWidget {
     const low = pantry.filter((s) => s.quantity > 0 && s.quantity <= 2)
       .sort((a, b) => a.quantity - b.quantity);
     if (out.length === 0 && low.length === 0) {
+      const usedToday = this.game.cooking.getTotalConsumedToday();
       const ok = document.createElement("div");
-      ok.textContent = "✓ All ingredients stocked";
+      ok.innerHTML = usedToday > 0
+        ? `✓ All ingredients stocked <span style="opacity:0.7">· ${usedToday} used today</span>`
+        : "✓ All ingredients stocked";
       Object.assign(ok.style, { color: "#a8e2a8", textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
       this.body.appendChild(ok);
       return;

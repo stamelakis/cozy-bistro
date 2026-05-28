@@ -171,6 +171,12 @@ export class CookingSystem {
     return (this.preparedServings[recipe.id] ?? 0) > 0 || this.hasIngredients(recipe);
   }
 
+  /** Per-ingredient running consumption count for the current day. Reset
+   * by resetDailyConsumption() on day rollover. Lets the UI show that
+   * ingredients ARE being used even when auto-shop snaps them back up
+   * between display refreshes. */
+  private consumedToday: Map<string, number> = new Map();
+
   /**
    * Decrement pantry by 1 for each ingredient in the recipe (skipping ingredients
    * not present in pantry). Returns the count of stocks actually decremented.
@@ -181,10 +187,29 @@ export class CookingSystem {
       const stock = this.pantry.find((item) => item.id === ingredient);
       if (stock) {
         stock.quantity = Math.max(0, stock.quantity - 1);
+        this.consumedToday.set(ingredient, (this.consumedToday.get(ingredient) ?? 0) + 1);
         consumed += 1;
       }
     });
     return consumed;
+  }
+
+  /** How much of an ingredient has been consumed since the last day
+   * rollover. UI surfaces this so a player can see activity even when
+   * the auto-shop holds quantities at target. */
+  getConsumedToday(id: string): number {
+    return this.consumedToday.get(id) ?? 0;
+  }
+
+  /** Total ingredient units consumed today across all ingredients. */
+  getTotalConsumedToday(): number {
+    let n = 0;
+    for (const v of this.consumedToday.values()) n += v;
+    return n;
+  }
+
+  resetDailyConsumption(): void {
+    this.consumedToday.clear();
   }
 
   /** Adds quantity to an existing pantry entry; no-op if the ingredient id is unknown. */

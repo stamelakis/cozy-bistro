@@ -360,6 +360,7 @@ export class Game {
     });
     this.economy.resetDailyTotals();
     this.customers.resetDailyTotals();
+    this.cooking.resetDailyConsumption();
     this.day.rollOverDay();
     // Roll the next day's weather AFTER the day counter advances so the
     // HUD's "Day N" matches the weather forecast for that same day.

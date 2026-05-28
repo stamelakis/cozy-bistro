@@ -18,10 +18,15 @@ export class PantryModal {
   private restockLine?: HTMLElement;
   /** Track last-known quantities so we can flash rows that just went up. */
   private lastQty: Map<string, number> = new Map();
+  /** Same idea but for the daily "used" counter — it grows monotonically
+   * over the day, so we just flash on increment. */
+  private lastUsed: Map<string, number> = new Map();
   /** Map from ingredient id → quantity-cell element. Lets the live refresh
    * mutate just the values without rebuilding the entire row list — keeps
    * scroll position stable and gives us cheap per-row highlight pulses. */
   private qtyEls: Map<string, HTMLElement> = new Map();
+  /** Per-row "used today" badge cells (small orange text). */
+  private usedTodayEls: Map<string, HTMLElement> = new Map();
   /** Last seen auto-shop wall-clock timestamp, so we re-render the summary
    * line when a fresh restock fires. */
   private lastSeenAutoShopMs = 0;
@@ -83,7 +88,7 @@ export class PantryModal {
     const headerRow = document.createElement("div");
     Object.assign(headerRow.style, {
       display: "grid",
-      gridTemplateColumns: "1fr 70px 60px",
+      gridTemplateColumns: "1fr 60px 50px 50px",
       gap: "10px",
       padding: "4px 6px",
       fontSize: "10px",
@@ -94,7 +99,7 @@ export class PantryModal {
       borderBottom: "1px solid rgba(255,245,220,0.18)",
       marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
-    headerRow.innerHTML = `<span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span>`;
+    headerRow.innerHTML = `<span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span>`;
     body.appendChild(headerRow);
 
     this.list = document.createElement("div");
@@ -192,8 +197,9 @@ export class PantryModal {
     }
   }
 
-  /** Cheap live update — only mutates the quantity cells + the restock
-   * summary. The full rebuild only fires on show() / target bump. */
+  /** Cheap live update — mutates the quantity cells, the per-row
+   * "consumed today" badge, and the restock summary. The full rebuild
+   * only fires on show() / target bump. */
   private tickRefresh(): void {
     const pantry = this.game.cooking.getPantry();
     let totalValue = 0;
@@ -201,25 +207,43 @@ export class PantryModal {
       const cost = getIngredientCost(stock.id);
       totalValue += cost * stock.quantity;
       const qtyEl = this.qtyEls.get(stock.id);
-      if (!qtyEl) continue;
-      const prev = this.lastQty.get(stock.id) ?? stock.quantity;
-      if (stock.quantity !== prev) {
-        qtyEl.textContent = String(stock.quantity);
-        qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
-          : stock.quantity <= 3 ? "#ffd47a"
-          : "#a8e2a8";
-        if (stock.quantity > prev) this.pulseRow(qtyEl);
-        this.lastQty.set(stock.id, stock.quantity);
+      if (qtyEl) {
+        const prev = this.lastQty.get(stock.id) ?? stock.quantity;
+        if (stock.quantity !== prev) {
+          qtyEl.textContent = String(stock.quantity);
+          qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
+            : stock.quantity <= 3 ? "#ffd47a"
+            : "#a8e2a8";
+          if (stock.quantity > prev) this.pulseRow(qtyEl);
+          this.lastQty.set(stock.id, stock.quantity);
+        }
+      }
+      const usedEl = this.usedTodayEls.get(stock.id);
+      if (usedEl) {
+        const used = this.game.cooking.getConsumedToday(stock.id);
+        const prevUsed = this.lastUsed.get(stock.id) ?? used;
+        if (used !== prevUsed) {
+          usedEl.textContent = used > 0 ? `−${used}` : "";
+          if (used > prevUsed) this.pulseRow(usedEl, "rgba(220, 170, 100, 0.45)");
+          this.lastUsed.set(stock.id, used);
+        }
       }
     }
-    if (this.totalLine) this.totalLine.textContent = `Inventory value: $${totalValue}`;
+    if (this.totalLine) {
+      const totalUsed = this.game.cooking.getTotalConsumedToday();
+      this.totalLine.textContent = totalUsed > 0
+        ? `Inventory value: $${totalValue} · used today: ${totalUsed}`
+        : `Inventory value: $${totalValue}`;
+    }
     this.updateRestockSummary();
   }
 
-  /** Briefly flash an element's background to draw the eye to a change. */
-  private pulseRow(el: HTMLElement): void {
+  /** Briefly flash an element's background to draw the eye to a change.
+   * Default color is the green "restock" pulse; pass a custom rgba for
+   * other event types (e.g. orange for "just got consumed"). */
+  private pulseRow(el: HTMLElement, color = "rgba(120, 220, 120, 0.45)"): void {
     el.style.transition = "background-color 0.2s ease";
-    el.style.background = "rgba(120, 220, 120, 0.45)";
+    el.style.background = color;
     window.setTimeout(() => {
       el.style.background = "transparent";
     }, 500);
@@ -258,13 +282,14 @@ export class PantryModal {
       .sort((a, b) => getIngredientCost(b.id) - getIngredientCost(a.id) || a.name.localeCompare(b.name));
     this.list.innerHTML = "";
     this.qtyEls.clear();
+    this.usedTodayEls.clear();
     let totalValue = 0;
     for (const stock of pantry) {
       const cost = getIngredientCost(stock.id);
       const row = document.createElement("div");
       Object.assign(row.style, {
         display: "grid",
-        gridTemplateColumns: "1fr 70px 60px",
+        gridTemplateColumns: "1fr 60px 50px 50px",
         gap: "10px",
         padding: "4px 6px",
         borderBottom: "1px solid rgba(255,245,220,0.06)",
@@ -283,12 +308,23 @@ export class PantryModal {
       qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
         : stock.quantity <= 3 ? "#ffd47a"
         : "#a8e2a8";
+      // "Used today" badge — orange minus-count, blank when none used yet.
+      const usedToday = this.game.cooking.getConsumedToday(stock.id);
+      const usedEl = document.createElement("span");
+      usedEl.textContent = usedToday > 0 ? `−${usedToday}` : "";
+      usedEl.style.textAlign = "right";
+      usedEl.style.fontWeight = "600";
+      usedEl.style.color = "#e0a050";
+      usedEl.style.fontSize = "11px";
       row.appendChild(nameEl);
       row.appendChild(costEl);
       row.appendChild(qtyEl);
+      row.appendChild(usedEl);
       this.list.appendChild(row);
       this.qtyEls.set(stock.id, qtyEl);
+      this.usedTodayEls.set(stock.id, usedEl);
       this.lastQty.set(stock.id, stock.quantity);
+      this.lastUsed.set(stock.id, usedToday);
       totalValue += cost * stock.quantity;
     }
     this.updateRestockSummary();
