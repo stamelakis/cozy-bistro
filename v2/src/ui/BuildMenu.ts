@@ -5,6 +5,23 @@ import type { Game } from "../game/Game";
 import type { FurnitureRegistry } from "../game/FurnitureRegistry";
 import { fitFurniture } from "../assets/fitFurniture";
 
+/** Result of evaluating the current hover position for a placement preview.
+ *
+ * - "blocked": cell is occupied or otherwise invalid — show RED, don't allow click.
+ * - "snap-perfect": chair auto-snapped to an empty seat slot — show GREEN,
+ *   placement uses the snapped pose (overrides hoverCell + rotationY).
+ * - "ok": placement is allowed but not optimal — show YELLOW.
+ */
+type PlacementQuality = "blocked" | "snap-perfect" | "ok";
+interface PlacementPlan {
+  quality: PlacementQuality;
+  /** Final placement world coords (integer cell, or snapped slot). */
+  x: number;
+  z: number;
+  /** Final rotation (radians). */
+  rotY: number;
+}
+
 /**
  * Minimal build/buy menu — list furniture items on the right side of the
  * screen. Click an item to enter PLACING mode: a translucent preview
@@ -33,6 +50,10 @@ export class BuildMenu {
   /** Snapped world position the preview is hovering over. */
   private readonly hoverCell = new THREE.Vector3();
   private hoverValid = false;
+  /** Latest evaluated placement plan — populated by onPointerMove, consumed
+   * by onClick. Lets the quality tint, snap pose and click placement stay
+   * in lockstep (no chance of clicking before the tint updates). */
+  private currentPlan: PlacementPlan | null = null;
   /** Rotation (radians around Y) applied to the preview/placed model.
    * Press R while placing to rotate 90°. */
   private rotationY = 0;
@@ -199,8 +220,10 @@ export class BuildMenu {
     root.appendChild(actionRow);
 
     const hint = document.createElement("div");
-    hint.textContent = "Click item → click floor to place. R = rotate. Esc = cancel.";
-    Object.assign(hint.style, { marginTop: "8px", opacity: "0.65", fontSize: "11px" } as Partial<CSSStyleDeclaration>);
+    hint.innerHTML = `Click item → click floor to place. R = rotate. Esc = cancel.<br/>
+      Preview tints: <span style="color:#70e070">green</span> = perfect (chair snapped to a table seat),
+      <span style="color:#ffd47a">yellow</span> = OK, <span style="color:#ff5050">red</span> = blocked.`;
+    Object.assign(hint.style, { marginTop: "8px", opacity: "0.85", fontSize: "10px", lineHeight: "1.35" } as Partial<CSSStyleDeclaration>);
     root.appendChild(hint);
 
     return root;
@@ -316,24 +339,72 @@ export class BuildMenu {
     const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const point = new THREE.Vector3();
     this.hoverValid = this.raycaster.ray.intersectPlane(groundPlane, point) !== null;
-    if (this.hoverValid) {
-      // Snap to integer cells (1 cell = 1 world unit).
-      this.hoverCell.set(Math.round(point.x), 0, Math.round(point.z));
-      if (this.preview) {
-        this.preview.position.copy(this.hoverCell);
-        // Tint preview red if the cell is already taken — placement will be blocked.
-        const blocked = this.registry.isOccupied(this.hoverCell.x, this.hoverCell.z);
-        this.preview.traverse((o) => {
-          if (o instanceof THREE.Mesh) {
-            const m = o.material as THREE.MeshStandardMaterial;
-            if (m && "color" in m && m.color) {
-              m.color.set(blocked ? 0xff8080 : 0xffffff);
-            }
-          }
-        });
+    if (!this.hoverValid) return;
+    // Snap to integer cells (1 cell = 1 world unit) for non-chair placement.
+    this.hoverCell.set(Math.round(point.x), 0, Math.round(point.z));
+    if (!this.preview || !this.placingDef) return;
+    const plan = this.computePlacementPlan(this.placingDef, point);
+    this.currentPlan = plan;
+    // Apply the plan's pose to the preview so the user sees the snap.
+    this.preview.position.set(plan.x, 0, plan.z);
+    this.preview.rotation.y = plan.rotY;
+    this.tintPreview(plan.quality);
+  };
+
+  /** Decide where the preview should land and how good that placement is.
+   *
+   * For chairs near a table seat slot we auto-snap to the slot (overriding
+   * the user's snapped cell + the rotationY they pressed R for) and mark
+   * GREEN. Otherwise we use the integer cell under the cursor and mark
+   * YELLOW (or RED if blocked). */
+  private computePlacementPlan(def: FurnitureDef, rawPoint: THREE.Vector3): PlacementPlan {
+    const cellX = Math.round(rawPoint.x);
+    const cellZ = Math.round(rawPoint.z);
+
+    // Chair-specific: try to snap to the nearest empty seat slot. Use the
+    // raw (unsnapped) pointer position so the chair "magnets" toward the
+    // ideal pose even while the cursor is over the table itself.
+    if (def.category === "chair") {
+      const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4);
+      if (slot && slot.chairUid == null) {
+        // Snap! Override rotationY so click places at the perfect pose.
+        return { quality: "snap-perfect", x: slot.x, z: slot.z, rotY: slot.facingY };
       }
     }
-  };
+
+    const blocked = this.registry.isOccupied(cellX, cellZ);
+    if (blocked) {
+      return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+    }
+    return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };
+  }
+
+  /** Set every mesh on the preview to the quality color. Materials were
+   * cloned at startPlacing time so this only affects the ghost. */
+  private tintPreview(quality: PlacementQuality): void {
+    if (!this.preview) return;
+    // Red = blocked. Green = perfect snap. Yellow = ok but not optimal.
+    const tint = quality === "blocked" ? 0xff5050
+      : quality === "snap-perfect" ? 0x70e070
+      : 0xffd47a;
+    this.preview.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        const m = o.material as THREE.MeshStandardMaterial;
+        if (m && "color" in m && m.color) {
+          m.color.set(tint);
+        }
+        if (m && "emissive" in m) {
+          // A little glow on green/red so the state is unmistakable even
+          // in busy lighting.
+          (m.emissive as THREE.Color).setHex(
+            quality === "blocked" ? 0x300000 :
+            quality === "snap-perfect" ? 0x004400 :
+            0x000000,
+          );
+        }
+      }
+    });
+  }
 
   private onClick = (e: MouseEvent): void => {
     if (e.button !== 0) return;
@@ -369,9 +440,8 @@ export class BuildMenu {
     }
     if (!this.placingDef || !this.preview || !this.hoverValid) return;
     const def = this.placingDef;
-    const cellX = Math.round(this.hoverCell.x);
-    const cellZ = Math.round(this.hoverCell.z);
-    if (this.registry.isOccupied(cellX, cellZ)) {
+    const plan = this.currentPlan;
+    if (!plan || plan.quality === "blocked") {
       this.flashRoot("Cell already occupied");
       return;
     }
@@ -379,15 +449,19 @@ export class BuildMenu {
       this.flashRoot("Not enough money");
       return;
     }
-    // Bake the preview into the scene: clone it as a solid model and add.
-    const rotY = this.rotationY;
+    // Bake the preview into the scene using the plan's final pose (which
+    // may be a slot-snapped chair pose, not the raw cursor cell).
+    const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
-      solid.position.set(cellX, solid.position.y, cellZ);
+      solid.position.set(placeX, solid.position.y, placeZ);
       solid.rotation.y = rotY;
       this.scene.add(solid);
-      this.registry.register(def.id, cellX, cellZ, rotY, solid);
+      this.registry.register(def.id, placeX, placeZ, rotY, solid);
     });
+    if (plan.quality === "snap-perfect") {
+      this.flashRoot("Perfect placement!");
+    }
     // Keep placing more of the same — many people want to drop multiples
     // (e.g. 4 chairs around a table). Esc / right-click to stop.
   };

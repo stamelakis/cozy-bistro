@@ -14,6 +14,23 @@
  *   procedurally-built items already self-scale (kept at 1.0).
  */
 
+/**
+ * One sitting position around a table. Offsets are relative to the table's
+ * center; facingY is the chair's required rotation (Three.js Y, where
+ * 0 = -Z, π/2 = +X, π = +Z, -π/2 = -X). platePos is where the served plate
+ * sits on the tabletop for this seat.
+ *
+ * A chair placed at (table.x + dx, table.z + dz) with rotation facingY
+ * becomes a FUNCTIONAL seat — a customer can sit there to eat. Chairs
+ * placed elsewhere are only useful as overflow / waiting seats.
+ */
+export interface SeatSlot {
+  dx: number;
+  dz: number;
+  facingY: number;
+  platePos: { dx: number; dz: number };
+}
+
 export interface FurnitureDef {
   /** Stable id, matches the 2D furniture.ts id when possible. */
   id: string;
@@ -31,6 +48,9 @@ export interface FurnitureDef {
   cost: number;
   /** Optional rotation offset (radians) if the model points the wrong way. */
   rotationOffset?: number;
+  /** Tables: the sitting positions around this table. Chairs placed at one
+   * of these become functional seats for the dining loop. */
+  seatSlots?: readonly SeatSlot[];
 
   // === Gameplay stats (Game.getFurnitureBonuses sums these across all placed) ===
   style?: number;
@@ -39,6 +59,20 @@ export interface FurnitureDef {
   ratingBonus?: number;
   seatingCapacity?: number;
 }
+
+/** Default 4-side seat slot pattern for a 1×1 dining table. Shared by every
+ * dining-style table in the catalog so the build/snap behaviour is
+ * consistent regardless of which mesh the player picks. */
+const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
+  // Left side: chair faces +X (toward table center).
+  { dx: -0.9, dz: 0,    facingY:  Math.PI / 2, platePos: { dx: -0.3, dz: 0    } },
+  // Right side: chair faces -X.
+  { dx:  0.9, dz: 0,    facingY: -Math.PI / 2, platePos: { dx:  0.3, dz: 0    } },
+  // Top side (lower z): chair faces +Z.
+  { dx:  0,   dz: -0.9, facingY:  Math.PI,     platePos: { dx:  0,   dz: -0.3 } },
+  // Bottom side (higher z): chair faces -Z (the facingY=0 baseline).
+  { dx:  0,   dz:  0.9, facingY:  0,           platePos: { dx:  0,   dz:  0.3 } },
+];
 
 // Per-category scale defaults. Use these constants when authoring entries.
 const S_TABLE = 1.9;
@@ -54,17 +88,25 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // Tables (small-table now uses the proper dining table mesh — the old
   // cabinetBedDrawerTable was a bedside drawer, not a dining piece).
   { id: "small-table",   name: "Small Table",   category: "table",
-    modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 24, style: 1 },
+    modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 24, style: 1,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "round-table",   name: "Round Table",   category: "table",
-    modelPath: "assets/kenney/tableRound.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 32, style: 2 },
+    modelPath: "assets/kenney/tableRound.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 32, style: 2,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "dining-table",  name: "Dining Table",  category: "table",
-    modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 48, style: 3 },
+    modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 48, style: 3,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "fancy-table",   name: "Linen Table",   category: "table",
-    modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 64, style: 5, ratingBonus: 0.05 },
+    modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 64, style: 5, ratingBonus: 0.05,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "cloth-table",   name: "Tablecloth Top", category: "table",
-    modelPath: "assets/kenney/tableCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 40, style: 4 },
+    modelPath: "assets/kenney/tableCloth.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 40, style: 4,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "glass-table",   name: "Glass Table",   category: "table",
-    modelPath: "assets/kenney/tableGlass.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 56, style: 4, ratingBonus: 0.04 },
+    modelPath: "assets/kenney/tableGlass.glb", scale: S_TABLE, size: { width: 1, depth: 1 }, cost: 56, style: 4, ratingBonus: 0.04,
+    seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+  // Coffee tables are non-dining; intentionally no seatSlots — chairs near
+  // them are always "yellow" overflow seating.
   { id: "coffee-table",  name: "Coffee Table",  category: "table",
     modelPath: "assets/kenney/tableCoffee.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 28, style: 2 },
   { id: "coffee-glass",  name: "Glass Coffee Table", category: "table",

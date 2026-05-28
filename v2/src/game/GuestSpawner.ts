@@ -5,11 +5,19 @@ import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
 import type { FloatingText } from "../ui/FloatingText";
 import type { SfxPlayer } from "../ui/SfxPlayer";
-import type { FurnitureRegistry } from "./FurnitureRegistry";
+import type { FurnitureRegistry, ResolvedSeatSlot } from "./FurnitureRegistry";
 import { recipes } from "../data/recipes";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
+
+/** Stable seat identifier: `${tableUid}#${slotIndex}`. Lets a seated guest
+ * remember their slot even when other seats are added/removed by player
+ * placement edits. */
+type SeatId = string;
+function makeSeatId(slot: ResolvedSeatSlot): SeatId {
+  return `${slot.tableUid}#${slot.slotIndex}`;
+}
 
 /**
  * Drives the visible gameplay loop for guests:
@@ -37,7 +45,14 @@ interface ActiveGuest {
   variantId: string; // "guest-v0".."guest-v6"
   state: GuestState;
   character: AnimatedCharacter;
-  seatIndex: number;
+  /** Stable id of the seat slot this guest is assigned to (or empty if
+   * no functional seat was available and they were waitlisted). */
+  seatId: SeatId;
+  /** Latest cached pose of that seat in world space — refreshed each frame
+   * via FurnitureRegistry so the guest follows even if the table is moved. */
+  seatPos: THREE.Vector2;
+  seatFacingY: number;
+  platePos: THREE.Vector2;
   // Target world position for walking. Reached when we get within
   // arrivalThreshold of it.
   target: THREE.Vector2;
@@ -69,49 +84,6 @@ const DOOR_POSITION = new THREE.Vector2(0, 5);
 // Where guests exit to when leaving
 const EXIT_POSITION = new THREE.Vector2(0, 6.5);
 
-// 20 chair seats across 5 dining tables. The number of seats actually
-// available to guests is gated by Game.luxuryTier:
-//   tier 1 → 8 seats   (tables 1-2)
-//   tier 2 → 12 seats  (tables 1-3)
-//   tier 3 → 16 seats  (tables 1-4)
-//   tier 4 → 20 seats  (tables 1-5)
-//   tier 5 → 20 seats  (max)
-// Locked tables visually exist but seatsAvailableForTier() filters them.
-const SEATS: { pos: THREE.Vector2; facingY: number; platePos: THREE.Vector2 }[] = [
-  // After fitFurniture, table half-width ≈ 0.48 and chair half-depth ≈
-  // 0.42, so chair-center at 0.9 from table-center puts the seat front
-  // right against the table edge.
-  // Tables 1 + 2.
-  { pos: new THREE.Vector2(-2.9, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-2.3, 1.0) },
-  { pos: new THREE.Vector2(-1.1, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-1.7, 1.0) },
-  { pos: new THREE.Vector2(-2,   0.1), facingY:  Math.PI,    platePos: new THREE.Vector2(-2.0, 0.7) },
-  { pos: new THREE.Vector2(-2,   1.9), facingY:  0,          platePos: new THREE.Vector2(-2.0, 1.3) },
-  { pos: new THREE.Vector2( 1.1, 1.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 1.7, 1.0) },
-  { pos: new THREE.Vector2( 2.9, 1.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 2.3, 1.0) },
-  { pos: new THREE.Vector2( 2,   0.1), facingY:  Math.PI,    platePos: new THREE.Vector2( 2.0, 0.7) },
-  { pos: new THREE.Vector2( 2,   1.9), facingY:  0,          platePos: new THREE.Vector2( 2.0, 1.3) },
-  // Table 3.
-  { pos: new THREE.Vector2(-0.9, 3.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-0.3, 3.0) },
-  { pos: new THREE.Vector2( 0.9, 3.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 0.3, 3.0) },
-  { pos: new THREE.Vector2( 0,   2.1), facingY:  Math.PI,    platePos: new THREE.Vector2( 0,   2.7) },
-  { pos: new THREE.Vector2( 0,   3.9), facingY:  0,          platePos: new THREE.Vector2( 0,   3.3) },
-  // Table 4.
-  { pos: new THREE.Vector2(-4.9, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2(-4.3, 0.0) },
-  { pos: new THREE.Vector2(-3.1, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2(-3.7, 0.0) },
-  { pos: new THREE.Vector2(-4,  -0.9), facingY:  Math.PI,    platePos: new THREE.Vector2(-4,  -0.3) },
-  { pos: new THREE.Vector2(-4,   0.9), facingY:  0,          platePos: new THREE.Vector2(-4,   0.3) },
-  // Table 5.
-  { pos: new THREE.Vector2( 3.1, 0.0), facingY:  Math.PI / 2, platePos: new THREE.Vector2( 3.7, 0.0) },
-  { pos: new THREE.Vector2( 4.9, 0.0), facingY: -Math.PI / 2, platePos: new THREE.Vector2( 4.3, 0.0) },
-  { pos: new THREE.Vector2( 4,  -0.9), facingY:  Math.PI,    platePos: new THREE.Vector2( 4,  -0.3) },
-  { pos: new THREE.Vector2( 4,   0.9), facingY:  0,          platePos: new THREE.Vector2( 4,   0.3) },
-];
-
-/** Number of seats unlocked at a given luxury tier. */
-function seatsAvailableForTier(tier: number): number {
-  // tier 1: 8, tier 2: 12, tier 3: 16, tier 4+: 20
-  return Math.min(SEATS.length, 4 + tier * 4);
-}
 /** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
 const TABLE_HEIGHT_Y = 0.95;
 
@@ -168,9 +140,10 @@ export class GuestSpawner {
   private readonly game: Game;
   private readonly router: StaffRouter;
   private readonly guests: ActiveGuest[] = [];
-  private occupiedSeats = new Set<number>();
-  /** seatIndex → wall-clock seconds when the seat becomes clean again. */
-  private dirtyUntil = new Map<number, number>();
+  /** seatId ("tableUid#slotIndex") → reserved. Cleared on guest leave. */
+  private occupiedSeats = new Set<SeatId>();
+  /** seatId → wall-clock seconds when the seat becomes clean again. */
+  private dirtyUntil = new Map<SeatId, number>();
   /** guestId → live Object3D for the plate sitting on their table.
    * Spawned when food is delivered, removed when the guest stands up. */
   private readonly tablePlates = new Map<string, THREE.Object3D>();
@@ -216,10 +189,14 @@ export class GuestSpawner {
     // Expire dirty-seat timers — once a seat's cleanup window is up, it
     // becomes available to the next guest.
     if (this.dirtyUntil.size > 0) {
-      for (const [seatIdx, cleanAt] of this.dirtyUntil) {
-        if (cleanAt <= this.elapsed) this.dirtyUntil.delete(seatIdx);
+      for (const [seatId, cleanAt] of this.dirtyUntil) {
+        if (cleanAt <= this.elapsed) this.dirtyUntil.delete(seatId);
       }
     }
+    // Refresh each seated guest's cached seat pose so they follow if the
+    // player moves a table mid-meal. If a seat disappeared entirely (table
+    // sold) the guest will walk away on their next tick via missingSeatExit.
+    this.refreshSeatedGuestPoses();
     if (this.restaurantOpen && this.spawnCooldown <= 0 && this.countAvailableSeats() > 0) {
       void this.spawnGuest();
       // Apply weather multiplier first, then halve if a paid boost is on.
@@ -286,28 +263,61 @@ export class GuestSpawner {
     }));
   }
 
-  /** Count of seats that are unlocked-for-tier, not occupied, and not in
-   * the dirty-cleanup window. */
+  /** All functional seats (table seat slots with a correctly-placed chair)
+   * across every visible table. Empty list if no registry yet. */
+  private listFunctionalSeats(): ResolvedSeatSlot[] {
+    if (!this.registry) return [];
+    return this.registry.getResolvedSeatSlots(true).filter((s) => s.chairUid != null);
+  }
+
+  /** Count of functional seats not currently occupied + not in the dirty
+   * cleanup window. The previous tier-gated SEATS array has been replaced
+   * by the actual placed-chair situation. */
   private countAvailableSeats(): number {
-    const max = seatsAvailableForTier(this.game.getLuxuryTier());
     let n = 0;
-    for (let i = 0; i < max; i += 1) {
-      if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) n += 1;
+    for (const s of this.listFunctionalSeats()) {
+      const id = makeSeatId(s);
+      if (!this.occupiedSeats.has(id) && !this.dirtyUntil.has(id)) n += 1;
     }
     return n;
   }
 
-  private async spawnGuest(): Promise<void> {
-    // Find a free seat that isn't currently being cleaned. Seats beyond
-    // the tier's unlock threshold are skipped — the chair model exists in
-    // the world but the bistro hasn't "opened" that section yet.
-    const max = seatsAvailableForTier(this.game.getLuxuryTier());
-    let seatIndex = -1;
-    for (let i = 0; i < max; i += 1) {
-      if (!this.occupiedSeats.has(i) && !this.dirtyUntil.has(i)) { seatIndex = i; break; }
+  /** Refresh each seated guest's cached pose from the registry. If their
+   * seat slot has vanished (table sold while they were eating), eject them. */
+  private refreshSeatedGuestPoses(): void {
+    if (!this.registry) return;
+    const byId = new Map<string, ResolvedSeatSlot>();
+    for (const s of this.registry.getResolvedSeatSlots()) byId.set(makeSeatId(s), s);
+    for (const g of this.guests) {
+      const slot = byId.get(g.seatId);
+      if (!slot) {
+        // Table sold under them. Walk them out gracefully.
+        if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
+          g.target = DOOR_POSITION.clone();
+          g.state = "walkingToDoor";
+          g.character.action = "walk";
+          g.stateClock = 0;
+        }
+        continue;
+      }
+      g.seatPos.set(slot.x, slot.z);
+      g.seatFacingY = slot.facingY;
+      g.platePos.set(slot.platePos.x, slot.platePos.z);
+      if (g.state === "walkingIn") {
+        g.target.copy(g.seatPos);
+      }
     }
-    if (seatIndex < 0) return;
-    this.occupiedSeats.add(seatIndex);
+  }
+
+  private async spawnGuest(): Promise<void> {
+    // Pick the first functional seat that's idle (not occupied, not dirty).
+    const available = this.listFunctionalSeats().find((s) => {
+      const id = makeSeatId(s);
+      return !this.occupiedSeats.has(id) && !this.dirtyUntil.has(id);
+    });
+    if (!available) return;
+    const seatId = makeSeatId(available);
+    this.occupiedSeats.add(seatId);
 
     const variantId = pick(GUEST_VARIANT_IDS);
     const id = `guest-${this.nextGuestNum++}`;
@@ -338,8 +348,11 @@ export class GuestSpawner {
         variantId,
         state: "walkingIn",
         character,
-        seatIndex,
-        target: SEATS[seatIndex].pos.clone(),
+        seatId,
+        seatPos: new THREE.Vector2(available.x, available.z),
+        seatFacingY: available.facingY,
+        platePos: new THREE.Vector2(available.platePos.x, available.platePos.z),
+        target: new THREE.Vector2(available.x, available.z),
         stateClock: 0,
         order: [],
         orderIndex: 0,
@@ -351,7 +364,7 @@ export class GuestSpawner {
       });
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
-      this.occupiedSeats.delete(seatIndex);
+      this.occupiedSeats.delete(seatId);
     }
   }
 
@@ -359,14 +372,13 @@ export class GuestSpawner {
     const g = this.guests[idx];
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
-    this.occupiedSeats.delete(g.seatIndex);
+    this.occupiedSeats.delete(g.seatId);
     // Clear any plate left on their table when they walk out.
     this.removePlateForGuest(g.id);
     // Seat needs cleanup before the next guest can use it. Pop a small
     // marker above the seat to show the player why it's not taking guests.
-    this.dirtyUntil.set(g.seatIndex, this.elapsed + SEAT_CLEAN_SECONDS);
-    const seat = SEATS[g.seatIndex];
-    this.floatingText?.pop(seat.pos.x, seat.pos.y, "🧹 cleaning", "#f0c8a0");
+    this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
+    this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
     this.guests.splice(idx, 1);
   }
 
@@ -379,8 +391,7 @@ export class GuestSpawner {
       GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
     }
     const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
-    const seat = SEATS[g.seatIndex];
-    plate.position.set(seat.platePos.x, TABLE_HEIGHT_Y, seat.platePos.y);
+    plate.position.set(g.platePos.x, TABLE_HEIGHT_Y, g.platePos.y);
     plate.castShadow = true;
     plate.receiveShadow = true;
     // Add a small food-color blob on top so it doesn't read as "empty plate".
@@ -412,8 +423,8 @@ export class GuestSpawner {
       case "walkingIn": {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
-          g.character.groundPos.copy(SEATS[g.seatIndex].pos);
-          g.character.facingY = SEATS[g.seatIndex].facingY;
+          g.character.groundPos.copy(g.seatPos);
+          g.character.facingY = g.seatFacingY;
           g.character.action = "sit";
           g.state = "seated";
           g.stateClock = 0;
@@ -554,7 +565,7 @@ export class GuestSpawner {
     }
     this.game.cooking.consumeIngredients(recipe);
     g.ticketId = this.router.enqueueOrder(
-      g.id, recipe.id, SEATS[g.seatIndex].pos, recipe.preparationTimeSeconds,
+      g.id, recipe.id, g.seatPos, recipe.preparationTimeSeconds,
     );
     g.state = "waitingForFood";
     g.stateClock = 0;

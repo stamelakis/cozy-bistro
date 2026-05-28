@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
-import { getFurnitureDef } from "../data/furnitureCatalog";
+import { getFurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
 import { fitFurniture } from "../assets/fitFurniture";
 
 /**
@@ -32,6 +32,24 @@ export interface PersistedPlacement {
   x: number;
   z: number;
   rotY: number;
+}
+
+/** A resolved seat-slot from a placed table — world coords for chair and plate. */
+export interface ResolvedSeatSlot {
+  /** uid of the table this slot belongs to. */
+  tableUid: string;
+  /** Index into table.def.seatSlots — lets the GuestSpawner stamp persistent
+   * ids per slot ("table-X#slot-2") so it can track occupancy across frames. */
+  slotIndex: number;
+  /** World chair position. */
+  x: number;
+  z: number;
+  /** Required chair facing (radians). */
+  facingY: number;
+  /** Where the plate goes on the table. */
+  platePos: { x: number; z: number };
+  /** uid of the chair currently sitting in this slot, or null if none. */
+  chairUid: string | null;
 }
 
 let nextUidCounter = 1;
@@ -154,6 +172,107 @@ export class FurnitureRegistry {
       ratingBonus += def.ratingBonus ?? 0;
     }
     return { style, comfort, attractionBonus, ratingBonus };
+  }
+
+  // === Seat-slot integration ===
+
+  /** Tolerance for matching a chair to its table's seat slot. Chairs within
+   * this distance AND with their facing within ~15° of the slot's required
+   * facing are considered "functional" seats. */
+  private static readonly SEAT_POSITION_TOL = 0.35;
+  private static readonly SEAT_FACING_TOL = 0.27; // ≈15°
+
+  /** Return every placed table, resolved with its seat slots in world space
+   * and whether each slot is filled by a correctly-oriented chair. Pass
+   * `onlyVisible: true` to skip slots whose table is currently hidden by
+   * the luxury-tier visibility groups in WorldScene. */
+  getResolvedSeatSlots(onlyVisible = false): ResolvedSeatSlot[] {
+    const out: ResolvedSeatSlot[] = [];
+    for (const it of this.items) {
+      if (onlyVisible && !this.isVisibleInScene(it.model)) continue;
+      const def = getFurnitureDef(it.defId);
+      if (!def?.seatSlots) continue;
+      for (let i = 0; i < def.seatSlots.length; i += 1) {
+        const slot = def.seatSlots[i];
+        const world = this.rotateSlotOffset(slot, it);
+        out.push({
+          tableUid: it.uid,
+          slotIndex: i,
+          x: it.x + world.dx,
+          z: it.z + world.dz,
+          facingY: this.normalizeAngle(slot.facingY + it.rotY),
+          platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
+          chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY)),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** True if this object3D (or any of its ancestors) is currently visible.
+   * The scene tier-visibility groups toggle `.visible = false` on locked
+   * table models — guests should ignore the seats on hidden tables. */
+  private isVisibleInScene(model: THREE.Object3D): boolean {
+    let cur: THREE.Object3D | null = model;
+    while (cur) {
+      if (cur.visible === false) return false;
+      cur = cur.parent;
+    }
+    return true;
+  }
+
+  /** Find the seat slot closest to (x, z) within snap range. Returns null if
+   * nothing in range. Used by BuildMenu's chair auto-snap behaviour. */
+  findNearestSeatSlot(x: number, z: number, range = 1.4): ResolvedSeatSlot | null {
+    let best: ResolvedSeatSlot | null = null;
+    let bestD2 = range * range;
+    for (const s of this.getResolvedSeatSlots()) {
+      const dx = s.x - x;
+      const dz = s.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = s; }
+    }
+    return best;
+  }
+
+  /** Internal: find the uid of a chair whose pose matches a slot. */
+  private findChairAtSlot(slotX: number, slotZ: number, slotFacing: number): string | null {
+    const TOL = FurnitureRegistry.SEAT_POSITION_TOL;
+    const FTOL = FurnitureRegistry.SEAT_FACING_TOL;
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "chair") continue;
+      const dx = it.x - slotX;
+      const dz = it.z - slotZ;
+      if (Math.abs(dx) > TOL || Math.abs(dz) > TOL) continue;
+      const dFacing = Math.abs(this.normalizeAngle(it.rotY - slotFacing));
+      if (dFacing > FTOL) continue;
+      return it.uid;
+    }
+    return null;
+  }
+
+  /** Internal: apply the table's rotation to a slot offset so a rotated
+   * table's seats still land in the right world positions. */
+  private rotateSlotOffset(slot: SeatSlot, table: PlacedFurnitureItem):
+    { dx: number; dz: number; platePos: { dx: number; dz: number } } {
+    const c = Math.cos(table.rotY);
+    const s = Math.sin(table.rotY);
+    const rot = (dx: number, dz: number): { dx: number; dz: number } => ({
+      dx: c * dx + s * dz,
+      dz: -s * dx + c * dz,
+    });
+    const seat = rot(slot.dx, slot.dz);
+    const plate = rot(slot.platePos.dx, slot.platePos.dz);
+    return { dx: seat.dx, dz: seat.dz, platePos: { dx: plate.dx, dz: plate.dz } };
+  }
+
+  /** Normalize an angle into (-π, π] so |delta| math is meaningful. */
+  private normalizeAngle(a: number): number {
+    let v = a % (Math.PI * 2);
+    if (v > Math.PI) v -= Math.PI * 2;
+    if (v <= -Math.PI) v += Math.PI * 2;
+    return v;
   }
 
   /** Count of placed items of a specific id. Used to detect sinks /

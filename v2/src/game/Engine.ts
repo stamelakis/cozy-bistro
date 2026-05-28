@@ -30,6 +30,7 @@ import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
+import { SeatMarkers } from "../scene/SeatMarkers";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
@@ -49,6 +50,7 @@ export class Engine {
   pedestrians?: PedestrianSpawner;
   trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
+  readonly seatMarkers: SeatMarkers;
   readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
@@ -199,6 +201,7 @@ export class Engine {
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
+    this.seatMarkers = new SeatMarkers(this.scene.threeScene, this.registry);
     if (savedState?.furniture && savedState.furniture.length > 0) {
       // SaveGameState.furniture mirrors the 2D PlacedFurniture shape
       // ({position:{x,y}, rotation:degrees}). Re-instantiate each item
@@ -520,6 +523,7 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
+      this.seatMarkers.refresh();
       this.hudAccumulator = 0;
     }
 
