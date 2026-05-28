@@ -2,7 +2,7 @@ import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { LuxuryTier } from "../data/types";
-import { STAFF_UPGRADE_MAX, type StaffRole } from "../systems/StaffSystem";
+import { STAFF_UPGRADE_MAX, getTrainingDurationHours, type StaffRole } from "../systems/StaffSystem";
 
 /**
  * Upgrades browser. Outer tabs split the modal into:
@@ -345,16 +345,36 @@ export class UpgradeModal {
         btn.textContent = "MAX";
         btn.disabled = true;
         btn.style.opacity = "0.5";
+      } else if (this.game.isMemberTraining(m.id)) {
+        // In-flight training — show a countdown instead of the Train
+        // button. Update the row label too so the "now / next" text
+        // reads "Training to L(n+1)".
+        const remaining = this.game.getMemberTrainingRemainingSeconds(m.id) ?? 0;
+        btn.innerHTML = `📚 Training<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+        btn.disabled = true;
+        btn.style.opacity = "0.7";
+        btn.style.background = "rgba(120, 160, 220, 0.22)";
+        // Replace the "next" preview line with the target level + the
+        // expected total duration so the player sees the deal.
+        const targetLevel = level + 1;
+        const hours = getTrainingDurationHours(targetLevel);
+        detail.innerHTML =
+          `<span style="opacity:0.7">Now:</span> ${meta.current(level)} ` +
+          `&nbsp; · &nbsp; ` +
+          `<span style="color:#a8d4f0">📚 Training to L${targetLevel} — ${hours}h total, ${formatHM(remaining)} left</span>`;
       } else {
         const cost = this.game.getMemberUpgradeCost(m.id);
         const requiredTier = this.game.getMemberUpgradeRequiredTier(m.id);
         const playerTier = this.game.getLuxuryTier();
         const tierLocked = requiredTier !== null && requiredTier > playerTier;
+        const targetLevel = level + 1;
+        const hours = getTrainingDurationHours(targetLevel);
         if (tierLocked) {
-          btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+          btn.innerHTML = `🔒 Tier ${requiredTier}<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
           btn.title = `Requires restaurant tier ${requiredTier} (you're on ${playerTier})`;
         } else {
-          btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost}</span>`;
+          btn.innerHTML = `Train<br><span style="font-size:10px;opacity:0.85">$${cost} · ${hours}h</span>`;
+          btn.title = `Spend $${cost} and ${hours} in-game hours to reach L${targetLevel}`;
         }
         const can = this.game.canUpgradeMember(m.id);
         btn.disabled = !can;
@@ -382,4 +402,16 @@ export class UpgradeModal {
   }
 
   private pretty(id: string): string { return id.replace(/[-_]/g, " "); }
+}
+
+/** Format a duration in IN-GAME seconds as "Xh Ym" (game hours +
+ * minutes). One in-game day is 720 real seconds = 24 in-game hours,
+ * so 1 game hour = 30 seconds. */
+function formatHM(gameSeconds: number): string {
+  const gameHours = gameSeconds / 30; // 30 real sec per game hour
+  const wholeHours = Math.floor(gameHours);
+  const minutes = Math.round((gameHours - wholeHours) * 60);
+  if (wholeHours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${wholeHours}h`;
+  return `${wholeHours}h ${minutes}m`;
 }

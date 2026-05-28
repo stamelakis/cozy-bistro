@@ -311,6 +311,15 @@ export class StaffRouter {
   getChefCount(): number { return this.chefs.length; }
   getWaiterCount(): number { return this.waiters.length; }
 
+  /** Look up the animated character that represents a specific
+   * HiredStaffMember — Engine uses this to anchor floating-text
+   * confirmations over the right actor when training completes. */
+  findCharacterByMemberId(memberId: string): AnimatedCharacter | null {
+    for (const c of this.chefs) if (c.memberId === memberId) return c.character;
+    for (const w of this.waiters) if (w.memberId === memberId) return w.character;
+    return null;
+  }
+
   /** True if at least one chef is currently in their "working" (cooking)
    * state. Used to drive the visible stove flame. */
   isAnyChefCooking(): boolean {

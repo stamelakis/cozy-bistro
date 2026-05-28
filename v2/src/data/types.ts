@@ -91,6 +91,10 @@ export interface HiredStaffMember {
   role: "chef" | "waiter" | "errand";
   name: string;
   upgradeLevel: number;
+  /** Total playtime (seconds) at which the in-flight training
+   * completes and the member's level ticks up. Absent when the
+   * member is idle / not currently training. */
+  trainingCompletesAt?: number;
 }
 
 export interface AdminSettings {

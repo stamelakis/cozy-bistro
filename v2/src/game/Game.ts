@@ -12,7 +12,7 @@ import { recipes } from "../data/recipes";
 import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
-import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
+import type { HiredStaffMember, IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
 /** Highest luxury tier the player can unlock. */
 const MAX_LUXURY_TIER: LuxuryTier = 5;
@@ -168,6 +168,9 @@ export class Game {
    * uses this to spawn an extra character in the world and add them to
    * the corresponding router pool. */
   onStaffHired?: (role: StaffRole, indexAmongRole: number) => void;
+  /** Fired the frame a member finishes training. Engine wires this to
+   * a floating "🎓 Name is now Lk" toast. */
+  onTrainingCompleted?: (member: HiredStaffMember) => void;
   /** Fired when the player fires a staff member. Engine uses this to
    * remove the matching character from the world. */
   onStaffFired?: (role: StaffRole) => void;
@@ -245,6 +248,13 @@ export class Game {
     const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
     if (payroll.charge > 0) {
       this.economy.forceSpendMoney(payroll.charge, "charge");
+    }
+    // Tick any in-flight staff training. Each completed level fires a
+    // floating-text confirmation so the player notices the bump even
+    // when their attention is elsewhere on the canvas.
+    const completed = this.staff.tickTraining(this.day.getTotalPlaySeconds());
+    for (const m of completed) {
+      this.onTrainingCompleted?.(m);
     }
     // Auto-shop is now an errand-driven supply chain. Each tick we work
     // out which ingredients are genuinely under target (accounting for
@@ -457,16 +467,34 @@ export class Game {
     const m = this.staff.getMember(id);
     if (!m) return false;
     if (m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
+    // A member who's already training can't queue up a second one.
+    if (this.staff.isMemberTraining(id)) return false;
     // Each training level is gated behind the matching restaurant
     // tier: L1 needs T1, L5 needs T5.
     if (m.upgradeLevel + 1 > this.getLuxuryTier()) return false;
     return this.economy.canAfford(this.staff.getMemberUpgradeCost(id));
   }
+  /** Start a training run on a member. Money is debited up front;
+   * the level ticks up automatically once the in-game timer (driven
+   * from {@link DayCycleSystem.totalPlaySeconds}) crosses the
+   * deadline. */
   upgradeMember(id: string): boolean {
     if (!this.canUpgradeMember(id)) return false;
     const cost = this.staff.getMemberUpgradeCost(id);
     if (!this.economy.spendMoney(cost, "unlock")) return false;
-    return this.staff.upgradeMember(id);
+    return this.staff.startMemberTraining(id, this.day.getTotalPlaySeconds());
+  }
+  /** True if the member is currently mid-training. UI uses this to
+   * disable the Train button and show a countdown instead. */
+  isMemberTraining(id: string): boolean {
+    return this.staff.isMemberTraining(id);
+  }
+  /** Seconds of in-game time remaining on this member's training,
+   * or null if they're not training. */
+  getMemberTrainingRemainingSeconds(id: string): number | null {
+    const target = this.staff.getMemberTrainingCompletesAt(id);
+    if (target === null) return null;
+    return Math.max(0, target - this.day.getTotalPlaySeconds());
   }
   /** Roll a member back one training level. Used by the dev-tools
    * "Manage Upgrades" window. Doesn't refund the money — the dev

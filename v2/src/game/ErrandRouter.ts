@@ -189,6 +189,14 @@ export class ErrandRouter {
 
   getHelperCount(): number { return this.helpers.length; }
 
+  /** Look up the animated character that represents a specific
+   * HiredStaffMember. Returns null when the helper is offscreen
+   * (shopping). */
+  findCharacterByMemberId(memberId: string): AnimatedCharacter | null {
+    for (const h of this.helpers) if (h.memberId === memberId) return h.character;
+    return null;
+  }
+
   /** Snapshot for the status-bubble layer. Skips offscreen helpers so
    * we don't render a bubble floating over the empty road. */
   snapshotStatus(): { character: AnimatedCharacter; label: string }[] {

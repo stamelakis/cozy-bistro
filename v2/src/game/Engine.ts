@@ -413,6 +413,15 @@ export class Engine {
       this.game.onStaffFired = (role) => {
         this.handleStaffFired(role);
       };
+      this.game.onTrainingCompleted = (member) => {
+        // Find the actor's world position so the toast pops over the
+        // right character. Fall back to the supply counter for errand
+        // helpers offscreen.
+        const worldPos = this.findMemberWorldPos(member.id);
+        const label = `🎓 ${member.name} → L${member.upgradeLevel}`;
+        this.floatingText?.pop(worldPos.x, worldPos.y - 0.4, label, "#ffd986");
+        this.sfx?.chime();
+      };
       if (haveStaffPair) {
         // Restore any extra hired staff from the save. The base 3
         // characters (1 chef, 1 waiter, 1 errand) are already in the
@@ -589,6 +598,18 @@ export class Engine {
 
   private labelForRole(role: "chef" | "waiter" | "errand"): string {
     return role === "chef" ? "Chef" : role === "waiter" ? "Waiter" : "Errand";
+  }
+
+  /** Look up the world position of the actor that represents a
+   * HiredStaffMember. Falls back to a sensible "near the kitchen"
+   * point when the actor can't be located (e.g. an errand helper
+   * who's offscreen on a shopping run). */
+  private findMemberWorldPos(memberId: string): THREE.Vector2 {
+    const fromStaff = this.router?.findCharacterByMemberId(memberId);
+    if (fromStaff) return fromStaff.groundPos.clone();
+    const fromErrand = this.errand?.findCharacterByMemberId(memberId);
+    if (fromErrand) return fromErrand.groundPos.clone();
+    return this.scene.stovePos.clone();
   }
 
   /** Remove the most-recently-added staff character of this role from

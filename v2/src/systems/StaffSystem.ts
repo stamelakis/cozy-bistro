@@ -29,6 +29,33 @@ export interface SalaryTickResult {
  * but not overwhelming bump and the player has a clear endpoint. */
 export const STAFF_UPGRADE_MAX = 5;
 
+/** Training duration in IN-GAME seconds. One in-game day is 720 real
+ * seconds (12 real minutes), 24 in-game hours → 30 real seconds per
+ * game-hour. Doubles per level:
+ *   L1: 3h game = 90s real (1.5 min at 1×)
+ *   L2: 6h game = 180s real
+ *   L3: 12h game = 360s real
+ *   L4: 24h game = 720s real (1 full day)
+ *   L5: 48h game = 1440s real (2 full days)
+ *
+ * Indexed by the TARGET level (the one the trainee is studying
+ * toward). targetLevel 1 = the first upgrade purchase. */
+const GAME_SECONDS_PER_HOUR = 30;
+const TRAINING_HOURS_BY_TARGET_LEVEL: Record<number, number> = {
+  1: 3,
+  2: 6,
+  3: 12,
+  4: 24,
+  5: 48,
+};
+export function getTrainingDurationSeconds(targetLevel: number): number {
+  const hours = TRAINING_HOURS_BY_TARGET_LEVEL[targetLevel] ?? 3;
+  return hours * GAME_SECONDS_PER_HOUR;
+}
+export function getTrainingDurationHours(targetLevel: number): number {
+  return TRAINING_HOURS_BY_TARGET_LEVEL[targetLevel] ?? 3;
+}
+
 export class StaffSystem {
   /** Source of truth — one record per hired staff member. Aggregate
    * {@link HiredStaff} counts and the legacy per-role multipliers are
@@ -150,28 +177,81 @@ export class StaffSystem {
   }
 
   /** Cost to move THIS member from their current level to the next.
-   * Same linear ramp as before but applied to the individual. */
+   * Doubled from the original linear ramp now that training also
+   * takes time: 500 × next level. Full progression: 500 / 1k / 1.5k /
+   * 2k / 2.5k = $7500 total per member. */
   getMemberUpgradeCost(id: string): number {
     const level = this.getMemberUpgradeLevel(id);
     if (level >= STAFF_UPGRADE_MAX) return 0;
-    return 250 * (level + 1);
+    return 500 * (level + 1);
   }
 
-  /** Move one member up one level. Caller handles money. */
-  upgradeMember(id: string): boolean {
+  /** True if the member is currently training toward their next
+   * level. */
+  isMemberTraining(id: string): boolean {
+    return typeof this.getMember(id)?.trainingCompletesAt === "number";
+  }
+
+  /** Total playtime (seconds) at which the current training will
+   * complete, or null when the member isn't training. */
+  getMemberTrainingCompletesAt(id: string): number | null {
+    const m = this.getMember(id);
+    return typeof m?.trainingCompletesAt === "number" ? m.trainingCompletesAt : null;
+  }
+
+  /** Start training one member toward their next level. Returns true
+   * when the timer actually started. Caller handles money. */
+  startMemberTraining(id: string, totalPlaySeconds: number): boolean {
     const m = this.getMember(id);
     if (!m || m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
-    m.upgradeLevel += 1;
+    if (typeof m.trainingCompletesAt === "number") return false; // already training
+    const targetLevel = m.upgradeLevel + 1;
+    m.trainingCompletesAt = totalPlaySeconds + getTrainingDurationSeconds(targetLevel);
     return true;
   }
 
-  /** Revert one member one level (used by dev tools / refunds). No
-   * money side-effect — caller chooses whether to credit anything. */
+  /** Cancel any in-flight training on this member (does NOT refund
+   * money). */
+  cancelMemberTraining(id: string): boolean {
+    const m = this.getMember(id);
+    if (!m || typeof m.trainingCompletesAt !== "number") return false;
+    delete m.trainingCompletesAt;
+    return true;
+  }
+
+  /** Advance every member's training clock. Completes any whose
+   * deadline has passed (their level ticks up). Called once per Game
+   * tick. Returns the list of members who just completed a level so
+   * the caller can pop UI confirmations. */
+  tickTraining(totalPlaySeconds: number): HiredStaffMember[] {
+    const completed: HiredStaffMember[] = [];
+    for (const m of this.members) {
+      if (typeof m.trainingCompletesAt !== "number") continue;
+      if (totalPlaySeconds >= m.trainingCompletesAt) {
+        m.upgradeLevel = Math.min(STAFF_UPGRADE_MAX, m.upgradeLevel + 1);
+        delete m.trainingCompletesAt;
+        completed.push(m);
+      }
+    }
+    return completed;
+  }
+
+  /** Revert one member one level (used by dev tools / refunds). Also
+   * cancels any in-flight training. No money side-effect — caller
+   * chooses whether to credit anything. */
   demoteMember(id: string): boolean {
     const m = this.getMember(id);
-    if (!m || m.upgradeLevel <= 0) return false;
-    m.upgradeLevel -= 1;
-    return true;
+    if (!m) return false;
+    let changed = false;
+    if (typeof m.trainingCompletesAt === "number") {
+      delete m.trainingCompletesAt;
+      changed = true;
+    }
+    if (m.upgradeLevel > 0) {
+      m.upgradeLevel -= 1;
+      changed = true;
+    }
+    return changed;
   }
 
   // === Per-member effect multipliers ===
@@ -270,12 +350,16 @@ export class StaffSystem {
       // Modern save — rebuild the roster exactly.
       for (const m of save.staffMembers) {
         if (m && typeof m.id === "string" && (m.role === "chef" || m.role === "waiter" || m.role === "errand")) {
-          this.members.push({
+          const restored: HiredStaffMember = {
             id: m.id,
             role: m.role,
             name: typeof m.name === "string" && m.name.length > 0 ? m.name : randomStaffName(),
             upgradeLevel: clampLevel(m.upgradeLevel),
-          });
+          };
+          if (typeof m.trainingCompletesAt === "number" && Number.isFinite(m.trainingCompletesAt)) {
+            restored.trainingCompletesAt = m.trainingCompletesAt;
+          }
+          this.members.push(restored);
         }
       }
     } else {
