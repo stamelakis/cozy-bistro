@@ -31,6 +31,7 @@ import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
+import { Pathfinding } from "./Pathfinding";
 import { SeatMarkers } from "../scene/SeatMarkers";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
@@ -51,6 +52,10 @@ export class Engine {
   pedestrians?: PedestrianSpawner;
   trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
+  /** Shared A* pathfinder. Reads obstacle positions live from the
+   * registry so every staff/customer move routes around placed
+   * furniture instead of clipping through it. */
+  readonly pathfind: Pathfinding;
   readonly seatMarkers: SeatMarkers;
   /** True when the chef/waiter pair failed to load and the spawner is
    * running with the stub router (tickets resolve internally with no
@@ -208,6 +213,11 @@ export class Engine {
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
+    // Pathfinder reads the live registry each query — we don't have to
+    // rebuild a grid when furniture is placed/moved/sold. PlacedFurnitureItem
+    // has defId/x/z plus extras, so it satisfies the PathfinderItem shape
+    // structurally.
+    this.pathfind = new Pathfinding(() => this.registry.snapshotItems());
     this.seatMarkers = new SeatMarkers(this.scene.threeScene, this.registry);
     if (savedState?.furniture && savedState.furniture.length > 0) {
       // SaveGameState.furniture mirrors the 2D PlacedFurniture shape
@@ -337,7 +347,7 @@ export class Engine {
         );
         this.usingStubRouter = true;
       } else {
-        this.router = new StaffRouter(this.scene.chefChar!, this.scene.waiterChar!, this.scene.stovePos, this.scene.pickupPos);
+        this.router = new StaffRouter(this.scene.chefChar!, this.scene.waiterChar!, this.scene.stovePos, this.scene.pickupPos, this.pathfind);
         console.log("[Engine] real StaffRouter created with 1 chef + 1 waiter");
       }
       this.spawner = new GuestSpawner(
@@ -347,6 +357,7 @@ export class Engine {
       this.spawner.floatingText = this.floatingText;
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
+      this.spawner.pathfind = this.pathfind;
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.
@@ -361,6 +372,7 @@ export class Engine {
           this.scene.errandChar,
           this.scene.doorPos,
           this.scene.supplyCounterPos,
+          this.pathfind,
         );
         this.errand.onDelivery = (list) => this.game.completeErrandDelivery(list);
         this.game.onAutoShopDispatch = (list) => this.errand?.triggerRun(list);

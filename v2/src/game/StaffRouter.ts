@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
+import type { Pathfinding, PathStep } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
 /**
  * Drives staff (chef + waiter) movement & state machines so they actually
@@ -56,6 +58,10 @@ interface StaffActor {
    * and waiter can move at different speeds without branching in the
    * shared moveActor. */
   speed: number;
+  /** Remaining waypoints (in world coords) from the most recent
+   * pathfind to a.target. Empty array = no plan; moveActor falls back
+   * to direct movement so the actor still does SOMETHING. */
+  path: PathStep[];
 }
 
 // Chef stays slow so the visible "shuffle to the stove" reads at the
@@ -98,16 +104,39 @@ export class StaffRouter {
   /** Where the waiter picks up plates from the chef. */
   private readonly pickupPos: THREE.Vector2;
 
+  /** Optional pathfinder — when set, every target assignment recomputes
+   * a path that routes around blocking furniture. Without it, staff
+   * fall back to direct A→B movement (the pre-pathfinding behaviour). */
+  private readonly pathfind?: Pathfinding;
+
   constructor(
     chefChar: AnimatedCharacter,
     waiterChar: AnimatedCharacter,
     stovePos: THREE.Vector2,
     pickupPos: THREE.Vector2,
+    pathfind?: Pathfinding,
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
+    this.pathfind = pathfind;
     this.addChef(chefChar);
     this.addWaiter(waiterChar);
+  }
+
+  /** Recompute the path from the actor's current position to its
+   * target. Called whenever the state machine writes a fresh
+   * a.target. Falls back to a single direct waypoint when the
+   * pathfinder is missing or returns nothing useful. */
+  private planPath(a: StaffActor): void {
+    if (!this.pathfind) {
+      a.path = [a.target.clone()];
+      return;
+    }
+    a.path = this.pathfind.findPath(
+      a.character.groundPos.x, a.character.groundPos.y,
+      a.target.x, a.target.y,
+    );
+    if (a.path.length === 0) a.path = [a.target.clone()];
   }
 
   /** Append a chef to the pool. Their current ground position becomes home. */
@@ -120,6 +149,7 @@ export class StaffRouter {
       target: char.groundPos.clone(),
       clock: 0,
       speed: CHEF_SPEED,
+      path: [],
     });
   }
 
@@ -132,6 +162,7 @@ export class StaffRouter {
       target: char.groundPos.clone(),
       clock: 0,
       speed: WAITER_SPEED,
+      path: [],
     });
   }
 
@@ -263,6 +294,7 @@ export class StaffRouter {
           ticket.clock = 0;
           c.ticketId = ticket.id;
           c.target = this.stovePos.clone();
+          this.planPath(c);
           c.state = "movingToWork";
           c.clock = 0;
           c.character.action = "walk";
@@ -283,6 +315,7 @@ export class StaffRouter {
         const ticket = this.tickets.find((t) => t.id === c.ticketId);
         if (!ticket) { // guest left, abandon the cook
           c.target = c.home.clone();
+          this.planPath(c);
           c.state = "returningHome";
           c.character.action = "walk";
           c.clock = 0;
@@ -293,6 +326,7 @@ export class StaffRouter {
           ticket.state = "ready";
           ticket.clock = 0;
           c.target = c.home.clone();
+          this.planPath(c);
           c.state = "returningHome";
           c.character.action = "walk";
           c.ticketId = null;
@@ -325,6 +359,7 @@ export class StaffRouter {
           ticket.clock = 0;
           w.ticketId = ticket.id;
           w.target = this.pickupPos.clone();
+          this.planPath(w);
           w.state = "movingToWork"; // movingToWork = first goes to kitchen, then to seat
           w.clock = 0;
           w.character.action = "walk";
@@ -338,6 +373,7 @@ export class StaffRouter {
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (!ticket) {
             w.target = w.home.clone();
+            this.planPath(w);
             w.state = "returningHome";
             w.character.action = "walk";
             w.ticketId = null;
@@ -354,6 +390,7 @@ export class StaffRouter {
           }
           w.heldPlate.visible = true;
           w.target = ticket.seatPos.clone();
+          this.planPath(w);
           w.state = "working";
           w.clock = 0;
         }
@@ -369,6 +406,7 @@ export class StaffRouter {
           // spawned by GuestSpawner takes over the visual.
           if (w.heldPlate) w.heldPlate.visible = false;
           w.target = w.home.clone();
+          this.planPath(w);
           w.state = "returningHome";
           w.character.action = "walk";
           w.ticketId = null;
@@ -392,8 +430,20 @@ export class StaffRouter {
 
   private moveActor(a: StaffActor, dt: number): void {
     const pos = a.character.groundPos;
-    const dx = a.target.x - pos.x;
-    const dz = a.target.y - pos.y;
+    // Path-driven movement — walk toward the next waypoint, advance
+    // when it's reached, and fall back to direct movement against
+    // a.target when no path is set.
+    if (a.path.length === 0 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+      // Re-plan if we lost our path mid-step (e.g. obstacles changed
+      // mid-frame). Cheap and self-correcting.
+      this.planPath(a);
+    }
+    while (a.path.length > 0 && this.distance(pos, a.path[0]) < PATH_ARRIVAL_THRESHOLD) {
+      a.path.shift();
+    }
+    const wp = a.path[0] ?? a.target;
+    const dx = wp.x - pos.x;
+    const dz = wp.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
     const step = Math.min(dist, a.speed * dt);

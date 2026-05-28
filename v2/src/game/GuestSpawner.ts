@@ -11,6 +11,8 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
+import type { Pathfinding, PathStep } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
 /** Stable seat identifier: `${tableUid}#${slotIndex}`. Lets a seated guest
  * remember their slot even when other seats are added/removed by player
@@ -96,6 +98,9 @@ interface ActiveGuest {
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
+  /** Remaining waypoints from the most recent pathfind. Re-planned each
+   * time the guest's target changes. */
+  path: PathStep[];
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -209,6 +214,9 @@ export class GuestSpawner {
   /** Optional: registry of placed furniture. When provided, its stats
    * scale spawn rate, satisfaction, and rating. */
   registry?: FurnitureRegistry;
+  /** Optional: route around blocking furniture when set. Falls back to a
+   * straight line otherwise. */
+  pathfind?: Pathfinding;
 
   constructor(
     scene: THREE.Scene,
@@ -222,6 +230,17 @@ export class GuestSpawner {
     this.animator = animator;
     this.game = game;
     this.router = router;
+  }
+
+  /** Plan a guest's walking path from current pos to current target.
+   * Falls back to a direct waypoint when no pathfinder is wired. */
+  private planPath(g: ActiveGuest): void {
+    if (!this.pathfind) { g.path = [g.target.clone()]; return; }
+    g.path = this.pathfind.findPath(
+      g.character.groundPos.x, g.character.groundPos.y,
+      g.target.x, g.target.y,
+    );
+    if (g.path.length === 0) g.path = [g.target.clone()];
   }
 
   /** Per-frame tick. Spawns guests, advances their state machines, moves
@@ -340,6 +359,7 @@ export class GuestSpawner {
     this.game.reputation.recordRating(1);
     g.character.action = "walk";
     g.target = DOOR_POSITION.clone();
+    this.planPath(g);
     g.state = "walkingToDoor";
     g.stateClock = 0;
   }
@@ -434,6 +454,7 @@ export class GuestSpawner {
         // Table sold under them. Walk them out gracefully.
         if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
           g.target = DOOR_POSITION.clone();
+          this.planPath(g);
           g.state = "walkingToDoor";
           g.character.action = "walk";
           g.stateClock = 0;
@@ -445,6 +466,9 @@ export class GuestSpawner {
       g.platePos.set(slot.platePos.x, slot.platePos.z);
       if (g.state === "walkingIn") {
         g.target.copy(g.seatPos);
+        // Re-plan whenever the seat moves mid-walk so the guest still
+        // routes around obstacles after a table relocation.
+        this.planPath(g);
       }
     }
   }
@@ -496,6 +520,7 @@ export class GuestSpawner {
         this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a");
         g.character.action = "walk";
         g.target = DOOR_POSITION.clone();
+        this.planPath(g);
         g.state = "walkingToDoor";
         g.stateClock = 0;
         continue;
@@ -517,6 +542,7 @@ export class GuestSpawner {
       g.seatFacingY = available.facingY;
       g.platePos.set(available.platePos.x, available.platePos.z);
       g.target = new THREE.Vector2(available.x, available.z);
+      this.planPath(g);
       g.state = "walkingIn"; // reuse the existing walk-to-seat handler
       g.character.action = "walk";
       g.stateClock = 0;
@@ -603,7 +629,9 @@ export class GuestSpawner {
         totalPaid: 0,
         totalSatisfaction: 0,
         archetype,
+        path: [],
       };
+      this.planPath(guest);
       if (!available && waitingChair) {
         guest.waiting = {
           chairUid: waitingChair.uid,
@@ -690,6 +718,7 @@ export class GuestSpawner {
             // Reached the door — now head to the seat. Stay in walkingIn.
             g.passedDoor = true;
             g.target = g.seatPos.clone();
+            this.planPath(g);
             g.stateClock = 0;
           } else {
             // Reached the seat.
@@ -764,6 +793,7 @@ export class GuestSpawner {
             this.finalizeVisit(g);
             g.character.action = "walk";
             g.target = DOOR_POSITION.clone();
+            this.planPath(g);
             g.state = "walkingToDoor";
             g.stateClock = 0;
           }
@@ -776,6 +806,7 @@ export class GuestSpawner {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
           g.target = EXIT_POSITION.clone();
+          this.planPath(g);
           g.state = "walkingOut";
           g.stateClock = 0;
         }
@@ -790,8 +821,19 @@ export class GuestSpawner {
 
   private moveToward(g: ActiveGuest, dt: number): void {
     const pos = g.character.groundPos;
-    const dx = g.target.x - pos.x;
-    const dz = g.target.y - pos.y;
+    // Defensive: plan a path on the fly if nothing's queued and we
+    // still have ground to cover. Normally planPath() has run at the
+    // state transition that set this target.
+    if (g.path.length === 0 && this.distanceToTarget(g) >= ARRIVAL_THRESHOLD) {
+      this.planPath(g);
+    }
+    // Consume waypoints we're already within range of.
+    while (g.path.length > 0 && Math.hypot(g.path[0].x - pos.x, g.path[0].y - pos.y) < PATH_ARRIVAL_THRESHOLD) {
+      g.path.shift();
+    }
+    const wp = g.path[0] ?? g.target;
+    const dx = wp.x - pos.x;
+    const dz = wp.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
     const step = Math.min(dist, WALK_SPEED * dt);
@@ -852,6 +894,7 @@ export class GuestSpawner {
         this.finalizeVisit(g);
         g.character.action = "walk";
         g.target = DOOR_POSITION.clone();
+        this.planPath(g);
         g.state = "walkingToDoor";
         g.stateClock = 0;
       }
@@ -875,6 +918,7 @@ export class GuestSpawner {
     this.sfx?.thud();
     g.character.action = "walk";
     g.target = DOOR_POSITION.clone();
+    this.planPath(g);
     g.state = "walkingToDoor";
     g.stateClock = 0;
   }

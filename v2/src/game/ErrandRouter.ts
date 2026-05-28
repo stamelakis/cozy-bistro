@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
+import type { Pathfinding, PathStep } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
 /**
  * Drives the errand-helper characters so the auto-shop has a visible
@@ -50,6 +52,8 @@ interface ErrandActor {
   /** What this helper is currently fetching — set when they leave home,
    * delivered (via onDelivery) when they hand off at the counter. */
   payload: ShoppingList | null;
+  /** Remaining waypoints from the most recent pathfind. */
+  path: PathStep[];
 }
 
 const WALK_SPEED = 2.88; // +20% over the previous 2.4
@@ -91,10 +95,28 @@ export class ErrandRouter {
    * actually land on the pantry shelves. */
   onDelivery?: (list: ShoppingList) => void;
 
-  constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2, counterPos: THREE.Vector2) {
+  /** Optional pathfinder; when present, helper movements route around
+   * blocking furniture. Falls back to direct movement otherwise. The
+   * offscreen "shopping" segment and the road-edge legs aren't routed
+   * (they're outside the playable grid). */
+  private readonly pathfind?: Pathfinding;
+
+  constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
     this.doorInteriorPos = doorPos.clone();
     this.counterPos = counterPos.clone();
+    this.pathfind = pathfind;
     this.addHelper(helperChar);
+  }
+
+  /** Plan the helper's path from current position to target. Falls
+   * back to a single direct waypoint when no pathfinder is wired. */
+  private planPath(h: ErrandActor): void {
+    if (!this.pathfind) { h.path = [h.target.clone()]; return; }
+    h.path = this.pathfind.findPath(
+      h.character.groundPos.x, h.character.groundPos.y,
+      h.target.x, h.target.y,
+    );
+    if (h.path.length === 0) h.path = [h.target.clone()];
   }
 
   addHelper(char: AnimatedCharacter): void {
@@ -113,6 +135,7 @@ export class ErrandRouter {
       clock: 0,
       payload: null,
       roadEdge: null,
+      path: [],
     });
   }
 
@@ -207,6 +230,7 @@ export class ErrandRouter {
           const dir = Math.random() < 0.5 ? -1 : 1;
           h.roadEdge = new THREE.Vector2(ROAD_EDGE_X * dir, ROAD_EDGE_Z);
           h.target = this.doorInteriorPos.clone();
+          this.planPath(h);
           h.state = "walkingToDoor";
           h.clock = 0;
           h.character.action = "walk";
@@ -218,6 +242,7 @@ export class ErrandRouter {
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
           // At the door — now head along the pavement toward the edge.
           h.target = (h.roadEdge ?? new THREE.Vector2(ROAD_EDGE_X, ROAD_EDGE_Z)).clone();
+          this.planPath(h);
           h.state = "walkingToRoadEdge";
           h.clock = 0;
         }
@@ -239,6 +264,7 @@ export class ErrandRouter {
           // Pop back into view at the same pavement edge, now carrying.
           h.character.root.visible = true;
           h.target = this.doorInteriorPos.clone();
+          this.planPath(h);
           h.state = "walkingFromRoadEdge";
           h.clock = 0;
           h.character.action = "carry";
@@ -250,6 +276,7 @@ export class ErrandRouter {
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
           // Through the door — head to the supply counter to drop off.
           h.target = this.counterPos.clone();
+          this.planPath(h);
           h.state = "walkingToCounter";
           h.clock = 0;
         }
@@ -277,6 +304,7 @@ export class ErrandRouter {
           // the same coord every cycle.
           h.home = this.pickIdleSpot();
           h.target = h.home.clone();
+          this.planPath(h);
           h.state = "returningHome";
           h.clock = 0;
           h.character.action = "walk";
@@ -298,8 +326,19 @@ export class ErrandRouter {
 
   private moveActor(a: ErrandActor, dt: number): void {
     const pos = a.character.groundPos;
-    const dx = a.target.x - pos.x;
-    const dz = a.target.y - pos.y;
+    // Plan a path on demand if we haven't yet (defensive — should
+    // normally have been planned at state entry, but new helpers and
+    // hot-reload paths can land here without one).
+    if (a.path.length === 0 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+      this.planPath(a);
+    }
+    // Consume waypoints we've already reached.
+    while (a.path.length > 0 && this.distance(pos, a.path[0]) < PATH_ARRIVAL_THRESHOLD) {
+      a.path.shift();
+    }
+    const wp = a.path[0] ?? a.target;
+    const dx = wp.x - pos.x;
+    const dz = wp.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
     const step = Math.min(dist, WALK_SPEED * dt);
