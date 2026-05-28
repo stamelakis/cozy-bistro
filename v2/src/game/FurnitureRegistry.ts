@@ -96,6 +96,18 @@ export class FurnitureRegistry {
     return { defId: item.defId, refund };
   }
 
+  /** Move an existing item to a new cell. Returns true on success
+   * (item exists, new cell is free or the same). */
+  relocate(uid: string, x: number, z: number): boolean {
+    const item = this.items.find((it) => it.uid === uid);
+    if (!item) return false;
+    if (item.x === x && item.z === z) return true;
+    if (this.isOccupied(x, z)) return false;
+    item.x = x; item.z = z;
+    item.model.position.set(x, 0, z);
+    return true;
+  }
+
   /** Snapshot for save. Strips the model ref. */
   snapshot(): PersistedPlacement[] {
     return this.items.map((it) => ({

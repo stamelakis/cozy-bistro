@@ -39,6 +39,13 @@ export class BuildMenu {
    * Mutually exclusive with placingDef (entering sell mode cancels placement). */
   private sellMode = false;
   private sellBtn?: HTMLButtonElement;
+  /** When true, first click picks up a placed item, second click drops
+   * it at a new cell. */
+  private moveMode = false;
+  private moveBtn?: HTMLButtonElement;
+  /** uid of the item the player is currently moving (between the two
+   * clicks of a move). null = not holding anything yet. */
+  private holdingUid: string | null = null;
 
   constructor(
     parent: HTMLElement,
@@ -148,13 +155,16 @@ export class BuildMenu {
       root.appendChild(items_wrap);
     }
 
+    // Sell + Move buttons live as a pair under the catalog list.
+    const actionRow = document.createElement("div");
+    Object.assign(actionRow.style, {
+      display: "grid", gridTemplateColumns: "1fr 1fr",
+      gap: "4px", marginTop: "10px",
+    } as Partial<CSSStyleDeclaration>);
     const sellBtn = document.createElement("button");
-    sellBtn.textContent = "SELL MODE (50% refund)";
+    sellBtn.textContent = "SELL (50%)";
     Object.assign(sellBtn.style, {
-      display: "block",
-      width: "100%",
-      marginTop: "10px",
-      padding: "6px 8px",
+      padding: "6px 4px",
       background: "rgba(220, 140, 80, 0.18)",
       color: "#fff5dc",
       border: "1px solid rgba(220, 140, 80, 0.5)",
@@ -165,8 +175,26 @@ export class BuildMenu {
       fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
     sellBtn.onclick = () => this.toggleSellMode();
-    root.appendChild(sellBtn);
+    actionRow.appendChild(sellBtn);
     this.sellBtn = sellBtn;
+
+    const moveBtn = document.createElement("button");
+    moveBtn.textContent = "MOVE";
+    Object.assign(moveBtn.style, {
+      padding: "6px 4px",
+      background: "rgba(120, 160, 220, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(120, 160, 220, 0.5)",
+      borderRadius: "4px",
+      textAlign: "center",
+      cursor: "pointer",
+      fontSize: "12px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    moveBtn.onclick = () => this.toggleMoveMode();
+    actionRow.appendChild(moveBtn);
+    this.moveBtn = moveBtn;
+    root.appendChild(actionRow);
 
     const hint = document.createElement("div");
     hint.textContent = "Click item → click floor to place. R = rotate. Esc = cancel.";
@@ -174,6 +202,23 @@ export class BuildMenu {
     root.appendChild(hint);
 
     return root;
+  }
+
+  private toggleMoveMode(): void {
+    this.moveMode = !this.moveMode;
+    this.holdingUid = null;
+    if (this.moveMode) {
+      this.cancelPlacing();
+      if (this.sellMode) this.toggleSellMode();
+    }
+    if (this.moveBtn) {
+      this.moveBtn.style.background = this.moveMode
+        ? "rgba(120, 160, 220, 0.6)"
+        : "rgba(120, 160, 220, 0.18)";
+      this.moveBtn.textContent = this.moveMode
+        ? "MOVE — click item then dest (Esc to exit)"
+        : "MOVE";
+    }
   }
 
   private toggleSellMode(): void {
@@ -198,6 +243,7 @@ export class BuildMenu {
       if (e.key === "Escape") {
         this.cancelPlacing();
         if (this.sellMode) this.toggleSellMode();
+        if (this.moveMode) this.toggleMoveMode();
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
         this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
@@ -212,6 +258,7 @@ export class BuildMenu {
       return;
     }
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
+    if (this.moveMode) this.toggleMoveMode();
     this.cancelPlacing();
     this.placingDef = def;
     try {
@@ -256,9 +303,9 @@ export class BuildMenu {
   }
 
   private onPointerMove = (e: PointerEvent): void => {
-    // Run the raycaster in both placing mode (to position the preview)
-    // and sell mode (to know which cell a click would hit).
-    if (!this.placingDef && !this.sellMode) return;
+    // Run the raycaster in placing / sell / move modes so we always
+    // know which cell a click would hit.
+    if (!this.placingDef && !this.sellMode && !this.moveMode) return;
     const rect = this.canvas.getBoundingClientRect();
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -298,6 +345,24 @@ export class BuildMenu {
       }
       this.game.economy.earnMoney(removed.refund, "payment");
       this.flashRoot(`Sold for $${removed.refund}`);
+      return;
+    }
+    if (this.moveMode && this.hoverValid) {
+      const x = Math.round(this.hoverCell.x);
+      const z = Math.round(this.hoverCell.z);
+      if (!this.holdingUid) {
+        // First click: pick up whatever's here.
+        const item = this.registry.findAt(x, z);
+        if (!item) { this.flashRoot("Nothing to move there"); return; }
+        this.holdingUid = item.uid;
+        this.flashRoot(`Picked up — click destination`);
+      } else {
+        // Second click: drop at the new cell.
+        const ok = this.registry.relocate(this.holdingUid, x, z);
+        if (!ok) { this.flashRoot("Destination is occupied"); return; }
+        this.holdingUid = null;
+        this.flashRoot("Moved");
+      }
       return;
     }
     if (!this.placingDef || !this.preview || !this.hoverValid) return;

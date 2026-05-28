@@ -80,10 +80,12 @@ export class MenuPanel {
         text.className = "recipe-text";
         text.style.flex = "1";
         const cat = document.createElement("span");
-        cat.textContent = recipe.category[0].toUpperCase();
+        cat.textContent = this.shortForCategory(recipe.category);
+        cat.title = recipe.category[0].toUpperCase() + recipe.category.slice(1);
         Object.assign(cat.style, {
           fontSize: "10px", padding: "1px 5px", borderRadius: "3px",
           background: this.colorForCategory(recipe.category), color: "#1b1410",
+          fontWeight: "700", minWidth: "20px", textAlign: "center",
         } as Partial<CSSStyleDeclaration>);
         label.appendChild(cb);
         label.appendChild(text);
@@ -116,5 +118,14 @@ export class MenuPanel {
       : c === "dessert"   ? "#f0a0d0"
       : c === "drink"     ? "#a0d8f0"
       : "#cccccc"; // side
+  }
+
+  /** 2-letter category code so dessert and drink don't both show as "D". */
+  private shortForCategory(c: string): string {
+    return c === "appetizer" ? "Ap"
+      : c === "main"      ? "Ma"
+      : c === "dessert"   ? "De"
+      : c === "drink"     ? "Dr"
+      : "Si"; // side
   }
 }
