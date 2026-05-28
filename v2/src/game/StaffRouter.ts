@@ -394,10 +394,16 @@ export class StaffRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Reverted to the original facingY formula — the various "fixes"
-    // for crab walking made everything worse. Leaving as-is until we
-    // can verify the actual GLB orientation empirically.
-    a.character.facingY = Math.atan2(dx, -dz);
+    // GLB default forward is -Z (three.js standard) — confirmed by the
+    // seat-slot facing values that demonstrably point customers at the
+    // table. For R_y(θ) * (0, 0, -1) to equal the movement vector
+    // (dx, 0, dz), we need -sin θ = dx and -cos θ = dz, i.e.
+    // θ = atan2(-dx, -dz). Earlier formulas:
+    //   atan2(dx, -dz)  → backward in X (east/west reversed)
+    //   atan2(-dz, dx)  → 90° crab with right side leading
+    // The correct atan2(-dx, -dz) leaves the seat/hardcoded values
+    // alone and matches them all to GLB -Z.
+    a.character.facingY = Math.atan2(-dx, -dz);
     // Sanity logging — fires occasionally during an actual walk so we can
     // confirm in DevTools that groundPos IS being mutated. If you ever
     // see these lines but the chef still looks frozen in 3D, the

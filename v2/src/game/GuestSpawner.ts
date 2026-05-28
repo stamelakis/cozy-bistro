@@ -797,8 +797,9 @@ export class GuestSpawner {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Reverted to original formula — see StaffRouter.
-    g.character.facingY = Math.atan2(dx, -dz);
+    // GLB forward = -Z (three.js standard) → atan2(-dx, -dz). See
+    // StaffRouter.moveActor for the derivation.
+    g.character.facingY = Math.atan2(-dx, -dz);
     g.character.action = "walk";
   }
 

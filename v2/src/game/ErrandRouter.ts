@@ -305,8 +305,9 @@ export class ErrandRouter {
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Reverted to original formula — see StaffRouter for the same comment.
-    a.character.facingY = Math.atan2(dx, -dz);
+    // GLB forward = -Z (three.js standard) → atan2(-dx, -dz). See
+    // StaffRouter.moveActor for the derivation.
+    a.character.facingY = Math.atan2(-dx, -dz);
   }
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {
