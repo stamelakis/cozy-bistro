@@ -92,6 +92,7 @@ export class StaffPanel {
   update(): void {
     let totalCount = 0;
     let totalPayroll = 0;
+    const perStaff = this.game.admin.payrollPerStaffPerMinute;
     (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => {
       const count = this.game.staff.getStaffCount(role);
       const hireCost = this.game.staff.getStaffHireCost(role);
@@ -99,12 +100,15 @@ export class StaffPanel {
       const label = this.game.staff.getStaffRoleLabel(role);
       const working = this.game.getStaffWorkingCount?.(role) ?? 0;
       const idle = Math.max(0, count - working);
+      const rolePayroll = count * perStaff;
       const row = this.rows[role];
-      row.label.textContent = `${label} (${count})`;
+      // Title row now includes the role payroll so the player can see
+      // expenses per category, not just an aggregate footer.
+      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${rolePayroll}/min</span>`;
       row.activity.innerHTML = count === 0
         ? `<span style="opacity:0.4">none hired</span>`
         : `<span style="color:#a8e2a8">▶ ${working} working</span> · <span style="color:#ffd47a">⏸ ${idle} idle</span>`;
-      row.hire.title = `Hire ${label} ($${hireCost})`;
+      row.hire.title = `Hire ${label} ($${hireCost}) — adds $${perStaff}/min payroll`;
       row.fire.title = `Fire ${label} (−$${fireCost} severance)`;
       const canHire = this.game.economy.canAfford(hireCost);
       row.hire.disabled = !canHire;
@@ -112,12 +116,12 @@ export class StaffPanel {
       row.fire.disabled = count === 0;
       row.fire.style.opacity = count === 0 ? "0.4" : "1";
       totalCount += count;
-      totalPayroll += count * this.game.admin.payrollPerStaffPerMinute;
+      totalPayroll += rolePayroll;
     });
     if (this.payrollLine) {
       this.payrollLine.textContent = totalCount === 0
         ? "No staff hired — guests wait forever."
-        : `${totalCount} hired · payroll $${totalPayroll}/min`;
+        : `${totalCount} hired · total payroll $${totalPayroll}/min`;
     }
   }
 }

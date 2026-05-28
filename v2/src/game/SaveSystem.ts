@@ -40,6 +40,13 @@ export class SaveSystem {
   registry?: FurnitureRegistry;
   private elapsed = 0;
   private readonly activeSlot: number;
+  /** Saves performed in this session — surfaced via getSaveStats() for the
+   * HUD diagnostic readout. */
+  private saveCount = 0;
+  private lastSaveMs = 0;
+  private lastSaveBytes = 0;
+  private lastSaveOk = true;
+  private lastSaveError = "";
 
   constructor(game: Game) {
     this.game = game;
@@ -48,15 +55,38 @@ export class SaveSystem {
 
   getActiveSlot(): number { return this.activeSlot; }
 
+  /** Diagnostic — current session save stats so the HUD can show
+   * "Saved 12s ago · 387 KB · slot 1" when the player wonders if their
+   * progress is being persisted. */
+  getSaveStats(): { count: number; lastMs: number; bytes: number; ok: boolean; error: string; slot: number } {
+    return {
+      count: this.saveCount,
+      lastMs: this.lastSaveMs,
+      bytes: this.lastSaveBytes,
+      ok: this.lastSaveOk,
+      error: this.lastSaveError,
+      slot: this.activeSlot,
+    };
+  }
+
   /** Read the active slot's previously-saved state. */
   static loadFromStorage(): SaveGameState | undefined {
-    if (typeof localStorage === "undefined") return undefined;
-    const raw = localStorage.getItem(slotKey(readActiveSlot()));
-    if (!raw) return undefined;
+    if (typeof localStorage === "undefined") {
+      console.warn("[Load] localStorage unavailable — starting fresh");
+      return undefined;
+    }
+    const slot = readActiveSlot();
+    const raw = localStorage.getItem(slotKey(slot));
+    if (!raw) {
+      console.log(`[Load] no save found in slot ${slot} — starting fresh`);
+      return undefined;
+    }
     try {
-      return JSON.parse(raw) as SaveGameState;
-    } catch {
-      console.warn("Save data was corrupt; starting fresh.");
+      const parsed = JSON.parse(raw) as SaveGameState;
+      console.log(`[Load] restored slot ${slot} (${(raw.length / 1024).toFixed(1)} KB · day ${parsed.dayNumber} · $${parsed.money})`);
+      return parsed;
+    } catch (e) {
+      console.warn(`[Load] save in slot ${slot} corrupt — starting fresh`, e);
       return undefined;
     }
   }
@@ -100,12 +130,38 @@ export class SaveSystem {
 
   /** Manually trigger a save right now (e.g. on `beforeunload`). */
   saveNow(): void {
-    if (typeof localStorage === "undefined") return;
-    const state = this.snapshot();
+    if (typeof localStorage === "undefined") {
+      this.lastSaveOk = false;
+      this.lastSaveError = "localStorage unavailable";
+      console.warn("[Save] localStorage not available — save skipped");
+      return;
+    }
+    let json: string;
     try {
-      localStorage.setItem(slotKey(this.activeSlot), JSON.stringify(state));
+      const state = this.snapshot();
+      json = JSON.stringify(state);
     } catch (e) {
-      console.warn("Save failed (quota?):", e);
+      this.lastSaveOk = false;
+      this.lastSaveError = `snapshot error: ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[Save] snapshot/serialize failed:", e);
+      return;
+    }
+    try {
+      localStorage.setItem(slotKey(this.activeSlot), json);
+      this.saveCount += 1;
+      this.lastSaveMs = Date.now();
+      this.lastSaveBytes = json.length;
+      this.lastSaveOk = true;
+      this.lastSaveError = "";
+      // Every 10th save also logs to console so devs/players opening
+      // DevTools can confirm autosave is working. Avoid spam at 0.2 Hz.
+      if (this.saveCount === 1 || this.saveCount % 10 === 0) {
+        console.log(`[Save] slot ${this.activeSlot} · ${(json.length / 1024).toFixed(1)} KB · save #${this.saveCount}`);
+      }
+    } catch (e) {
+      this.lastSaveOk = false;
+      this.lastSaveError = `write failed: ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[Save] write failed (quota? private mode?):", e);
     }
   }
 

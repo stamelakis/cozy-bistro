@@ -127,6 +127,10 @@ export class Engine {
     // Single shared left panel that holds the HUD + tier/boost widget +
     // stock status + staff panel as stacked sections.
     this.sidebar = new Sidebar(container);
+    this.sidebar.saveNowBtn.onclick = () => {
+      this.saver.saveNow();
+      this.sidebar.updateSaveStatus(this.saver.getSaveStats());
+    };
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,
@@ -515,6 +519,7 @@ export class Engine {
       this.menuPanel.update();
       this.expandWidget.update();
       this.stockWidget.update();
+      this.sidebar.updateSaveStatus(this.saver.getSaveStats());
       this.hudAccumulator = 0;
     }
 

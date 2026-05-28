@@ -65,19 +65,38 @@ export class FurnitureRegistry {
     }
   }
 
-  /** True if any item is already at the given snapped cell. */
+  /** True if any item is already at the given snapped cell. Allows a half-
+   * cell tolerance so chairs placed at fractional coords (e.g. -2.9, 1.0)
+   * register as occupying the nearest integer cell too. */
   isOccupied(x: number, z: number): boolean {
-    return this.items.some((it) => it.x === x && it.z === z);
+    return this.findIndexNear(x, z) >= 0;
   }
 
-  /** Find a placed item at the given cell; the most recently-placed wins
-   * if multiple share a cell (shouldn't happen if isOccupied is checked). */
+  /** Find a placed item near the given snapped cell. Uses ±0.6 tolerance
+   * so demo placements at fractional coords (chairs around table centers)
+   * can still be picked by Move/Sell mode. Most recently-placed wins. */
   findAt(x: number, z: number): PlacedFurnitureItem | null {
+    const i = this.findIndexNear(x, z);
+    return i >= 0 ? this.items[i] : null;
+  }
+
+  /** Internal: return the index of the nearest item within ±0.6 of (x, z),
+   * or -1. Searches newest-first so player placements beat demo. */
+  private findIndexNear(x: number, z: number): number {
+    const TOL = 0.6;
+    let bestIdx = -1;
+    let bestDist = Infinity;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
       const it = this.items[i];
-      if (it.x === x && it.z === z) return it;
+      const dx = it.x - x;
+      const dz = it.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (Math.abs(dx) <= TOL && Math.abs(dz) <= TOL && d2 < bestDist) {
+        bestDist = d2;
+        bestIdx = i;
+      }
     }
-    return null;
+    return bestIdx;
   }
 
   /** Remove the item at the given cell and return its def + refund value.
@@ -85,10 +104,7 @@ export class FurnitureRegistry {
    * selling a Linen Table doesn't punish the player as hard as selling a
    * plain wooden chair. Returns null if nothing was there. */
   removeAt(x: number, z: number): { defId: string; refund: number } | null {
-    let idx = -1;
-    for (let i = this.items.length - 1; i >= 0; i -= 1) {
-      if (this.items[i].x === x && this.items[i].z === z) { idx = i; break; }
-    }
+    const idx = this.findIndexNear(x, z);
     if (idx < 0) return null;
     const item = this.items[idx];
     this.scene.remove(item.model);

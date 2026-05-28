@@ -32,6 +32,10 @@ export interface AnimatedCharacter {
   seatHeight?: number;
   // Internal: cached base scale so breathing oscillates around it.
   _baseScale?: number;
+  // Internal: cached "feet at floor" Y offset captured when the character
+  // was added to the animator — preserves CharacterLoader.liftFeetToOrigin
+  // through the per-frame position reset.
+  _baseY?: number;
 }
 
 export class CharacterAnimator {
@@ -41,6 +45,11 @@ export class CharacterAnimator {
   add(c: AnimatedCharacter): void {
     c._baseScale = c.root.scale.x; // assume uniform scale
     c.phase = c.phase ?? Math.random() * 100;
+    // Capture the "feet at floor" Y offset that CharacterLoader.liftFeetToOrigin
+    // set on the root. The per-frame position reset below restores this Y,
+    // not 0 — otherwise characters end up sunk into the floor by half their
+    // bbox height.
+    c._baseY = c.root.position.y;
     this.characters.push(c);
   }
 
@@ -64,8 +73,11 @@ export class CharacterAnimator {
     const breath = 1 + Math.sin(t * 1.6) * 0.012;
     c.root.scale.set(base, base * breath, base);
 
-    // Reset to neutral pose, then apply the action's transforms.
-    c.root.position.set(c.groundPos.x, 0, c.groundPos.y);
+    // Reset to neutral pose, then apply the action's transforms. Use the
+    // cached _baseY (feet-at-floor offset from CharacterLoader) so the
+    // characters don't sink half-way into the ground.
+    const baseY = c._baseY ?? 0;
+    c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
     c.root.rotation.set(0, c.facingY, 0);
 
     switch (c.action) {

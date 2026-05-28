@@ -182,15 +182,15 @@ export class Hud {
     ];
     const row2 = document.createElement("div");
     Object.assign(row2.style, {
-      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
-      gap: "4px", marginTop: "4px",
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)",
+      gap: "5px", marginTop: "5px",
     } as Partial<CSSStyleDeclaration>);
     const buttons2: IconBtn[] = [
-      { icon: "🏆 Awards",     title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.18)" },
-      { icon: "📓 Ledger",     title: "Transaction ledger",  click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.18)" },
-      { icon: "☁ Cloud",       title: "Cloud: leaderboards, friends, restaurants", click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.22)" },
-      { icon: "💾 Slots",      title: "Save slots + cloud save", click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.18)" },
-      { icon: "? Help",        title: "How to play",         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.18)" },
+      { icon: "🏆 Awards",     title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "📓 Ledger",     title: "Transaction ledger",  click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.22)" },
+      { icon: "☁ Cloud",       title: "Cloud: leaderboards, friends, restaurants", click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
+      { icon: "💾 Slots",      title: "Save slots + cloud save", click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.22)" },
+      { icon: "? Help",        title: "How to play",         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.22)" },
     ];
     const row3 = document.createElement("div");
     Object.assign(row3.style, {
@@ -221,7 +221,10 @@ export class Hud {
       return btn;
     };
     for (const b of buttons) row.appendChild(mkBtn(b, "big"));
-    for (const b of buttons2) row2.appendChild(mkBtn(b, "med"));
+    // Secondary row now uses the same "big" size so the layout is uniform —
+    // user wanted Awards/Ledger/Cloud/Slots/Help at the same size as the
+    // first row of Upgrades/Pantry/Decor/Trends.
+    for (const b of buttons2) row2.appendChild(mkBtn(b, "big"));
     for (const b of buttons3) row3.appendChild(mkBtn(b, "small"));
     this.root.appendChild(row);
     this.root.appendChild(row2);
