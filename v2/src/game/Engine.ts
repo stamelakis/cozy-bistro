@@ -10,9 +10,9 @@ import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
 import { PantryPanel } from "../ui/PantryPanel";
 import { MenuPanel } from "../ui/MenuPanel";
-import { UpgradePanel } from "../ui/UpgradePanel";
+import { UpgradeModal } from "../ui/UpgradeModal";
 import { ExpandPanel } from "../ui/ExpandPanel";
-import { DecorPanel } from "../ui/DecorPanel";
+import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { HelpModal } from "../ui/HelpModal";
@@ -48,9 +48,9 @@ export class Engine {
   readonly staffPanel: StaffPanel;
   readonly pantryPanel: PantryPanel;
   readonly menuPanel: MenuPanel;
-  readonly upgradePanel: UpgradePanel;
+  readonly upgradeModal: UpgradeModal;
   readonly expandPanel: ExpandPanel;
-  readonly decorPanel: DecorPanel;
+  readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
   readonly helpModal: HelpModal;
@@ -124,6 +124,8 @@ export class Engine {
       openAchievements: () => this.achievementsModal.show(),
       openSlots: () => this.slotsModal.show(),
       openAdmin: () => this.adminModal.show(),
+      openUpgrades: () => this.upgradeModal.show(),
+      openDecor: () => this.decorModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
@@ -131,9 +133,9 @@ export class Engine {
     this.staffPanel = new StaffPanel(container, this.game);
     this.pantryPanel = new PantryPanel(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
-    this.upgradePanel = new UpgradePanel(container, this.game);
+    this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandPanel = new ExpandPanel(container, this.game);
-    this.decorPanel = new DecorPanel(container, this.game);
+    this.decorModal = new DecorModal(container, this.game);
     // Wire theme changes to the live scene + restore the saved theme.
     this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
     this.scene.setTheme(this.game.getCurrentTheme());
@@ -428,9 +430,7 @@ export class Engine {
       this.staffPanel.update();
       this.pantryPanel.update();
       this.menuPanel.update();
-      this.upgradePanel.update();
       this.expandPanel.update();
-      this.decorPanel.update();
       this.hudAccumulator = 0;
     }
 

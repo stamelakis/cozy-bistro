@@ -9,8 +9,7 @@ export interface SpawnerAccessor {
   setOpen(open: boolean): void;
 }
 
-/** Controls for the simulation clock (pause / speed). Engine wires this up
- * so the HUD can drive timeScale without depending on Engine directly. */
+/** Controls for the simulation clock (pause / speed). */
 export interface TimeControl {
   isPaused(): boolean;
   setPaused(p: boolean): void;
@@ -18,9 +17,7 @@ export interface TimeControl {
   setTimeScale(scale: number): void;
 }
 
-/** Extra HUD action hooks the Engine wires in (opening modals, clearing
- * the save). Kept as a plain callback bundle so we don't pass Engine
- * directly. */
+/** Modal openers + the audio + reset hooks Engine wires in. */
 export interface HudActions {
   openLedger: () => void;
   openHelp: () => void;
@@ -28,18 +25,20 @@ export interface HudActions {
   openAchievements: () => void;
   openSlots: () => void;
   openAdmin: () => void;
+  openUpgrades: () => void;
+  openDecor: () => void;
   resetSave: () => void;
-  /** Returns whether audio is currently muted. */
   isMuted: () => boolean;
-  /** Toggle audio on/off; returns the new muted state. */
   toggleMute: () => boolean;
 }
 
+/** A modal-trigger icon for the icon row. */
+interface IconBtn { icon: string; title: string; click: () => void; tint?: string }
+
 /**
- * Minimal HTML overlay for the 3D game: shows money, rating, day, time
- * remaining, active guests, total served, etc. Just text-on-canvas style
- * — proper UI design is a Phase 5 concern. For now this confirms the
- * gameplay systems are actually running.
+ * Compact HUD: stats grid + speed/mute row + single modal icon row +
+ * tiny dev sub-row at the bottom. Everything else (upgrades, decor,
+ * ledger, achievements, stats, slots, admin, help) lives in modals.
  */
 export class Hud {
   private readonly root: HTMLElement;
@@ -49,6 +48,11 @@ export class Hud {
   private readonly actions: HudActions;
   private readonly fields: Record<string, HTMLElement> = {};
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
+  private muteBtn?: HTMLButtonElement;
+  private openCloseBtn?: HTMLButtonElement;
+  private devOpen = false;
+  private devSection?: HTMLDivElement;
+  private devToggle?: HTMLButtonElement;
 
   constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl, actions: HudActions) {
     this.game = game;
@@ -60,189 +64,92 @@ export class Hud {
       position: "fixed",
       top: "12px",
       left: "12px",
-      padding: "12px 16px",
-      background: "rgba(20, 14, 10, 0.78)",
+      padding: "10px 12px",
+      background: "rgba(20, 14, 10, 0.82)",
       color: "#fff5dc",
-      font: "13px/1.4 system-ui, sans-serif",
+      font: "12px/1.3 system-ui, sans-serif",
       borderRadius: "8px",
-      pointerEvents: "none",
-      minWidth: "200px",
+      pointerEvents: "auto",
+      width: "230px",
       boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
-    this.addRow("title", "COZY BISTRO 3D", "16px", true);
-    this.addRow("money", "Money: —");
-    this.addRow("rating", "Rating: —");
-    this.addRow("day", "Day: —");
-    this.addRow("weather", "Weather: —");
-    this.addRow("guests", "Guests: —");
-    this.addRow("served", "Served today: —");
-    this.addRow("lost", "Lost today: —");
-    this.addRow("daytime", "Day ends in: —");
-    this.addRow("dishes", "Dirty dishes: —");
-    this.addRow("rent", "Daily rent: —");
-    this.addSpeedControls();
-    this.addOpenCloseButton();
-    this.addLedgerButton();
-    this.addStatsButton();
-    this.addAchievementsButton();
-    this.addSlotsButton();
-    this.addHelpButton();
-    this.addAdminGrantButton();
-    this.addAdminTuningButton();
-    this.addResetButton();
+    this.buildTitle();
+    this.buildStatsGrid();
+    this.buildOpenCloseRow();
+    this.buildSpeedRow();
+    this.buildModalIconRow();
+    this.buildDevSection();
   }
 
-  private addAdminTuningButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(120, 140, 200, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
+  private buildTitle(): void {
+    const t = document.createElement("div");
+    t.textContent = "COZY BISTRO 3D";
+    Object.assign(t.style, {
+      fontSize: "13px", fontWeight: "700", letterSpacing: "0.04em",
+      marginBottom: "8px", textAlign: "center", opacity: "0.9",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(t);
+  }
+
+  /** 2-column compact stats grid: label/value pairs. */
+  private buildStatsGrid(): void {
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      columnGap: "6px",
+      rowGap: "2px",
       fontSize: "11px",
     } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "[dev] Tuning sliders";
-    btn.onclick = () => this.actions.openAdmin();
-    this.root.appendChild(btn);
+    const pairs: { key: string; label: string }[] = [
+      { key: "money", label: "$" },
+      { key: "rating", label: "★" },
+      { key: "day", label: "Day" },
+      { key: "weather", label: "" },
+      { key: "guests", label: "👥" },
+      { key: "daytime", label: "⏳" },
+      { key: "served", label: "✓" },
+      { key: "lost", label: "✗" },
+      { key: "dishes", label: "🍽" },
+      { key: "rent", label: "Rent" },
+    ];
+    for (const p of pairs) {
+      const row = document.createElement("div");
+      Object.assign(row.style, { display: "flex", gap: "4px", overflow: "hidden" } as Partial<CSSStyleDeclaration>);
+      const lab = document.createElement("span");
+      lab.textContent = p.label;
+      Object.assign(lab.style, { opacity: "0.55", minWidth: "20px" } as Partial<CSSStyleDeclaration>);
+      const val = document.createElement("span");
+      val.textContent = "—";
+      Object.assign(val.style, { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } as Partial<CSSStyleDeclaration>);
+      row.appendChild(lab); row.appendChild(val);
+      grid.appendChild(row);
+      this.fields[p.key] = val;
+    }
+    this.root.appendChild(grid);
   }
 
-  private addHelpButton(): void {
+  private buildOpenCloseRow(): void {
     const btn = document.createElement("button");
     Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(180, 200, 220, 0.18)",
+      marginTop: "8px", padding: "5px 8px", width: "100%",
+      background: "rgba(120, 200, 120, 0.18)",
       color: "#fff5dc",
       border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
+      borderRadius: "4px", cursor: "pointer", font: "inherit",
+      fontSize: "11px", fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "? How to play";
-    btn.onclick = () => this.actions.openHelp();
+    btn.onclick = () => { this.spawner.setOpen(!this.spawner.isOpen()); this.update(); };
     this.root.appendChild(btn);
+    this.openCloseBtn = btn;
   }
 
-  private addSlotsButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(160, 180, 140, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "💾 Save slots";
-    btn.onclick = () => this.actions.openSlots();
-    this.root.appendChild(btn);
-  }
-
-  private addAchievementsButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(220, 200, 120, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "🏆 Achievements";
-    btn.onclick = () => this.actions.openAchievements();
-    this.root.appendChild(btn);
-  }
-
-  private addStatsButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(140, 180, 200, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "📊 Daily trends";
-    btn.onclick = () => this.actions.openStats();
-    this.root.appendChild(btn);
-  }
-
-  private addLedgerButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(200, 180, 120, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "Show ledger";
-    btn.onclick = () => this.actions.openLedger();
-    this.root.appendChild(btn);
-  }
-
-  private addResetButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(200, 80, 80, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "[dev] Reset save";
-    btn.onclick = () => this.actions.resetSave();
-    this.root.appendChild(btn);
-  }
-
-  private muteBtn?: HTMLButtonElement;
-
-  private addSpeedControls(): void {
-    const wrap = document.createElement("div");
-    Object.assign(wrap.style, {
-      marginTop: "6px",
-      display: "flex",
-      gap: "4px",
-      pointerEvents: "auto",
+  private buildSpeedRow(): void {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", gap: "3px", marginTop: "5px",
     } as Partial<CSSStyleDeclaration>);
     const choices: { label: string; action: () => void; key: string }[] = [
       { label: "‖", action: () => this.time.setPaused(true), key: "pause" },
@@ -253,95 +160,96 @@ export class Hud {
     for (const c of choices) {
       const btn = document.createElement("button");
       btn.textContent = c.label;
-      Object.assign(btn.style, {
-        flex: "1",
-        padding: "4px 6px",
-        background: "rgba(255,245,220,0.08)",
-        color: "#fff5dc",
-        border: "1px solid rgba(255,245,220,0.25)",
-        borderRadius: "4px",
-        cursor: "pointer",
-        font: "inherit",
-        fontSize: "12px",
-      } as Partial<CSSStyleDeclaration>);
+      Object.assign(btn.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
+      btn.style.flex = "1";
       btn.onclick = () => { c.action(); this.update(); };
-      wrap.appendChild(btn);
+      row.appendChild(btn);
       this.speedBtns[c.key] = btn;
     }
-    // Mute toggle joins the speed row on the right.
-    const muteBtn = document.createElement("button");
-    Object.assign(muteBtn.style, {
-      flex: "0 0 32px",
-      padding: "4px 6px",
+    const mute = document.createElement("button");
+    Object.assign(mute.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
+    mute.style.flex = "0 0 28px";
+    mute.onclick = () => { this.actions.toggleMute(); this.update(); };
+    row.appendChild(mute);
+    this.muteBtn = mute;
+    this.root.appendChild(row);
+  }
+
+  /** Single icon row for opening all the modals. Tooltips on hover. */
+  private buildModalIconRow(): void {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(8, 1fr)",
+      gap: "3px", marginTop: "5px",
+    } as Partial<CSSStyleDeclaration>);
+    const buttons: IconBtn[] = [
+      { icon: "⚡", title: "Recipe upgrades",     click: this.actions.openUpgrades, tint: "rgba(140, 200, 140, 0.18)" },
+      { icon: "🎨", title: "Interior theme",      click: this.actions.openDecor,    tint: "rgba(220, 150, 200, 0.18)" },
+      { icon: "📓", title: "Transaction ledger",  click: this.actions.openLedger,   tint: "rgba(200, 180, 120, 0.18)" },
+      { icon: "📊", title: "Daily trends",        click: this.actions.openStats,    tint: "rgba(140, 180, 200, 0.18)" },
+      { icon: "🏆", title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.18)" },
+      { icon: "💾", title: "Save slots",          click: this.actions.openSlots,    tint: "rgba(160, 180, 140, 0.18)" },
+      { icon: "?",  title: "How to play",         click: this.actions.openHelp,     tint: "rgba(180, 200, 220, 0.18)" },
+      { icon: "⚙",  title: "Dev tools",           click: () => this.toggleDev(),    tint: "rgba(180, 180, 180, 0.18)" },
+    ];
+    for (const b of buttons) {
+      const btn = document.createElement("button");
+      btn.textContent = b.icon;
+      btn.title = b.title;
+      Object.assign(btn.style, {
+        padding: "5px 0", background: b.tint ?? "rgba(255,245,220,0.08)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "4px", cursor: "pointer", font: "inherit",
+        fontSize: "13px",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = b.click;
+      row.appendChild(btn);
+    }
+    this.root.appendChild(row);
+  }
+
+  private buildDevSection(): void {
+    const section = document.createElement("div");
+    section.style.display = "none";
+    section.style.marginTop = "6px";
+    section.style.borderTop = "1px solid rgba(255,245,220,0.15)";
+    section.style.paddingTop = "6px";
+    this.devSection = section;
+    const mkRow = (label: string, action: () => void, tint: string) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      Object.assign(b.style, {
+        display: "block", width: "100%", marginBottom: "3px",
+        padding: "4px 6px", background: tint, color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "4px", cursor: "pointer", font: "inherit", fontSize: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      b.onclick = action;
+      section.appendChild(b);
+    };
+    mkRow("+$500 starter grant", () => { this.game.economy.earnMoney(500, "grant"); this.update(); }, "rgba(120, 140, 200, 0.18)");
+    mkRow("Tuning sliders",      () => this.actions.openAdmin(), "rgba(120, 140, 200, 0.18)");
+    mkRow("Reset save",          () => this.actions.resetSave(), "rgba(200, 80, 80, 0.18)");
+    this.root.appendChild(section);
+  }
+
+  private toggleDev(): void {
+    this.devOpen = !this.devOpen;
+    if (this.devSection) this.devSection.style.display = this.devOpen ? "block" : "none";
+  }
+
+  private tinyBtnStyle(): Record<string, string> {
+    return {
+      padding: "3px 4px",
       background: "rgba(255,245,220,0.08)",
       color: "#fff5dc",
       border: "1px solid rgba(255,245,220,0.25)",
       borderRadius: "4px",
       cursor: "pointer",
       font: "inherit",
-      fontSize: "13px",
-    } as Partial<CSSStyleDeclaration>);
-    muteBtn.onclick = () => { this.actions.toggleMute(); this.update(); };
-    wrap.appendChild(muteBtn);
-    this.muteBtn = muteBtn;
-    this.root.appendChild(wrap);
-  }
-
-  private addAdminGrantButton(): void {
-    const btn = document.createElement("button");
-    Object.assign(btn.style, {
-      marginTop: "4px",
-      padding: "4px 8px",
-      background: "rgba(120, 140, 200, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
       fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.textContent = "[dev] +$500 starter grant";
-    btn.onclick = () => {
-      this.game.economy.earnMoney(500, "grant");
-      this.update();
     };
-    this.root.appendChild(btn);
-  }
-
-  private addOpenCloseButton(): void {
-    const btn = document.createElement("button");
-    btn.id = "hud-openclose";
-    Object.assign(btn.style, {
-      marginTop: "8px",
-      padding: "6px 10px",
-      background: "rgba(120, 200, 120, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      pointerEvents: "auto",
-      font: "inherit",
-      width: "100%",
-    } as Partial<CSSStyleDeclaration>);
-    btn.onclick = () => {
-      this.spawner.setOpen(!this.spawner.isOpen());
-      this.update();
-    };
-    this.root.style.pointerEvents = "none";
-    this.root.appendChild(btn);
-    this.fields.openclose = btn;
-  }
-
-  private addRow(key: string, text: string, size = "13px", bold = false): void {
-    const el = document.createElement("div");
-    el.textContent = text;
-    el.style.fontSize = size;
-    if (bold) el.style.fontWeight = "600";
-    if (bold) el.style.marginBottom = "6px";
-    this.root.appendChild(el);
-    this.fields[key] = el;
   }
 
   update(): void {
@@ -351,27 +259,30 @@ export class Hud {
     const guests = this.spawner.getCount();
     const served = this.game.customers.getDailyServed();
     const lost = this.game.customers.getDailyLost();
-    this.fields.money.textContent = `Money: $${money}`;
-    this.fields.rating.textContent = `Rating: ${rating} ⭐`;
-    this.fields.day.textContent = `Day: ${day}`;
-    const w = this.game.weather.getCurrent();
-    this.fields.weather.textContent = `Weather: ${w.emoji} ${w.label}`;
-    this.fields.guests.textContent = `Guests in: ${guests}`;
-    this.fields.served.textContent = `Served today: ${served}`;
-    this.fields.lost.textContent = `Lost today: ${lost}`;
     const remaining = Math.max(0, Math.ceil(this.game.day.getTimeRemainingSeconds()));
     const mins = Math.floor(remaining / 60);
     const secs = String(remaining % 60).padStart(2, "0");
-    this.fields.daytime.textContent = `Day ends in: ${mins}:${secs}`;
     const dishes = this.game.getDirtyDishCount();
-    this.fields.dishes.textContent = `Dirty dishes: ${dishes}`;
+    const rent = this.game.getDailyRent();
+    const w = this.game.weather.getCurrent();
+    this.fields.money.textContent = `$${money}`;
+    this.fields.rating.textContent = `${rating}`;
+    this.fields.day.textContent = `${day}`;
+    this.fields.weather.textContent = `${w.emoji}${w.label}`;
+    this.fields.weather.title = `Weather: ${w.label}`;
+    this.fields.guests.textContent = `${guests}`;
+    this.fields.served.textContent = `${served}`;
+    this.fields.lost.textContent = `${lost}`;
+    this.fields.daytime.textContent = `${mins}:${secs}`;
+    this.fields.dishes.textContent = `${dishes}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#fff5dc";
-    this.fields.rent.textContent = `Daily rent: $${this.game.getDailyRent()}`;
+    this.fields.rent.textContent = `$${rent}`;
+
     const open = this.spawner.isOpen();
-    this.fields.openclose.textContent = open ? "OPEN — click to close" : "CLOSED — click to open";
-    (this.fields.openclose as HTMLButtonElement).style.background = open
-      ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
-    // Highlight whichever speed button matches the current state.
+    if (this.openCloseBtn) {
+      this.openCloseBtn.textContent = open ? "🟢 OPEN — click to close" : "🔴 CLOSED — click to open";
+      this.openCloseBtn.style.background = open ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
+    }
     const activeKey = this.time.isPaused() ? "pause" : String(this.time.getTimeScale());
     for (const [key, btn] of Object.entries(this.speedBtns)) {
       btn.style.background = key === activeKey
@@ -383,6 +294,9 @@ export class Hud {
       const muted = this.actions.isMuted();
       this.muteBtn.textContent = muted ? "🔇" : "🔈";
       this.muteBtn.title = muted ? "Sound off — click to enable" : "Sound on — click to mute";
+    }
+    if (this.devToggle) {
+      this.devToggle.style.background = this.devOpen ? "rgba(255,245,220,0.18)" : "rgba(180, 180, 180, 0.18)";
     }
   }
 }
