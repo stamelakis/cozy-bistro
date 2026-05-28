@@ -33,10 +33,12 @@ type ShoppingList = Map<string, number>;
 type ErrandState =
   | "idle"
   | "walkingToDoor"       // home → door (interior side)
-  | "walkingToRoadEdge"   // door → pavement edge (about to disappear)
+  | "exitingDoor"         // door (interior) → door (exterior) — short pass through the wall
+  | "walkingToRoadEdge"   // door (exterior) → pavement edge (about to disappear)
   | "offscreen"           // invisible, "shopping" timer
-  | "walkingFromRoadEdge" // pavement edge → door (now carrying)
-  | "walkingToCounter"    // door → supply counter (drop point)
+  | "walkingFromRoadEdge" // pavement edge → door (exterior)
+  | "enteringDoor"        // door (exterior) → door (interior) — short pass back through
+  | "walkingToCounter"    // door (interior) → supply counter (drop point)
   | "atCounter"           // brief dwell, payload delivered
   | "returningHome";      // counter → home
 
@@ -82,6 +84,13 @@ export class ErrandRouter {
   /** Where the helper enters/exits the building. The interior side of
    * the front door — see WorldScene.doorPos. */
   private readonly doorInteriorPos: THREE.Vector2;
+  /** A point on the OUTSIDE face of the front door, ~1 unit past the
+   * wall. The helper always passes through this BEFORE heading to the
+   * road edge (and through it again coming back). Without this the
+   * diagonal direct line from doorInterior to the off-screen road edge
+   * sliced through the side wall — the helper visibly clipped through
+   * the building corner instead of using the door. */
+  private readonly doorExteriorPos: THREE.Vector2;
   /** Where the helper drops off the goods after returning — see
    * WorldScene.supplyCounterPos. */
   private readonly counterPos: THREE.Vector2;
@@ -103,6 +112,10 @@ export class ErrandRouter {
 
   constructor(helperChar: AnimatedCharacter, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
     this.doorInteriorPos = doorPos.clone();
+    // Exterior anchor sits 1 tile out from the interior point along the
+    // door's normal (+Z, toward the front of the building). Front door
+    // lives on the +Z exterior wall so +Z is "outside".
+    this.doorExteriorPos = new THREE.Vector2(doorPos.x, doorPos.y + 1);
     this.counterPos = counterPos.clone();
     this.pathfind = pathfind;
     this.addHelper(helperChar);
@@ -240,7 +253,21 @@ export class ErrandRouter {
       case "walkingToDoor": {
         this.moveActor(h, dt);
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
-          // At the door — now head along the pavement toward the edge.
+          // Reached the inside of the door. Step straight through to the
+          // exterior anchor before turning toward the pavement — this
+          // 1-unit hop along the door normal is what keeps the helper
+          // from slicing diagonally through the side wall on the way out.
+          h.target = this.doorExteriorPos.clone();
+          this.planPath(h);
+          h.state = "exitingDoor";
+          h.clock = 0;
+        }
+        break;
+      }
+      case "exitingDoor": {
+        this.moveActor(h, dt);
+        if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
+          // Now safely outside the front wall — head down the pavement.
           h.target = (h.roadEdge ?? new THREE.Vector2(ROAD_EDGE_X, ROAD_EDGE_Z)).clone();
           this.planPath(h);
           h.state = "walkingToRoadEdge";
@@ -262,8 +289,10 @@ export class ErrandRouter {
       case "offscreen": {
         if (h.clock >= OFFSCREEN_SHOP_SECONDS) {
           // Pop back into view at the same pavement edge, now carrying.
+          // Walk back to the EXTERIOR door anchor first; we'll step
+          // through the wall from there.
           h.character.root.visible = true;
-          h.target = this.doorInteriorPos.clone();
+          h.target = this.doorExteriorPos.clone();
           this.planPath(h);
           h.state = "walkingFromRoadEdge";
           h.clock = 0;
@@ -274,7 +303,19 @@ export class ErrandRouter {
       case "walkingFromRoadEdge": {
         this.moveActor(h, dt);
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
-          // Through the door — head to the supply counter to drop off.
+          // At the outside of the door — step through to the interior
+          // before heading to the supply counter. Mirror of exitingDoor.
+          h.target = this.doorInteriorPos.clone();
+          this.planPath(h);
+          h.state = "enteringDoor";
+          h.clock = 0;
+        }
+        break;
+      }
+      case "enteringDoor": {
+        this.moveActor(h, dt);
+        if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
+          // Now inside the building — continue to the drop-off counter.
           h.target = this.counterPos.clone();
           this.planPath(h);
           h.state = "walkingToCounter";
@@ -357,8 +398,10 @@ export class ErrandRouter {
 function errandLabel(state: ErrandState): string {
   switch (state) {
     case "walkingToDoor":       return "📦 leaving";
+    case "exitingDoor":         return "📦 leaving";
     case "walkingToRoadEdge":   return "📦 to shop";
     case "walkingFromRoadEdge": return "📦 returning";
+    case "enteringDoor":        return "📦 returning";
     case "walkingToCounter":    return "📦 → counter";
     case "atCounter":           return "📦 dropping off";
     case "returningHome":       return "← back";
