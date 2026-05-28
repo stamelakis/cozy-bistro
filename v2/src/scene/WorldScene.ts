@@ -811,18 +811,16 @@ export class WorldScene {
       // borders. Each chair gets its own corner of the table top for
       // the plate, so there's no plate conflict between adjacent seats.
       { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
-      // Pinwheel chairs around the 2×2 table. The Kenney chair GLB has
-      // its back at -Z (north) by default, so chair.rotY = θ puts the
-      // back at R_y(θ) * (0, 0, -1). For the back to point AWAY from
-      // the table, the offsets below resolve to:
-      //   top-left  → back at -Z (north)        → rotY = 0
-      //   top-right → back at +X (east)         → rotY = -π/2
-      //   bottom-right → back at +Z (south)     → rotY = π
-      //   bottom-left → back at -X (west)       → rotY = π/2
-      { id: "wooden-chair", x:  0,   z:  0,   rotY: 0,            tier: 1 },
-      { id: "wooden-chair", x:  2,   z:  1,   rotY: -Math.PI / 2, tier: 1 },
-      { id: "wooden-chair", x:  1,   z:  3,   rotY: Math.PI,      tier: 1 },
-      { id: "wooden-chair", x: -1,   z:  2,   rotY:  Math.PI / 2, tier: 1 },
+      // Bench-style chairs around the 2×2 table — 2 on the north side
+      // (z=0) and 2 on the south side (z=3). Matches the bench layout
+      // shown in the player's reference. Kenney chair GLB has its back
+      // at -Z by default; for the back to point AWAY from the table,
+      // north chairs use rotY = 0 (back at -Z, customer facing south),
+      // south chairs use rotY = π (back at +Z, customer facing north).
+      { id: "wooden-chair", x:  0,   z:  0,   rotY: 0,        tier: 1 },
+      { id: "wooden-chair", x:  1,   z:  0,   rotY: 0,        tier: 1 },
+      { id: "wooden-chair", x:  0,   z:  3,   rotY: Math.PI,  tier: 1 },
+      { id: "wooden-chair", x:  1,   z:  3,   rotY: Math.PI,  tier: 1 },
     ];
 
     await Promise.all(placements.map(async (p) => {

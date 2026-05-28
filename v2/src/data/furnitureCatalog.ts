@@ -122,23 +122,6 @@ export interface FurnitureDef {
   stockCapacity?: number;
 }
 
-/** Default 4-side seat slot pattern for a 2×2 dining table that seats 4.
- *
- * The table anchor is at the cross-section of 4 cells (half-integer
- * coords in world space). Each chair sits in one of the 4 adjacent
- * cells; offsets are tuned so chair-center → cell-center under the
- * half-integer anchor (e.g. dx=-1.5 from anchor 0.5 → chair at -1, a
- * cell center). The layout is intentionally asymmetric (one chair per
- * side, all rotated 90° from the next) — that way every chair lands
- * on a real tile center instead of sitting at a tile border. Looks
- * like a normal 4-top and respects the per-tile grid the player sees.
- *
- * Plate offsets sit ~half-way between the chair and the table center
- * (closer to the chair) so served food reads as belonging to that
- * seat. The plate's WORLD Y comes from the placed table's bounding
- * box at runtime (FurnitureRegistry.getPlateHeightFor or similar), so
- * different table meshes can have different top heights without the
- * plate floating. */
 /** Seat slots for a 1×1 coffee table — chairs go on all four sides and
  * each gets a tiny offset on the tabletop for their drink. Coffee tables
  * are anchored at an integer cell (1×1 → cell center) and the four
@@ -157,41 +140,32 @@ const COFFEE_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   { dx: -1, dz:  0, facingY: -Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
 ];
 
+/** Bench-style seat layout for a 2×2 dining table that seats 4: TWO
+ * chairs on each LONG side (north and south of the table at default
+ * rotation), zero chairs on the short sides. Pairs the seats up like
+ * the bench example the player gave — the player can drop a wall or
+ * a window against either short end without losing seats, and chairs
+ * sit shoulder-to-shoulder per side instead of one-per-cardinal.
+ *
+ * For a table anchored at (0.5, 1.5) the four chair world coords are
+ * (0, 0), (1, 0), (0, 3), (1, 3) — all integer cell centers.
+ *
+ * Customer facings:
+ *   north seats (z=-1.5)  → face +Z (south, toward table) → θ = π
+ *   south seats (z=+1.5)  → face -Z (north, toward table) → θ = 0
+ *
+ * Plate offsets sit just inside the long edge of the table top
+ * (dz = ±0.8), aligned with each chair's x so the plate reads as
+ * belonging to that seat. The plate's WORLD Y comes from the placed
+ * table's bounding box at runtime so different table meshes can have
+ * different top heights without the plate floating. */
 const STANDARD_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
-  // Four chairs around a 2×2 table, each in one of the corner cells
-  // adjacent to the table. The pattern is intentionally asymmetric (a
-  // "pinwheel" — top-left, top-right, bottom-right, bottom-left) so
-  // every chair lands on an integer tile center rather than sitting at
-  // a tile cross-section the way a perfectly symmetric "one chair per
-  // side midpoint" layout would on a 2-tile-wide table.
-  //
-  // Each chair gets its own corner of the table top for the plate, so
-  // there's no shared-corner conflict: top-left chair's plate hugs the
-  // top edge near the LEFT half of the table, top-right's hugs the
-  // RIGHT edge near the TOP half, etc.
-  //
-  // For a table anchored at (0.5, 1.5), the resulting chair world
-  // coords are (0, 0), (2, 1), (1, 3), (-1, 2) — all integer cell
-  // centers.
-  // Facing values for seated customers. With customer GLB defaulting
-  // to look -Z (three.js standard forward), a customer with
-  // rotation.y = θ faces direction R_y(θ) * (-Z) = (-sin θ, 0, -cos θ).
-  // The four target facings for the corner pinwheel are:
-  //   top-left  → +Z (south, toward table) → θ = π
-  //   top-right → -X (west)                → θ = π/2
-  //   bottom-right → -Z (north)            → θ = 0
-  //   bottom-left → +X (east)              → θ = -π/2
-  // The top-right and bottom-left values were previously the WRONG
-  // signs (-π/2 and π/2) which made those two seated customers face
-  // AWAY from the table.
-  // Top-left chair: customer facing +Z (south toward table).
-  { dx: -0.5, dz: -1.5, facingY:  Math.PI,     platePos: { dx: -0.5, dz: -0.8 } },
-  // Top-right chair: customer facing -X (west toward table).
-  { dx:  1.5, dz: -0.5, facingY:  Math.PI / 2, platePos: { dx:  0.8, dz: -0.5 } },
-  // Bottom-right chair: customer facing -Z (north toward table).
-  { dx:  0.5, dz:  1.5, facingY:  0,           platePos: { dx:  0.5, dz:  0.8 } },
-  // Bottom-left chair: customer facing +X (east toward table).
-  { dx: -1.5, dz:  0.5, facingY: -Math.PI / 2, platePos: { dx: -0.8, dz:  0.5 } },
+  // North side — 2 seats facing south.
+  { dx: -0.5, dz: -1.5, facingY: Math.PI, platePos: { dx: -0.5, dz: -0.8 } },
+  { dx:  0.5, dz: -1.5, facingY: Math.PI, platePos: { dx:  0.5, dz: -0.8 } },
+  // South side — 2 seats facing north.
+  { dx: -0.5, dz:  1.5, facingY: 0,       platePos: { dx: -0.5, dz:  0.8 } },
+  { dx:  0.5, dz:  1.5, facingY: 0,       platePos: { dx:  0.5, dz:  0.8 } },
 ];
 
 // Per-category fill ratios. See "SCALE SEMANTICS" in the file header —
