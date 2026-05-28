@@ -52,15 +52,18 @@ interface StaffActor {
   /** Small plate mesh held above their hands while delivering. Created
    * lazily on first delivery, then shown/hidden via .visible. */
   heldPlate?: THREE.Mesh;
+  /** Walk speed in units/sec — set per role at register-time so chef
+   * and waiter can move at different speeds without branching in the
+   * shared moveActor. */
+  speed: number;
 }
 
-// Slower than guests. The kitchen stations are clustered close together
-// (~0.6 units from chef home to the stove waypoint), so at the old 2.2
-// the entire walk took 0.3s — players couldn't catch them mid-stride.
-// 1.2 stretches a typical kitchen walk to ~0.5s, which combined with
-// the louder walk bob in CharacterAnimator makes the chef visibly
-// shuffle between tasks instead of looking idle.
-const WALK_SPEED = 1.2;
+// Chef stays slow so the visible "shuffle to the stove" reads at the
+// shorter walks the kitchen makes. Waiter is +20% over that — their
+// deliveries cross the dining room and they need to keep up with
+// ticket flow.
+const CHEF_SPEED = 1.2;
+const WAITER_SPEED = 1.44; // +20% over CHEF_SPEED
 const ARRIVAL_THRESHOLD = 0.18;
 
 /** Shared geometry/material so all waiters reuse the same allocation. */
@@ -116,6 +119,7 @@ export class StaffRouter {
       ticketId: null,
       target: char.groundPos.clone(),
       clock: 0,
+      speed: CHEF_SPEED,
     });
   }
 
@@ -127,6 +131,7 @@ export class StaffRouter {
       ticketId: null,
       target: char.groundPos.clone(),
       clock: 0,
+      speed: WAITER_SPEED,
     });
   }
 
@@ -391,7 +396,7 @@ export class StaffRouter {
     const dz = a.target.y - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return;
-    const step = Math.min(dist, WALK_SPEED * dt);
+    const step = Math.min(dist, a.speed * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
     // GLB default forward is -Z (three.js standard) — confirmed by the

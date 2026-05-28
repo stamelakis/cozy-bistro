@@ -316,47 +316,71 @@ export class WorldScene {
     bulbMat.opacity = Math.min(1, nightAmount * 1.5);
   }
 
-  /** Drive lighting + sky tint by time of day. progress is 0..1 from
-   * dawn through dusk into night. Engine ticks this every frame. */
+  /** Drive lighting + sky tint by time of day. progress is 0..1 over a
+   * 24h game-day, divided as 8h night + 4h dawn/dusk + 12h day:
+   *   0.000 – 0.083  dawn  (2h, brightening)
+   *   0.083 – 0.583  day   (12h, full sun)
+   *   0.583 – 0.667  dusk  (2h, darkening)
+   *   0.667 – 1.000  night (8h, dark)
+   * Engine ticks this every frame. */
   applyDayNight(progress: number): { skyColor: number } {
-    // Sun follows an arc: low/warm at dawn (0) and dusk (1), high/bright at noon (0.5).
-    const noonish = 1 - Math.abs(progress - 0.5) * 2; // 0 at edges, 1 at noon
-    // Sun: bright all day (0.9 → 1.8), softer at dawn/dusk but never dim,
-    // and a calmer moonlight at night (0.35) so the bistro looks lit.
-    const sunIntensity = progress < 0.92
-      ? 0.9 + noonish * 0.9
-      : Math.max(0.35, 0.35);
-    this.sunLight.intensity = sunIntensity;
-    const sunColor = progress < 0.92
-      ? mixColors(0xffa860, 0xfff4d8, noonish)
-      : mixColors(0xffa860, 0xaab8d6, (progress - 0.92) / 0.08);
-    this.sunLight.color.setHex(sunColor);
-    // Ambient: warm bright during day, cool blue at night.
-    if (progress < 0.92) {
-      this.ambientLight.color.setHex(mixColors(0xffd6a8, 0xfff1d6, noonish));
-      this.ambientLight.intensity = 0.65 + noonish * 0.35;
+    const DAWN_END = 0.083;
+    const DAY_END = 0.583;
+    const DUSK_END = 0.667;
+    // "dayness" is 0 in deep night, 1 in full daylight, ramping on
+    // dawn + ramping off dusk. Drives sun + ambient.
+    let dayness: number;
+    if (progress < DAWN_END) {
+      dayness = progress / DAWN_END;            // 0 → 1
+    } else if (progress < DAY_END) {
+      dayness = 1;
+    } else if (progress < DUSK_END) {
+      dayness = 1 - (progress - DAY_END) / (DUSK_END - DAY_END); // 1 → 0
     } else {
-      this.ambientLight.color.setHex(0x8898b8);
-      this.ambientLight.intensity = 0.6;
+      dayness = 0;
     }
-    // Fill (sky bounce) — adds color and softens shadows.
-    this.fillLight.intensity = Math.max(0.3, 0.3 + noonish * 0.15);
-    // Sky color (engine sets renderer clear color from this).
+
+    // Sun: bright during day, dim during dawn/dusk, very dark at night.
+    // Cap night sun way lower than before so the bistro genuinely
+    // dims when it's supposed to be dark.
+    const sunIntensity = 0.12 + dayness * 1.7;
+    this.sunLight.intensity = sunIntensity;
+    this.sunLight.color.setHex(mixColors(0xaab8d6, 0xfff4d8, dayness));
+
+    // Ambient: warm bright during day, cool blue at night. Lower the
+    // night floor here too so corners actually feel dark before lamps
+    // are turned on.
+    this.ambientLight.color.setHex(mixColors(0x8a98b8, 0xfff1d6, dayness));
+    this.ambientLight.intensity = 0.32 + dayness * 0.68;
+
+    // Fill (sky bounce) — fades with daylight but never to zero.
+    this.fillLight.intensity = 0.18 + dayness * 0.32;
+
+    // Sky color — sunrise/sunset orange during the transitions, deep
+    // navy at night, cream during the day.
     let skyColor: number;
-    if (progress < 0.1) skyColor = mixColors(0xf7c08a, 0xd8c4a3, progress / 0.1); // dawn → day
-    else if (progress < 0.85) skyColor = 0xd8c4a3; // day
-    else if (progress < 0.95) skyColor = mixColors(0xd8c4a3, 0xb27a52, (progress - 0.85) / 0.1); // day → dusk
-    else skyColor = mixColors(0xb27a52, 0x1f2a48, (progress - 0.95) / 0.05); // dusk → night
-    // Lamps come on as the sky darkens. The ramp matches the dusk
-    // window (0.85 → 0.95) so bulbs visibly warm up over a couple
-    // sim-seconds rather than snapping on. Stays at full intensity
-    // through the deep-night portion and through the dawn fade-in.
-    let nightAmount: number;
-    if (progress < 0.1) nightAmount = 1 - progress / 0.1;        // dawn — dim out
-    else if (progress < 0.85) nightAmount = 0;                    // day — off
-    else if (progress < 0.95) nightAmount = (progress - 0.85) / 0.1; // dusk — fade in
-    else nightAmount = 1;                                          // night — full
-    this.updateLamps(nightAmount);
+    if (progress < DAWN_END) {
+      // night → orange dawn → day
+      const t = progress / DAWN_END;
+      skyColor = t < 0.5
+        ? mixColors(0x12162a, 0xb27a52, t / 0.5)
+        : mixColors(0xb27a52, 0xd8c4a3, (t - 0.5) / 0.5);
+    } else if (progress < DAY_END) {
+      skyColor = 0xd8c4a3;
+    } else if (progress < DUSK_END) {
+      // day → orange dusk → night
+      const t = (progress - DAY_END) / (DUSK_END - DAY_END);
+      skyColor = t < 0.5
+        ? mixColors(0xd8c4a3, 0xb27a52, t / 0.5)
+        : mixColors(0xb27a52, 0x12162a, (t - 0.5) / 0.5);
+    } else {
+      skyColor = 0x12162a; // darker than the old 0x1f2a48
+    }
+
+    // Lamp intensity tracks `1 - dayness` so bulbs warm up over the
+    // dusk window, stay lit through deep night, then dim out across
+    // the dawn window.
+    this.updateLamps(1 - dayness);
     return { skyColor };
   }
 

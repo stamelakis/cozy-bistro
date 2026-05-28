@@ -27,7 +27,9 @@ export class DayCycleSystem {
   private rentElapsedSeconds = 0;
   private totalPlaySeconds = 0;
 
-  constructor(dayNumber = 1, dayLengthSeconds = 180) {
+  // 720 sec = 12 real minutes for one full 24h game-day. Matches the
+  // applyDayNight schedule: 8h night + 4h dawn/dusk + 12h day = 24h.
+  constructor(dayNumber = 1, dayLengthSeconds = 720) {
     this.dayNumber = dayNumber;
     this.dayLengthSeconds = dayLengthSeconds;
   }

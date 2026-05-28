@@ -52,12 +52,12 @@ interface ErrandActor {
   payload: ShoppingList | null;
 }
 
-const WALK_SPEED = 2.4; // a hair faster than other staff
+const WALK_SPEED = 2.88; // +20% over the previous 2.4
 const ARRIVAL_THRESHOLD = 0.18;
 /** Pause at the supply counter (seconds) to suggest signing for the delivery. */
 const COUNTER_DWELL_SECONDS = 0.8;
 /** How long the helper is invisible "at the shop" before walking back. */
-const OFFSCREEN_SHOP_SECONDS = 10.0;
+const OFFSCREEN_SHOP_SECONDS = 3.0;
 /** Cap on queued trips so a long shortage doesn't queue dozens. */
 const MAX_PENDING_TRIPS = 6;
 /** How far past the pavement (in world units along the road) the helper
