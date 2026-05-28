@@ -12,10 +12,13 @@ permissions:
   pages: write
   id-token: write
 
-# Only one Pages deploy at a time; queue rather than cancel so an in-flight deploy finishes.
+# Only one Pages deploy at a time. cancel-in-progress: true so a new
+# push supersedes an old stuck deploy instead of queueing behind it —
+# avoids the "pending forever" failure mode we hit when the github-pages
+# environment got into a wedged state.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
