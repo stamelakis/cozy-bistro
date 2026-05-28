@@ -3,6 +3,7 @@ import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
+import { fitFurniture } from "../assets/fitFurniture";
 
 /** Linearly interpolate between two RGB integers by t in [0,1]. */
 function mixColors(a: number, b: number, t: number): number {
@@ -56,6 +57,13 @@ export class WorldScene {
   /** Resolves once the staff characters are loaded — so Engine can build
    * the StaffRouter at the right moment. */
   staffReady: Promise<void> = Promise.resolve();
+  /** Resolves once the demo restaurant furniture is in the scene — so
+   * Engine can register every demo piece in the FurnitureRegistry and
+   * therefore make them moveable / sellable like player-placed items. */
+  demoReady: Promise<void> = Promise.resolve();
+  /** Snapshot of the demo placements (id + cell + rotation + model)
+   * filled in by populateDemoRestaurant. */
+  readonly demoPlacements: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D }[] = [];
 
   constructor() {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
@@ -154,25 +162,28 @@ export class WorldScene {
   applyDayNight(progress: number): { skyColor: number } {
     // Sun follows an arc: low/warm at dawn (0) and dusk (1), high/bright at noon (0.5).
     const noonish = 1 - Math.abs(progress - 0.5) * 2; // 0 at edges, 1 at noon
-    // Sun intensity peaks at noon, drops to ~0.15 at edges; dives to ~0 at night.
+    // Sun: peaks at noon, drops at edges, but never fully zero so
+    // we don't go pitch-black at "night" (the bistro stays operating).
     const sunIntensity = progress < 0.92
-      ? 0.15 + noonish * 1.1
-      : Math.max(0, 0.15 - (progress - 0.92) * 1.8);
+      ? 0.25 + noonish * 1.0
+      : Math.max(0.25, 0.25 - (progress - 0.92) * 0.5);
     this.sunLight.intensity = sunIntensity;
-    // Sun color: warm orange at low elevation, white at high.
-    const sunColor = mixColors(0xffa860, 0xfff4d8, noonish);
+    // Sun color: warm orange at low elevation, white at high, cool blue at deep night.
+    const sunColor = progress < 0.92
+      ? mixColors(0xffa860, 0xfff4d8, noonish)
+      : mixColors(0xffa860, 0x9aaacc, (progress - 0.92) / 0.08);
     this.sunLight.color.setHex(sunColor);
-    // Ambient: cool at night, warm during day.
+    // Ambient: cool at night (but still bright enough to see), warm during day.
     if (progress < 0.92) {
       this.ambientLight.color.setHex(mixColors(0xffd6a8, 0xfff1d6, noonish));
-      this.ambientLight.intensity = 0.35 + noonish * 0.4;
+      this.ambientLight.intensity = 0.4 + noonish * 0.4;
     } else {
-      // Night: low blue ambient
-      this.ambientLight.color.setHex(0x5a6a8a);
-      this.ambientLight.intensity = 0.25;
+      // Night: bright moonlight rather than dim void.
+      this.ambientLight.color.setHex(0x7a88a8);
+      this.ambientLight.intensity = 0.55;
     }
-    // Fill (sky bounce) — cooler at noon, warmer at edges.
-    this.fillLight.intensity = 0.18 + noonish * 0.15;
+    // Fill (sky bounce) — cooler at noon, warmer at edges, stays on at night.
+    this.fillLight.intensity = Math.max(0.18, 0.18 + noonish * 0.15);
     // Sky color (engine sets renderer clear color from this).
     let skyColor: number;
     if (progress < 0.1) skyColor = mixColors(0xf7c08a, 0xd8c4a3, progress / 0.1); // dawn → day
@@ -189,15 +200,54 @@ export class WorldScene {
 
   private addBuilding(): void {
     // === Exterior ground layers ===
-    // Grass surrounds everything (big plane).
+    // Grass surrounds everything — uses per-vertex color noise so it
+    // doesn't look like a flat green sheet. ~3600 verts at 60×60 res.
+    const grassGeo = new THREE.PlaneGeometry(60, 60, 60, 60);
+    const colors = new Float32Array(grassGeo.attributes.position.count * 3);
+    for (let i = 0; i < grassGeo.attributes.position.count; i += 1) {
+      // Mix three greens with a per-vertex random.
+      const r = Math.random();
+      let c: { r: number; g: number; b: number };
+      if (r < 0.55) c = { r: 0.32, g: 0.50, b: 0.22 };   // mid green
+      else if (r < 0.85) c = { r: 0.40, g: 0.58, b: 0.28 }; // light green
+      else c = { r: 0.24, g: 0.40, b: 0.18 };               // dark green
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    grassGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(60, 60),
-      new THREE.MeshStandardMaterial({ color: 0x6b8e4d, roughness: 1.0, metalness: 0 }),
+      grassGeo,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
-    grass.position.y = -0.01; // sit just below interior floor to avoid z-fighting
+    grass.position.y = -0.01;
     grass.receiveShadow = true;
     this.threeScene.add(grass);
+    // Scatter ~400 small grass tufts using instanced cones — adds 3D
+    // detail without thousands of draw calls.
+    const tuftGeo = new THREE.ConeGeometry(0.06, 0.22, 5);
+    const tuftMat = new THREE.MeshStandardMaterial({ color: 0x4a6b30, roughness: 0.95 });
+    const tufts = new THREE.InstancedMesh(tuftGeo, tuftMat, 400);
+    const tmp = new THREE.Object3D();
+    let placed = 0;
+    while (placed < 400) {
+      const tx = (Math.random() - 0.5) * 58;
+      const tz = (Math.random() - 0.5) * 58;
+      // Skip indoors (-5..5 x and z) and the road/pavement strip in front.
+      const insideBuilding = tx > -5.5 && tx < 5.5 && tz > -5.5 && tz < 5.5;
+      const onSidewalkOrRoad = tz > 4.5 && tz < 16.5 && tx > -15 && tx < 15;
+      if (insideBuilding || onSidewalkOrRoad) continue;
+      tmp.position.set(tx, 0.11, tz);
+      tmp.rotation.y = Math.random() * Math.PI * 2;
+      tmp.scale.setScalar(0.7 + Math.random() * 0.6);
+      tmp.updateMatrix();
+      tufts.setMatrixAt(placed, tmp.matrix);
+      placed += 1;
+    }
+    tufts.castShadow = false;
+    tufts.receiveShadow = true;
+    this.threeScene.add(tufts);
     // Pavement strip in front of the door (z=5 to z=10).
     const pavement = new THREE.Mesh(
       new THREE.PlaneGeometry(30, 5),
@@ -273,13 +323,13 @@ export class WorldScene {
     const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), ghostMat);
     wallRight.position.set(5, 1.5, 0);
     this.threeScene.add(wallRight);
-    // Front wall is split into two segments to leave the doorway open at
-    // x=-1..+1 (the door sits there).
-    const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 0.2), ghostMat);
-    frontLeft.position.set(-3, 1.5, 5);
+    // Front wall is split into two segments leaving a 1-tile doorway
+    // open at x=-0.5..+0.5 (matches the 1×1 door footprint).
+    const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(4.5, 3, 0.2), ghostMat);
+    frontLeft.position.set(-2.75, 1.5, 5);
     this.threeScene.add(frontLeft);
-    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 0.2), ghostMat);
-    frontRight.position.set(3, 1.5, 5);
+    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(4.5, 3, 0.2), ghostMat);
+    frontRight.position.set(2.75, 1.5, 5);
     this.threeScene.add(frontRight);
   }
 
@@ -292,6 +342,8 @@ export class WorldScene {
   }
 
   private async populateDemoRestaurant(): Promise<void> {
+    let resolveDemoReady: () => void = () => {};
+    this.demoReady = new Promise((r) => { resolveDemoReady = r; });
     // Place a few Kenney pieces to verify loading + look. Positions are in
     // world units (1 unit = 1 grid cell). Coords are (x, z) on the ground.
     const placements: { id: string; x: number; z: number; rotY?: number }[] = [
@@ -303,40 +355,39 @@ export class WorldScene {
       { id: "counter",    x:  1,   z: -4 },
       { id: "microwave",  x:  2,   z: -4 },
 
-      // Dining: 2 tables (large now — scale 1.9) with chairs at 1.05 offset
-      // so the seat front edge meets the table.
+      // Tables sit on a 1×1 cell; chairs go 0.9 from table center so the
+      // seat-front edge meets the table-edge after fitFurniture.
       { id: "small-table",   x: -2,    z: 1 },
-      { id: "wooden-chair",  x: -3.05, z: 1,    rotY: Math.PI / 2 },
-      { id: "wooden-chair",  x: -0.95, z: 1,    rotY: -Math.PI / 2 },
-      { id: "wooden-chair",  x: -2,    z: -0.05, rotY: 0 },
-      { id: "wooden-chair",  x: -2,    z: 2.05, rotY: Math.PI },
+      { id: "wooden-chair",  x: -2.9,  z: 1,    rotY: Math.PI / 2 },
+      { id: "wooden-chair",  x: -1.1,  z: 1,    rotY: -Math.PI / 2 },
+      { id: "wooden-chair",  x: -2,    z: 0.1,  rotY: 0 },
+      { id: "wooden-chair",  x: -2,    z: 1.9,  rotY: Math.PI },
 
       { id: "small-table",   x: 2,     z: 1 },
-      { id: "cushion-chair", x: 0.95,  z: 1,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 3.05,  z: 1,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 2,     z: -0.05, rotY: 0 },
-      { id: "cushion-chair", x: 2,     z: 2.05, rotY: Math.PI },
+      { id: "cushion-chair", x: 1.1,   z: 1,    rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 2.9,   z: 1,    rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 2,     z: 0.1,  rotY: 0 },
+      { id: "cushion-chair", x: 2,     z: 1.9,  rotY: Math.PI },
 
       // Third table near the front so the restaurant doesn't feel half-empty.
       { id: "small-table",   x: 0,     z: 3 },
-      { id: "modern-chair",  x: -1.05, z: 3,    rotY: Math.PI / 2 },
-      { id: "modern-chair",  x:  1.05, z: 3,    rotY: -Math.PI / 2 },
-      { id: "modern-chair",  x:  0,    z: 1.95, rotY: 0 },
-      { id: "modern-chair",  x:  0,    z: 4.05, rotY: Math.PI },
+      { id: "modern-chair",  x: -0.9,  z: 3,    rotY: Math.PI / 2 },
+      { id: "modern-chair",  x:  0.9,  z: 3,    rotY: -Math.PI / 2 },
+      { id: "modern-chair",  x:  0,    z: 2.1,  rotY: 0 },
+      { id: "modern-chair",  x:  0,    z: 3.9,  rotY: Math.PI },
 
-      // Tier 3+ tables — sides. Chair against the wall is nudged in slightly
-      // so it doesn't clip through the left wall at x=-5.
+      // Tier 3+ tables — sides.
       { id: "small-table",   x: -4,    z: 0 },
-      { id: "cushion-chair", x: -4.95, z: 0,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: -2.95, z: 0,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: -4,    z: -1.05, rotY: 0 },
-      { id: "cushion-chair", x: -4,    z: 1.05, rotY: Math.PI },
+      { id: "cushion-chair", x: -4.9,  z: 0,    rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: -3.1,  z: 0,    rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: -4,    z: -0.9, rotY: 0 },
+      { id: "cushion-chair", x: -4,    z: 0.9,  rotY: Math.PI },
 
       { id: "small-table",   x: 4,     z: 0 },
-      { id: "cushion-chair", x: 4.95,  z: 0,    rotY: -Math.PI / 2 },
-      { id: "cushion-chair", x: 2.95,  z: 0,    rotY: Math.PI / 2 },
-      { id: "cushion-chair", x: 4,     z: -1.05, rotY: 0 },
-      { id: "cushion-chair", x: 4,     z: 1.05, rotY: Math.PI },
+      { id: "cushion-chair", x: 4.9,   z: 0,    rotY: -Math.PI / 2 },
+      { id: "cushion-chair", x: 3.1,   z: 0,    rotY: Math.PI / 2 },
+      { id: "cushion-chair", x: 4,     z: -0.9, rotY: 0 },
+      { id: "cushion-chair", x: 4,     z: 0.9,  rotY: Math.PI },
 
       // Decor
       { id: "plant-medium",  x: -4.5, z: -4 },
@@ -364,10 +415,11 @@ export class WorldScene {
       }
       try {
         const model = await this.loader.load(def.modelPath);
-        model.position.set(p.x, 0, p.z);
+        fitFurniture(model, def);
+        model.position.set(p.x, model.position.y, p.z);
         if (p.rotY != null) model.rotation.y = p.rotY;
-        model.scale.setScalar(def.scale);
         this.threeScene.add(model);
+        this.demoPlacements.push({ defId: p.id, x: p.x, z: p.z, rotY: p.rotY ?? 0, model });
         // Capture the front-door reference for open/close animation.
         if (p.id === "door" && p.x === 0 && p.z === 5) {
           this.doorObj = model;
@@ -378,6 +430,7 @@ export class WorldScene {
       }
     }));
 
+    resolveDemoReady();
     await this.populateCharacters();
   }
 

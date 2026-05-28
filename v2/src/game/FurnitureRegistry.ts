@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import { fitFurniture } from "../assets/fitFurniture";
 
 /**
  * Tracks furniture the player has placed at runtime. Owns the model
@@ -53,6 +54,15 @@ export class FurnitureRegistry {
     const uid = makeUid();
     this.items.push({ uid, defId, x, z, rotY, model });
     return uid;
+  }
+
+  /** Bulk-register many existing models (e.g. the demo placements that
+   * WorldScene puts in directly). Skips cells already occupied. */
+  registerExisting(items: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D }[]): void {
+    for (const it of items) {
+      if (this.isOccupied(it.x, it.z)) continue;
+      this.register(it.defId, it.x, it.z, it.rotY, it.model);
+    }
   }
 
   /** True if any item is already at the given snapped cell. */
@@ -149,9 +159,9 @@ export class FurnitureRegistry {
       }
       try {
         const model = await this.loader.load(def.modelPath);
-        model.position.set(p.x, 0, p.z);
+        fitFurniture(model, def);
+        model.position.set(p.x, model.position.y, p.z);
         model.rotation.y = p.rotY;
-        model.scale.setScalar(def.scale);
         this.scene.add(model);
         this.items.push({ uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model });
       } catch (err) {

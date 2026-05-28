@@ -28,6 +28,7 @@ export interface HudActions {
   openUpgrades: () => void;
   openDecor: () => void;
   openExpand: () => void;
+  openPantry: () => void;
   resetSave: () => void;
   isMuted: () => boolean;
   toggleMute: () => boolean;
@@ -180,35 +181,53 @@ export class Hud {
   private buildModalIconRow(): void {
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "repeat(9, 1fr)",
-      gap: "3px", marginTop: "5px",
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+      gap: "5px", marginTop: "6px",
     } as Partial<CSSStyleDeclaration>);
+    // Important / often-used modals get a bigger button each. The tier
+    // and boost actions are NOT here — they live in the always-visible
+    // ExpandWidget directly below this HUD.
     const buttons: IconBtn[] = [
-      { icon: "🏛", title: "Restaurant tier + boost", click: this.actions.openExpand,   tint: "rgba(200, 160, 100, 0.18)" },
-      { icon: "⚡", title: "Recipe upgrades",     click: this.actions.openUpgrades, tint: "rgba(140, 200, 140, 0.18)" },
-      { icon: "🎨", title: "Interior theme",      click: this.actions.openDecor,    tint: "rgba(220, 150, 200, 0.18)" },
-      { icon: "📓", title: "Transaction ledger",  click: this.actions.openLedger,   tint: "rgba(200, 180, 120, 0.18)" },
-      { icon: "📊", title: "Daily trends",        click: this.actions.openStats,    tint: "rgba(140, 180, 200, 0.18)" },
-      { icon: "🏆", title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.18)" },
-      { icon: "💾", title: "Save slots",          click: this.actions.openSlots,    tint: "rgba(160, 180, 140, 0.18)" },
-      { icon: "?",  title: "How to play",         click: this.actions.openHelp,     tint: "rgba(180, 200, 220, 0.18)" },
-      { icon: "⚙",  title: "Dev tools",           click: () => this.toggleDev(),    tint: "rgba(180, 180, 180, 0.18)" },
+      { icon: "⚡ Upgrades",  title: "Recipe upgrades",        click: this.actions.openUpgrades,    tint: "rgba(140, 200, 140, 0.22)" },
+      { icon: "🧺 Pantry",   title: "Pantry + auto-shop",     click: this.actions.openPantry,      tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "🎨 Decor",    title: "Interior theme",          click: this.actions.openDecor,       tint: "rgba(220, 150, 200, 0.22)" },
+      { icon: "📊 Trends",   title: "Daily trends",            click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
+      { icon: "🏆 Awards",   title: "Achievements",            click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.22)" },
     ];
-    for (const b of buttons) {
+    // Second row for less-used items.
+    const row2 = document.createElement("div");
+    Object.assign(row2.style, {
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)",
+      gap: "5px", marginTop: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const buttons2: IconBtn[] = [
+      { icon: "📓 Ledger",   title: "Transaction ledger",     click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.18)" },
+      { icon: "💾 Slots",    title: "Save slots",             click: this.actions.openSlots,      tint: "rgba(160, 180, 140, 0.18)" },
+      { icon: "? Help",      title: "How to play",            click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.18)" },
+      { icon: "⚙ Dev",       title: "Dev tools",              click: () => this.toggleDev(),      tint: "rgba(180, 180, 180, 0.18)" },
+      { icon: "🏛 Tier",     title: "Restaurant tier + boost (also in widget below)", click: this.actions.openExpand, tint: "rgba(200, 160, 100, 0.18)" },
+    ];
+    const mkBtn = (b: IconBtn, big: boolean): HTMLButtonElement => {
       const btn = document.createElement("button");
       btn.textContent = b.icon;
       btn.title = b.title;
       Object.assign(btn.style, {
-        padding: "5px 0", background: b.tint ?? "rgba(255,245,220,0.08)",
+        padding: big ? "6px 2px" : "4px 2px",
+        background: b.tint ?? "rgba(255,245,220,0.08)",
         color: "#fff5dc",
         border: "1px solid rgba(255,245,220,0.18)",
         borderRadius: "4px", cursor: "pointer", font: "inherit",
-        fontSize: "13px",
+        fontSize: big ? "11px" : "10px",
+        fontWeight: big ? "600" : "500",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       } as Partial<CSSStyleDeclaration>);
       btn.onclick = b.click;
-      row.appendChild(btn);
-    }
+      return btn;
+    };
+    for (const b of buttons) row.appendChild(mkBtn(b, true));
+    for (const b of buttons2) row2.appendChild(mkBtn(b, false));
     this.root.appendChild(row);
+    this.root.appendChild(row2);
   }
 
   private buildDevSection(): void {

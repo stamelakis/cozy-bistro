@@ -3,6 +3,7 @@ import { furnitureCatalog, type FurnitureDef } from "../data/furnitureCatalog";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import type { FurnitureRegistry } from "../game/FurnitureRegistry";
+import { fitFurniture } from "../assets/fitFurniture";
 
 /**
  * Minimal build/buy menu — list furniture items on the right side of the
@@ -264,7 +265,7 @@ export class BuildMenu {
     this.placingDef = def;
     try {
       this.preview = await this.loader.load(def.modelPath);
-      this.preview.scale.setScalar(def.scale);
+      fitFurniture(this.preview, def);
       this.preview.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           const m = (o.material as THREE.Material).clone() as THREE.Material;
@@ -381,9 +382,9 @@ export class BuildMenu {
     // Bake the preview into the scene: clone it as a solid model and add.
     const rotY = this.rotationY;
     void this.loader.load(def.modelPath).then((solid) => {
-      solid.position.set(cellX, 0, cellZ);
+      fitFurniture(solid, def);
+      solid.position.set(cellX, solid.position.y, cellZ);
       solid.rotation.y = rotY;
-      solid.scale.setScalar(def.scale);
       this.scene.add(solid);
       this.registry.register(def.id, cellX, cellZ, rotY, solid);
     });

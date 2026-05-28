@@ -1,0 +1,156 @@
+import type { Game } from "../game/Game";
+import { getIngredientCost } from "../data/ingredients";
+
+/**
+ * Pantry browser — full list of stocked ingredients with Ingredient /
+ * Unit Cost / Stock columns. Includes the Auto-shop toggle + the
+ * inventory-value total. Opens from the HUD's 🧺 icon.
+ */
+export class PantryModal {
+  private readonly game: Game;
+  private readonly root: HTMLElement;
+  private readonly list: HTMLElement;
+  private readonly toggle: HTMLButtonElement;
+  private totalLine?: HTMLElement;
+
+  constructor(parent: HTMLElement, game: Game) {
+    this.game = game;
+    this.root = document.createElement("div");
+    Object.assign(this.root.style, {
+      position: "fixed", top: "0", left: "0",
+      width: "100vw", height: "100vh",
+      display: "none",
+      alignItems: "center", justifyContent: "center",
+      background: "rgba(0, 0, 0, 0.45)",
+      zIndex: "1000",
+      pointerEvents: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.addEventListener("click", (e) => { if (e.target === this.root) this.hide(); });
+    parent.appendChild(this.root);
+
+    const body = document.createElement("div");
+    Object.assign(body.style, {
+      width: "min(460px, calc(100vw - 40px))",
+      maxHeight: "84vh",
+      display: "flex", flexDirection: "column",
+      padding: "18px 22px",
+      background: "rgba(28, 20, 14, 0.96)",
+      color: "#fff5dc",
+      font: "12px/1.4 system-ui, sans-serif",
+      borderRadius: "12px",
+      border: "2px solid #d8b98f",
+      boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(body);
+
+    const header = document.createElement("div");
+    Object.assign(header.style, {
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      marginBottom: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    const title = document.createElement("div");
+    title.textContent = "🧺 PANTRY";
+    Object.assign(title.style, { fontSize: "16px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
+    header.appendChild(title);
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    Object.assign(closeBtn.style, {
+      background: "transparent", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)", borderRadius: "4px",
+      width: "26px", height: "26px", cursor: "pointer",
+      font: "inherit", fontSize: "13px",
+    } as Partial<CSSStyleDeclaration>);
+    closeBtn.onclick = () => this.hide();
+    header.appendChild(closeBtn);
+    body.appendChild(header);
+
+    // Column headers.
+    const headerRow = document.createElement("div");
+    Object.assign(headerRow.style, {
+      display: "grid",
+      gridTemplateColumns: "1fr 70px 60px",
+      gap: "10px",
+      padding: "4px 6px",
+      fontSize: "10px",
+      fontWeight: "700",
+      textTransform: "uppercase",
+      letterSpacing: "0.05em",
+      opacity: "0.65",
+      borderBottom: "1px solid rgba(255,245,220,0.18)",
+      marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    headerRow.innerHTML = `<span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span>`;
+    body.appendChild(headerRow);
+
+    this.list = document.createElement("div");
+    Object.assign(this.list.style, { flex: "1", overflowY: "auto" } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.list);
+
+    // Auto-shop toggle.
+    this.toggle = document.createElement("button");
+    Object.assign(this.toggle.style, {
+      marginTop: "10px",
+      padding: "6px 10px",
+      background: "rgba(255,245,220,0.10)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      cursor: "pointer",
+      font: "inherit",
+      width: "100%",
+    } as Partial<CSSStyleDeclaration>);
+    this.toggle.onclick = () => { this.game.autoShopEnabled = !this.game.autoShopEnabled; this.refresh(); };
+    body.appendChild(this.toggle);
+
+    this.totalLine = document.createElement("div");
+    Object.assign(this.totalLine.style, {
+      marginTop: "6px", fontSize: "11px", opacity: "0.75",
+      textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.totalLine);
+  }
+
+  show(): void { this.refresh(); this.root.style.display = "flex"; }
+  hide(): void { this.root.style.display = "none"; }
+
+  private refresh(): void {
+    const pantry = this.game.cooking.getPantry().slice()
+      .sort((a, b) => getIngredientCost(b.id) - getIngredientCost(a.id) || a.name.localeCompare(b.name));
+    this.list.innerHTML = "";
+    let totalValue = 0;
+    for (const stock of pantry) {
+      const cost = getIngredientCost(stock.id);
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "grid",
+        gridTemplateColumns: "1fr 70px 60px",
+        gap: "10px",
+        padding: "4px 6px",
+        borderBottom: "1px solid rgba(255,245,220,0.06)",
+        fontVariantNumeric: "tabular-nums",
+      } as Partial<CSSStyleDeclaration>);
+      const nameEl = document.createElement("span");
+      nameEl.textContent = stock.name;
+      const costEl = document.createElement("span");
+      costEl.textContent = `$${cost}`;
+      costEl.style.textAlign = "right";
+      costEl.style.opacity = "0.85";
+      const qtyEl = document.createElement("span");
+      qtyEl.textContent = String(stock.quantity);
+      qtyEl.style.textAlign = "right";
+      qtyEl.style.fontWeight = "700";
+      qtyEl.style.color = stock.quantity === 0 ? "#ff9a9a"
+        : stock.quantity <= 3 ? "#ffd47a"
+        : "#a8e2a8";
+      row.appendChild(nameEl);
+      row.appendChild(costEl);
+      row.appendChild(qtyEl);
+      this.list.appendChild(row);
+      totalValue += cost * stock.quantity;
+    }
+    this.toggle.textContent = this.game.autoShopEnabled ? "Auto-shop: ON" : "Auto-shop: OFF";
+    this.toggle.style.background = this.game.autoShopEnabled
+      ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
+    if (this.totalLine) this.totalLine.textContent = `Inventory value: $${totalValue}`;
+  }
+}

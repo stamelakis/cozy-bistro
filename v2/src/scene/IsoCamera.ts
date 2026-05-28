@@ -58,14 +58,15 @@ export class IsoCamera {
     this.resize(window.innerWidth, window.innerHeight);
   };
 
+  private dragButton = 0; // which mouse button started the drag
+  private dragMoved = 0;  // total px moved during this drag
+
   private onPointerDown = (e: PointerEvent): void => {
-    if (e.button === 2 || e.button === 1) {
-      // Right or middle drag rotates.
+    // Left = pan, Right = rotate, Middle = rotate.
+    if (e.button === 0 || e.button === 1 || e.button === 2) {
       this.dragging = true;
-      (e.target as Element).setPointerCapture?.(e.pointerId);
-    } else if (e.button === 0 && e.shiftKey) {
-      // Shift+left drag pans.
-      this.dragging = true;
+      this.dragButton = e.button;
+      this.dragMoved = 0;
       (e.target as Element).setPointerCapture?.(e.pointerId);
     }
     this.dragLastX = e.clientX;
@@ -78,21 +79,28 @@ export class IsoCamera {
     const dy = e.clientY - this.dragLastY;
     this.dragLastX = e.clientX;
     this.dragLastY = e.clientY;
+    this.dragMoved += Math.abs(dx) + Math.abs(dy);
 
-    if (e.shiftKey) {
-      // Pan in the camera's screen-aligned plane.
+    if (this.dragButton === 2 || this.dragButton === 1 || e.shiftKey) {
+      // Right / middle / Shift+left = rotate.
+      this.azimuth -= dx * 0.005;
+      this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 12, Math.PI / 2 - 0.05);
+    } else {
+      // Plain left-drag = pan.
       const panScale = this.zoom * 0.0025;
       const right = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 0);
       const up = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 1);
       this.target.addScaledVector(right, -dx * panScale);
       this.target.addScaledVector(up, dy * panScale);
-    } else {
-      // Rotate around target.
-      this.azimuth -= dx * 0.005;
-      this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 12, Math.PI / 2 - 0.05);
     }
     this.updatePose();
   };
+
+  /** Returns true if the most recent drag was a true drag (moved more
+   * than ~6 px) — used by BuildMenu to suppress the place-click. */
+  wasDragging(): boolean {
+    return this.dragMoved > 6;
+  }
 
   private onPointerUp = (_e: PointerEvent): void => {
     this.dragging = false;

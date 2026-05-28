@@ -2,14 +2,21 @@ import type { Game } from "../game/Game";
 import type { StaffRole } from "../systems/StaffSystem";
 
 /**
- * Bottom-left panel showing current staff counts + hire/fire buttons per
- * role. Hiring costs money up front, then payroll ticks per minute via
- * Game.update(). Firing has a small severance cost.
+ * Enlarged staff panel with per-role activity badges + payroll summary.
+ *
+ * Per row: role label · count · working/idle badges · hire (+ cost) ·
+ * fire (- severance).
+ *
+ * Footer: total payroll/min and total hire cost for next reinforcement.
  */
 export class StaffPanel {
   private readonly root: HTMLElement;
   private readonly game: Game;
-  private readonly rows: Record<StaffRole, { count: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement }> = {} as Record<StaffRole, { count: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement }>;
+  private readonly rows: Record<StaffRole, {
+    label: HTMLElement; activity: HTMLElement;
+    hire: HTMLButtonElement; fire: HTMLButtonElement;
+  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement }>;
+  private payrollLine?: HTMLElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -19,73 +26,110 @@ export class StaffPanel {
       left: "12px",
       bottom: "12px",
       padding: "10px 12px",
-      background: "rgba(20, 14, 10, 0.78)",
+      background: "rgba(20, 14, 10, 0.82)",
       color: "#fff5dc",
       font: "12px/1.3 system-ui, sans-serif",
       borderRadius: "8px",
-      minWidth: "220px",
-      pointerEvents: "none",
+      width: "254px",
+      pointerEvents: "auto",
       boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
     const title = document.createElement("div");
-    title.textContent = "STAFF";
-    Object.assign(title.style, { fontWeight: "600", fontSize: "13px", marginBottom: "6px" } as Partial<CSSStyleDeclaration>);
+    title.textContent = "👥 STAFF";
+    Object.assign(title.style, {
+      fontWeight: "700", fontSize: "12px", letterSpacing: "0.04em",
+      marginBottom: "6px", textAlign: "center", opacity: "0.9",
+    } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(title);
 
     (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => this.addRow(role));
+
+    // Footer: total payroll + status.
+    this.payrollLine = document.createElement("div");
+    Object.assign(this.payrollLine.style, {
+      marginTop: "6px",
+      paddingTop: "6px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
+      fontSize: "10px",
+      opacity: "0.75",
+      textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.payrollLine);
   }
 
   private addRow(role: StaffRole): void {
-    const row = document.createElement("div");
-    Object.assign(row.style, { display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" } as Partial<CSSStyleDeclaration>);
-    const count = document.createElement("span");
-    count.style.flex = "1";
-    const hire = this.makeBtn("+", "rgba(120,200,120,0.18)");
-    const fire = this.makeBtn("−", "rgba(200,120,120,0.18)");
-    hire.onclick = () => this.tryHire(role);
-    fire.onclick = () => this.tryFire(role);
-    row.appendChild(count);
-    row.appendChild(hire);
-    row.appendChild(fire);
-    this.root.appendChild(row);
-    this.rows[role] = { count, hire, fire };
+    const block = document.createElement("div");
+    Object.assign(block.style, {
+      marginBottom: "5px",
+      padding: "4px 6px",
+      background: "rgba(255,245,220,0.04)",
+      borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+
+    const top = document.createElement("div");
+    Object.assign(top.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
+    const label = document.createElement("span");
+    Object.assign(label.style, { fontWeight: "600", fontSize: "12px", flex: "1" } as Partial<CSSStyleDeclaration>);
+    const hire = this.makeBtn("+", "rgba(120,200,120,0.22)");
+    const fire = this.makeBtn("−", "rgba(200,120,120,0.22)");
+    hire.onclick = () => { if (this.game.hireStaff(role)) this.update(); };
+    fire.onclick = () => { if (this.game.fireStaff(role)) this.update(); };
+    top.appendChild(label);
+    top.appendChild(hire);
+    top.appendChild(fire);
+    block.appendChild(top);
+
+    const activity = document.createElement("div");
+    Object.assign(activity.style, { fontSize: "10px", opacity: "0.75", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+    block.appendChild(activity);
+
+    this.root.appendChild(block);
+    this.rows[role] = { label, activity, hire, fire };
   }
 
-  private makeBtn(label: string, bg: string): HTMLButtonElement {
+  private makeBtn(text: string, bg: string): HTMLButtonElement {
     const b = document.createElement("button");
-    b.textContent = label;
+    b.textContent = text;
     Object.assign(b.style, {
-      width: "28px", height: "24px",
+      width: "26px", height: "22px",
       background: bg, color: "#fff5dc",
       border: "1px solid rgba(255,245,220,0.25)", borderRadius: "4px",
-      cursor: "pointer", pointerEvents: "auto", font: "inherit",
+      cursor: "pointer", font: "inherit", fontSize: "13px", fontWeight: "700",
     } as Partial<CSSStyleDeclaration>);
     return b;
   }
 
-  private tryHire(role: StaffRole): void {
-    // Game.hireStaff handles the economy + staff system + onStaffHired
-    // callback so the Engine can spawn the actual world character.
-    if (this.game.hireStaff(role)) this.update();
-  }
-
-  private tryFire(role: StaffRole): void {
-    if (this.game.fireStaff(role)) this.update();
-  }
-
   update(): void {
+    let totalCount = 0;
+    let totalPayroll = 0;
     (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => {
       const count = this.game.staff.getStaffCount(role);
       const hireCost = this.game.staff.getStaffHireCost(role);
       const fireCost = this.game.staff.getStaffFireCost(role);
       const label = this.game.staff.getStaffRoleLabel(role);
-      this.rows[role].count.textContent = `${label}: ${count}`;
-      this.rows[role].hire.title = `Hire ${label} ($${hireCost})`;
-      this.rows[role].fire.title = `Fire ${label} ($${fireCost})`;
-      this.rows[role].fire.disabled = count === 0;
-      this.rows[role].fire.style.opacity = count === 0 ? "0.4" : "1";
+      const working = this.game.getStaffWorkingCount?.(role) ?? 0;
+      const idle = Math.max(0, count - working);
+      const row = this.rows[role];
+      row.label.textContent = `${label} (${count})`;
+      row.activity.innerHTML = count === 0
+        ? `<span style="opacity:0.4">none hired</span>`
+        : `<span style="color:#a8e2a8">▶ ${working} working</span> · <span style="color:#ffd47a">⏸ ${idle} idle</span>`;
+      row.hire.title = `Hire ${label} ($${hireCost})`;
+      row.fire.title = `Fire ${label} (−$${fireCost} severance)`;
+      const canHire = this.game.economy.canAfford(hireCost);
+      row.hire.disabled = !canHire;
+      row.hire.style.opacity = canHire ? "1" : "0.4";
+      row.fire.disabled = count === 0;
+      row.fire.style.opacity = count === 0 ? "0.4" : "1";
+      totalCount += count;
+      totalPayroll += count * this.game.admin.payrollPerStaffPerMinute;
     });
+    if (this.payrollLine) {
+      this.payrollLine.textContent = totalCount === 0
+        ? "No staff hired — guests wait forever."
+        : `${totalCount} hired · payroll $${totalPayroll}/min`;
+    }
   }
 }

@@ -8,10 +8,11 @@ import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffPanel } from "../ui/StaffPanel";
-import { PantryPanel } from "../ui/PantryPanel";
+import { PantryModal } from "../ui/PantryModal";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
 import { ExpandModal } from "../ui/ExpandModal";
+import { ExpandWidget } from "../ui/ExpandWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
@@ -46,10 +47,11 @@ export class Engine {
   readonly registry: FurnitureRegistry;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
-  readonly pantryPanel: PantryPanel;
+  readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
   readonly expandModal: ExpandModal;
+  readonly expandWidget: ExpandWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
@@ -127,15 +129,17 @@ export class Engine {
       openUpgrades: () => this.upgradeModal.show(),
       openDecor: () => this.decorModal.show(),
       openExpand: () => this.expandModal.show(),
+      openPantry: () => this.pantryModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
     });
     this.staffPanel = new StaffPanel(container, this.game);
-    this.pantryPanel = new PantryPanel(container, this.game);
+    this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
+    this.expandWidget = new ExpandWidget(container, this.game);
     this.decorModal = new DecorModal(container, this.game);
     // Wire theme changes to the live scene + restore the saved theme.
     this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
@@ -179,9 +183,24 @@ export class Engine {
       void this.registry.restore(restored);
     }
     this.saver.registry = this.registry;
+    // Once the demo restaurant finishes loading, register every demo
+    // placement so MOVE / SELL can target them too.
+    void this.scene.demoReady.then(() => {
+      this.registry.registerExisting(this.scene.demoPlacements);
+    });
     // Let the Game read counts of placed sinks/dishwashers when scaling
     // the dish-wash interval.
     this.game.countPlacedById = (id) => this.registry.countById(id);
+    // StaffPanel queries this to show "X working" badges.
+    this.game.getStaffWorkingCount = (role) => {
+      if (role === "chef") {
+        return this.router?.snapshotStatus().filter((s) => s.role === "chef" && s.label).length ?? 0;
+      }
+      if (role === "waiter") {
+        return this.router?.snapshotStatus().filter((s) => s.role === "waiter" && s.label).length ?? 0;
+      }
+      return this.errand?.snapshotStatus().filter((s) => s.label).length ?? 0;
+    };
     // Build menu — for placing furniture at runtime.
     new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
 
@@ -457,8 +476,8 @@ export class Engine {
     if (this.hudAccumulator >= 0.2) {
       this.hud.update();
       this.staffPanel.update();
-      this.pantryPanel.update();
       this.menuPanel.update();
+      this.expandWidget.update();
       this.hudAccumulator = 0;
     }
 

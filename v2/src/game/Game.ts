@@ -126,6 +126,10 @@ export class Game {
   /** Optional: when set, the dish-wash interval queries this for
    * counts of placed sinks / dishwashers. */
   countPlacedById?: (id: string) => number;
+  /** Optional: Engine sets this to query how many staff of a role are
+   * currently working (non-idle). Used by StaffPanel for the
+   * "X working / Y idle" badge. */
+  getStaffWorkingCount?: (role: StaffRole) => number;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */
@@ -356,10 +360,11 @@ export class Game {
     return recipe.satisfactionEffect + (level - 1) * UPGRADE_SATISFACTION_PER_LEVEL;
   }
 
-  /** Money cost to take this recipe to the next level. */
+  /** Money cost to take this recipe to the next level. Doubles each step:
+   * L1 → $30, L2 → $60, L3 → $120, L4 → $240, L5 → $480, ... */
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
-    return level * level * 30;
+    return 30 * Math.pow(2, level - 1);
   }
 
   /** Material cost to upgrade — L units of each ingredient, where L is
