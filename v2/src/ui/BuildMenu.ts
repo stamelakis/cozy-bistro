@@ -31,6 +31,25 @@ interface PlacementPlan {
   rotY: number;
 }
 
+/** The fixed segments of the restaurant's exterior shell, taken from
+ * WorldScene.addBuilding. Wall-mounted items (mirror, art, sconces)
+ * snap to these in addition to player-placed partition walls. Each
+ * segment is a 2-D line from (x1, z1) to (x2, z2) with a wall rotation
+ * `rotY` matching how the corresponding mesh was authored (0 for walls
+ * running along X, π/2 for walls running along Z). */
+const EXTERIOR_WALL_SEGMENTS: readonly { x1: number; z1: number; x2: number; z2: number; rotY: number }[] = [
+  // Back wall (horizontal, along X at z=-4.5).
+  { x1: -4.5, z1: -4.5, x2:  5.5, z2: -4.5, rotY: 0 },
+  // Left side wall (vertical, along Z at x=-4.5).
+  { x1: -4.5, z1: -4.5, x2: -4.5, z2:  5.5, rotY: Math.PI / 2 },
+  // Right side wall (vertical, along Z at x=5.5).
+  { x1:  5.5, z1: -4.5, x2:  5.5, z2:  5.5, rotY: Math.PI / 2 },
+  // Front-left segment (horizontal, along X at z=5.5, x from -5 to -0.5).
+  { x1: -5.0, z1:  5.5, x2: -0.5, z2:  5.5, rotY: 0 },
+  // Front-right segment (horizontal, along X at z=5.5, x from 0.5 to 6).
+  { x1:  0.5, z1:  5.5, x2:  6.0, z2:  5.5, rotY: 0 },
+];
+
 /**
  * Minimal build/buy menu — list furniture items on the right side of the
  * screen. Click an item to enter PLACING mode: a translucent preview
@@ -727,15 +746,21 @@ export class BuildMenu {
     return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };
   }
 
-  /** Find the registered wall (edge-placed item) closest to the cursor,
-   * returning a mount anchor + rotation for a wall-mounted item. Picks
-   * the FACE of the wall the cursor is hovering over, so a mirror can
-   * be mounted on either side of the same wall (the rotation flips
-   * 180° when the cursor crosses to the other side). Returns null if
-   * no wall is within maxDist. */
+  /** Find the nearest wall to the cursor — either a player-placed
+   * partition (registry, placement="edge") or one of the building's
+   * exterior walls — and return a mount anchor + rotation for a
+   * wall-mounted item. The mount picks the FACE of the wall the cursor
+   * is on, so the same wall can hold items on both sides. Returns null
+   * if nothing is within maxDist. */
   private findNearestWall(x: number, z: number, maxDist: number): { x: number; z: number; rotY: number } | null {
     let bestDistSq = maxDist * maxDist;
-    let bestWall: { x: number; z: number; rotY: number } | null = null;
+    // Best hit: anchor (mount point on the wall plane) + rotY (the wall's
+    // own orientation, which we use to derive its normals below).
+    let best: { x: number; z: number; rotY: number } | null = null;
+
+    // 1) Player-placed partition walls (registry items with placement
+    //    "edge"). These are anchored at their own centers — a single
+    //    point per wall.
     for (const it of this.registry.snapshotItems()) {
       if (this.holdingUid && it.uid === this.holdingUid) continue;
       const itDef = furnitureCatalog.find((d) => d.id === it.defId);
@@ -744,29 +769,52 @@ export class BuildMenu {
       const d2 = dx * dx + dz * dz;
       if (d2 < bestDistSq) {
         bestDistSq = d2;
-        bestWall = { x: it.x, z: it.z, rotY: it.rotY };
+        best = { x: it.x, z: it.z, rotY: it.rotY };
       }
     }
-    if (!bestWall) return null;
+
+    // 2) Exterior building walls. These are long segments, not points,
+    //    so we project the cursor onto each segment and take the
+    //    closest point along its length.
+    for (const seg of EXTERIOR_WALL_SEGMENTS) {
+      const sx = seg.x2 - seg.x1, sz = seg.z2 - seg.z1;
+      const segLen2 = sx * sx + sz * sz;
+      // Parametric position along segment: 0 = start, 1 = end.
+      const t = Math.max(0, Math.min(1, ((x - seg.x1) * sx + (z - seg.z1) * sz) / segLen2));
+      const px = seg.x1 + sx * t;
+      const pz = seg.z1 + sz * t;
+      const dx = px - x, dz = pz - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < bestDistSq) {
+        bestDistSq = d2;
+        best = { x: px, z: pz, rotY: seg.rotY };
+      }
+    }
+
+    if (!best) return null;
+
     // Wall's two normals: rotY=0 wall extends along X with normals on
     // ±Z; rotY=π/2 wall extends along Z with normals on ±X. Pick the
     // side the cursor is on.
-    const wallNormalX = Math.sin(bestWall.rotY);
-    const wallNormalZ = Math.cos(bestWall.rotY);
-    const proj = (x - bestWall.x) * wallNormalX + (z - bestWall.z) * wallNormalZ;
+    const wallNormalX = Math.sin(best.rotY);
+    const wallNormalZ = Math.cos(best.rotY);
+    const proj = (x - best.x) * wallNormalX + (z - best.z) * wallNormalZ;
     const sign = proj >= 0 ? 1 : -1;
     const mountNX = wallNormalX * sign;
     const mountNZ = wallNormalZ * sign;
-    // Push the item a hair (~0.07 m) off the wall plane so its own
-    // depth doesn't z-fight with the wall.
+    // Push the item a hair off the wall plane so its own depth doesn't
+    // z-fight with the wall geometry.
     const off = 0.07;
     return {
-      x: bestWall.x + mountNX * off,
-      z: bestWall.z + mountNZ * off,
-      // Item's GLB front is +X; rotate so it faces the same way as
-      // the mount normal. atan2(-nz, nx) is the inverse of the
-      // R_y(θ) * +X = (nx, 0, nz) used elsewhere.
-      rotY: Math.atan2(-mountNZ, mountNX),
+      x: best.x + mountNX * off,
+      z: best.z + mountNZ * off,
+      // Item's GLB front is -Z (three.js standard); rotate so its
+      // visible front aligns with the mount normal. The required θ for
+      // R_y(θ) * (0, 0, -1) = (mountNX, 0, mountNZ) is
+      // atan2(-mountNX, -mountNZ). Earlier this used atan2(-mountNZ, mountNX)
+      // which assumed a +X-front GLB and produced items perpendicular
+      // to the wall.
+      rotY: Math.atan2(-mountNX, -mountNZ),
     };
   }
 
