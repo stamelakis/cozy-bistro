@@ -299,14 +299,15 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // player can drop a coffee table inside it. Same 2-customer capacity
   // as a regular sofa, but the extra style + comfort + attraction make
   // it the showpiece of a lounge corner.
-  // Mask orientation: the Kenney mesh has the L extending into the +X
-  // and -Z quadrant from its origin, so after fitFurniture's recenter
-  // the visual open elbow lands at (mi=1, mj=0) — i.e. the +X half of
-  // the back row. Mask is authored as [[ row z=0 ], [ row z=1 ]] and
-  // each row is [ x=0, x=1 ], so the open cell is mask[0][1] = 0.
+  // Mask orientation derived from a vertex-density scan of the Kenney
+  // mesh: 290 verts split (0, 98, 98, 94) across the (TL, TR, BL, BR)
+  // raw quadrants, so the empty (TL) is at raw (near 0, near 0). After
+  // fitFurniture's recenter + scale that empty quadrant lands at world
+  // cell (0, 1) — index (mi=0, mj=1) — making mask[1][0] = 0. Solid
+  // cells are (0, 0), (1, 0), (1, 1).
   { id: "sofa-corner",    name: "Corner Sofa",   category: "chair",
     modelPath: "assets/kenney/loungeSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 200, comfort: 6, style: 4, seatingCapacity: 2,
-    footprint: [[1, 0], [1, 1]], surface: "drink" },
+    footprint: [[1, 1], [0, 1]], surface: "drink" },
   { id: "sofa-design",    name: "Designer Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 240, comfort: 5, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
     surface: "drink" },
@@ -523,7 +524,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/loungeSofaOttoman.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 70, comfort: 4, style: 3 },
   { id: "sofa-design-c",  name: "Designer Corner Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 280, comfort: 6, style: 6, ratingBonus: 0.08, seatingCapacity: 2,
-    footprint: [[1, 0], [1, 1]], surface: "drink" },
+    footprint: [[1, 1], [0, 1]], surface: "drink" },
 
   // === More kitchen cabinets + corner pieces. ===
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "counter",
