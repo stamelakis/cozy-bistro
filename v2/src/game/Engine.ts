@@ -227,6 +227,32 @@ export class Engine {
     window.addEventListener("resize", this.handleResize);
   }
 
+  /** True if any guest/errand/pedestrian is within ~1.5 units of the
+   * front door (0, 5). Used to swing it open. */
+  private anyoneNearDoor(): boolean {
+    const DOOR_X = 0, DOOR_Z = 5, NEAR_SQ = 1.5 * 1.5;
+    const check = (x: number, z: number) => {
+      const dx = x - DOOR_X, dz = z - DOOR_Z;
+      return dx * dx + dz * dz <= NEAR_SQ;
+    };
+    if (this.spawner) {
+      for (const g of this.spawner.snapshotMovable()) {
+        if (check(g.character.groundPos.x, g.character.groundPos.y)) return true;
+      }
+    }
+    if (this.pedestrians) {
+      for (const p of this.pedestrians.snapshotMovable()) {
+        if (check(p.character.groundPos.x, p.character.groundPos.y)) return true;
+      }
+    }
+    if (this.errand) {
+      for (const h of this.errand.snapshotStatus()) {
+        if (check(h.character.groundPos.x, h.character.groundPos.y)) return true;
+      }
+    }
+    return false;
+  }
+
   /** Build a fresh status-bubble list from the routers' + spawner's
    * current state. One entry per actor; empty label = no bubble. */
   private updateStatusBubbles(): void {
@@ -408,6 +434,8 @@ export class Engine {
     // Stove flame mirrors chef working state. Drive it before scene.update
     // so the flame's flicker animation runs this frame.
     this.scene.setStoveFlame(this.router?.isAnyChefCooking() ?? false);
+    // Open the door when a guest, errand helper, or pedestrian is close.
+    this.scene.setDoorOpen(this.anyoneNearDoor());
     // Day/night lighting follows the in-game day timer.
     const day = this.scene.applyDayNight(this.game.day.getDayProgress());
     this.renderer.setClearColor(day.skyColor);

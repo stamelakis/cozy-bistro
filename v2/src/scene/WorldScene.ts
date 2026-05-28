@@ -39,6 +39,14 @@ export class WorldScene {
   private stoveFlameMesh?: THREE.Mesh;
   private stoveFlameLight?: THREE.PointLight;
   private stoveFlamePhase = 0;
+  /** The door (front entrance) loaded into the scene during populateDemo.
+   * Captured so we can rotate it open/closed when characters approach. */
+  private doorObj?: THREE.Object3D;
+  /** Door open amount [0,1] — lerps toward doorOpenTarget every frame. */
+  private doorOpenAmount = 0;
+  private doorOpenTarget = 0;
+  /** Base rotation of the door (whatever rotY it was placed with). */
+  private doorBaseRotY = Math.PI;
   /** World position of the stove and the plate-pickup spot. Used by the
    * StaffRouter to send chef/waiter to the right places. */
   readonly stovePos = new THREE.Vector2(0, -3.0);
@@ -61,11 +69,25 @@ export class WorldScene {
     this.animator.update(dt);
     if (this.stoveFlameGroup && this.stoveFlameGroup.visible) {
       this.stoveFlamePhase += dt;
-      // Flicker scale + intensity so the flame looks alive.
       const flick = 0.85 + Math.sin(this.stoveFlamePhase * 22) * 0.1 + Math.random() * 0.1;
       if (this.stoveFlameMesh) this.stoveFlameMesh.scale.setScalar(flick);
       if (this.stoveFlameLight) this.stoveFlameLight.intensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
     }
+    // Lerp door open amount toward target and apply rotation.
+    if (this.doorObj) {
+      const lerpSpeed = 3.0; // ~0.3s open/close
+      const diff = this.doorOpenTarget - this.doorOpenAmount;
+      const step = Math.sign(diff) * Math.min(Math.abs(diff), lerpSpeed * dt);
+      this.doorOpenAmount += step;
+      // Open swings 90° to the side. base + 90° = open inward.
+      this.doorObj.rotation.y = this.doorBaseRotY + this.doorOpenAmount * Math.PI / 2;
+    }
+  }
+
+  /** Tell the front door to open (true) or close (false). Engine calls
+   * this every frame based on whether any character is near the door. */
+  setDoorOpen(open: boolean): void {
+    this.doorOpenTarget = open ? 1 : 0;
   }
 
   /** Show or hide the cooking flame above the stove. Engine calls this
@@ -166,21 +188,69 @@ export class WorldScene {
   wallMat!: THREE.MeshStandardMaterial;
 
   private addBuilding(): void {
-    // Floor
+    // === Exterior ground layers ===
+    // Grass surrounds everything (big plane).
+    const grass = new THREE.Mesh(
+      new THREE.PlaneGeometry(60, 60),
+      new THREE.MeshStandardMaterial({ color: 0x6b8e4d, roughness: 1.0, metalness: 0 }),
+    );
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.y = -0.01; // sit just below interior floor to avoid z-fighting
+    grass.receiveShadow = true;
+    this.threeScene.add(grass);
+    // Pavement strip in front of the door (z=5 to z=10).
+    const pavement = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 5),
+      new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
+    );
+    pavement.rotation.x = -Math.PI / 2;
+    pavement.position.set(0, 0, 7.5);
+    pavement.receiveShadow = true;
+    this.threeScene.add(pavement);
+    // Road beyond the pavement (z=10 to z=16).
+    const road = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 6),
+      new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
+    );
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0, 13);
+    road.receiveShadow = true;
+    this.threeScene.add(road);
+    // Painted lane lines down the middle of the road.
+    const laneMat = new THREE.MeshStandardMaterial({ color: 0xe6e0c4, roughness: 0.85, emissive: 0xe6e0c4, emissiveIntensity: 0.05 });
+    for (let x = -14; x <= 14; x += 4) {
+      const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(x, 0.005, 13);
+      this.threeScene.add(dash);
+    }
+    // Curb between pavement + road.
+    const curb = new THREE.Mesh(
+      new THREE.BoxGeometry(30, 0.12, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
+    );
+    curb.position.set(0, 0.06, 10);
+    curb.castShadow = true;
+    curb.receiveShadow = true;
+    this.threeScene.add(curb);
+
+    // === Interior floor ===
     this.floorMat = new THREE.MeshStandardMaterial({ color: 0xe7d4ad, roughness: 0.95, metalness: 0 });
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), this.floorMat);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0.0; // sits above grass
     floor.receiveShadow = true;
     this.threeScene.add(floor);
 
-    // Grid overlay so the iso "tile" feel reads.
-    const grid = new THREE.GridHelper(40, 40, 0xa68969, 0xc4ab85);
+    // Grid overlay so the iso "tile" feel reads (interior only).
+    const grid = new THREE.GridHelper(10, 10, 0xa68969, 0xc4ab85);
     (grid.material as THREE.Material).transparent = true;
     (grid.material as THREE.Material).opacity = 0.3;
-    grid.position.y = 0.001;
+    grid.position.y = 0.002;
     this.threeScene.add(grid);
 
-    // Two short walls to suggest the bistro interior corner.
+    // === Walls ===
+    // Solid back + left walls.
     this.wallMat = new THREE.MeshStandardMaterial({ color: 0xe8a98a, roughness: 0.85 });
     const wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
     wallBack.position.set(0, 1.5, -5);
@@ -193,6 +263,24 @@ export class WorldScene {
     wallSide.castShadow = true;
     wallSide.receiveShadow = true;
     this.threeScene.add(wallSide);
+
+    // Transparent right + front walls (so the room is enclosed but the
+    // camera can still see in). 15% opacity → barely visible glass-like.
+    const ghostMat = new THREE.MeshStandardMaterial({
+      color: 0xe8a98a, roughness: 0.6,
+      transparent: true, opacity: 0.15, depthWrite: false,
+    });
+    const wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), ghostMat);
+    wallRight.position.set(5, 1.5, 0);
+    this.threeScene.add(wallRight);
+    // Front wall is split into two segments to leave the doorway open at
+    // x=-1..+1 (the door sits there).
+    const frontLeft = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 0.2), ghostMat);
+    frontLeft.position.set(-3, 1.5, 5);
+    this.threeScene.add(frontLeft);
+    const frontRight = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 0.2), ghostMat);
+    frontRight.position.set(3, 1.5, 5);
+    this.threeScene.add(frontRight);
   }
 
   /** Apply a theme color set to the existing wall + floor materials.
@@ -280,6 +368,11 @@ export class WorldScene {
         if (p.rotY != null) model.rotation.y = p.rotY;
         model.scale.setScalar(def.scale);
         this.threeScene.add(model);
+        // Capture the front-door reference for open/close animation.
+        if (p.id === "door" && p.x === 0 && p.z === 5) {
+          this.doorObj = model;
+          this.doorBaseRotY = p.rotY ?? 0;
+        }
       } catch (err) {
         console.error(`Failed to load ${def.id} (${def.modelPath})`, err);
       }
