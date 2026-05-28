@@ -188,6 +188,7 @@ export class SaveSystem {
       unlockedRecipeIds: this.game.cooking.getUnlockedRecipeIdsSnapshot(),
       menuRecipeIds: this.game.cooking.getMenuRecipeIdsSnapshot(),
       recipeUpgradeLevels: this.game.cooking.getRecipeUpgradeLevelsSnapshot(),
+      recipeTrainingCompletesAt: this.game.cooking.getRecipeTrainingSnapshot(),
       // Persist player-placed furniture so layouts survive reloads. The 2D
       // PlacedFurniture shape uses {position:{x,y}, rotation:degrees}.
       // World x/z snap to integer cells, so position is lossless. rotation

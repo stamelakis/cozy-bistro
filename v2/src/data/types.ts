@@ -155,6 +155,11 @@ export interface SaveGameState {
   unlockedRecipeIds: string[];
   menuRecipeIds?: string[];
   recipeUpgradeLevels?: Record<string, number>;
+  /** Wall-clock deadlines (ms since epoch) for recipe upgrades that
+   * are currently in progress. Only one entry at a time because the
+   * kitchen can only test one new dish at once. Absent or empty when
+   * no recipe is being developed. */
+  recipeTrainingCompletesAt?: Record<string, number>;
   furniture: PlacedFurniture[];
   ingredients?: IngredientStock[];
   preparedServings?: Record<string, number>;

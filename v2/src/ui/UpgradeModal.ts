@@ -242,13 +242,37 @@ export class UpgradeModal {
         btn.textContent = "MAX";
         btn.disabled = true;
         btn.style.opacity = "0.5";
+      } else if (this.game.isRecipeTraining(recipe)) {
+        // This specific recipe is mid-upgrade — countdown instead of
+        // the Upgrade button.
+        const remaining = this.game.getRecipeTrainingRemainingSeconds(recipe) ?? 0;
+        btn.innerHTML = `🧪 Cooking<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+        btn.disabled = true;
+        btn.style.opacity = "0.7";
+        btn.style.background = "rgba(120, 160, 220, 0.22)";
       } else {
         const moneyCost = this.game.getRecipeUpgradeCost(recipe);
-        btn.innerHTML = `Upgrade<br><span style="font-size:10px;opacity:0.85">$${moneyCost} + mats</span>`;
-        const can = this.game.canUpgradeRecipe(recipe);
-        btn.disabled = !can;
-        btn.style.opacity = can ? "1" : "0.5";
-        btn.onclick = () => { if (this.game.upgradeRecipe(recipe)) this.refresh(); };
+        const durationMin = this.game.getRecipeUpgradeDurationMinutes(recipe);
+        const otherTrainingId = this.game.getCurrentlyTrainingRecipeId();
+        const someoneElseTraining = otherTrainingId !== null && otherTrainingId !== recipe.id;
+        if (someoneElseTraining) {
+          const other = this.game.cooking
+            ? recipes.find((r) => r.id === otherTrainingId)
+            : undefined;
+          btn.innerHTML = `🧪 Busy<br><span style="font-size:10px;opacity:0.85">$${moneyCost} · ${formatMinutes(durationMin)}</span>`;
+          btn.title = other
+            ? `${other.name} is being developed — only one recipe at a time`
+            : "Another recipe is being developed";
+          btn.disabled = true;
+          btn.style.opacity = "0.5";
+        } else {
+          btn.innerHTML = `Upgrade<br><span style="font-size:10px;opacity:0.85">$${moneyCost} · ${formatMinutes(durationMin)}</span>`;
+          btn.title = `Spend $${moneyCost} + materials and wait ${formatMinutes(durationMin)} (real time) to reach L${level + 1}`;
+          const can = this.game.canUpgradeRecipe(recipe);
+          btn.disabled = !can;
+          btn.style.opacity = can ? "1" : "0.5";
+          btn.onclick = () => { if (this.game.upgradeRecipe(recipe)) this.refresh(); };
+        }
       }
       row.appendChild(btn);
       this.body.appendChild(row);
@@ -427,6 +451,19 @@ function compactDollars(amount: number): string {
   }
   const m = amount / 1_000_000;
   return Number.isInteger(m) ? `$${m}M` : `$${m.toFixed(1)}M`;
+}
+
+/** Format a duration given in MINUTES as "Xm" or "Xh Ym" — used on
+ * the recipe Upgrade button which carries durations like 1m, 16m,
+ * 256m, etc. */
+function formatMinutes(totalMinutes: number): string {
+  if (totalMinutes < 60) {
+    const m = Math.round(totalMinutes * 10) / 10;
+    return Number.isInteger(m) ? `${m}m` : `${m.toFixed(1)}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = Math.round(totalMinutes - hours * 60);
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
 /** Format a duration in REAL seconds as "Xh Ym" / "Xm Ys". Training

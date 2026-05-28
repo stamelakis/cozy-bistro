@@ -24,6 +24,12 @@ export class CookingSystem {
   private menuRecipeIds: string[];
   private unlockedRecipeIds: string[];
   private recipeUpgradeLevels: Record<string, number> = {};
+  /** Wall-clock deadlines for in-flight recipe upgrades. Keyed by
+   * recipe id; the value is a `Date.now()`-style timestamp. The
+   * kitchen only develops one dish at a time so this map has at most
+   * one entry — using a record (not a scalar) lets the save format
+   * extend to multiple parallel runs cleanly if we ever want to. */
+  private recipeTrainingCompletesAt: Record<string, number> = {};
   private pantry: IngredientStock[] = [];
   private errandOrder: Record<string, number> = {};
   private errandInTransit: Record<string, number> = {};
@@ -69,6 +75,69 @@ export class CookingSystem {
 
   setRecipeUpgradeLevel(recipeId: string, level: number): void {
     this.recipeUpgradeLevels[recipeId] = clamp(Math.floor(level), 1, maxRecipeUpgradeLevel);
+  }
+
+  // === Recipe upgrade training (wall-clock) ===
+
+  /** Snapshot of the in-flight deadlines map for save round-trips. */
+  getRecipeTrainingSnapshot(): Record<string, number> {
+    return { ...this.recipeTrainingCompletesAt };
+  }
+
+  /** True if a specific recipe is currently being developed. */
+  isRecipeTraining(recipeId: string): boolean {
+    return typeof this.recipeTrainingCompletesAt[recipeId] === "number";
+  }
+
+  /** Id of the recipe currently being developed, or null if the
+   * kitchen is idle. Caller (UI) uses this to disable other recipe
+   * Upgrade buttons while one is in progress. */
+  getCurrentlyTrainingRecipeId(): string | null {
+    for (const id of Object.keys(this.recipeTrainingCompletesAt)) return id;
+    return null;
+  }
+  isAnyRecipeTraining(): boolean {
+    return this.getCurrentlyTrainingRecipeId() !== null;
+  }
+
+  /** Wall-clock deadline (ms) for the in-flight upgrade, or null. */
+  getRecipeTrainingCompletesAt(recipeId: string): number | null {
+    return this.recipeTrainingCompletesAt[recipeId] ?? null;
+  }
+
+  /** Start a recipe-upgrade timer. Returns true when it actually
+   * started (recipe wasn't already training, current level < max).
+   * Caller is responsible for debiting money / materials. */
+  startRecipeUpgrade(recipeId: string, durationMs: number): boolean {
+    if (this.isRecipeTraining(recipeId)) return false;
+    const level = this.getRecipeUpgradeLevel(recipeId);
+    if (level >= maxRecipeUpgradeLevel) return false;
+    this.recipeTrainingCompletesAt[recipeId] = Date.now() + durationMs;
+    return true;
+  }
+
+  cancelRecipeUpgrade(recipeId: string): boolean {
+    if (!this.isRecipeTraining(recipeId)) return false;
+    delete this.recipeTrainingCompletesAt[recipeId];
+    return true;
+  }
+
+  /** Tick all in-flight recipe upgrades — any whose Date.now()
+   * deadline has passed get their level bumped and the deadline
+   * cleared. Returns the ids of recipes that just completed a level
+   * so the caller can pop UI confirmations. */
+  tickRecipeUpgrades(): string[] {
+    const completed: string[] = [];
+    const now = Date.now();
+    for (const [id, deadline] of Object.entries(this.recipeTrainingCompletesAt)) {
+      if (now >= deadline) {
+        const level = this.getRecipeUpgradeLevel(id);
+        this.setRecipeUpgradeLevel(id, level + 1);
+        delete this.recipeTrainingCompletesAt[id];
+        completed.push(id);
+      }
+    }
+    return completed;
   }
 
   getUnlockedRecipeIdsForCurrentTier(unlockedTier: LuxuryTier): string[] {
@@ -372,6 +441,14 @@ export class CookingSystem {
   /** Apply persisted state on load, then re-sync to the current expansion tier. */
   hydrate(save: SaveGameState | null | undefined, unlockedTier: LuxuryTier): void {
     this.recipeUpgradeLevels = hydrateRecipeUpgradeLevels(save?.recipeUpgradeLevels);
+    this.recipeTrainingCompletesAt = {};
+    if (save?.recipeTrainingCompletesAt) {
+      for (const [id, ts] of Object.entries(save.recipeTrainingCompletesAt)) {
+        if (typeof ts === "number" && Number.isFinite(ts)) {
+          this.recipeTrainingCompletesAt[id] = ts;
+        }
+      }
+    }
     this.unlockedRecipeIds = this.getUnlockedRecipeIdsForCurrentTier(unlockedTier);
     const menu = save?.menuRecipeIds ?? this.menuRecipeIds;
     this.menuRecipeIds = this.normalizeMenuRecipeIds(menu, unlockedTier);

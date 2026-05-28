@@ -84,6 +84,18 @@ const DEFAULT_STOCK_TARGET = 5;
  * — the customer cap is the same, you just need a more trained chef
  * (or more chefs) to keep up. */
 const COOK_TIME_GLOBAL_MULT = 1.5;
+
+/** Duration (in REAL minutes) for the next recipe upgrade. Base is
+ * 1 minute at tier 1 / current level 1, doubling per tier AND per
+ * level. So Tier 5 going from L1 → L2 = 1 × 2⁴ × 2⁰ = 16 min;
+ * Tier 1 going from L9 → L10 = 256 min. The level argument is the
+ * CURRENT level (before the upgrade) — i.e. how seasoned the recipe
+ * already is. */
+function getRecipeUpgradeDurationMinutes(tier: number, currentLevel: number): number {
+  const tierScale = Math.pow(2, tier - 1);
+  const levelScale = Math.pow(2, currentLevel - 1);
+  return tierScale * levelScale;
+}
 const MIN_STOCK_TARGET = 3;
 const MAX_STOCK_TARGET = 50;
 /** Auto-shop runs this often (seconds). */
@@ -171,6 +183,9 @@ export class Game {
   /** Fired the frame a member finishes training. Engine wires this to
    * a floating "🎓 Name is now Lk" toast. */
   onTrainingCompleted?: (member: HiredStaffMember) => void;
+  /** Fired the frame a recipe finishes its in-development upgrade.
+   * Engine pops a toast over the kitchen. */
+  onRecipeUpgradeCompleted?: (recipe: RecipeDefinition, newLevel: number) => void;
   /** Fired when the player fires a staff member. Engine uses this to
    * remove the matching character from the world. */
   onStaffFired?: (role: StaffRole) => void;
@@ -257,6 +272,13 @@ export class Game {
     const completed = this.staff.tickTraining();
     for (const m of completed) {
       this.onTrainingCompleted?.(m);
+    }
+    // Same drill for recipe upgrades — wall-clock deadlines that
+    // could complete this frame even if the user just opened the tab.
+    const completedRecipes = this.cooking.tickRecipeUpgrades();
+    for (const recipeId of completedRecipes) {
+      const recipe = recipes.find((r) => r.id === recipeId);
+      if (recipe) this.onRecipeUpgradeCompleted?.(recipe, this.cooking.getRecipeUpgradeLevel(recipe));
     }
     // Auto-shop is now an errand-driven supply chain. Each tick we work
     // out which ingredients are genuinely under target (accounting for
@@ -409,6 +431,10 @@ export class Game {
   /** True if the player has both the money AND the materials to upgrade. */
   canUpgradeRecipe(recipe: RecipeDefinition): boolean {
     if (this.cooking.getRecipeUpgradeLevel(recipe) >= 10) return false;
+    // Only one recipe can be in development at a time — mirrors the
+    // staff training rule. If any recipe is mid-upgrade, block all
+    // new starts.
+    if (this.cooking.isAnyRecipeTraining()) return false;
     if (!this.economy.canAfford(this.getRecipeUpgradeCost(recipe))) return false;
     const needed = this.getRecipeUpgradeMaterials(recipe);
     for (const n of needed) {
@@ -419,6 +445,9 @@ export class Game {
 
   /** Spend money + ingredients, bump the recipe to next level. Returns
    * true on success. */
+  /** Start developing a recipe — debits money + materials immediately
+   * and starts a wall-clock timer. The level ticks up automatically
+   * when the deadline passes. */
   upgradeRecipe(recipe: RecipeDefinition): boolean {
     if (!this.canUpgradeRecipe(recipe)) return false;
     const cost = this.getRecipeUpgradeCost(recipe);
@@ -430,18 +459,46 @@ export class Game {
       const stock = pantry.find((s) => s.id === n.id);
       if (stock) stock.quantity = Math.max(0, stock.quantity - n.qty);
     }
+    const tier = getRecipeLuxuryTier(recipe);
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
-    this.cooking.setRecipeUpgradeLevel(recipe.id, level + 1);
-    return true;
+    const durationMs = getRecipeUpgradeDurationMinutes(tier, level) * 60 * 1000;
+    return this.cooking.startRecipeUpgrade(recipe.id, durationMs);
+  }
+
+  /** True if this recipe is currently mid-upgrade. */
+  isRecipeTraining(recipe: RecipeDefinition): boolean {
+    return this.cooking.isRecipeTraining(recipe.id);
+  }
+  /** Id of the recipe currently being developed (any tier), or null. */
+  getCurrentlyTrainingRecipeId(): string | null {
+    return this.cooking.getCurrentlyTrainingRecipeId();
+  }
+  /** Real-time seconds remaining on this recipe's upgrade, or null. */
+  getRecipeTrainingRemainingSeconds(recipe: RecipeDefinition): number | null {
+    const target = this.cooking.getRecipeTrainingCompletesAt(recipe.id);
+    if (target === null) return null;
+    return Math.max(0, (target - Date.now()) / 1000);
+  }
+  /** Duration of the *next* recipe upgrade (minutes). UI shows this on
+   * the Upgrade button so the player sees the commitment up front. */
+  getRecipeUpgradeDurationMinutes(recipe: RecipeDefinition): number {
+    const tier = getRecipeLuxuryTier(recipe);
+    const level = this.cooking.getRecipeUpgradeLevel(recipe);
+    return getRecipeUpgradeDurationMinutes(tier, level);
   }
 
   /** Roll a recipe back one level. Used by the dev-tools "Manage
-   * Upgrades" panel — doesn't refund money or materials. */
+   * Upgrades" panel — doesn't refund money or materials. Also cancels
+   * an in-flight upgrade on that recipe. */
   demoteRecipe(recipe: RecipeDefinition): boolean {
+    let changed = false;
+    if (this.cooking.cancelRecipeUpgrade(recipe.id)) changed = true;
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
-    if (level <= 1) return false;
-    this.cooking.setRecipeUpgradeLevel(recipe.id, level - 1);
-    return true;
+    if (level > 1) {
+      this.cooking.setRecipeUpgradeLevel(recipe.id, level - 1);
+      changed = true;
+    }
+    return changed;
   }
 
   // === Staff training upgrades (per-member) ===

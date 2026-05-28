@@ -422,6 +422,14 @@ export class Engine {
         this.floatingText?.pop(worldPos.x, worldPos.y - 0.4, label, "#ffd986");
         this.sfx?.chime();
       };
+      this.game.onRecipeUpgradeCompleted = (recipe, newLevel) => {
+        // Recipe upgrades pop over the stove since that's where the
+        // kitchen's brain lives visually.
+        const at = this.scene.stovePos;
+        this.floatingText?.pop(at.x, at.y - 0.4,
+          `📜 ${recipe.name} → L${newLevel}`, "#ffd986");
+        this.sfx?.chime();
+      };
       if (haveStaffPair) {
         // Restore any extra hired staff from the save. The base 3
         // characters (1 chef, 1 waiter, 1 errand) are already in the
