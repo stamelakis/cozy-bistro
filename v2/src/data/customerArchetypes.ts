@@ -21,17 +21,23 @@ export interface CustomerArchetype {
   orderSizeBias: -1 | 0 | 1;
   /** Short emoji + label shown in the guest's status bubble. */
   shortLabel: string;
+  /** 0..1 probability this archetype will visit the WC during their
+   * meal. Foodies / dates linger so they need a break; quick-lunch
+   * customers are in/out and rarely use it. WC users care strongly
+   * about the bathroom score in their final rating; non-users still
+   * care a little (the bathroom door is visible from the floor). */
+  wcUseChance: number;
 }
 
 export const customerArchetypes: readonly CustomerArchetype[] = [
-  { id: "casual",      name: "Casual Diner",  weight: 33, patienceMultiplier: 1.0,  tipMultiplier: 1.0, orderSizeBias:  0, shortLabel: "🙂" },
-  { id: "quick-lunch", name: "Quick Lunch",   weight: 20, patienceMultiplier: 0.6,  tipMultiplier: 0.8, orderSizeBias: -1, shortLabel: "⚡" },
-  { id: "foodie",      name: "Foodie",        weight: 15, patienceMultiplier: 1.3,  tipMultiplier: 1.5, orderSizeBias:  1, shortLabel: "🍷" },
-  { id: "tourist",     name: "Tourist",       weight: 15, patienceMultiplier: 0.85, tipMultiplier: 1.3, orderSizeBias:  0, shortLabel: "📸" },
-  { id: "date-night",  name: "Date Night",    weight: 10, patienceMultiplier: 1.2,  tipMultiplier: 1.4, orderSizeBias:  1, shortLabel: "💕" },
-  { id: "grump",       name: "Grumpy Critic", weight:  5, patienceMultiplier: 0.7,  tipMultiplier: 0.4, orderSizeBias:  0, shortLabel: "😠" },
+  { id: "casual",      name: "Casual Diner",  weight: 33, patienceMultiplier: 1.0,  tipMultiplier: 1.0, orderSizeBias:  0, shortLabel: "🙂", wcUseChance: 0.40 },
+  { id: "quick-lunch", name: "Quick Lunch",   weight: 20, patienceMultiplier: 0.6,  tipMultiplier: 0.8, orderSizeBias: -1, shortLabel: "⚡", wcUseChance: 0.15 },
+  { id: "foodie",      name: "Foodie",        weight: 15, patienceMultiplier: 1.3,  tipMultiplier: 1.5, orderSizeBias:  1, shortLabel: "🍷", wcUseChance: 0.55 },
+  { id: "tourist",     name: "Tourist",       weight: 15, patienceMultiplier: 0.85, tipMultiplier: 1.3, orderSizeBias:  0, shortLabel: "📸", wcUseChance: 0.45 },
+  { id: "date-night",  name: "Date Night",    weight: 10, patienceMultiplier: 1.2,  tipMultiplier: 1.4, orderSizeBias:  1, shortLabel: "💕", wcUseChance: 0.50 },
+  { id: "grump",       name: "Grumpy Critic", weight:  5, patienceMultiplier: 0.7,  tipMultiplier: 0.4, orderSizeBias:  0, shortLabel: "😠", wcUseChance: 0.40 },
   // Rare: food critic whose rating counts triple but tips huge if pleased.
-  { id: "critic",      name: "Food Critic",   weight:  2, patienceMultiplier: 0.9,  tipMultiplier: 3.0, orderSizeBias:  1, shortLabel: "🕵️" },
+  { id: "critic",      name: "Food Critic",   weight:  2, patienceMultiplier: 0.9,  tipMultiplier: 3.0, orderSizeBias:  1, shortLabel: "🕵️", wcUseChance: 0.55 },
 ];
 
 /** Pick one archetype weighted by its `weight` field. */

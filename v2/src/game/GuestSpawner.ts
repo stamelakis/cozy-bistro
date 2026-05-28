@@ -48,6 +48,12 @@ type GuestState =
   /** Sitting at an overflow chair, watching for a real seat to open up. */
   | "waitingForSeat"
   | "seated" | "waitingForFood" | "eating"
+  /** Headed for the toilet stand-spot before ordering. */
+  | "walkingToToilet"
+  /** Standing at the toilet, on the dwell timer. */
+  | "atToilet"
+  /** Walking back to their seat from the toilet. */
+  | "returningFromToilet"
   /** Headed for the interior side of the door before leaving. */
   | "walkingToDoor"
   /** Quick straight hop along the door axis from interior → exterior,
@@ -114,6 +120,20 @@ interface ActiveGuest {
   /** Remaining waypoints from the most recent pathfind. Re-planned each
    * time the guest's target changes. */
   path: PathStep[];
+  /** Rolled at spawn from the archetype's wcUseChance. Heavy users
+   * trigger the bathroom-visit detour after sitting (between seated
+   * and ordering); their final rating is significantly shaped by the
+   * bathroom quality. Non-users still get a light bonus from having
+   * a bathroom available — but they don't actually visit. */
+  willUseToilet?: boolean;
+  /** Set true after the bathroom visit completes so we don't repeat
+   * it between courses. */
+  usedToilet?: boolean;
+  /** uid of the toilet they reserved while in walkingToToilet /
+   * atToilet states. Cleared on visit complete or abandonment. */
+  toiletUid?: string;
+  /** Pre-visit seat pose so they snap back to it after returning. */
+  returnSeatPos?: THREE.Vector2;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -146,6 +166,10 @@ const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
 const TIME_TO_ORDER = 3.0;
 const TIME_TO_EAT = 8.0;
+/** Dwell at a toilet (in seconds). Short enough that a busy restaurant
+ * can cycle the same fixture among multiple guests, long enough that
+ * the trip reads as deliberate when you watch a single guest do it. */
+const TIME_AT_TOILET = 6.0;
 const SPAWN_INTERVAL_SECONDS = 6.0; // a new guest every N seconds if seats free
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
@@ -181,6 +205,9 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
       return `${prefix} ${waitIcon} ${secs}s`;
     }
     case "eating":         return `${prefix} ${drinkTable ? "🥤" : "🍴"}`;
+    case "walkingToToilet": return `${prefix} 🚻`;
+    case "atToilet":        return `${prefix} 🚻`;
+    case "returningFromToilet": return `${prefix} 🚻`;
     case "walkingToDoor":  return "";
     case "exitingDoor":    return "";
     case "walkingOut":     return "";
@@ -221,6 +248,9 @@ export class GuestSpawner {
    * await would see the seat as free and two guests end up assigned to
    * the same chair. */
   private inFlightSpawnSeats = new Set<SeatId>();
+  /** Toilet reservations — one guest per toilet uid. Cleared when the
+   * guest returns to their seat or abandons the trip. */
+  private reservedToilets = new Set<string>();
   /** Same protection for overflow-chair reservations during await. */
   private inFlightSpawnChairs = new Set<string>();
   /** guestId → live Object3D for the plate sitting on their table.
@@ -452,7 +482,7 @@ export class GuestSpawner {
   snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
     return this.guests.map((g) => ({
       character: g.character,
-      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating" || g.state === "waitingForSeat",
+      pinned: g.state === "seated" || g.state === "waitingForFood" || g.state === "eating" || g.state === "waitingForSeat" || g.state === "atToilet",
     }));
   }
 
@@ -526,6 +556,19 @@ export class GuestSpawner {
     if (policy.maxCount <= 0) return false;
     if (this.guests.filter((g) => g.waiting != null).length >= policy.maxCount) return false;
     return this.findFreeOverflowChair() != null;
+  }
+
+  /** First placed toilet not currently reserved by another guest.
+   * Returns the uid + the customer's "stand in front" pose; null when
+   * either no toilet exists or every one is busy. */
+  private findFreeToilet(): { uid: string; standPos: THREE.Vector2 } | null {
+    if (!this.registry) return null;
+    const toilets = this.registry.getToilets();
+    for (const t of toilets) {
+      if (this.reservedToilets.has(t.uid)) continue;
+      return { uid: t.uid, standPos: t.standPos.clone() };
+    }
+    return null;
   }
 
   /** Pick the first overflow chair not already claimed by another waiter. */
@@ -670,6 +713,8 @@ export class GuestSpawner {
         totalSatisfaction: 0,
         archetype,
         path: [],
+        willUseToilet: Math.random() < archetype.wcUseChance,
+        usedToilet: false,
       };
       this.planPath(guest);
       if (!available && waitingChair) {
@@ -708,6 +753,8 @@ export class GuestSpawner {
       this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
       this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
     }
+    // Release any toilet reservation they were holding.
+    if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
     // Clear any plate left on their table when they walk out.
     this.removePlateForGuest(g.id);
     this.guests.splice(idx, 1);
@@ -802,6 +849,28 @@ export class GuestSpawner {
         break;
       }
       case "seated": {
+        // First-thing-after-sitting: WC users excuse themselves to
+        // the bathroom before ordering. Only triggers ONCE per visit
+        // and only if a free toilet exists right now.
+        if (g.willUseToilet && !g.usedToilet) {
+          const toilet = this.findFreeToilet();
+          if (toilet) {
+            this.reservedToilets.add(toilet.uid);
+            g.toiletUid = toilet.uid;
+            g.returnSeatPos = g.seatPos.clone();
+            g.target = toilet.standPos.clone();
+            this.planPath(g);
+            g.character.action = "walk";
+            g.state = "walkingToToilet";
+            g.stateClock = 0;
+            break;
+          }
+          // No toilet free right now — skip the trip but remember
+          // they didn't get to use it. finalizeVisit reads this so
+          // the missing-bathroom penalty still lands.
+          g.usedToilet = false;
+          g.willUseToilet = false; // don't keep retrying every tick
+        }
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
         if (g.stateClock >= TIME_TO_ORDER && g.order.length === 0) {
@@ -815,6 +884,43 @@ export class GuestSpawner {
             break;
           }
           this.beginNextCourse(g);
+        }
+        break;
+      }
+      case "walkingToToilet": {
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          g.character.action = "idle";
+          g.state = "atToilet";
+          g.stateClock = 0;
+        }
+        break;
+      }
+      case "atToilet": {
+        if (g.stateClock >= TIME_AT_TOILET) {
+          // Done — release the reservation and head back to the seat.
+          if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
+          g.toiletUid = undefined;
+          g.usedToilet = true;
+          g.target = (g.returnSeatPos ?? g.seatPos).clone();
+          g.returnSeatPos = undefined;
+          this.planPath(g);
+          g.character.action = "walk";
+          g.state = "returningFromToilet";
+          g.stateClock = 0;
+        }
+        break;
+      }
+      case "returningFromToilet": {
+        this.moveToward(g, dt);
+        if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
+          // Snap back into the seat and resume the "considering the
+          // menu" beat.
+          g.character.groundPos.copy(g.seatPos);
+          g.character.facingY = g.seatFacingY;
+          g.character.action = "sit";
+          g.state = "seated";
+          g.stateClock = 0;
         }
         break;
       }
@@ -1069,6 +1175,33 @@ export class GuestSpawner {
       const vibe = (stats.style + stats.comfort * 0.5) * 0.012;
       base = clamp(base + Math.min(1.0, vibe) + stats.ratingBonus, 1, 5);
     }
+    // Bathroom adjustment. WC users care strongly: their final rating
+    // can swing by ±0.6 stars based on the bathroom score. Non-users
+    // still pick up a light bonus from a nice bathroom (the door is
+    // visible from the floor) capped at +0.2.
+    const bathroom = this.registry?.getBathroomScore() ?? { toiletCount: 0, quality: 0 };
+    // Normalize quality on roughly 0..20: a basic toilet+sink scores
+    // ~4, a luxe bathroom (mirror + bathtub + shower-round + cabinet
+    // + designer toilet) tops ~20.
+    const qNorm = Math.min(1, bathroom.quality / 18);
+    let toiletDelta = 0;
+    if (g.willUseToilet || g.usedToilet) {
+      if (bathroom.toiletCount === 0) {
+        // Wanted to go and there wasn't one — significant negative.
+        toiletDelta = -0.8;
+      } else if (!g.usedToilet) {
+        // Wanted to go, but every toilet was busy — moderate negative.
+        toiletDelta = -0.3;
+      } else {
+        // Actually used it. Quality drives a -0.2..+0.6 swing.
+        toiletDelta = -0.2 + qNorm * 0.8;
+      }
+    } else if (bathroom.toiletCount > 0) {
+      // Didn't visit, but a tidy bathroom is still part of the
+      // overall impression. Light bonus.
+      toiletDelta = qNorm * 0.2;
+    }
+    base = clamp(base + toiletDelta, 1, 5);
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
     // Each course they ate becomes a dirty dish in the wash queue.

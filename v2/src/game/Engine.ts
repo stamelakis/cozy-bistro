@@ -446,6 +446,49 @@ export class Engine {
     window.addEventListener("resize", this.handleResize);
   }
 
+  /** Update every placed interior doorway's panel — open when any
+   * guest or staff member is close enough to walk through, closed
+   * otherwise. Cheap: walks the registry once, the actor list once
+   * per door, and only mutates panels that actually changed (via the
+   * scene's lerp). */
+  private updateInteriorDoorways(dt: number): void {
+    const items = this.registry.snapshotItems();
+    const doors: { uid: string; model: THREE.Object3D; open: boolean }[] = [];
+    if (items.length === 0) {
+      this.scene.updateInternalDoors(doors, dt);
+      return;
+    }
+    // Snapshot every walkable actor's ground position once.
+    const positions: { x: number; z: number }[] = [];
+    if (this.spawner) {
+      for (const g of this.spawner.snapshotMovable()) {
+        positions.push({ x: g.character.groundPos.x, z: g.character.groundPos.y });
+      }
+    }
+    if (this.router) {
+      for (const s of this.router.snapshotStatus()) {
+        positions.push({ x: s.character.groundPos.x, z: s.character.groundPos.y });
+      }
+    }
+    if (this.errand) {
+      for (const h of this.errand.snapshotStatus()) {
+        positions.push({ x: h.character.groundPos.x, z: h.character.groundPos.y });
+      }
+    }
+    const OPEN_DIST_SQ = 1.5 * 1.5;
+    for (const it of items) {
+      if (it.defId !== "int-doorway") continue;
+      let open = false;
+      for (const p of positions) {
+        const dx = p.x - it.x;
+        const dz = p.z - it.z;
+        if (dx * dx + dz * dz < OPEN_DIST_SQ) { open = true; break; }
+      }
+      doors.push({ uid: it.uid, model: it.model, open });
+    }
+    this.scene.updateInternalDoors(doors, dt);
+  }
+
   /** True if any guest/errand/pedestrian is within ~1.5 units of the
    * front door (0, 5). Used to swing it open. */
   private anyoneNearDoor(): boolean {
@@ -720,6 +763,9 @@ export class Engine {
     else this.sfx.stopCookingLoop();
     // Open the door when a guest, errand helper, or pedestrian is close.
     this.scene.setDoorOpen(this.anyoneNearDoor());
+    // Animate interior doorways — any placed int-doorway opens when a
+    // guest or staff member is close enough to walk through.
+    this.updateInteriorDoorways(dt);
     // Day/night lighting follows the in-game day timer.
     const day = this.scene.applyDayNight(this.game.day.getDayProgress());
     this.renderer.setClearColor(day.skyColor);

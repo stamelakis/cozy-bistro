@@ -481,6 +481,55 @@ export class FurnitureRegistry {
     return v;
   }
 
+  /** Every visible placed toilet (id starting with "toilet"). Used by
+   * GuestSpawner to route WC-needing customers to the nearest free
+   * fixture. The "standing spot" is one tile in front of the toilet
+   * along its facing axis — that's where the customer stops. */
+  getToilets(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] {
+    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] = [];
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category !== "bathroom") continue;
+      if (!def.id.startsWith("toilet")) continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      // Same +Z-front convention as stoves: rotate the unit +Z by rotY
+      // to get the customer's stand-in-front spot.
+      const standPos = new THREE.Vector2(
+        it.x + Math.sin(it.rotY),
+        it.z + Math.cos(it.rotY),
+      );
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos });
+    }
+    return out;
+  }
+
+  /** A "quality" snapshot of the placed bathroom. `toiletCount` is the
+   * raw availability (used by routing); `quality` is a heuristic
+   * blend of every bathroom item's style / comfort / attractionBonus
+   * / ratingBonus that GuestSpawner.finalizeVisit folds into the
+   * star rating. A plain 1-toilet + 1-sink bathroom scores ~4;
+   * a full setup (toilet-sq + sink-sq + mirror + shower + cabinet)
+   * scores ~18-22. */
+  getBathroomScore(): { toiletCount: number; quality: number } {
+    let toiletCount = 0;
+    let quality = 0;
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      // Toilets are the core fixture. Bathroom-category items (sinks,
+      // mirrors, bathtubs, showers, cabinets) all contribute to
+      // quality whether they're placed inside the partition or not —
+      // the player gets to decide the room layout themselves.
+      if (def.category !== "bathroom") continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      if (def.id.startsWith("toilet")) toiletCount += 1;
+      quality += (def.style ?? 0) + (def.comfort ?? 0) +
+                 (def.attractionBonus ?? 0) * 2 +
+                 (def.ratingBonus ?? 0) * 20;
+    }
+    return { toiletCount, quality };
+  }
+
   /** Every visible placed stove. StaffRouter uses this to assign chefs
    * to stoves 1-to-1; the world position is the stove's footprint
    * centre and rotY is its model rotation (used to compute the chef

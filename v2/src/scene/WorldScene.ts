@@ -135,6 +135,40 @@ export class WorldScene {
    * comes in without going through populateDemoRestaurant — so without
    * this call, setDoorOpen mutates an orphaned mesh and the door looks
    * stuck shut. */
+  /** Per-doorway state for the placed `int-doorway` items — each one
+   * is animated independently based on whether any character is
+   * standing close to it. The panel ref is captured lazily from the
+   * model's userData (same convention as the front door). */
+  private internalDoorState = new Map<string, { panel: THREE.Object3D; openAmount: number }>();
+
+  /** Reconcile the placed-interior-doorway list and animate each
+   * panel toward the requested open / closed state. Engine calls
+   * this once per frame after walking the registry — we don't poll
+   * the registry from inside the scene because Engine already has a
+   * cheap proximity test against guests + staff. */
+  updateInternalDoors(doors: readonly { uid: string; model: THREE.Object3D; open: boolean }[], dt: number): void {
+    const live = new Set<string>();
+    for (const d of doors) {
+      live.add(d.uid);
+      let entry = this.internalDoorState.get(d.uid);
+      if (!entry) {
+        const panel = (d.model.userData as { panel?: THREE.Object3D }).panel;
+        if (!panel) continue;
+        entry = { panel, openAmount: 0 };
+        this.internalDoorState.set(d.uid, entry);
+      }
+      const target = d.open ? 1 : 0;
+      // Lerp toward the target. 6/sec means the door is open in ~0.17s
+      // — feels snappy enough that the guest doesn't visibly clip it.
+      const speed = 6;
+      entry.openAmount += (target - entry.openAmount) * Math.min(1, dt * speed);
+      entry.panel.rotation.y = -entry.openAmount * Math.PI / 2;
+    }
+    for (const uid of [...this.internalDoorState.keys()]) {
+      if (!live.has(uid)) this.internalDoorState.delete(uid);
+    }
+  }
+
   attachDoorPanel(model: THREE.Object3D): void {
     const panel = model.userData?.panel as THREE.Object3D | undefined;
     if (panel) {
