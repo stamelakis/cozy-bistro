@@ -743,19 +743,22 @@ export class FurnitureRegistry {
    * model rotation (used to compute the chef standing position one
    * tile in front of it). */
   /** Every placed kitchen wash station — basic sinks plus dishwashers.
-   * Each carries a `dwell` in seconds the waiter spends scrubbing /
-   * loading before the dish goes back to clean: sinks are slowest,
-   * pro dishwashers fastest. standPos puts the waiter one tile in
-   * front (+Z) of the unit, matching the toilet / sink stand
-   * convention. */
+   * Each carries a `dwell` (seconds the waiter actually stays at the
+   * station) which has different meaning per type:
+   *   - sink: full scrub time. When dwell ends the piece is clean.
+   *   - dishwasher / dishwasher-pro: just "load and walk away" time.
+   *     The actual wash happens asynchronously inside DishwareSystem's
+   *     dishwasher batch cycle; the waiter has already left.
+   * standPos puts the waiter one tile in front (+Z) of the unit,
+   * matching the toilet / sink stand convention. */
   getWashStations(): { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number }[] {
     const out: { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "wash") continue;
       if (!this.isVisibleInScene(it.model)) continue;
-      const dwell = it.defId === "dishwasher-pro" ? 1.0
-        : it.defId === "dishwasher" ? 1.8
+      const dwell = it.defId === "dishwasher-pro" ? 0.3
+        : it.defId === "dishwasher" ? 0.5
         : 3.0; // sink — manual scrub takes longest
       const standPos = new THREE.Vector2(
         it.x + Math.sin(it.rotY),

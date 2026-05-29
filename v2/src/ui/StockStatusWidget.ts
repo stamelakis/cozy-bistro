@@ -244,6 +244,17 @@ export class StockStatusWidget {
     if (!Number.isFinite(washInterval) && totalDirty > 0) {
       dishLines.push(`<div style="color:#ff9a9a;margin-top:2px">No sink or dishwasher — wash paused.</div>`);
     }
+    // Surface how much is mid-cycle inside dishwashers so the "dirty"
+    // count drifting upward while plates wait for a batch flush doesn't
+    // look like a stuck system.
+    const inDwPlates = dish.getDishwasherInFlight("plate");
+    const inDwGlasses = dish.getDishwasherInFlight("glass");
+    if (inDwPlates + inDwGlasses > 0) {
+      const parts: string[] = [];
+      if (inDwPlates > 0) parts.push(`${inDwPlates} plate${inDwPlates === 1 ? "" : "s"}`);
+      if (inDwGlasses > 0) parts.push(`${inDwGlasses} glass${inDwGlasses === 1 ? "" : "es"}`);
+      dishLines.push(`<div style="opacity:0.7;margin-top:2px">Washing in dishwashers: ${parts.join(", ")}</div>`);
+    }
     this.dishTooltip.innerHTML = dishLines.join("");
     this.dishTooltip.scrollTop = dishScroll;
 

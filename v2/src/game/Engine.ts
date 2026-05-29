@@ -393,9 +393,11 @@ export class Engine {
           releaseDirtyPickup: (id) => spawner.releaseDirtyPickup(id),
           pickupDirty: (id) => spawner.pickupDirty(id),
           getWashStations: () => registry.getWashStations().map((s) => ({
-            uid: s.uid, standPos: s.standPos, dwell: s.dwell,
+            uid: s.uid, defId: s.defId, standPos: s.standPos, dwell: s.dwell,
           })),
           washOne: (kind) => { dishware.washOne(kind); },
+          canDishwasherLoad: (uid, kind) => dishware.canDishwasherLoad(uid, kind),
+          loadDishwasher: (uid, defId, kind) => dishware.loadDishwasher(uid, defId, kind),
         };
       }
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);

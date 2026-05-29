@@ -26,11 +26,40 @@ import {
  * tier reservePlate() / reserveGlass() pick first, so newer / shinier
  * dishware shows up on tables as soon as the player buys it.
  */
+/** Per-dishwasher background batch state. Plates / glasses get loaded
+ * by the waiter on a "drop and walk away" trip (short dwell); the
+ * cycle clock counts down independently and flushes everything in the
+ * batch to the clean pool when it hits zero.
+ *
+ * Each loaded piece bumps the clock by washPerItem seconds (1.5 for a
+ * regular dishwasher, 1.0 for the pro). Running totals are kept by
+ * kind because the clean-pool calls split by plate / glass. */
+interface DishwasherBatch {
+  defId: string;
+  plates: number;
+  glasses: number;
+  cycleTimeRemaining: number;
+}
+
+/** Per-kind capacity inside one dishwasher. Same for regular and pro
+ * — the pro's edge is shorter cycle time, not a bigger drum. */
+const DISHWASHER_CAPACITY = { plate: 10, glass: 5 } as const;
+
+/** Seconds the dishwasher cycle adds per loaded piece — the user
+ * called for "half the sink" (sink dwell = 3.0s). Pro shaves another
+ * third off. */
+function dishwasherWashPerItem(defId: string): number {
+  return defId === "dishwasher-pro" ? 1.0 : 1.5;
+}
+
 export class DishwareSystem {
   /** plates[tier] = { clean, dirty }. Sparse — tiers with zero owned
    * are simply absent. */
   private plates: Map<number, { clean: number; dirty: number }> = new Map();
   private glasses: Map<number, { clean: number; dirty: number }> = new Map();
+
+  /** uid → batch state. Auto-created on first load. */
+  private dishwasherBatches: Map<string, DishwasherBatch> = new Map();
 
   // washClock removed — Phase 3 replaced the abstract timer-driven
   // wash with explicit waiter trips. Kept the field name in comments
@@ -195,15 +224,88 @@ export class DishwareSystem {
     return Math.max(0.5, base - speedup);
   }
 
-  /** Tick — kept around for save-migration parity (early phases ran an
-   * abstract wash timer here). Real washing is now driven by waiter
-   * trips in StaffRouter, which call washOne() directly. The
-   * `washClock` field is retained for the rare path that re-enables
-   * the fallback timer (no waiters hired, dishes still piling up). */
-  update(_dt: number): void {
-    // Intentional no-op. Wash work happens when a waiter completes a
-    // trip; see StaffRouter's wash state machine for the live cadence.
-    void _dt;
+  /** Tick the background dishwasher cycles. Waiters dropping a piece
+   * at a dishwasher add it to that station's batch and walk away; the
+   * cycle clock counts down here and flushes every loaded piece to
+   * the clean pool when it hits zero. Sink washes happen synchronously
+   * via washOne() the moment the waiter finishes scrubbing — those
+   * never touch this tick. */
+  update(dt: number): void {
+    for (const batch of this.dishwasherBatches.values()) {
+      const loaded = batch.plates + batch.glasses;
+      if (loaded === 0) continue;
+      batch.cycleTimeRemaining -= dt;
+      if (batch.cycleTimeRemaining > 0) continue;
+      // Cycle complete — all loaded pieces become clean simultaneously.
+      // washOne picks the highest-tier dirty piece globally; the
+      // dishwasher is abstract about WHICH piece it holds.
+      for (let i = 0; i < batch.plates; i += 1) this.washOne("plate");
+      for (let i = 0; i < batch.glasses; i += 1) this.washOne("glass");
+      batch.plates = 0;
+      batch.glasses = 0;
+      batch.cycleTimeRemaining = 0;
+    }
+  }
+
+  // === Dishwasher batch API (called by the waiter wash trip) ===
+
+  /** Can the named dishwasher accept one more piece of `kind`? Returns
+   * false when this dishwasher's batch is already at capacity for
+   * that kind. The waiter trip system reads this before claiming a
+   * station so a full dishwasher doesn't lock out other waiters. */
+  canDishwasherLoad(uid: string, kind: DishKind): boolean {
+    const batch = this.dishwasherBatches.get(uid);
+    if (!batch) return true;
+    const current = kind === "plate" ? batch.plates : batch.glasses;
+    return current < DISHWASHER_CAPACITY[kind];
+  }
+
+  /** Drop one piece into the named dishwasher. Returns false when
+   * the batch is full for that kind (callers should fall back to a
+   * sink or another dishwasher). The cycle timer extends by
+   * washPerItem so a steady drip of plates keeps the cycle running. */
+  loadDishwasher(uid: string, defId: string, kind: DishKind): boolean {
+    let batch = this.dishwasherBatches.get(uid);
+    if (!batch) {
+      batch = { defId, plates: 0, glasses: 0, cycleTimeRemaining: 0 };
+      this.dishwasherBatches.set(uid, batch);
+    } else {
+      // If the same uid somehow gets a different def (move / replace),
+      // refresh defId so the wash rate matches the placed unit.
+      batch.defId = defId;
+    }
+    const current = kind === "plate" ? batch.plates : batch.glasses;
+    if (current >= DISHWASHER_CAPACITY[kind]) return false;
+    if (kind === "plate") batch.plates += 1;
+    else batch.glasses += 1;
+    batch.cycleTimeRemaining += dishwasherWashPerItem(defId);
+    return true;
+  }
+
+  /** Per-uid snapshot — for the StockStatusWidget tooltip and any
+   * future "open dishwasher" UI. Returns null when the uid hasn't
+   * been loaded yet (empty dishwashers don't have a batch record). */
+  getDishwasherBatch(uid: string): { plates: number; glasses: number; cycleTimeRemaining: number } | null {
+    const batch = this.dishwasherBatches.get(uid);
+    if (!batch) return null;
+    return { plates: batch.plates, glasses: batch.glasses, cycleTimeRemaining: batch.cycleTimeRemaining };
+  }
+
+  /** Sum of pieces currently mid-wash across every dishwasher. UI
+   * uses this to clarify "X dirty (Y in dishwashers)" so the player
+   * isn't surprised by the wait between trip end and clean-count tick. */
+  getDishwasherInFlight(kind: DishKind): number {
+    let n = 0;
+    for (const b of this.dishwasherBatches.values()) {
+      n += kind === "plate" ? b.plates : b.glasses;
+    }
+    return n;
+  }
+
+  /** Capacity per kind in a single dishwasher. Exposed so UI / tooltips
+   * can show "10 / 10 plates" without hardcoding the number. */
+  static getDishwasherCapacity(kind: DishKind): number {
+    return DISHWASHER_CAPACITY[kind];
   }
 
   // === Save / load ===

@@ -57,10 +57,15 @@ export interface DirtyPickupInfo {
 }
 
 /** Snapshot of a placed wash station — sink or dishwasher. `dwell` is
- * how many seconds the waiter scrubs / loads before the dish goes back
- * to clean. */
+ * how many seconds the waiter scrubs / loads at the station before
+ * walking home. For SINKS dwell is the scrub time and the piece is
+ * clean the moment dwell ends. For DISHWASHERS dwell is the brief
+ * "load and walk" time and the actual wash happens asynchronously
+ * inside DishwareSystem's batch cycle. `defId` lets the trip decide
+ * which path to take when dwell finishes. */
 export interface WashStationInfo {
   uid: string;
+  defId: string;
   standPos: THREE.Vector2;
   dwell: number;
 }
@@ -72,6 +77,10 @@ interface WashTrip {
   dirtyPos: THREE.Vector2;
   kind: DishKind;
   stationUid: string;
+  /** Catalog id of the wash station ("sink", "dishwasher",
+   * "dishwasher-pro"). Drives the dwell-completion branch in the
+   * working state — sinks wash immediately, dishwashers load. */
+  stationDefId: string;
   stationPos: THREE.Vector2;
   dwell: number;
   phase: "pickup" | "wash";
@@ -242,7 +251,18 @@ export class StaffRouter {
     releaseDirtyPickup: (id: number) => void;
     pickupDirty: (id: number) => DishKind | null;
     getWashStations: () => WashStationInfo[];
+    /** Sink path: scrub one dirty piece of `kind` into clean. Picks
+     * the highest-tier dirty piece globally. */
     washOne: (kind: DishKind) => void;
+    /** Dishwasher path: can this station accept one more piece of
+     * this kind? Drives the start-of-trip station picker — full
+     * dishwashers are skipped in favour of empty ones or sinks. */
+    canDishwasherLoad: (uid: string, kind: DishKind) => boolean;
+    /** Dishwasher path: drop the piece in. Returns false if the
+     * batch is full (rare — the canDishwasherLoad check should keep
+     * trips from reaching here on a full unit, but waiters in flight
+     * can race so we still bail gracefully). */
+    loadDishwasher: (uid: string, defId: string, kind: DishKind) => boolean;
   };
 
   constructor(
@@ -762,12 +782,29 @@ export class StaffRouter {
       }
       case "working": {
         if (w.washTrip) {
-          // Dwelling at the sink / dishwasher. When the dwell elapses
-          // the plate goes back into the clean pool (washOne picks the
-          // tier) and the waiter walks home empty-handed.
+          // Dwelling at the wash station. Two paths split here:
+          //   SINK: dwell is the full scrub time. When it ends the
+          //     piece goes straight to the clean pool (washOne picks
+          //     the tier from the global dirty pool).
+          //   DISHWASHER: dwell is the brief "load and leave" time.
+          //     The piece gets pushed into that dishwasher's batch
+          //     state; DishwareSystem.update finishes the wash in the
+          //     background. Multiple waiters can use the same
+          //     dishwasher back-to-back since they only dwell for
+          //     half a second each.
           if (w.clock >= w.washTrip.dwell) {
-            this.washCallbacks?.washOne(w.washTrip.kind);
-            this.busyWashUids.delete(w.washTrip.stationUid);
+            const trip = w.washTrip;
+            const isDishwasher = trip.stationDefId.startsWith("dishwasher");
+            if (isDishwasher) {
+              this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind);
+              // Dishwashers don't lock — clearing busyWashUids is a
+              // safety net for legacy code paths that may still have
+              // claimed it.
+              this.busyWashUids.delete(trip.stationUid);
+            } else {
+              this.washCallbacks?.washOne(trip.kind);
+              this.busyWashUids.delete(trip.stationUid);
+            }
             if (w.heldPlate) w.heldPlate.visible = false;
             w.washTrip = null;
             w.target = w.home.clone();
@@ -828,22 +865,36 @@ export class StaffRouter {
       if (dist < pickedDirtyDist) { pickedDirty = d; pickedDirtyDist = dist; }
     }
     if (!pickedDirty) return null;
-    // Nearest free wash station (skip ones another waiter has claimed).
+    // Nearest free wash station. Two kinds of "free":
+    //   • sink: only one waiter at a time (busyWashUids gate)
+    //   • dishwasher: many waiters can drop into the same unit, but
+    //     each dishwasher has a per-kind capacity (10 plates / 5
+    //     glasses); reject when this kind's bin is already full.
     let pickedStation: WashStationInfo | null = null;
     let pickedStationDist = Infinity;
     for (const s of stations) {
-      if (this.busyWashUids.has(s.uid)) continue;
+      const isDishwasher = s.defId.startsWith("dishwasher");
+      if (isDishwasher) {
+        if (!this.washCallbacks.canDishwasherLoad(s.uid, pickedDirty.kind)) continue;
+      } else {
+        if (this.busyWashUids.has(s.uid)) continue;
+      }
       const dist = Math.hypot(s.standPos.x - here.x, s.standPos.y - here.y);
       if (dist < pickedStationDist) { pickedStation = s; pickedStationDist = dist; }
     }
     if (!pickedStation) return null;
     if (!this.washCallbacks.claimDirtyPickup(pickedDirty.id, w.memberId)) return null;
-    this.busyWashUids.add(pickedStation.uid);
+    // Dishwashers stay unclaimed — capacity already enforces the
+    // limit; sinks get the busy-set claim so a second waiter doesn't
+    // queue up at the same basin.
+    const isSink = !pickedStation.defId.startsWith("dishwasher");
+    if (isSink) this.busyWashUids.add(pickedStation.uid);
     return {
       dirtyId: pickedDirty.id,
       dirtyPos: pickedDirty.pos.clone(),
       kind: pickedDirty.kind,
       stationUid: pickedStation.uid,
+      stationDefId: pickedStation.defId,
       stationPos: pickedStation.standPos.clone(),
       dwell: pickedStation.dwell,
       phase: "pickup",
