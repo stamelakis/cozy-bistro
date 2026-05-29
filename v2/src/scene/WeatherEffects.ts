@@ -67,10 +67,10 @@ export class WeatherEffects {
   // opacity scales with how overcast the weather is.
   private cloudShadows: THREE.Mesh[] = [];
   private cloudShadowDrifts!: { vx: number; vz: number; phaseY: number }[];
-  private static readonly CLOUD_SHADOW_COUNT = 12;
+  private static readonly CLOUD_SHADOW_COUNT = 22;
   /** Larger spread for cloud shadows so they cover the whole visible
    * yard, not pile up over the building. */
-  private static readonly CLOUD_AREA_HALF = 30;
+  private static readonly CLOUD_AREA_HALF = 32;
 
   /** Shared horizontal/vertical extents. The play area is 10×10 m
    * (perimeter -4.5..5.5); 36×36 covers the building plus a generous
@@ -307,12 +307,20 @@ export class WeatherEffects {
     }
   }
 
-  /** Procedural cloud-shadow texture. 14 overlapping soft radial
+  /** Procedural cloud-shadow texture. Many overlapping soft radial
    * gradients on a transparent background — each cloud gets a unique
-   * irregular silhouette without shipping any image assets. The
-   * gradient stops paint dark grey (with falling alpha) so the
-   * texture's RGBA itself is the "shadow tone × alpha" curve and the
-   * plane material doesn't need an alphaMap or shader. */
+   * irregular silhouette + patchy internal density so it reads as a
+   * REAL cloud shadow (diffused, varied opacity, cool tone) rather
+   * than a solid dark sticker.
+   *
+   * Key tweaks vs the first pass:
+   *  - Cool blue-grey colour (~rgb 60, 72, 90) instead of near-black,
+   *    matching the skylight tint that fills in a sun-occluded patch
+   *  - Per-blob random opacity 0.15-0.40 instead of a flat 0.55 max,
+   *    giving the cloud internal mottling — some spots dark, some
+   *    lighter, like real cloud cover
+   *  - More blobs per cloud (16-22) with overall smaller radii so the
+   *    silhouette has more detail and softer edges */
   private static makeCloudTexture(): THREE.CanvasTexture {
     const sz = 256;
     const canvas = document.createElement("canvas");
@@ -320,18 +328,19 @@ export class WeatherEffects {
     canvas.height = sz;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, sz, sz);
-    const blobs = 12 + Math.floor(Math.random() * 5);
+    const blobs = 16 + Math.floor(Math.random() * 7);
     for (let i = 0; i < blobs; i += 1) {
-      // Place each blob within the inner 75% so the outer edge of the
-      // canvas stays mostly transparent — gives the cloud a soft
-      // feathered border, not a hard square cut-off.
-      const cx = sz * (0.13 + Math.random() * 0.74);
-      const cy = sz * (0.13 + Math.random() * 0.74);
-      const r  = sz * (0.12 + Math.random() * 0.18);
+      const cx = sz * (0.12 + Math.random() * 0.76);
+      const cy = sz * (0.12 + Math.random() * 0.76);
+      const r  = sz * (0.10 + Math.random() * 0.16);
+      // Each blob gets its own peak opacity so the cloud has internal
+      // density variation rather than a smooth gradient from a single
+      // dark centre.
+      const peak = 0.15 + Math.random() * 0.25;
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grad.addColorStop(0,    "rgba(20, 24, 30, 0.55)");
-      grad.addColorStop(0.6,  "rgba(20, 24, 30, 0.20)");
-      grad.addColorStop(1.0,  "rgba(20, 24, 30, 0.00)");
+      grad.addColorStop(0,    `rgba(60, 72, 90, ${peak.toFixed(3)})`);
+      grad.addColorStop(0.55, `rgba(60, 72, 90, ${(peak * 0.4).toFixed(3)})`);
+      grad.addColorStop(1.0,  `rgba(60, 72, 90, 0)`);
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, sz, sz);
     }
@@ -456,13 +465,13 @@ export class WeatherEffects {
       if (mesh.position.x - cam.x < -half) mesh.position.x += half * 2;
       if (mesh.position.z - cam.z > half) mesh.position.z -= half * 2;
       if (mesh.position.z - cam.z < -half) mesh.position.z += half * 2;
-      // Per-cloud opacity wobble — gives the overcast a breathing
-      // feel rather than 12 solid blobs.
+      // Per-cloud opacity wobble — gives the overcast a breathing feel.
       const wobble = 0.5 + 0.5 * Math.sin(t * 0.25 + drift.phaseY);
-      // Cap higher than the old version (was 0.20) because the cloud
-      // texture itself already has fractional alpha — the visible
-      // shadow ends up multiplied by the painted blob's alpha.
-      const target = overcast * (0.55 + 0.30 * wobble);
+      // Lower cap than before — the new texture paints internal
+      // mottling so the shadow needs less material-level opacity to
+      // read. Keeping it subtle (0.50-0.85 of overcast) prevents the
+      // patches from feeling like solid stickers laid over the floor.
+      const target = overcast * (0.50 + 0.35 * wobble);
       const mat = mesh.material as THREE.MeshBasicMaterial;
       mat.opacity = target;
       mesh.visible = target > 0.01;
