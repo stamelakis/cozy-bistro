@@ -34,19 +34,31 @@ export class WorldScene {
   chefChar?: AnimatedCharacter;
   waiterChar?: AnimatedCharacter;
   errandChar?: AnimatedCharacter;
-  /** Per-stove flames, keyed by furniture uid. Each cooking stove
-   * (gas / electric) gets its own glowing sphere + point light pinned
-   * to the top of its model. Engine.update calls syncStoveFlames each
-   * frame to keep this map in lockstep with the placed stoves, then
-   * setCookingStoves(uids) flips the per-stove visibility based on
-   * which chefs are actively at the burner. */
-  private stoveFlames = new Map<string, {
+  /** Per-station visual effects, keyed by furniture uid. Every cook
+   * station gets a small group pinned to the top of its model;
+   * Engine.update reconciles the map each frame via syncStationEffects,
+   * then setActiveStations(uids) flips the per-station visibility based
+   * on which chefs are actively working there. Each variant has its own
+   * mesh / light layout and animation in update(dt):
+   *  - gas stove   → orange flame + flicker
+   *  - electric    → blue induction glow + flicker
+   *  - toaster     → red coil glow on top, pulses while in use
+   *  - coffee      → 3 white steam puffs rising in sequence
+   *  - blender     → small wobble of the model's top accessory
+   *  - microwave   → soft yellow inside-light glow (currently unused —
+   *                  no recipe gates on microwave yet) */
+  private stationEffects = new Map<string, {
     group: THREE.Group;
-    mesh: THREE.Mesh;
-    light: THREE.PointLight;
-    variant: "gas" | "electric";
+    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave";
+    flameMesh?: THREE.Mesh;
+    flameLight?: THREE.PointLight;
+    // Steam puffs for coffee: each has a phase offset so they rise in
+    // sequence rather than as a single blob.
+    steamPuffs?: { mesh: THREE.Mesh; phase: number }[];
+    // Wobble accessory for blender: a small disc that rotates + pulses.
+    wobbleMesh?: THREE.Mesh;
   }>();
-  private stoveFlamePhase = 0;
+  private stationEffectPhase = 0;
   /** The hinged door panel (sub-object of the procedural front-door
    * group, exposed via userData.panel). Rotating this swings the door
    * around its hinge while the frame stays put. */
@@ -105,26 +117,82 @@ export class WorldScene {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
     this.addBuilding();
-    // Per-stove flames are created lazily by syncStoveFlames() once
-    // a stove is placed — no global flame to set up here.
+    // Per-station effects (flames, toaster glow, coffee steam, etc.)
+    // are created lazily by syncStationEffects() once each station
+    // is placed — no global state to set up here.
     void this.populateDemoRestaurant();
   }
 
   update(dt: number): void {
     this.animator.update(dt);
-    // Stove-flame flicker — drive every currently-visible flame off a
-    // single phase so they flicker in sync (looks like the same kitchen
-    // physics rather than each burner doing its own thing). Both gas
-    // and electric variants animate; the per-variant color is baked
-    // into the materials at flame-build time.
-    if (this.stoveFlames.size > 0) {
-      this.stoveFlamePhase += dt;
-      const flick = 0.85 + Math.sin(this.stoveFlamePhase * 22) * 0.1 + Math.random() * 0.1;
-      const lightIntensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
-      for (const f of this.stoveFlames.values()) {
-        if (!f.group.visible) continue;
-        f.mesh.scale.setScalar(flick);
-        f.light.intensity = lightIntensity;
+    // Per-station effect animation — dispatched by variant so a stove
+    // flickers, a coffee machine puffs steam, a blender wobbles, etc.
+    // Single phase drives them all so kitchen visuals feel synchronized.
+    if (this.stationEffects.size > 0) {
+      this.stationEffectPhase += dt;
+      const flick = 0.85 + Math.sin(this.stationEffectPhase * 22) * 0.1 + Math.random() * 0.1;
+      const flameLightInt = 1.6 + Math.sin(this.stationEffectPhase * 18) * 0.3;
+      for (const e of this.stationEffects.values()) {
+        if (!e.group.visible) continue;
+        switch (e.variant) {
+          case "gas":
+          case "electric": {
+            if (e.flameMesh) e.flameMesh.scale.setScalar(flick);
+            if (e.flameLight) e.flameLight.intensity = flameLightInt;
+            break;
+          }
+          case "toaster": {
+            // Pulse the coil glow — slow breathing on top of the burner
+            // colour so it reads as "heating" rather than just "on".
+            if (e.flameMesh) {
+              const mat = e.flameMesh.material as THREE.MeshStandardMaterial;
+              if (mat && "emissiveIntensity" in mat) {
+                mat.emissiveIntensity = 1.6 + Math.sin(this.stationEffectPhase * 7) * 0.6;
+              }
+            }
+            if (e.flameLight) {
+              e.flameLight.intensity = 0.6 + Math.sin(this.stationEffectPhase * 7) * 0.3;
+            }
+            break;
+          }
+          case "coffee": {
+            // Steam puffs rise + fade + reset. Each puff has its own
+            // phase offset so they leave the spout in sequence.
+            if (e.steamPuffs) {
+              for (const puff of e.steamPuffs) {
+                puff.phase += dt * 0.8;
+                if (puff.phase > 1) puff.phase -= 1;
+                const p = puff.phase;
+                puff.mesh.position.y = 0.1 + p * 0.45;
+                puff.mesh.scale.setScalar(0.6 + p * 0.9);
+                const mat = puff.mesh.material as THREE.MeshStandardMaterial;
+                if (mat && "opacity" in mat) {
+                  mat.opacity = Math.max(0, 0.55 * (1 - p));
+                }
+              }
+            }
+            break;
+          }
+          case "blender": {
+            // Spin the accessory disc + a slight Y-bounce so the
+            // model reads as actively blending.
+            if (e.wobbleMesh) {
+              e.wobbleMesh.rotation.y = this.stationEffectPhase * 14;
+              e.wobbleMesh.position.y = 0.08 + Math.sin(this.stationEffectPhase * 24) * 0.015;
+            }
+            break;
+          }
+          case "microwave": {
+            // Soft inside-light pulse — currently no recipe gates on
+            // microwave but the effect is here so the system is
+            // complete and players who pre-emptively buy one see it
+            // light up if a chef ever uses it.
+            if (e.flameLight) {
+              e.flameLight.intensity = 0.5 + Math.sin(this.stationEffectPhase * 3) * 0.2;
+            }
+            break;
+          }
+        }
       }
     }
     // Lerp door open amount toward target and apply rotation to the
@@ -198,67 +266,84 @@ export class WorldScene {
     }
   }
 
-  /** Reconcile the per-stove flame map with the registry's current set
-   * of cooking stoves. Engine calls this each frame; it adds a flame
-   * for every newly-placed stove (colored per stove type) and removes
-   * flames for stoves that have been sold or moved. Cheap — the map is
-   * tiny and we only do allocation when something actually changed. */
-  syncStoveFlames(stoves: readonly { uid: string; defId: string; model: THREE.Object3D }[]): void {
-    const live = new Set(stoves.map((s) => s.uid));
-    for (const uid of [...this.stoveFlames.keys()]) {
+  /** Reconcile the per-station effect map with the registry's current
+   * cook-station list. Engine calls this each frame; it builds the
+   * right variant effect for every newly-placed station and removes
+   * effects for stations that have been sold or moved. */
+  syncStationEffects(stations: readonly { uid: string; defId: string; model: THREE.Object3D }[]): void {
+    const live = new Set(stations.map((s) => s.uid));
+    for (const uid of [...this.stationEffects.keys()]) {
       if (!live.has(uid)) {
-        const f = this.stoveFlames.get(uid)!;
+        const f = this.stationEffects.get(uid)!;
         this.threeScene.remove(f.group);
-        this.stoveFlames.delete(uid);
+        this.stationEffects.delete(uid);
       }
     }
-    for (const s of stoves) {
-      if (this.stoveFlames.has(s.uid)) {
-        // Already have a flame for this stove — but the model might
-        // have been re-positioned (move-mode). Refresh the anchor.
-        this.alignFlameToModel(this.stoveFlames.get(s.uid)!.group, s.model);
+    for (const s of stations) {
+      if (this.stationEffects.has(s.uid)) {
+        // Already have an effect for this station — but the model
+        // might have been moved (move-mode) or its host repositioned
+        // (surface placement). Refresh the world anchor.
+        this.alignEffectToModel(this.stationEffects.get(s.uid)!.group, s.model);
         continue;
       }
-      const variant: "gas" | "electric" = s.defId === "stove-electric" ? "electric" : "gas";
-      const flame = this.buildStoveFlame(variant);
-      this.alignFlameToModel(flame.group, s.model);
-      this.threeScene.add(flame.group);
-      this.stoveFlames.set(s.uid, { ...flame, variant });
+      const effect = this.buildStationEffect(s.defId);
+      if (!effect) continue;
+      this.alignEffectToModel(effect.group, s.model);
+      this.threeScene.add(effect.group);
+      this.stationEffects.set(s.uid, effect);
     }
   }
 
-  /** Flip per-stove flame visibility. `uids` is the set of stoves with
-   * a chef ACTIVELY cooking (router.getCookingStoveUids()). Stoves
-   * outside the set go dark. */
-  setCookingStoves(uids: ReadonlySet<string>): void {
-    for (const [uid, f] of this.stoveFlames) {
+  /** Flip per-station effect visibility. `uids` is the set of stations
+   * with a chef ACTIVELY cooking (router.getCookingStoveUids()).
+   * Stations outside the set go dark / idle. */
+  setActiveStations(uids: ReadonlySet<string>): void {
+    for (const [uid, f] of this.stationEffects) {
       f.group.visible = uids.has(uid);
     }
   }
 
-  /** True if at least one per-stove flame is currently visible — i.e.
+  /** True if at least one station effect is currently visible — i.e.
    * a chef is cooking somewhere right now. Engine uses this to drive
    * the kitchen sizzle SFX loop. */
-  isAnyStoveLit(): boolean {
-    for (const f of this.stoveFlames.values()) if (f.group.visible) return true;
+  isAnyStationActive(): boolean {
+    for (const f of this.stationEffects.values()) if (f.group.visible) return true;
     return false;
   }
 
-  /** Build a single stove flame — sphere + point light — with colours
-   * tuned to the stove variant. Gas stoves get the classic warm orange
-   * glow; electric stoves use a cool blue induction-coil look so the
-   * player can tell at a glance which appliance is which. */
-  private buildStoveFlame(variant: "gas" | "electric"): {
+  /** Build the per-variant effect group for a given station defId.
+   * Returns undefined for ids without a built-in visual (e.g. counter
+   * — the chef just stands there chopping, no glow needed). */
+  private buildStationEffect(defId: string): {
     group: THREE.Group;
-    mesh: THREE.Mesh;
-    light: THREE.PointLight;
-  } {
+    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave";
+    flameMesh?: THREE.Mesh;
+    flameLight?: THREE.PointLight;
+    steamPuffs?: { mesh: THREE.Mesh; phase: number }[];
+    wobbleMesh?: THREE.Mesh;
+  } | undefined {
+    switch (defId) {
+      case "stove": return this.buildStoveFlameEffect("gas");
+      case "stove-electric": return this.buildStoveFlameEffect("electric");
+      case "toaster": return this.buildToasterGlowEffect();
+      case "coffee-machine": return this.buildCoffeeSteamEffect();
+      case "blender": return this.buildBlenderWobbleEffect();
+      case "microwave": return this.buildMicrowaveGlowEffect();
+      default: return undefined;
+    }
+  }
+
+  /** Gas / electric stove flame — sphere + point light. Gas reads
+   * warm-orange, electric reads cool-blue induction so the player can
+   * tell at a glance which appliance is which. */
+  private buildStoveFlameEffect(variant: "gas" | "electric") {
     const palette = variant === "electric"
       ? { color: 0x4d8eff, emissive: 0x1d4fc8, light: 0x88aaff }
       : { color: 0xff7a3c, emissive: 0xff5500, light: 0xff8844 };
     const group = new THREE.Group();
     group.visible = false;
-    const mesh = new THREE.Mesh(
+    const flameMesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 12, 12),
       new THREE.MeshStandardMaterial({
         color: palette.color,
@@ -268,17 +353,101 @@ export class WorldScene {
         opacity: 0.85,
       }),
     );
-    group.add(mesh);
-    const light = new THREE.PointLight(palette.light, 1.2, 2.5, 2);
-    light.position.set(0, 0.05, 0);
-    group.add(light);
-    return { group, mesh, light };
+    group.add(flameMesh);
+    const flameLight = new THREE.PointLight(palette.light, 1.2, 2.5, 2);
+    flameLight.position.set(0, 0.05, 0);
+    group.add(flameLight);
+    return { group, variant, flameMesh, flameLight };
   }
 
-  /** Pin a flame group to a stove model's measured top. Same bounding-
-   * box maths as the previous global flame — works regardless of which
-   * stove asset (gas or electric) is in play. */
-  private alignFlameToModel(group: THREE.Group, model: THREE.Object3D): void {
+  /** Toaster glow — a thin red plane on top of the slot, pulsing as
+   * if the coils inside are heating up. Plus a small warm point light
+   * so the surrounding counter top picks up the colour. */
+  private buildToasterGlowEffect() {
+    const group = new THREE.Group();
+    group.visible = false;
+    const flameMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.16, 0.08),
+      new THREE.MeshStandardMaterial({
+        color: 0xff5a30,
+        emissive: 0xff3a10,
+        emissiveIntensity: 2.0,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+      }),
+    );
+    // Lie flat looking up; sits a hair above the toaster's top.
+    flameMesh.rotation.x = -Math.PI / 2;
+    group.add(flameMesh);
+    const flameLight = new THREE.PointLight(0xff8866, 0.7, 1.5, 2);
+    flameLight.position.set(0, 0.05, 0);
+    group.add(flameLight);
+    return { group, variant: "toaster" as const, flameMesh, flameLight };
+  }
+
+  /** Coffee steam — three small white spheres that rise + fade in
+   * sequence so the spout looks like it's continuously puffing. */
+  private buildCoffeeSteamEffect() {
+    const group = new THREE.Group();
+    group.visible = false;
+    const geom = new THREE.SphereGeometry(0.05, 8, 8);
+    const steamPuffs: { mesh: THREE.Mesh; phase: number }[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const mesh = new THREE.Mesh(
+        geom,
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.55,
+          emissive: 0xf0f0f0,
+          emissiveIntensity: 0.4,
+        }),
+      );
+      // Initial vertical offset so puffs aren't stacked.
+      mesh.position.set(0, 0.05 + i * 0.12, 0);
+      group.add(mesh);
+      steamPuffs.push({ mesh, phase: i / 3 });
+    }
+    return { group, variant: "coffee" as const, steamPuffs };
+  }
+
+  /** Blender wobble — a small dark accessory disc on top of the model
+   * that spins while in use. */
+  private buildBlenderWobbleEffect() {
+    const group = new THREE.Group();
+    group.visible = false;
+    const wobbleMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.07, 0.02, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0x2a2a2a,
+        emissive: 0x444444,
+        emissiveIntensity: 0.3,
+      }),
+    );
+    wobbleMesh.position.set(0, 0.08, 0);
+    group.add(wobbleMesh);
+    return { group, variant: "blender" as const, wobbleMesh };
+  }
+
+  /** Microwave inside-glow — a soft yellow point light just above the
+   * model's top surface. Currently no recipe gates on microwave so
+   * this rarely fires, but having it ready means the visual lights up
+   * the moment we add a microwave recipe later. */
+  private buildMicrowaveGlowEffect() {
+    const group = new THREE.Group();
+    group.visible = false;
+    const flameLight = new THREE.PointLight(0xffcc66, 0.5, 1.2, 2);
+    flameLight.position.set(0, 0.02, 0);
+    group.add(flameLight);
+    return { group, variant: "microwave" as const, flameLight };
+  }
+
+  /** Pin an effect group to a station model's measured top. Same
+   * bounding-box maths as the previous per-stove flame anchoring;
+   * works for stoves, toasters, coffee machines, etc. regardless of
+   * how tall the model is. */
+  private alignEffectToModel(group: THREE.Group, model: THREE.Object3D): void {
     model.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(model);
     const cx = (box.min.x + box.max.x) / 2;

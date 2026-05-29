@@ -661,19 +661,11 @@ export class FurnitureRegistry {
     return out;
   }
 
-  /** Stoves that can actually COOK — i.e. the gas / electric stoves
-   * themselves, excluding the kitchen-sink and dishwasher items that
-   * share the "stove" category. Each entry carries the defId + model
-   * so the WorldScene can pin a per-stove flame to the model and color
-   * it based on stove type (gas → orange, electric → blue). */
+  /** @deprecated Phase C.2 superseded this with the broader
+   * {@link getCookStations}. Kept for one revision in case any
+   * external caller still references it. */
   getCookingStoves(): { uid: string; defId: string; model: THREE.Object3D }[] {
-    const out: { uid: string; defId: string; model: THREE.Object3D }[] = [];
-    for (const it of this.items) {
-      if (it.defId !== "stove" && it.defId !== "stove-electric") continue;
-      if (!this.isVisibleInScene(it.model)) continue;
-      out.push({ uid: it.uid, defId: it.defId, model: it.model });
-    }
-    return out;
+    return this.getCookStations().filter((s) => s.defId === "stove" || s.defId === "stove-electric");
   }
 
   /** Count of placed items of a specific id. Used to detect sinks /
@@ -701,15 +693,16 @@ export class FurnitureRegistry {
    * with a `provides` value in its def. StaffRouter uses this to match
    * a recipe's required appliance to a specific place in the kitchen
    * so chefs walk to the toaster for toast, the coffee machine for a
-   * latte, etc. Position fields mirror getStoves(); the `provides`
-   * value is the appliance type the station serves. */
-  getCookStations(): { uid: string; provides: string; x: number; z: number; rotY: number }[] {
-    const out: { uid: string; provides: string; x: number; z: number; rotY: number }[] = [];
+   * latte, etc. The defId + model fields let WorldScene pin a
+   * per-variant visual effect (flame, toaster glow, coffee steam, etc.)
+   * to each station model. */
+  getCookStations(): { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number }[] {
+    const out: { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (!def?.provides) continue;
       if (!this.isVisibleInScene(it.model)) continue;
-      out.push({ uid: it.uid, provides: def.provides, x: it.x, z: it.z, rotY: it.rotY });
+      out.push({ uid: it.uid, defId: it.defId, model: it.model, provides: def.provides, x: it.x, z: it.z, rotY: it.rotY });
     }
     return out;
   }

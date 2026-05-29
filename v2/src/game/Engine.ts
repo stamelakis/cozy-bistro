@@ -755,9 +755,9 @@ export class Engine {
     // at the burner. Driven before scene.update so the per-frame
     // flicker animation runs this frame. The cooking-loop SFX tracks
     // the aggregate flag (any flame visible = sizzling).
-    this.scene.syncStoveFlames(this.registry.getCookingStoves());
-    this.scene.setCookingStoves(this.router?.getCookingStoveUids() ?? new Set());
-    const cooking = this.scene.isAnyStoveLit();
+    this.scene.syncStationEffects(this.registry.getCookStations());
+    this.scene.setActiveStations(this.router?.getCookingStoveUids() ?? new Set());
+    const cooking = this.scene.isAnyStationActive();
     if (cooking) this.sfx.startCookingLoop("stove");
     else this.sfx.stopCookingLoop();
     // Open the door when a guest, errand helper, or pedestrian is close.
