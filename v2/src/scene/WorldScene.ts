@@ -1008,6 +1008,11 @@ export class WorldScene {
     group: THREE.Group;
     slab: THREE.Mesh;
     walls: Map<WallDir, THREE.Mesh>;
+    /** Per-storey material instances so DecorModal can theme each
+     * upper floor independently from the ground floor. Cloned from
+     * `slabMatSolid` / `wallMat` at construction. */
+    slabMat: THREE.MeshStandardMaterial;
+    wallMat: THREE.MeshStandardMaterial;
   }>();
   /** Staircase flights keyed by the storey index they LEAD UP TO
    * (1..NUM_STOREYS-1). Each flight is parented to the LOWER storey it
@@ -1180,10 +1185,15 @@ export class WorldScene {
       const group = new THREE.Group();
       group.visible = false;
       const baseY = idx * H;
+      // Per-storey material clones so DecorModal can theme each upper
+      // floor independently. Without this every floor would share the
+      // ground floor's wall + slab colours.
+      const slabMat = this.slabMatSolid.clone();
+      const wallMatStorey = this.wallMat.clone();
       // Floor of this storey == ceiling of the storey below, with a
-      // 1 × 2 m rectangular opening at the back-left corner so the
+      // 1 × 3 m rectangular opening at the back-left corner so the
       // staircase rising from below can emerge through it.
-      const slab = new THREE.Mesh(this.makeSlabWithStairHole(W), this.slabMatSolid);
+      const slab = new THREE.Mesh(this.makeSlabWithStairHole(W), slabMat);
       slab.rotation.x = -Math.PI / 2;
       slab.position.set(0.5, baseY, 0.5);
       slab.receiveShadow = true;
@@ -1196,14 +1206,14 @@ export class WorldScene {
         const geom = spec.horizontal
           ? new THREE.BoxGeometry(W, H, T)
           : new THREE.BoxGeometry(T, H, W);
-        const mesh = new THREE.Mesh(geom, this.wallMat);
+        const mesh = new THREE.Mesh(geom, wallMatStorey);
         mesh.position.set(spec.xz[0], baseY + H / 2, spec.xz[1]);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         group.add(mesh);
         walls.set(spec.dir, mesh);
       }
-      this.upperStoreys.set(idx, { group, slab, walls });
+      this.upperStoreys.set(idx, { group, slab, walls, slabMat, wallMat: wallMatStorey });
       this.threeScene.add(group);
     }
     // Second pass: each flight is parented to the storey it LEAVES
@@ -2245,12 +2255,26 @@ export class WorldScene {
     mat.color.setHex(frame);
   }
 
-  /** Apply a theme color set to the existing wall + floor materials.
-   * Used by the DecorPanel — the player picks one of a handful of
-   * pre-curated palettes. */
+  /** Apply a theme color set to the GROUND floor's wall + floor
+   * materials. Used as the default / legacy entry point — Engine
+   * calls this on startup with the player's saved Floor 0 theme. */
   setTheme(theme: { wallColor: number; floorColor: number }): void {
     if (this.wallMat) this.wallMat.color.setHex(theme.wallColor);
     if (this.floorMat) this.floorMat.color.setHex(theme.floorColor);
+  }
+
+  /** Apply a theme to a specific storey. Floor 0 → ground floor's
+   * shared materials (same as `setTheme`). Floor 1..N → that storey's
+   * cloned wall + slab materials so the other floors are unaffected. */
+  setStoreyTheme(floor: number, theme: { wallColor: number; floorColor: number }): void {
+    if (floor <= 0) {
+      this.setTheme(theme);
+      return;
+    }
+    const storey = this.upperStoreys.get(floor);
+    if (!storey) return;
+    storey.wallMat.color.setHex(theme.wallColor);
+    storey.slabMat.color.setHex(theme.floorColor);
   }
 
   /** Map demo placements → their tier section so we can show / hide as

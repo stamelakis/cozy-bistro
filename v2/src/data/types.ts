@@ -246,8 +246,15 @@ export interface SaveGameState {
   dayHistory?: unknown[];
   /** Unlocked achievement ids. v2-specific. */
   achievements?: string[];
-  /** Selected interior theme id. v2-specific. */
+  /** Selected interior theme id — legacy single-theme field. Still
+   * written on save so old loaders keep working; for new saves this
+   * holds the GROUND floor's theme, and `themeByFloor` carries the
+   * per-storey overrides. */
   themeId?: string;
+  /** Per-floor theme ids (key = storey index 0..NUM_STOREYS-1). Absent
+   * in saves predating multi-storey; loader rehydrates floor 0 from
+   * `themeId` and leaves upper floors on the default. */
+  themeByFloor?: Record<number, string>;
   /** Player-customised restaurant name for the door plaque. */
   restaurantName?: string;
   /** Per-axis catalog ids for the plaque visual style. */

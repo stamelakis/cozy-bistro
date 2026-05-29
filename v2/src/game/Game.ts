@@ -146,8 +146,13 @@ export class Game {
   /** Seconds remaining of an active marketing boost. While > 0,
    * GuestSpawner halves its spawn interval. */
   private boostRemaining = 0;
-  /** Currently applied interior theme id. */
+  /** Currently applied interior theme id (ground floor / legacy field).
+   * Upper floors override via `themeByFloor`. */
   private themeId: string = RESTAURANT_THEMES[0].id;
+  /** Per-floor theme ids. Key = storey index (0..NUM_STOREYS-1). Missing
+   * entries fall back to the default theme so unset floors render as
+   * the off-white shell instead of a random pick. */
+  private themeByFloor: Record<number, string> = {};
   /** Player-customised restaurant name shown on the door plaque. Edited
    * via the click-to-edit modal that pops when the plaque is clicked.
    * Empty string means "use the default" so the plaque never renders
@@ -166,9 +171,11 @@ export class Game {
   // runs its own wash clock.
   /** Runtime-mutable tuning knobs (AdminPanel). */
   readonly admin: AdminSettings = { ...DEFAULT_ADMIN_SETTINGS };
-  /** Optional callback fired when the theme changes — Engine wires
-   * this to WorldScene.setTheme so the world recolors. */
-  onThemeChanged?: (theme: RestaurantTheme) => void;
+  /** Optional callback fired when a floor's theme changes — Engine
+   * wires this to WorldScene.setStoreyTheme so just that floor's
+   * walls + slab recolour. Includes the floor index so the listener
+   * can target the right storey. */
+  onThemeChanged?: (floor: number, theme: RestaurantTheme) => void;
   /** Engine wires this to GuestSpawner so the SaveSystem can persist
    * per-kind / per-tier in-flight plate reservations. Without it a
    * refresh permanently loses any plate a mid-meal guest was holding
@@ -386,6 +393,17 @@ export class Game {
     }
     if (typeof save.themeId === "string") {
       this.themeId = save.themeId;
+      // Legacy single-theme saves: ground floor inherits themeId, upper
+      // floors stay on the default until the player picks one.
+      this.themeByFloor[0] = save.themeId;
+    }
+    if (save.themeByFloor && typeof save.themeByFloor === "object") {
+      for (const [k, v] of Object.entries(save.themeByFloor)) {
+        const n = Number(k);
+        if (Number.isInteger(n) && n >= 0 && typeof v === "string") {
+          this.themeByFloor[n] = v;
+        }
+      }
     }
     // Restaurant name + plaque style.
     if (typeof save.restaurantName === "string" && save.restaurantName.trim().length > 0) {
@@ -888,19 +906,39 @@ export class Game {
 
   // === Interior themes (wall + floor color presets) ===
 
+  /** Theme currently applied to the ground floor. Kept for any caller
+   * that still wants the "primary" theme without specifying a floor
+   * (e.g. the door plaque or other shared decor that lives on the
+   * exterior). */
   getCurrentTheme(): RestaurantTheme {
-    return RESTAURANT_THEMES.find((t) => t.id === this.themeId) ?? RESTAURANT_THEMES[0];
+    return this.getThemeForFloor(0);
   }
 
-  /** Apply (and persist) a new interior theme. Free themes skip the
-   * money check. Returns true on success. */
-  applyTheme(themeId: string): boolean {
+  /** Theme currently applied to a specific floor. Falls back to the
+   * default theme when no override has been set for that floor. */
+  getThemeForFloor(floor: number): RestaurantTheme {
+    const id = this.themeByFloor[floor] ?? (floor === 0 ? this.themeId : RESTAURANT_THEMES[0].id);
+    return RESTAURANT_THEMES.find((t) => t.id === id) ?? RESTAURANT_THEMES[0];
+  }
+
+  /** Snapshot the per-floor theme map for save. Returns a plain object
+   * keyed by storey index, omitting entries equal to the default theme
+   * so the save stays minimal. */
+  snapshotThemesByFloor(): Record<number, string> {
+    return { ...this.themeByFloor };
+  }
+
+  /** Apply (and persist) a theme to a specific floor. Free themes skip
+   * the money check. Returns true on success. */
+  applyTheme(floor: number, themeId: string): boolean {
     const theme = RESTAURANT_THEMES.find((t) => t.id === themeId);
     if (!theme) return false;
-    if (theme.id === this.themeId) return true; // no-op
+    const currentForFloor = this.themeByFloor[floor] ?? (floor === 0 ? this.themeId : RESTAURANT_THEMES[0].id);
+    if (theme.id === currentForFloor) return true; // no-op
     if (theme.cost > 0 && !this.economy.spendMoney(theme.cost, "decor")) return false;
-    this.themeId = theme.id;
-    this.onThemeChanged?.(theme);
+    this.themeByFloor[floor] = theme.id;
+    if (floor === 0) this.themeId = theme.id; // keep legacy field in sync for save compat
+    this.onThemeChanged?.(floor, theme);
     return true;
   }
 

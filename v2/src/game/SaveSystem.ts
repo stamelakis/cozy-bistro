@@ -235,6 +235,7 @@ export class SaveSystem {
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
       themeId: this.game.getCurrentTheme().id,
+      themeByFloor: this.game.snapshotThemesByFloor(),
       restaurantName: this.game.getRestaurantName(),
       signStyle: this.game.getRestaurantSignStyle(),
       // Snapshot in-flight plate reservations so a refresh doesn't

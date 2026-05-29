@@ -1,16 +1,29 @@
 import type { Game } from "../game/Game";
 import { RESTAURANT_THEMES } from "../data/themes";
+import { WorldScene } from "../scene/WorldScene";
 
 /**
  * Interior-theme picker as a modal (was DecorPanel). Click outside
  * or the X to close. Each theme row shows two color swatches, name,
  * description, and price; clicking an unlocked one buys + applies.
+ *
+ * Multi-storey: a row of floor tabs at the top selects which storey
+ * the chosen theme applies to. The tab opens to the currently focused
+ * storey by default so the player edits the floor they're looking at.
+ * Locked floors (tier-gated) show their tab disabled with 🔒.
  */
 
 export class DecorModal {
   private readonly game: Game;
   private readonly root: HTMLElement;
+  private readonly tabsEl: HTMLElement;
   private readonly body: HTMLElement;
+  /** Storey index currently being edited. Defaults to ground floor and
+   * is re-set to the focused storey every time the modal opens. */
+  private activeFloor = 0;
+  /** Optional source for the focused storey so the modal opens on the
+   * floor the camera is looking at. Engine wires this. */
+  getFocusedStorey?: () => number;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -63,17 +76,73 @@ export class DecorModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
+    // Floor tab row — one button per storey. Locked storeys (tier-gated)
+    // are visually disabled but still rendered so the player knows the
+    // floor is coming.
+    this.tabsEl = document.createElement("div");
+    Object.assign(this.tabsEl.style, {
+      display: "flex", flexDirection: "row", gap: "4px",
+      marginBottom: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.tabsEl);
+
     this.body = document.createElement("div");
     Object.assign(this.body.style, { flex: "1", overflowY: "auto" } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.body);
   }
 
-  show(): void { this.refresh(); this.root.style.display = "flex"; }
+  show(): void {
+    // Default-open on the storey the camera is focused on so the player
+    // edits the floor they're looking at.
+    this.activeFloor = Math.max(0, this.getFocusedStorey?.() ?? 0);
+    this.refresh();
+    this.root.style.display = "flex";
+  }
   hide(): void { this.root.style.display = "none"; }
 
   private refresh(): void {
+    this.renderTabs();
+    this.renderThemeList();
+  }
+
+  private renderTabs(): void {
+    this.tabsEl.innerHTML = "";
+    const n = WorldScene.getNumStoreys();
+    const tier = this.game.getLuxuryTier();
+    for (let idx = 0; idx < n; idx += 1) {
+      const unlocked = idx === 0 || tier >= idx + 1;
+      const isActive = idx === this.activeFloor;
+      const btn = document.createElement("button");
+      const label = idx === 0 ? "G" : String(idx);
+      btn.textContent = unlocked ? label : "🔒";
+      btn.title = unlocked
+        ? (idx === 0 ? "Ground floor" : `Floor ${idx}`)
+        : `Floor ${idx} — unlocks at tier ${idx + 1}`;
+      btn.disabled = !unlocked;
+      Object.assign(btn.style, {
+        flex: "1", padding: "6px 0",
+        background: isActive
+          ? "rgba(255, 210, 120, 0.45)"
+          : "rgba(120, 180, 200, 0.18)",
+        color: isActive ? "#fffff0" : "#fff5dc",
+        border: isActive
+          ? "1px solid rgba(255, 220, 150, 0.85)"
+          : "1px solid rgba(255,245,220,0.22)",
+        borderRadius: "6px",
+        cursor: unlocked ? "pointer" : "not-allowed",
+        opacity: unlocked ? "1" : "0.45",
+        font: "inherit", fontSize: "13px", fontWeight: "700",
+      } as Partial<CSSStyleDeclaration>);
+      if (unlocked) {
+        btn.onclick = () => { this.activeFloor = idx; this.refresh(); };
+      }
+      this.tabsEl.appendChild(btn);
+    }
+  }
+
+  private renderThemeList(): void {
     this.body.innerHTML = "";
-    const current = this.game.getCurrentTheme();
+    const current = this.game.getThemeForFloor(this.activeFloor);
     for (const theme of RESTAURANT_THEMES) {
       const row = document.createElement("div");
       const active = theme.id === current.id;
@@ -119,7 +188,7 @@ export class DecorModal {
           row.style.cursor = "not-allowed";
         } else {
           row.onclick = () => {
-            if (this.game.applyTheme(theme.id)) this.refresh();
+            if (this.game.applyTheme(this.activeFloor, theme.id)) this.refresh();
           };
         }
       }

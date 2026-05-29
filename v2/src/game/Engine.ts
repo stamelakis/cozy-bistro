@@ -239,9 +239,15 @@ export class Engine {
       this.floorSelector.update();
     };
     this.decorModal = new DecorModal(container, this.game);
+    // So opening Decor on Floor 2 lands on Floor 2's tab by default.
+    this.decorModal.getFocusedStorey = () => this.scene.getFocusedStorey();
     // Wire theme changes to the live scene + restore the saved theme.
-    this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
-    this.scene.setTheme(this.game.getCurrentTheme());
+    this.game.onThemeChanged = (floor, theme) => this.scene.setStoreyTheme(floor, theme);
+    // Replay every storey's saved theme on startup so the world
+    // reflects per-floor decor choices the moment the scene mounts.
+    for (let f = 0; f < WorldScene.getNumStoreys(); f += 1) {
+      this.scene.setStoreyTheme(f, this.game.getThemeForFloor(f));
+    }
     this.dayEndModal = new DayEndModal(container);
     this.game.onDayEnded = (summary) => {
       this.dayEndModal.show(summary);
