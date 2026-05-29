@@ -177,16 +177,14 @@ export class SfxPlayer {
   }
 
   /** Toilet flush — sustained gushing water with a downward pitch
-   * drift and random bubble-glug ticks layered on top. Closer to a
-   * real flush than the old whoosh-and-tail design. */
+   * drift. Pure water sound, no glug ticks (the previous sine-tone
+   * bubbles read as unrelated drips on top of the flush). */
   toiletFlush(): void {
     const ctx = this.ensure();
     if (!ctx || !this.sfxBus) return;
     const DURATION = 2.6;
     // Main water gush — wide noise band that drifts from upper-mid
-    // (flush-start splash) down to low-mid (bowl emptying out). Two
-    // bandpass nodes in parallel give the rushing-water character
-    // depth instead of a single-band buzz.
+    // (flush-start splash) down to low-mid (bowl emptying out).
     const noise = ctx.createBufferSource();
     noise.buffer = this.noiseBuffer(DURATION + 0.5);
     noise.loop = false;
@@ -199,27 +197,12 @@ export class SfxPlayer {
     noise.connect(hp); hp.connect(lp);
     const bodyG = ctx.createGain();
     bodyG.gain.setValueAtTime(0.0001, ctx.currentTime);
-    bodyG.gain.exponentialRampToValueAtTime(0.45, ctx.currentTime + 0.15);
-    bodyG.gain.setValueAtTime(0.45, ctx.currentTime + DURATION - 0.6);
+    bodyG.gain.exponentialRampToValueAtTime(0.55, ctx.currentTime + 0.15);
+    bodyG.gain.setValueAtTime(0.55, ctx.currentTime + DURATION - 0.6);
     bodyG.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + DURATION);
     lp.connect(bodyG); bodyG.connect(this.sfxBus);
     noise.start();
     noise.stop(ctx.currentTime + DURATION + 0.1);
-    // Glug-glug bubbles — random low-mid pops every ~80 ms across
-    // the flush window for the chunky "water entering the bowl" feel.
-    const start = performance.now();
-    const glugTimer = window.setInterval(() => {
-      const elapsed = (performance.now() - start) / 1000;
-      if (elapsed >= DURATION) { window.clearInterval(glugTimer); return; }
-      // Fade glug volume with the body so it tails off naturally.
-      const envelope = elapsed < 0.15
-        ? elapsed / 0.15
-        : Math.max(0, 1 - (elapsed - 0.15) / (DURATION - 0.15));
-      if (Math.random() < 0.6) {
-        const freq = 90 + Math.random() * 180;
-        this.tone({ freq, type: "sine", attack: 0.005, decay: 0.12, gain: 0.5 * envelope });
-      }
-    }, 80);
   }
 
   /** Single drip — used for sink dwell completions etc. */
@@ -479,7 +462,7 @@ export class SfxPlayer {
       case "gas-stove": {
         // Layered: low whoosh body (filtered noise around 200 Hz) +
         // mid sizzle (bandpass ~900 Hz) + crackles via random tone
-        // bursts. Reads as a real flame instead of TV static.
+        // bursts.
         const body = ensureLoopSource(2);
         const bodyFilt = ctx.createBiquadFilter();
         bodyFilt.type = "bandpass"; bodyFilt.frequency.value = 230; bodyFilt.Q.value = 0.8;
@@ -492,7 +475,7 @@ export class SfxPlayer {
         const sizzG = ctx.createGain(); sizzG.gain.value = 0.35;
         sizz.connect(sizzFilt); sizzFilt.connect(sizzG); sizzG.connect(gain);
         nodes.push(sizzFilt, sizzG);
-        peak(0.055);
+        peak(0.18);
         // Random crackle pops every 0.6-1.6s for the "something's
         // cooking" feel.
         const ticker = window.setInterval(() => {
@@ -509,78 +492,86 @@ export class SfxPlayer {
         // player can tell which appliance is on by ear.
         const o1 = ctx.createOscillator(); o1.type = "sine"; o1.frequency.value = 440;
         const o2 = ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = 444;
-        const oG = ctx.createGain(); oG.gain.value = 0.18;
+        const oG = ctx.createGain(); oG.gain.value = 0.4;
         o1.connect(oG); o2.connect(oG); oG.connect(gain);
         o1.start(); o2.start();
         nodes.push(o1, o2, oG);
-        // Quiet 60 Hz buzz layered underneath for the electric feel.
+        // Quiet 120 Hz buzz layered underneath for the electric feel.
         const buzz = ctx.createOscillator();
         buzz.type = "square"; buzz.frequency.value = 120;
-        const buzzG = ctx.createGain(); buzzG.gain.value = 0.04;
+        const buzzG = ctx.createGain(); buzzG.gain.value = 0.10;
         buzz.connect(buzzG); buzzG.connect(gain); buzz.start();
         nodes.push(buzz, buzzG);
-        peak(0.06);
+        peak(0.18);
         gain.connect(bus);
         return { nodes, gain, variant: id };
       }
       case "microwave": {
-        // Steady fan + low electrical hum + the characteristic
-        // mid-frequency "magnetron whine" so it actually reads as a
-        // microwave on laptop speakers (the previous 120 Hz pair was
-        // too bass-heavy to render). Three sines at 120/124/600 Hz
-        // plus a wider lowpass noise bed.
-        const o1 = ctx.createOscillator(); o1.type = "sine"; o1.frequency.value = 120;
-        const o2 = ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = 124;
-        const whine = ctx.createOscillator(); whine.type = "sine"; whine.frequency.value = 600;
-        const whineG = ctx.createGain(); whineG.gain.value = 0.18;
+        // Continuous electric whine — magnetron + transformer hum + a
+        // soft mains buzz. No fan noise, no beat-frequency wobble; just
+        // a steady, plainly-electric sound. User feedback was "electric
+        // but continuous", and the previous noise-bandpass layers gave
+        // it more of a "kitchen extractor" feel.
+        // Strong mid-frequency magnetron whine (~700 Hz).
+        const whine = ctx.createOscillator(); whine.type = "sine"; whine.frequency.value = 700;
+        const whineG = ctx.createGain(); whineG.gain.value = 0.55;
         whine.connect(whineG); whineG.connect(gain); whine.start();
-        const noise = ensureLoopSource(2);
-        const noiseFilt = ctx.createBiquadFilter();
-        noiseFilt.type = "bandpass"; noiseFilt.frequency.value = 900; noiseFilt.Q.value = 0.7;
-        noise.connect(noiseFilt);
-        const noiseG = ctx.createGain(); noiseG.gain.value = 0.45;
-        noiseFilt.connect(noiseG);
-        o1.connect(gain); o2.connect(gain); noiseG.connect(gain);
-        o1.start(); o2.start();
-        nodes.push(o1, o2, whine, whineG, noiseFilt, noiseG);
-        peak(0.11);
+        // Transformer hum at 120 Hz (mains harmonic — what an electric
+        // appliance "feels like").
+        const hum = ctx.createOscillator(); hum.type = "sine"; hum.frequency.value = 120;
+        const humG = ctx.createGain(); humG.gain.value = 0.30;
+        hum.connect(humG); humG.connect(gain); hum.start();
+        // Subtle 60 Hz mains buzz.
+        const mains = ctx.createOscillator(); mains.type = "square"; mains.frequency.value = 60;
+        const mainsG = ctx.createGain(); mainsG.gain.value = 0.10;
+        mains.connect(mainsG); mainsG.connect(gain); mains.start();
+        nodes.push(whine, whineG, hum, humG, mains, mainsG);
+        peak(0.16);
         gain.connect(bus);
         return { nodes, gain, variant: id };
       }
       case "coffee": {
-        // High-pressure steam: bright filtered noise + intermittent
-        // gurgle bursts that bubble through the bed.
+        // Espresso machine: continuous steam jet + pump motor. No
+        // gurgle ticker — the random sine bursts from the previous
+        // version made it "sometimes loud, sometimes silent" and read
+        // as drips rather than coffee.
+        // Steam: bright high-frequency noise, wider band so it has
+        // body rather than a thin whistle.
         const noise = ensureLoopSource(2);
         const hi = ctx.createBiquadFilter();
-        hi.type = "bandpass"; hi.frequency.value = 3200; hi.Q.value = 1.0;
-        noise.connect(hi); hi.connect(gain);
-        nodes.push(hi);
-        peak(0.05);
-        const ticker = window.setInterval(() => {
-          // Occasional bubble.
-          this.tone({ freq: 320 + Math.random() * 200, type: "sine", attack: 0.005, decay: 0.10, gain: 0.20 });
-        }, 600);
+        hi.type = "bandpass"; hi.frequency.value = 3800; hi.Q.value = 0.6;
+        const steamG = ctx.createGain(); steamG.gain.value = 0.85;
+        noise.connect(hi); hi.connect(steamG); steamG.connect(gain);
+        nodes.push(hi, steamG);
+        // Pump motor: low-mid square buzz so the machine "feels" like
+        // it's running, not just hissing.
+        const pump = ctx.createOscillator(); pump.type = "square"; pump.frequency.value = 220;
+        const pumpG = ctx.createGain(); pumpG.gain.value = 0.18;
+        pump.connect(pumpG); pumpG.connect(gain); pump.start();
+        nodes.push(pump, pumpG);
+        peak(0.18);
         gain.connect(bus);
-        return { nodes, gain, variant: id, ticker };
+        return { nodes, gain, variant: id };
       }
       case "blender": {
         // Loud motor whine: layered sawtooth + harmonic + noise burst
-        // on top. Sounds like the motor is genuinely working hard.
+        // on top. Boosted significantly — the previous peak of 0.085
+        // was below audible threshold on most laptop speakers.
         const motor = ctx.createOscillator(); motor.type = "sawtooth"; motor.frequency.value = 280;
         const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2400;
-        const motorG = ctx.createGain(); motorG.gain.value = 0.6;
+        const motorG = ctx.createGain(); motorG.gain.value = 0.7;
         motor.connect(lp); lp.connect(motorG); motorG.connect(gain);
         motor.start();
         nodes.push(motor, lp, motorG);
         // Higher-pitched whine harmonic.
         const whine = ctx.createOscillator(); whine.type = "sawtooth"; whine.frequency.value = 840;
-        const whineG = ctx.createGain(); whineG.gain.value = 0.10;
+        const whineG = ctx.createGain(); whineG.gain.value = 0.18;
         whine.connect(whineG); whineG.connect(gain); whine.start();
         nodes.push(whine, whineG);
         // Noise on top — frothy / chopping character.
         const noise = ensureLoopSource(2);
         const noiseBp = ctx.createBiquadFilter(); noiseBp.type = "bandpass"; noiseBp.frequency.value = 1800; noiseBp.Q.value = 0.7;
-        const noiseG = ctx.createGain(); noiseG.gain.value = 0.25;
+        const noiseG = ctx.createGain(); noiseG.gain.value = 0.35;
         noise.connect(noiseBp); noiseBp.connect(noiseG); noiseG.connect(gain);
         nodes.push(noiseBp, noiseG);
         // LFO on motor frequency for "load changes" character.
@@ -588,30 +579,29 @@ export class SfxPlayer {
         const lfoG = ctx.createGain(); lfoG.gain.value = 18;
         lfo.connect(lfoG); lfoG.connect(motor.frequency); lfo.start();
         nodes.push(lfo, lfoG);
-        peak(0.085);
+        peak(0.20);
         gain.connect(bus);
         return { nodes, gain, variant: id };
       }
       case "toaster": {
-        // Heating-coil hiss + electrical hum. The hum alone was so
-        // quiet it read as silence — pair it with a high-frequency
-        // noise layer (filtered around 5 kHz) that sells the "coils
-        // are glowing" character, plus the occasional crackle for
-        // the bread-toasting feel.
+        // Heating-coil hiss + electrical hum + occasional crackle as
+        // the bread browns. Boosted from peak 0.07 → 0.18 so it's
+        // clearly audible on laptop speakers.
         const hum = ctx.createOscillator(); hum.type = "sine"; hum.frequency.value = 60;
-        const humG = ctx.createGain(); humG.gain.value = 0.5;
+        const humG = ctx.createGain(); humG.gain.value = 0.45;
         hum.connect(humG); humG.connect(gain); hum.start();
         const harm = ctx.createOscillator(); harm.type = "sine"; harm.frequency.value = 240;
-        const harmG = ctx.createGain(); harmG.gain.value = 0.25;
+        const harmG = ctx.createGain(); harmG.gain.value = 0.30;
         harm.connect(harmG); harmG.connect(gain); harm.start();
         nodes.push(hum, harm, humG, harmG);
-        // Coil-hiss layer — high-band noise.
+        // Coil-hiss layer — high-band noise around 5 kHz where the
+        // ear is most sensitive.
         const noise = ensureLoopSource(2);
         const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 5000; bp.Q.value = 1.2;
-        const noiseG = ctx.createGain(); noiseG.gain.value = 0.4;
+        const noiseG = ctx.createGain(); noiseG.gain.value = 0.5;
         noise.connect(bp); bp.connect(noiseG); noiseG.connect(gain);
         nodes.push(bp, noiseG);
-        peak(0.07);
+        peak(0.18);
         // Occasional pop / crackle while the bread browns.
         const ticker = window.setInterval(() => {
           if (Math.random() < 0.25) this.crackle();
@@ -638,69 +628,62 @@ export class SfxPlayer {
         return { nodes, gain, variant: id };
       }
       case "sink": {
-        // Running water: layered noise (mid + high bands) with a
-        // bigger gain so it actually reads as a tap running. Original
-        // was too quiet to register over the gas-stove sizzle.
+        // Running water: layered noise (mid + high bands). NO sine-
+        // tone drip ticker — the random tones read as a leaky faucet
+        // dripping into a different basin, which is what the user
+        // wanted gone.
         const noise = ensureLoopSource(2);
         const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 700;
         const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 5500;
-        const bodyG = ctx.createGain(); bodyG.gain.value = 0.85;
+        const bodyG = ctx.createGain(); bodyG.gain.value = 0.9;
         noise.connect(hp); hp.connect(lp); lp.connect(bodyG); bodyG.connect(gain);
         nodes.push(hp, lp, bodyG);
         // Splash layer — narrower bandpass around 2 kHz gives the
         // water-hitting-basin character distinct from the body.
         const splash = ensureLoopSource(2);
         const splashBp = ctx.createBiquadFilter(); splashBp.type = "bandpass"; splashBp.frequency.value = 2000; splashBp.Q.value = 0.6;
-        const splashG = ctx.createGain(); splashG.gain.value = 0.4;
+        const splashG = ctx.createGain(); splashG.gain.value = 0.5;
         splash.connect(splashBp); splashBp.connect(splashG); splashG.connect(gain);
         nodes.push(splashBp, splashG);
-        peak(0.11);
-        const ticker = window.setInterval(() => {
-          if (Math.random() < 0.5) this.tone({ freq: 700 + Math.random() * 600, type: "sine", attack: 0.002, decay: 0.06, gain: 0.25 });
-        }, 300);
+        peak(0.14);
         gain.connect(bus);
-        return { nodes, gain, variant: id, ticker };
+        return { nodes, gain, variant: id };
       }
       case "bathtub": {
-        // Slower, gentler water than the sink — boosted gain so it's
-        // clearly audible. Fills a wider band than before with a louder
-        // body, plus the bubble ticks come faster.
+        // Slower, gentler water than the sink. NO sine-tone bubble
+        // ticker — same reasoning as sink, the random pops read as
+        // drips rather than tub-filling water.
         const noise = ensureLoopSource(2);
         const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1400; bp.Q.value = 0.5;
-        const bodyG = ctx.createGain(); bodyG.gain.value = 0.85;
+        const bodyG = ctx.createGain(); bodyG.gain.value = 0.95;
         noise.connect(bp); bp.connect(bodyG); bodyG.connect(gain);
         nodes.push(bp, bodyG);
-        peak(0.13);
-        const ticker = window.setInterval(() => {
-          if (Math.random() < 0.6) this.tone({ freq: 300 + Math.random() * 200, type: "sine", attack: 0.005, decay: 0.18, gain: 0.32 });
-        }, 600);
+        peak(0.16);
         gain.connect(bus);
-        return { nodes, gain, variant: id, ticker };
+        return { nodes, gain, variant: id };
       }
       case "dishwasher": {
-        // Continuous wash. Old version was an 80 Hz sine + 1.2 kHz
-        // water band — most laptop speakers can barely render 80 Hz,
-        // so the sound just disappeared. New chain shifts the motor up
-        // into reproducible territory and adds a louder water bed.
-        // Motor: 160 Hz sine + 320 Hz harmonic for the mid-range bite.
+        // Continuous wash. Motor + water + slow LFO surge for the
+        // "spray arm turning" feel. Bumped to peak 0.18 — was still
+        // too quiet at 0.12 to hear over a typical laptop fan.
         const motor = ctx.createOscillator(); motor.type = "sine"; motor.frequency.value = 160;
-        const motorG = ctx.createGain(); motorG.gain.value = 0.35;
+        const motorG = ctx.createGain(); motorG.gain.value = 0.45;
         motor.connect(motorG); motorG.connect(gain); motor.start();
         const harm = ctx.createOscillator(); harm.type = "sine"; harm.frequency.value = 320;
-        const harmG = ctx.createGain(); harmG.gain.value = 0.18;
+        const harmG = ctx.createGain(); harmG.gain.value = 0.25;
         harm.connect(harmG); harmG.connect(gain); harm.start();
         nodes.push(motor, motorG, harm, harmG);
         // Water: louder noise body across a wider band.
         const water = ensureLoopSource(2);
         const wbp = ctx.createBiquadFilter(); wbp.type = "bandpass"; wbp.frequency.value = 1500; wbp.Q.value = 0.5;
-        const waterG = ctx.createGain(); waterG.gain.value = 0.7;
+        const waterG = ctx.createGain(); waterG.gain.value = 0.85;
         water.connect(wbp); wbp.connect(waterG); waterG.connect(gain);
         nodes.push(wbp, waterG);
-        peak(0.12);
+        peak(0.18);
         // Rhythmic surge — LFO on the motor gain for the "spray arm
         // turning" feel.
         const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 0.4;
-        const lfoG = ctx.createGain(); lfoG.gain.value = 0.12;
+        const lfoG = ctx.createGain(); lfoG.gain.value = 0.15;
         lfo.connect(lfoG); lfoG.connect(motorG.gain); lfo.start();
         nodes.push(lfo, lfoG);
         gain.connect(bus);
