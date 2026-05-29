@@ -1463,6 +1463,21 @@ export class GuestSpawner {
       if (bathroom.sinkCount > 0) toiletDelta += 0.05;
     }
     base = clamp(base + toiletDelta, 1, 5);
+    // Smoke penalty: a placed stove without a Range Hood above it
+    // smokes up the dining room. The player needs one hood per stove
+    // (matches real-life fire code, and keeps the math obvious). The
+    // total penalty is capped at -0.5 stars so a player with a 6-stove
+    // line and no hoods doesn't get rated to oblivion in one visit —
+    // they'll still notice fast and build one.
+    if (this.registry) {
+      const stoveCount = this.registry.countById("stove") + this.registry.countById("stove-electric");
+      const hoodCount = this.registry.countById("kitchen-hood") + this.registry.countById("kitchen-hood-l");
+      const unhoodedStoves = Math.max(0, stoveCount - hoodCount);
+      if (unhoodedStoves > 0) {
+        const smokeDelta = Math.min(0.5, unhoodedStoves * 0.1);
+        base = clamp(base - smokeDelta, 1, 5);
+      }
+    }
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
     // Each course they ate becomes a dirty dish in the wash queue.
