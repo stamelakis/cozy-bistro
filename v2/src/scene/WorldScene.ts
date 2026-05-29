@@ -919,42 +919,13 @@ export class WorldScene {
 
   private addBuilding(): void {
     // === Exterior ground + props ===
+    // addGrassyExterior() owns the lawn, pavement, road, lane lines,
+    // and curb. The legacy pavement/road/curb that used to live inline
+    // here was a STALE COPY left over from an old refactor — it kept
+    // rendering at the old z=7.5 alongside the new geometry, so every
+    // attempt to move the sidewalk further from the building was
+    // masked by the duplicate still sitting on the original spot.
     this.addGrassyExterior();
-    // Pavement strip in front of the door (z=5 to z=10).
-    const pavement = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 5),
-      new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
-    );
-    pavement.rotation.x = -Math.PI / 2;
-    pavement.position.set(0, 0, 7.5);
-    pavement.receiveShadow = true;
-    this.threeScene.add(pavement);
-    // Road beyond the pavement (z=10 to z=16).
-    const road = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 6),
-      new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
-    );
-    road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, 13);
-    road.receiveShadow = true;
-    this.threeScene.add(road);
-    // Painted lane lines down the middle of the road.
-    const laneMat = new THREE.MeshStandardMaterial({ color: 0xe6e0c4, roughness: 0.85, emissive: 0xe6e0c4, emissiveIntensity: 0.05 });
-    for (let x = -14; x <= 14; x += 4) {
-      const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
-      dash.rotation.x = -Math.PI / 2;
-      dash.position.set(x, 0.005, 13);
-      this.threeScene.add(dash);
-    }
-    // Curb between pavement + road.
-    const curb = new THREE.Mesh(
-      new THREE.BoxGeometry(30, 0.12, 0.18),
-      new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
-    );
-    curb.position.set(0, 0.06, 10);
-    curb.castShadow = true;
-    curb.receiveShadow = true;
-    this.threeScene.add(curb);
 
     // === Interior floor ===
     // Default starter colors are intentionally bare white — the warm
