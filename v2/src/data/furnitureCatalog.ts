@@ -676,12 +676,18 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
     tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf" },
+  // Corner cabinets are FULL-HEIGHT base units (counter line), not
+  // upper wall-shelf cabinets — they fit at the corner of a counter
+  // run on the floor. Surface slot on top so the player can put a
+  // toaster / blender / coffee machine on them like a regular counter.
   { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120, style: 1,
-    tier: 2, stockCapacity: 2, dishCapacity: 8, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 2, dishCapacity: 8,
+    surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerRound.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 150, style: 2,
-    tier: 2, stockCapacity: 2, dishCapacity: 8, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 2, dishCapacity: 8,
+    surfaceSlots: [{ dx: 0, dz: 0 }] },
 
   // === Entertainment / TV / electronics. ===
   { id: "tv-modern",      name: "Modern TV",       category: "decoration",
