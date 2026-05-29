@@ -1183,8 +1183,22 @@ export class BuildMenu {
     // blocker scan.
     if (!def.flat) {
       const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
+      const floor = this.currentFloor();
       for (const cell of previewCells) {
-        if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer, this.currentFloor())) {
+        if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer, floor)) {
+          // Diagnostic: when the block fires on an upper floor, dump the
+          // colliding item so the player + bug reports can see whether
+          // it's an upper-floor item or a leaked ground one. Stripped
+          // back to a single console.warn for now; remove once stable.
+          if (floor > 0) {
+            const all = this.registry.snapshotItems();
+            const culprits = all.filter((it) =>
+              Math.abs(it.x - cell.x) <= 0.6 && Math.abs(it.z - cell.z) <= 0.6
+            );
+            console.warn(`[Build] BLOCKED at cell (${cell.x},${cell.z}) on floor ${floor}. ` +
+              `Cells:`, previewCells.map((c) => `(${c.x},${c.z})`).join(", "),
+              `Nearby items:`, culprits.map((c) => `${c.defId}@floor${c.floor}`).join(", "));
+          }
           return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
         }
       }
