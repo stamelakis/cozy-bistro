@@ -20,16 +20,60 @@ const AUDIO_LOOPS: { id: string; label: string }[] = [
   { id: "dishwasher",     label: "🧽 Dishwasher"     },
 ];
 
-const AUDIO_ONESHOTS: { id: string; label: string }[] = [
-  { id: "toiletFlush", label: "🚽 Toilet flush" },
-  { id: "ding",        label: "🔔 Ding"         },
-  { id: "chime",       label: "✨ Chime"         },
-  { id: "chaching",    label: "💰 Cha-ching"    },
-  { id: "gong",        label: "🪘 Gong"         },
-  { id: "alert",       label: "⚠️ Alert"         },
-  { id: "thud",        label: "👎 Thud"         },
-  { id: "drip",        label: "💧 Drip"         },
+/** Approximate audible duration of each one-shot in milliseconds —
+ * used to animate a progress-fill across the button while the sound
+ * plays. Estimated from SfxPlayer's envelope math (attack + decay +
+ * any setTimeout-scheduled tail). Slight over-estimates are better
+ * than under: a bar that hits 100% before the last gurgle is harder
+ * to read than one that lingers a beat. */
+const AUDIO_ONESHOTS: { id: string; label: string; durationMs: number }[] = [
+  { id: "toiletFlush", label: "🚽 Toilet flush", durationMs: 1500 },
+  { id: "ding",        label: "🔔 Ding",         durationMs: 240  },
+  { id: "chime",       label: "✨ Chime",         durationMs: 320  },
+  { id: "chaching",    label: "💰 Cha-ching",    durationMs: 280  },
+  { id: "gong",        label: "🪘 Gong",         durationMs: 1450 },
+  { id: "alert",       label: "⚠️ Alert",         durationMs: 380  },
+  { id: "thud",        label: "👎 Thud",         durationMs: 240  },
+  { id: "drip",        label: "💧 Drip",         durationMs: 140  },
 ];
+
+/** Inject the CSS keyframes for the loop pulse + ensure they only
+ * appear once even if multiple AdminModal instances are constructed. */
+const AUDIO_TEST_STYLE_ID = "admin-audio-test-styles";
+function ensureAudioTestStyles(): void {
+  if (document.getElementById(AUDIO_TEST_STYLE_ID)) return;
+  const s = document.createElement("style");
+  s.id = AUDIO_TEST_STYLE_ID;
+  // playing-shimmer is the loop indicator — a soft green band that
+  // sweeps left-to-right across the button continuously while the
+  // loop is active. progress-fill-bar is just a sliver element we
+  // animate via inline style; no keyframes needed for it.
+  s.textContent = `
+    @keyframes admin-audio-shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .admin-audio-loop-active {
+      background: rgba(120, 200, 120, 0.30) !important;
+      border-color: rgba(120, 200, 120, 0.75) !important;
+      position: relative;
+      overflow: hidden;
+    }
+    .admin-audio-loop-active::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 50%;
+      background: linear-gradient(90deg,
+        rgba(255, 255, 255, 0)   0%,
+        rgba(255, 255, 255, 0.18) 50%,
+        rgba(255, 255, 255, 0)   100%);
+      animation: admin-audio-shimmer 1.6s linear infinite;
+      pointer-events: none;
+    }
+  `;
+  document.head.appendChild(s);
+}
 
 /**
  * Dev-mode panel — tuning sliders for live balance changes plus a
@@ -98,6 +142,9 @@ export class AdminModal {
   constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer) {
     this.game = game;
     this.sfx = sfx;
+    // Audio-test CSS animations (shimmer / progress bar) are static —
+    // one stylesheet shared across all AdminModal lifetimes.
+    ensureAudioTestStyles();
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
@@ -379,30 +426,85 @@ export class AdminModal {
       display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
     } as Partial<CSSStyleDeclaration>);
     for (const o of AUDIO_ONESHOTS) {
-      oneshotGrid.appendChild(this.actionButton(o.label, "neutral", () => {
+      const btn = this.actionButton(o.label, "neutral", () => {
         // Hand off to the matching method on the SfxPlayer. Cast to
         // any here is contained: AUDIO_ONESHOTS lists only valid
         // method ids and the call shape is identical for each.
         const fn = (this.sfx as unknown as Record<string, () => void>)[o.id];
         if (typeof fn === "function") fn.call(this.sfx);
-      }));
+        // Visual play-time bar so the dev can see "yes, the click
+        // landed and a sound just fired" without relying on speaker
+        // output (which can be muted, low-volume, or — as the
+        // suspended-AudioContext bug showed — silent for a wholly
+        // different reason).
+        this.runOneShotProgress(btn, o.durationMs);
+      });
+      oneshotGrid.appendChild(btn);
     }
     section.appendChild(oneshotGrid);
     return section;
   }
 
   /** Recolor a loop test button so the dev can see active loops at
-   * a glance. Green = currently playing. */
+   * a glance. Adds an animated shimmer when playing so it's obvious
+   * which loop is producing sound (the previous flat-tint version
+   * looked the same as a regular hover state). */
   private refreshAudioLoopBtn(id: string, active: boolean): void {
     const btn = this.audioLoopBtns.get(id);
     if (!btn) return;
     if (active) {
-      btn.style.background = "rgba(120, 200, 120, 0.32)";
-      btn.style.border = "1px solid rgba(120, 200, 120, 0.65)";
+      btn.classList.add("admin-audio-loop-active");
     } else {
+      btn.classList.remove("admin-audio-loop-active");
       btn.style.background = "rgba(255, 245, 220, 0.10)";
       btn.style.border = "1px solid rgba(255, 245, 220, 0.25)";
     }
+  }
+
+  /** Render a left-to-right progress bar inside the given one-shot
+   * button that fills over `durationMs` and then disappears. Gives
+   * the dev visual confirmation that "yes, this click landed and the
+   * sound is currently playing", even when audio is muted / the
+   * speakers are off / etc. */
+  private runOneShotProgress(btn: HTMLButtonElement, durationMs: number): void {
+    // Mark the button so a rapid double-click doesn't spawn two
+    // overlapping bars (the second would race the first to width:100%).
+    const existing = btn.querySelector(".admin-audio-progress");
+    if (existing) existing.remove();
+    btn.style.position = "relative";
+    btn.style.overflow = "hidden";
+    // actionButton sets the label via textContent — a raw text node.
+    // Wrap it in a relatively-positioned span the first time so the
+    // animated bar (z-index 0) sits BEHIND the text instead of over
+    // the top of it.
+    const rawText = Array.from(btn.childNodes).find((n) => n.nodeType === Node.TEXT_NODE) as Text | undefined;
+    if (rawText && rawText.nodeValue) {
+      const span = document.createElement("span");
+      span.textContent = rawText.nodeValue;
+      Object.assign(span.style, { position: "relative", zIndex: "1" } as Partial<CSSStyleDeclaration>);
+      btn.replaceChild(span, rawText);
+    }
+    const bar = document.createElement("div");
+    bar.className = "admin-audio-progress";
+    Object.assign(bar.style, {
+      position: "absolute",
+      left: "0",
+      top: "0",
+      bottom: "0",
+      width: "0%",
+      background: "rgba(120, 200, 120, 0.30)",
+      transition: `width ${durationMs}ms linear`,
+      pointerEvents: "none",
+      zIndex: "0",
+    } as Partial<CSSStyleDeclaration>);
+    btn.appendChild(bar);
+    // Two RAFs guarantee the browser commits the initial width:0%
+    // before flipping to 100% — single RAF can collapse the transition
+    // and the bar would just snap.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      bar.style.width = "100%";
+    }));
+    window.setTimeout(() => { bar.remove(); }, durationMs + 100);
   }
 
   private buildQuickActionsSection(): HTMLElement {

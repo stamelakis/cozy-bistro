@@ -337,7 +337,16 @@ export class SfxPlayer {
   // === Internals =======================================================
 
   private ensure(): AudioContext | null {
-    if (this.ctx) return this.ctx;
+    if (this.ctx) {
+      // Already created — but browsers can re-suspend an AudioContext
+      // (tab background, autoplay policy, etc.). resume() is safe to
+      // call when the state is already "running"; it just no-ops.
+      // Without this, sounds queued into a suspended context play
+      // silently and the user reports "sometimes I hear it, sometimes
+      // not".
+      if (this.ctx.state === "suspended") this.ctx.resume().catch(() => { /* */ });
+      return this.ctx;
+    }
     try {
       const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (!AC) return null;
@@ -348,10 +357,24 @@ export class SfxPlayer {
       this.musicBus = this.ctx.createGain();
       this.musicBus.gain.value = 0.4;  // music is mixed at its own level
       this.musicBus.connect(this.ctx.destination);
+      // New contexts are typically created in suspended state until a
+      // user gesture proves consent. ensure() is always called from
+      // inside a click / keypress handler (gameplay sounds, admin test
+      // buttons), so the resume() call has gesture coverage.
+      if (this.ctx.state === "suspended") this.ctx.resume().catch(() => { /* */ });
       return this.ctx;
     } catch {
       return null;
     }
+  }
+
+  /** Force-resume the AudioContext. Exposed so the Engine can prime
+   * the SFX pipe on first user gesture (matches the music auto-start
+   * hook) — keeps the very first kitchen sizzle from being silent
+   * because the context was still suspended when its loop tried to
+   * start. */
+  resumeContext(): void {
+    this.ensure();
   }
 
   private noiseBuffer(seconds: number): AudioBuffer {

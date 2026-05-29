@@ -212,6 +212,10 @@ export class Engine {
     // it muted from a previous session). The listeners are { once:
     // true } so they self-clean after firing.
     const kickAudio = (): void => {
+      // Wake the Web Audio context too — without this, the FIRST few
+      // sounds (kitchen sizzle, ding, etc.) play into a suspended
+      // context and the player gets random silence on early actions.
+      this.sfx.resumeContext();
       if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
     };
     window.addEventListener("pointerdown", kickAudio, { once: true });
