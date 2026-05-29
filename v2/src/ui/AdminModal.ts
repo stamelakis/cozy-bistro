@@ -401,7 +401,7 @@ export class AdminModal {
     // Stop-all row — kill every loop the panel started in one click.
     const stopAll = this.actionButton("■ Stop all loops", "danger", () => {
       for (const id of Array.from(this.audioTestActive)) {
-        this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+        this.sfx.setLoopTestActive(id as Parameters<SfxPlayer["setLoopTestActive"]>[0], false);
         this.refreshAudioLoopBtn(id, false);
       }
       this.audioTestActive.clear();
@@ -466,15 +466,19 @@ export class AdminModal {
     const playBtn = this.miniIconButton("▶", "good", () => {
       // Force a fresh start: stop any in-flight loop (engine-driven or
       // previous test) before starting so the dev always hears the
-      // sound fade in from zero.
-      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      // sound fade in from zero. setLoopTestActive takes ownership of
+      // the id so the engine's per-frame setLoopActive(id, false) call
+      // (fires every Engine.update tick when no chef is cooking) can't
+      // turn it back off the next frame — which was why most loops
+      // played silently from the test panel before.
+      this.sfx.setLoopTestActive(id as Parameters<SfxPlayer["setLoopTestActive"]>[0], false);
       this.audioTestActive.add(id);
       // Small delay to let the 240 ms stop fade complete before the
       // restart — otherwise the new fade-in races the old fade-out and
       // the dev hears nothing for ~half a second.
       window.setTimeout(() => {
         if (!this.audioTestActive.has(id)) return;
-        this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], true);
+        this.sfx.setLoopTestActive(id as Parameters<SfxPlayer["setLoopTestActive"]>[0], true);
         this.refreshAudioLoopBtn(id, true);
       }, 260);
       // Paint active immediately so the dev sees the click landed.
@@ -483,7 +487,7 @@ export class AdminModal {
     row.appendChild(playBtn);
     const stopBtn = this.miniIconButton("■", "danger", () => {
       this.audioTestActive.delete(id);
-      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      this.sfx.setLoopTestActive(id as Parameters<SfxPlayer["setLoopTestActive"]>[0], false);
       this.refreshAudioLoopBtn(id, false);
     });
     row.appendChild(stopBtn);
@@ -794,9 +798,11 @@ export class AdminModal {
   }
   hide(): void {
     // Stop every audio-test loop the dev started — otherwise a forgotten
-    // "blender" toggle keeps running invisibly after the modal closes.
+    // "blender" toggle keeps running invisibly after the modal closes,
+    // AND we have to release the test lock or the engine can't drive
+    // that loop again until the page reloads.
     for (const id of Array.from(this.audioTestActive)) {
-      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      this.sfx.setLoopTestActive(id as Parameters<SfxPlayer["setLoopTestActive"]>[0], false);
       this.refreshAudioLoopBtn(id, false);
     }
     this.audioTestActive.clear();

@@ -70,6 +70,12 @@ export class SfxPlayer {
   /** Active named loops keyed by LoopId. setLoopActive flips them on
    * and off independently — multiple appliances can run at once. */
   private loops = new Map<LoopId, LoopHandle>();
+  /** Loop ids the dev admin panel is currently force-driving. The
+   * engine's per-frame setLoopActive(...) calls are ignored for any id
+   * in this set, so a test-panel "▶ Play" survives the engine's
+   * immediate "no chef is cooking → stop this loop" override on the
+   * very next frame. */
+  private testLocks = new Set<LoopId>();
   /** Streaming MP3 tracks for the daytime + nighttime restaurant
    * ambience. Files live in `public/audio/{daytime,nighttime}.mp3` and
    * Vite ships them as static assets under BASE_URL. Failed loads are
@@ -245,14 +251,31 @@ export class SfxPlayer {
   // === Loop control (called every Engine tick) =========================
 
   /** Enable / disable a named appliance loop. Idempotent — calling
-   * with the same value twice has no effect. */
+   * with the same value twice has no effect. Calls from the engine's
+   * per-frame update are ignored for any id currently locked by the
+   * test panel; see setLoopTestActive. */
   setLoopActive(id: LoopId, on: boolean): void {
+    if (this.testLocks.has(id)) return;
     if (on) this.startLoop(id);
     else this.stopLoop(id);
   }
 
+  /** Test-panel control. Like setLoopActive but takes ownership of the
+   * loop until explicitly cleared, blocking the engine from stopping
+   * it. Pass on=false to release the lock + stop. */
+  setLoopTestActive(id: LoopId, on: boolean): void {
+    if (on) {
+      this.testLocks.add(id);
+      this.startLoop(id);
+    } else {
+      this.testLocks.delete(id);
+      this.stopLoop(id);
+    }
+  }
+
   /** Stop every active loop — used on global mute. */
   stopAllLoops(): void {
+    this.testLocks.clear();
     for (const id of Array.from(this.loops.keys())) this.stopLoop(id);
   }
 
