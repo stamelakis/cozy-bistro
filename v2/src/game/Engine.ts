@@ -174,6 +174,15 @@ export class Engine {
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
+      // Pull live seat-availability off the spawner for the HUD's
+      // SEATS card. Optional because the spawner is built after the
+      // staff GLBs finish loading — getSpawnerStats may not exist for
+      // the first few frames.
+      getSeatStats: () => {
+        const stats = this.spawner?.getSpawnerStats();
+        if (!stats) return undefined;
+        return { avail: stats.seatsAvail, total: stats.seatsTotal };
+      },
     });
     this.sidebar.addSeparator();
     this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);

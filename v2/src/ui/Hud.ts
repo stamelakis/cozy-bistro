@@ -34,6 +34,10 @@ export interface HudActions {
   resetSave: () => void;
   isMuted: () => boolean;
   toggleMute: () => boolean;
+  /** Functional seat counts surfaced in the HUD's SEATS card.
+   * Optional because the spawner may not exist for the first few
+   * frames; HUD shows "—" when this returns undefined. */
+  getSeatStats?: () => { avail: number; total: number } | undefined;
 }
 
 /** A modal-trigger icon for the icon row. */
@@ -140,10 +144,21 @@ export class Hud {
         tint: "rgba(220, 180, 130, 0.14)", accent: "#e8c89a",
         tooltip: "Real seconds left in the in-game day. When it hits 0:00 the day ends, " +
                  "rent and wages are deducted, and a new day starts." },
+      // Customers in vs seats available — paired so the player sees
+      // "we have 8 IN and 4 SEATS left = filling up" at a glance.
       { key: "guests", icon: "👥", label: "IN",
         tint: "rgba(220, 150, 200, 0.14)", accent: "#e8b5d4",
         tooltip: "Customers currently inside the restaurant (waiting, seated, or eating). " +
-                 "Watch this for crowding — high in-count + slow turnover = lost orders." },
+                 "Watch this against SEATS — if IN approaches SEATS, you're filling up " +
+                 "and walk-ins will queue / leave." },
+      { key: "seats", icon: "🪑", label: "SEATS",
+        tint: "rgba(160, 200, 200, 0.14)", accent: "#a8d4cc",
+        tooltip: "Functional seats available right now / total functional seats. " +
+                 "A seat is FUNCTIONAL when a chair is parked at one of a table's " +
+                 "designated seat slots — yellow seat-slot markers show where chairs " +
+                 "need to go. Add tables + chairs to grow this number." },
+      // Daily outcomes — served vs lost, the two halves of the day's
+      // customer count.
       { key: "served", icon: "✓", label: "SERVED",
         tint: "rgba(120, 200, 120, 0.14)", accent: "#a8e2a8",
         tooltip: "Customers served today. Each served customer paid their bill and " +
@@ -152,16 +167,30 @@ export class Hud {
         tint: "rgba(220, 100, 100, 0.14)", accent: "#ff9a9a",
         tooltip: "Customers who left without being served today — usually because the " +
                  "wait was too long. Each lost customer dings your average rating." },
-      { key: "dishes", icon: "🍽", label: "DISHES",
+      // Dish state — dirty count + total storage cap so the player can
+      // see how much dishware they have AND how much is piled up.
+      { key: "dishes", icon: "🍽", label: "DIRTY DISHES",
         tint: "rgba(220, 170, 100, 0.14)", accent: "#e8b878",
-        tooltip: "Dirty dishes piling up. Waiters can't serve fresh food when the dish " +
-                 "stock runs out. Build sinks / dishwashers to wash faster; turns red " +
-                 "when the pile is overwhelming the kitchen." },
+        tooltip: "Dirty plates + glasses piling up on tables. Waiters can't serve " +
+                 "fresh food when the clean stock runs out. Build sinks / dishwashers " +
+                 "to wash faster; turns red when the pile is overwhelming the kitchen." },
+      { key: "storage", icon: "📦", label: "MAX STORAGE",
+        tint: "rgba(200, 180, 130, 0.14)", accent: "#e0c898",
+        tooltip: "Plates + glasses you currently own / your storage cap. Cap grows " +
+                 "from base 48 + the dishCapacity bonus on every cabinet / counter / " +
+                 "bar you place. Buy more dishware in the Pantry → Dishware section." },
+      // Daily expenses — rent + wages paired so the player can read
+      // their fixed-cost burden side by side.
       { key: "rent", icon: "🏠", label: "RENT/DAY",
         tint: "rgba(180, 180, 200, 0.14)", accent: "#c8c8e0",
         tooltip: "Daily rent charged at day end. Grows with the size + tier of your " +
                  "restaurant. Track it against your daily revenue to know if you're " +
                  "profitable." },
+      { key: "wages", icon: "💵", label: "WAGES/MIN",
+        tint: "rgba(180, 200, 180, 0.14)", accent: "#bce0bc",
+        tooltip: "Total staff payroll per in-game minute, across every hired chef, " +
+                 "waiter, and errand helper. Charged continuously throughout the day; " +
+                 "compare to RENT to see your full fixed-cost burden." },
     ];
     for (const s of specs) {
       const card = document.createElement("div");
@@ -441,6 +470,31 @@ export class Hud {
     this.fields.dishes.textContent = `${dishes}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#e8b878";
     this.fields.rent.textContent = `$${rent}`;
+    // New: dish storage cap (owned / max). Owned is current count of
+    // plates + glasses across all tiers; max is the storage cap.
+    const owned = this.game.dishware.getTotalOwned();
+    const cap = this.game.dishware.getCapacity();
+    this.fields.storage.textContent = `${owned} / ${cap}`;
+    // Tint amber when storage is nearly full so the player notices
+    // before a buy hits the cap.
+    this.fields.storage.style.color = (cap > 0 && owned / cap >= 0.9) ? "#e8c89a" : "#e0c898";
+    // Total payroll per in-game minute = headcount × per-staff rate.
+    const headcount = this.game.staff.getTotalStaff();
+    const perStaff = this.game.admin.payrollPerStaffPerMinute;
+    const wagesPerMin = headcount * perStaff;
+    this.fields.wages.textContent = `$${wagesPerMin}`;
+    // Functional seats — available now / total currently provisioned.
+    // Spawner is optional on the very first frames so default to "—".
+    const seatStats = this.actions.getSeatStats?.();
+    if (seatStats) {
+      this.fields.seats.textContent = `${seatStats.avail} / ${seatStats.total}`;
+      // Red when nothing's free, amber when ≤20% free, otherwise neutral.
+      const ratio = seatStats.total > 0 ? seatStats.avail / seatStats.total : 0;
+      this.fields.seats.style.color = ratio === 0 ? "#ff9a9a"
+        : ratio < 0.2 ? "#e8c89a" : "#a8d4cc";
+    } else {
+      this.fields.seats.textContent = "—";
+    }
 
     const open = this.spawner.isOpen();
     if (this.openCloseBtn) {
