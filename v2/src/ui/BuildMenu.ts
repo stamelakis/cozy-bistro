@@ -5,7 +5,7 @@ import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
-import { fitFurniture, placementY, defHeight, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
+import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 import { attachTooltip } from "./tooltip";
 
 /** A single user action that can be undone. The BuildMenu records one of
@@ -1514,6 +1514,11 @@ export class BuildMenu {
       const yOverride = def.placement === "surface" ? planHostTopY : undefined;
       solid.position.set(placeX, yOverride ?? placementY(solid, def), placeZ);
       solid.rotation.y = rotY;
+      // Visual-only: slide narrow tile items so their back face hugs
+      // any wall their cell touches. Keeps the kitchen line + dining
+      // tables against the wall flush instead of leaving an uneven
+      // per-item gap.
+      snapToAdjacentWall(solid, def);
       this.scene.add(solid);
       const parent = (def.placement === "surface" && planHostUid && typeof planSlotIndex === "number")
         ? { parentUid: planHostUid, slotIndex: planSlotIndex }

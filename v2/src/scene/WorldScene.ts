@@ -4,7 +4,7 @@ import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
-import { fitFurniture } from "../assets/fitFurniture";
+import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 
 /** Plaque visual catalogs — each id is a small string the modal exposes
@@ -1785,6 +1785,9 @@ export class WorldScene {
         fitFurniture(model, def);
         model.position.set(p.x, model.position.y, p.z);
         if (p.rotY != null) model.rotation.y = p.rotY;
+        // Wall-hug pass — same one BuildMenu + FurnitureRegistry.restore
+        // use, so the demo placements match player + load behaviour.
+        snapToAdjacentWall(model, def);
         this.threeScene.add(model);
         this.demoPlacements.push({ defId: p.id, x: p.x, z: p.z, rotY: p.rotY ?? 0, model });
         // Group by tier so we can hide locked sections.

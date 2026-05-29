@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
-import { fitFurniture, placementY } from "../assets/fitFurniture";
+import { fitFurniture, placementY, snapToAdjacentWall } from "../assets/fitFurniture";
 
 /**
  * Tracks furniture the player has placed at runtime. Owns the model
@@ -893,6 +893,10 @@ export class FurnitureRegistry {
         // exists.
         model.position.set(p.x, placementY(model, def), p.z);
         model.rotation.y = p.rotY;
+        // Same wall-hug pass the BuildMenu place handler runs, so a
+        // save round-trip keeps the kitchen line flush against the
+        // wall instead of drifting back into "uneven gap" territory.
+        snapToAdjacentWall(model, def);
         this.scene.add(model);
         const item: PlacedFurnitureItem = { uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model };
         if (p.parentUid) item.parentUid = p.parentUid;

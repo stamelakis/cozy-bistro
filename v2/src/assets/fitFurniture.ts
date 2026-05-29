@@ -200,6 +200,62 @@ export const CEILING_Y = 3;
  * moves. */
 export const WINDOW_SILL_TOP = 0.9;
 
+/** Perimeter wall positions used by snapToAdjacentWall. The building's
+ * floor spans (-4.5, 5.5) on both axes and the walls sit on those
+ * edges. A tile is "wall-adjacent" when its half-tile reaches one of
+ * these planes. */
+const WALL_BOUNDS = { minX: -4.5, maxX: 5.5, minZ: -4.5, maxZ: 5.5 };
+
+/** Slide a tile-placed model toward any perimeter wall its cell
+ * touches so the model's back face sits flush against the wall plane.
+ * Without this, narrower meshes (sinks, cabinets, fridges with raw
+ * mesh depth < 1 m) leave an uneven gap to the wall that varies per
+ * item — visibly distracting along a kitchen run.
+ *
+ * The shift is VISUAL ONLY — the placement registry still tracks the
+ * tile centre, so occupancy checks, surface slots, and seat-slot
+ * resolution all stay aligned. The model itself just moves a few
+ * centimetres inside its tile.
+ *
+ * Skipped for placements that aren't supposed to fill the tile
+ * footprint (rugs, ceiling lamps, etc.) and for items whose footprint
+ * already extends to / past the wall in that direction (so we never
+ * push something OUT of its cell). */
+export function snapToAdjacentWall(model: THREE.Object3D, def: FurnitureDef): void {
+  // Only "natural floor" items snap. Wall / wall-shelf / ceiling /
+  // edge / surface have their own positioning logic; rugs are flat
+  // decor that doesn't care about wall alignment.
+  const placement = def.placement ?? "tile";
+  if (placement !== "tile") return;
+  if (def.flat) return;
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  if (!isFinite(box.min.x) || !isFinite(box.max.x)) return;
+  const cx = (box.min.x + box.max.x) / 2;
+  const cz = (box.min.z + box.max.z) / 2;
+  // Adjacency check: is the model's CENTRE within one tile of a wall?
+  // Using the centre (not the bbox edge) keeps the logic stable as
+  // narrow vs wide meshes pass through here. The 1.0 m threshold
+  // matches the tile size — only the row of tiles touching a wall
+  // qualifies.
+  const TILE = 1.0;
+  let dx = 0, dz = 0;
+  if (WALL_BOUNDS.maxX - cx <= TILE / 2 + 0.01 && box.max.x < WALL_BOUNDS.maxX) {
+    dx = WALL_BOUNDS.maxX - box.max.x;
+  } else if (cx - WALL_BOUNDS.minX <= TILE / 2 + 0.01 && box.min.x > WALL_BOUNDS.minX) {
+    dx = WALL_BOUNDS.minX - box.min.x;
+  }
+  if (WALL_BOUNDS.maxZ - cz <= TILE / 2 + 0.01 && box.max.z < WALL_BOUNDS.maxZ) {
+    dz = WALL_BOUNDS.maxZ - box.max.z;
+  } else if (cz - WALL_BOUNDS.minZ <= TILE / 2 + 0.01 && box.min.z > WALL_BOUNDS.minZ) {
+    dz = WALL_BOUNDS.minZ - box.min.z;
+  }
+  if (dx !== 0 || dz !== 0) {
+    model.position.x += dx;
+    model.position.z += dz;
+  }
+}
+
 /** Pick the world-space Y for a placed model based on its placement
  * kind. Shared by BuildMenu (place / preview), the undo handler, and
  * FurnitureRegistry.restore so a ceiling lamp lands at the same Y
