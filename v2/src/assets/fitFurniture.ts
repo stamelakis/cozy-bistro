@@ -42,7 +42,9 @@ const DEFAULT_HEIGHTS: Record<FurnitureDef["category"], number> = {
   chair: 0.95,        // chair-back to character chest
   stove: 0.92,        // appliance height
   wash: 0.92,         // sinks + dishwashers — same kitchen-counter line
+  appliance: 0.40,    // small tabletop kitchen tools (sit on counters)
   counter: 0.92,
+  storage: 0.92,      // fridges + cabinets — match the counter line
   decoration: 0.55,   // small props (crates, books, pillows)
   plant: 0.85,        // potted plant + foliage
   lamp: 1.55,         // floor lamps tall, table lamps shorter (override per-id)

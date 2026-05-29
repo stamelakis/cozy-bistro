@@ -43,7 +43,7 @@ export interface FurnitureDef {
   /** Human label for the build menu. */
   name: string;
   /** Game category (mirrors 2D categories). */
-  category: "table" | "chair" | "stove" | "wash" | "counter" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
+  category: "table" | "chair" | "stove" | "wash" | "appliance" | "counter" | "storage" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
   /** Relative path under v2/public — fed to ModelLoader.load(). */
   modelPath: string;
   /** Fill ratio used by fitFurniture as a multiplier on top of the
@@ -356,29 +356,29 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "proc:dishwasher", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 320 },
   { id: "dishwasher-pro", name: "Pro Dishwasher Line", category: "wash",
     modelPath: "proc:dishwasher-pro", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 540 },
-  { id: "microwave",      name: "Microwave",       category: "counter",
+  { id: "microwave",      name: "Microwave",       category: "appliance",
     modelPath: "assets/kenney/kitchenMicrowave.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80,
     placement: "surface", provides: "microwave" },
-  { id: "fridge",         name: "Fridge",          category: "counter",
+  { id: "fridge",         name: "Fridge",          category: "storage",
     modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 360,
     stockCapacity: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
   // Walk-in is a "room" — actually 2×2 tiles and stretched tall. Holds
   // about three regular fridges' worth of stock. Top is broad enough
   // for two surface items.
-  { id: "fridge-large",   name: "Walk-in Fridge",  category: "counter",
+  { id: "fridge-large",   name: "Walk-in Fridge",  category: "storage",
     modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 2, depth: 2 }, cost: 540,
     targetHeight: 2.2, stockCapacity: 6,
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90,
     surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
-  { id: "coffee-machine", name: "Coffee Machine",  category: "counter",
+  { id: "coffee-machine", name: "Coffee Machine",  category: "appliance",
     modelPath: "assets/kenney/kitchenCoffeeMachine.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140,
     placement: "surface", provides: "coffee" },
-  { id: "blender",        name: "Blender",         category: "counter",
+  { id: "blender",        name: "Blender",         category: "appliance",
     modelPath: "assets/kenney/kitchenBlender.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60,
     placement: "surface", provides: "blender" },
-  { id: "toaster",        name: "Toaster",         category: "counter",
+  { id: "toaster",        name: "Toaster",         category: "appliance",
     modelPath: "assets/kenney/toaster.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 35,
     placement: "surface", provides: "toaster" },
   { id: "kitchen-hood",   name: "Range Hood",      category: "decoration",
@@ -389,10 +389,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 220 },
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120 },
-  { id: "fridge-built-in", name: "Built-in Fridge", category: "counter",
+  { id: "fridge-built-in", name: "Built-in Fridge", category: "storage",
     modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 380,
     stockCapacity: 3 },
-  { id: "fridge-small",   name: "Mini Fridge",     category: "counter",
+  { id: "fridge-small",   name: "Mini Fridge",     category: "storage",
     modelPath: "assets/kenney/kitchenFridgeSmall.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180,
     stockCapacity: 1 },
   { id: "counter-drawer", name: "Drawer Counter",  category: "counter",
@@ -579,16 +579,19 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/loungeDesignSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 2400, comfort: 6, style: 6, ratingBonus: 0.10, seatingCapacity: 2,
     tier: 5, footprint: [[1, 1], [0, 1]], surface: "drink" },
 
-  // === More kitchen cabinets + corner pieces. ===
-  { id: "kitchen-upper",  name: "Upper Cabinet",   category: "counter",
+  // === More kitchen cabinets + corner pieces (storage). ===
+  // These are upper / corner cabinets — currently placed as floor items
+  // but conceptually "storage". Future Phase: convert to a wall-shelf
+  // placement that mounts above shorter counters.
+  { id: "kitchen-upper",  name: "Upper Cabinet",   category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 70, style: 1 },
-  { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "counter",
+  { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 110, style: 1 },
-  { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "counter",
+  { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1 },
-  { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "counter",
+  { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 95, style: 1 },
-  { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "counter",
+  { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerRound.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 110, style: 2 },
 
   // === Entertainment / TV / electronics. ===

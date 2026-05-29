@@ -27,15 +27,18 @@ const adaptedDefinitions = new Map<string, FurnitureDefinition>();
 
 for (const def of furnitureCatalog) {
   const defaults = CATEGORY_DEFAULTS[def.category] ?? {};
-  // Map "lamp" / "door" / "wash" to allowed legacy FurnitureCategory values
+  // Map newer categories to allowed legacy FurnitureCategory values
   // (the gameplay systems' type allows: table, chair, stove, counter,
-  // decoration, plant, wallDecoration, lighting, flooring). lamp -> lighting,
-  // door -> wallDecoration, wash -> counter (sinks/dishwashers read as
-  // kitchen counters to the legacy rating systems).
+  // decoration, plant, wallDecoration, lighting, flooring). The Phase-A
+  // wash, Phase-D appliance, and Phase-D storage categories all read
+  // as kitchen counters to the legacy rating systems; lamp -> lighting,
+  // door -> wallDecoration.
   const remappedCategory =
     def.category === "lamp" ? "lighting" :
     def.category === "door" ? "wallDecoration" :
     def.category === "wash" ? "counter" :
+    def.category === "appliance" ? "counter" :
+    def.category === "storage" ? "counter" :
     def.category;
   adaptedDefinitions.set(def.id, {
     id: def.id,

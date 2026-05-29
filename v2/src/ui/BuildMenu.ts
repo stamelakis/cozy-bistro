@@ -383,12 +383,13 @@ export class BuildMenu {
     if (!this.tierContentEl) return;
     this.tierContentEl.innerHTML = "";
     const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "wash", "counter", "wall", "door", "bathroom",
-      "decoration", "plant", "lamp",
+      "table", "chair", "stove", "wash", "appliance", "counter", "storage",
+      "wall", "door", "bathroom", "decoration", "plant", "lamp",
     ];
     const categoryLabels: Record<FurnitureDef["category"], string> = {
       table: "Tables", chair: "Chairs", stove: "Cooking", wash: "Dishwashing",
-      counter: "Counters", wall: "Walls & Partitions", door: "Doors & Windows",
+      appliance: "Appliances", counter: "Counters", storage: "Storage",
+      wall: "Walls & Partitions", door: "Doors & Windows",
       bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };
     // Track whether we've already auto-opened a section. The first
