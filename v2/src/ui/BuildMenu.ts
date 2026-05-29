@@ -1045,7 +1045,13 @@ export class BuildMenu {
       if (snap) {
         return {
           quality: "snap-perfect",
-          x: snap.x, z: snap.z, rotY: snap.rotY,
+          x: snap.x, z: snap.z,
+          // Surface items inherit the host's facing as their base
+          // orientation, plus whatever the player added by pressing R.
+          // Without the rotationY add the ghost snapped back to the
+          // host's facing on every pointer-move and the user couldn't
+          // turn appliances on top of counters.
+          rotY: snap.rotY + this.rotationY,
           hostUid: snap.hostUid,
           slotIndex: snap.slotIndex,
           hostTopY: snap.hostTopY,

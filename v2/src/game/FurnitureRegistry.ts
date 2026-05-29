@@ -31,6 +31,12 @@ export interface PlacedFurnitureItem {
    * array this item occupies. Reserves the slot against further placements
    * on the same host. */
   slotIndex?: number;
+  /** For surface-placed items: the rotation the user chose RELATIVE to
+   * the host's rotation. Stored separately so a host-move resync can
+   * preserve the player's R-key spins instead of snapping every child
+   * back to the host's facing. Effective world rotY is
+   * `host.rotY + localRotY`. */
+  localRotY?: number;
 }
 
 export interface PersistedPlacement {
@@ -43,6 +49,8 @@ export interface PersistedPlacement {
    * item is re-snapped to the host's current top after the host loads. */
   parentUid?: string;
   slotIndex?: number;
+  /** Surface items: see PlacedFurnitureItem.localRotY. */
+  localRotY?: number;
 }
 
 /** A resolved seat-slot from a placed table — world coords for chair and plate. */
@@ -66,6 +74,18 @@ export interface ResolvedSeatSlot {
 let nextUidCounter = 1;
 function makeUid(): string {
   return `fp-${Date.now().toString(36)}-${(nextUidCounter++).toString(36)}`;
+}
+
+/** Wrap an angle into (-π, π]. Used so a stored localRotY stays in a
+ * canonical range regardless of how many R-spins the player chained
+ * during placement. Keeps the addition in repositionSurfaceChildren
+ * predictable when the host's rotation also wraps. */
+function normaliseAngle(theta: number): number {
+  const TAU = Math.PI * 2;
+  let t = theta % TAU;
+  if (t > Math.PI) t -= TAU;
+  if (t <= -Math.PI) t += TAU;
+  return t;
 }
 
 export class FurnitureRegistry {
@@ -94,6 +114,15 @@ export class FurnitureRegistry {
     if (parent) {
       item.parentUid = parent.parentUid;
       item.slotIndex = parent.slotIndex;
+      // Capture the player's chosen rotation RELATIVE to the host's
+      // current rotation. repositionSurfaceChildren reads this so a
+      // toaster the player turned 90° with R stays at 90° even after
+      // the counter is later moved or rotated — without this the child
+      // got snapped back to the host's facing on every move.
+      const host = this.items.find((it) => it.uid === parent.parentUid);
+      if (host) {
+        item.localRotY = normaliseAngle(rotY - host.rotY);
+      }
     }
     this.items.push(item);
     return uid;
@@ -136,9 +165,13 @@ export class FurnitureRegistry {
       const wz = host.z - slot.dx * sin + slot.dz * cos;
       child.x = wx;
       child.z = wz;
-      child.rotY = host.rotY;
+      // Preserve any per-child rotation the player set with R during
+      // placement. Falls back to 0 (i.e. matches the host) for items
+      // placed before localRotY existed or registered without a parent
+      // rotation diff.
+      child.rotY = host.rotY + (child.localRotY ?? 0);
       child.model.position.set(wx, child.model.position.y, wz);
-      child.model.rotation.y = host.rotY;
+      child.model.rotation.y = child.rotY;
     }
   }
 
@@ -347,6 +380,10 @@ export class FurnitureRegistry {
       const p: PersistedPlacement = { uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY };
       if (it.parentUid) p.parentUid = it.parentUid;
       if (typeof it.slotIndex === "number") p.slotIndex = it.slotIndex;
+      // Persist the user-chosen surface rotation offset so a save+load
+      // round-trip doesn't reset a rotated toaster back to the
+      // counter's facing.
+      if (typeof it.localRotY === "number") p.localRotY = it.localRotY;
       return p;
     });
   }
@@ -855,6 +892,7 @@ export class FurnitureRegistry {
         const item: PlacedFurnitureItem = { uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model };
         if (p.parentUid) item.parentUid = p.parentUid;
         if (typeof p.slotIndex === "number") item.slotIndex = p.slotIndex;
+        if (typeof p.localRotY === "number") item.localRotY = p.localRotY;
         this.items.push(item);
       } catch (err) {
         console.warn(`Failed to restore placed furniture ${def.id}`, err);
