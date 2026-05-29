@@ -4,6 +4,7 @@ import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import { getIngredientCost } from "../data/ingredients";
 import { APPLIANCE_LABELS } from "../data/types";
 import type { ApplianceId, LuxuryTier, RecipeDefinition } from "../data/types";
+import { attachTooltip } from "./tooltip";
 
 /**
  * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
@@ -51,6 +52,14 @@ export class MenuPanel {
       title.textContent = this.collapsed ? "MENU ▾  (click to expand)" : "MENU ▴  (click to collapse)";
     };
     this.root.appendChild(title);
+    attachTooltip(title,
+      "MENU — the dishes your restaurant serves.\n" +
+      "Each tier (T1 → T5) holds a set of recipes. Tick a recipe to put it on the menu — customers " +
+      "order it, the chef cooks it from pantry ingredients, and you earn its sell price.\n" +
+      "Higher tiers unlock as your overall luxury tier rises (matched to the priciest furniture you own). " +
+      "Each recipe can be upgraded for higher profit + satisfaction; some require specific appliances " +
+      "(stove, microwave, coffee, blender, toaster). Recipes appear locked when an appliance is missing."
+    );
 
     this.body = document.createElement("div");
     Object.assign(this.body.style, { display: "none", marginTop: "8px" } as Partial<CSSStyleDeclaration>);

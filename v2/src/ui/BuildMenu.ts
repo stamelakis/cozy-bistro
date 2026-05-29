@@ -6,6 +6,7 @@ import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
+import { attachTooltip } from "./tooltip";
 
 /** A single user action that can be undone. The BuildMenu records one of
  * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
@@ -215,6 +216,13 @@ export class BuildMenu {
     title.onclick = () => this.toggleCollapsed();
     root.appendChild(title);
     this.titleEl = title;
+    attachTooltip(title,
+      "BUILD menu — place, move, and sell furniture.\n" +
+      "Pick a tier (T1 cheap basics → T5 luxury) and a category to see what's available. " +
+      "Click an item, then click a tile to place it. Press R to rotate, Esc to cancel.\n" +
+      "SELL refunds 50% of an item's cost; MOVE picks up an item to drop somewhere else; " +
+      "AUTO-ARRANGE snaps loose chairs to the nearest table seat. UNDO reverts the last 5 build actions."
+    );
 
     // Body holds the tier tabs + content + action buttons. Toggled by
     // the collapse flag.

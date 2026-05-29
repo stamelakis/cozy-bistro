@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import type { StaffRole } from "../systems/StaffSystem";
+import { attachTooltip } from "./tooltip";
 
 /**
  * Enlarged staff panel with per-role activity badges + payroll summary.
@@ -31,6 +32,14 @@ export class StaffPanel {
       marginBottom: "6px", textAlign: "center", opacity: "0.9",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(title);
+    attachTooltip(title,
+      "STAFF — the people running your restaurant.\n" +
+      "• Chef cooks orders at the stove. Each placed stove gets one chef; more chefs = more dishes/min.\n" +
+      "• Waiter takes orders and brings food. Faster service when you have more waiters per table.\n" +
+      "• Errand helper buys groceries when the pantry runs low (per the auto-shop list).\n" +
+      "Hire + Fire per role. Each role costs a per-minute wage paid from your cash (shown at the bottom). " +
+      "Train staff in the Upgrades modal to raise their effective tier."
+    );
 
     (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => this.addRow(role));
 

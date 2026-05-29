@@ -1,4 +1,5 @@
 import type { Game } from "../game/Game";
+import { attachTooltip } from "./tooltip";
 
 /** Minimal accessor the HUD needs — we go through a getter object so the
  * Engine can construct the HUD before the spawner exists (spawner is built
@@ -175,10 +176,28 @@ export class Hud {
       gap: "5px", marginTop: "6px",
     } as Partial<CSSStyleDeclaration>);
     const buttons: IconBtn[] = [
-      { icon: "⚡ Upgrades",   title: "Recipe upgrades",     click: this.actions.openUpgrades,    tint: "rgba(140, 200, 140, 0.22)" },
-      { icon: "🧺 Pantry",     title: "Pantry + auto-shop",  click: this.actions.openPantry,      tint: "rgba(220, 200, 120, 0.22)" },
-      { icon: "🎨 Decor",      title: "Interior theme",      click: this.actions.openDecor,       tint: "rgba(220, 150, 200, 0.22)" },
-      { icon: "📊 Trends",     title: "Daily trends",        click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
+      { icon: "⚡ Upgrades",   title:
+          "UPGRADES — pay coins + real time to boost things.\n" +
+          "Recipes: higher sell price + satisfaction per level. Staff: faster cook / service speed " +
+          "+ higher effective tier. One upgrade at a time per row — they run in real-time even with " +
+          "the game paused.",
+        click: this.actions.openUpgrades,    tint: "rgba(140, 200, 140, 0.22)" },
+      { icon: "🧺 Pantry",     title:
+          "PANTRY — your raw ingredient stockpile.\n" +
+          "Cooking a recipe consumes its ingredients. When a row falls below its stock target the " +
+          "errand helper goes shopping. Adjust the target with the +/- buttons; raise the max with " +
+          "fridges + storage furniture.",
+        click: this.actions.openPantry,      tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "🎨 Decor",      title:
+          "DECOR — interior theme & wall colour.\n" +
+          "Pick a colour palette for the floor / walls / lights. Theme bonuses tweak customer " +
+          "satisfaction and ambience; doesn't affect recipes.",
+        click: this.actions.openDecor,       tint: "rgba(220, 150, 200, 0.22)" },
+      { icon: "📊 Trends",     title:
+          "TRENDS — per-day revenue / customers / rating.\n" +
+          "See whether the last few days are trending up or down so you know whether your last " +
+          "build / upgrade actually helped.",
+        click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
     ];
     const row2 = document.createElement("div");
     Object.assign(row2.style, {
@@ -186,11 +205,31 @@ export class Hud {
       gap: "5px", marginTop: "5px",
     } as Partial<CSSStyleDeclaration>);
     const buttons2: IconBtn[] = [
-      { icon: "🏆 Awards",     title: "Achievements",        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.22)" },
-      { icon: "📓 Ledger",     title: "Transaction ledger",  click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.22)" },
-      { icon: "☁ Cloud",       title: "Cloud: leaderboards, friends, restaurants", click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
-      { icon: "💾 Slots",      title: "Save slots + cloud save", click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.22)" },
-      { icon: "? Help",        title: "How to play",         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.22)" },
+      { icon: "🏆 Awards",     title:
+          "AWARDS — long-term goals & milestones.\n" +
+          "Each award lists a target (e.g. \"Serve 100 customers\", \"Hit a 4.5★ rating\") and pays " +
+          "a one-shot cash reward when you cross it.",
+        click: this.actions.openAchievements, tint: "rgba(220, 200, 120, 0.22)" },
+      { icon: "📓 Ledger",     title:
+          "LEDGER — every transaction this session.\n" +
+          "Lists payments in (customer orders), payments out (rent, wages, ingredient runs, " +
+          "furniture purchases). Use it to figure out where your money is going.",
+        click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.22)" },
+      { icon: "☁ Cloud",       title:
+          "CLOUD — online features.\n" +
+          "Leaderboards (high scores), friends, public restaurants. Requires a cloud account " +
+          "(set up under Slots). Offline play continues to work normally if cloud is off.",
+        click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
+      { icon: "💾 Slots",      title:
+          "SLOTS — local save slots + cloud sync.\n" +
+          "Three local save slots; switch between them, name them, manually save / load. Same panel " +
+          "controls the optional cloud-save: push your local state up, or pull a cloud save down.",
+        click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.22)" },
+      { icon: "? Help",        title:
+          "HELP — how to play.\n" +
+          "Quick reference for the build menu, customer loop, staff roles, save system, and " +
+          "keyboard shortcuts.",
+        click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.22)" },
     ];
     const row3 = document.createElement("div");
     Object.assign(row3.style, {
@@ -198,13 +237,20 @@ export class Hud {
       marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
     const buttons3: IconBtn[] = [
-      { icon: "⚙ Dev tools",   title: "Dev tools (admin sliders / reset save / starter grant)",
+      { icon: "⚙ Dev tools",   title:
+          "DEV TOOLS — debugging shortcuts.\n" +
+          "Expands a small section under the icons with a $500 starter grant, the admin tuning " +
+          "sliders (money / tier / upgrades / etc.), and a reset-save button. For experimenting " +
+          "or recovering from a stuck state — not part of normal play.",
         click: () => this.toggleDev(),    tint: "rgba(180, 180, 180, 0.18)" },
     ];
     const mkBtn = (b: IconBtn, size: "big" | "med" | "small"): HTMLButtonElement => {
       const btn = document.createElement("button");
       btn.textContent = b.icon;
-      btn.title = b.title;
+      // Custom delayed tooltip instead of the native `title` attribute —
+      // matches the panel UI styling and gives the user a consistent
+      // ~1 s reveal across browsers.
+      attachTooltip(btn, b.title);
       const pad = size === "big" ? "8px 4px" : size === "med" ? "5px 3px" : "4px 2px";
       const fs = size === "big" ? "13px" : size === "med" ? "11px" : "10px";
       Object.assign(btn.style, {
