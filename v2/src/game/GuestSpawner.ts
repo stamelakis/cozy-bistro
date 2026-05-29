@@ -332,6 +332,20 @@ interface ActiveGuest {
    * "wait for a toilet" beat every tick, while leaving `willUseToilet`
    * untouched so finalizeVisit can still tell that they wanted to go. */
   toiletAttemptComplete?: boolean;
+  /** Pre-meal handwash flag. Distinct from willUseToilet — a wash-only
+   * guest goes straight to the bathroom sink (no toilet leg) before
+   * ordering. If no sink exists or every one is busy long enough to
+   * give up, finalizeVisit applies a "wanted to wash but couldn't"
+   * penalty. Rolled at spawn alongside willUseToilet, mutually
+   * exclusive (toilet users wash AFTER the toilet, no separate trip). */
+  willWashOnly?: boolean;
+  /** Patience clock for waiting for a free sink during a wash-only
+   * trip. Same shape as toiletWaitRemaining. */
+  washWaitRemaining?: number;
+  /** Latches once the wash-only attempt has resolved one way or the
+   * other (washed, or gave up waiting). Stops the seated block
+   * re-entering the wash beat. */
+  washAttemptComplete?: boolean;
   /** Pre-visit seat pose so they snap back to it after returning. */
   returnSeatPos?: THREE.Vector2;
 }
@@ -1103,12 +1117,27 @@ export class GuestSpawner {
         archetype,
         path: [],
         replanAccum: 0,
-        willUseToilet: Math.random() < archetype.wcUseChance,
+        willUseToilet: false,           // assigned just below
+        willWashOnly: false,             // assigned just below
         usedToilet: false,
         reservedDishTiers: [],
       };
+      // Split the archetype's bathroom-going tendency:
+      //   20% of it → actual toilet use (toilet + post-wash chain)
+      //   80% of it → pre-meal wash-only trip (sink straight away)
+      // The bathroom remains relevant for ~the same proportion of
+      // guests overall, but most of them are now just washing — the
+      // realistic "wash hands before eating" beat the user asked for.
+      // Toilet path takes priority because that already includes a
+      // handwash, so willWashOnly is only rolled when the toilet
+      // didn't fire.
+      const bathTendency = archetype.wcUseChance;
+      guest.willUseToilet = Math.random() < bathTendency * 0.2;
+      if (!guest.willUseToilet) {
+        guest.willWashOnly = Math.random() < bathTendency * 0.8;
+      }
       if (DEBUG_GUEST_LOGS) {
-        console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
+        console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} · willWashOnly=${guest.willWashOnly} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
       }
       this.planPath(guest);
       if (!available && waitingChair) {
@@ -1425,6 +1454,43 @@ export class GuestSpawner {
           // so finalizeVisit can apply the "wanted but couldn't" hit)
           // and let the rest of the seated block run.
           g.toiletAttemptComplete = true;
+        }
+        // Pre-meal handwash trip — separate from the toilet flow. Most
+        // guests now just walk straight to a bathroom sink before
+        // ordering. Same patience-and-give-up shape as the toilet
+        // branch above; finalizeVisit's penalty fires if they wanted
+        // to wash and there was no sink (or every one stayed busy).
+        if (g.willWashOnly && !g.washedHands && !g.washAttemptComplete) {
+          const sink = this.findFreeSink();
+          if (DEBUG_GUEST_LOGS && g.washWaitRemaining === undefined) {
+            const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
+            console.log(`[Guest ${g.id}] wash-only — sink search: ${sink ? `uid=${sink.uid}` : `null (${sinkCountTotal} sinks placed, ${this.reservedSinks.size} reserved)`}`);
+          }
+          if (sink) {
+            this.reservedSinks.add(sink.uid);
+            g.sinkUid = sink.uid;
+            g.sinkRotY = sink.rotY;
+            g.returnSeatPos = g.seatPos.clone();
+            g.target = sink.standPos.clone();
+            this.planPath(g);
+            g.character.action = "walk";
+            g.state = "walkingToSink";
+            g.stateClock = 0;
+            g.washWaitRemaining = undefined;
+            break;
+          }
+          // No free sink. Wait WC_PATIENCE_SECONDS, then give up so the
+          // order beat below can still fire; finalizeVisit will apply
+          // the "wanted to wash but couldn't" penalty.
+          if (g.washWaitRemaining === undefined) {
+            g.washWaitRemaining = WC_PATIENCE_SECONDS;
+          }
+          g.washWaitRemaining -= dt;
+          if (g.washWaitRemaining > 0) {
+            // Hold here — same as the toilet branch.
+            break;
+          }
+          g.washAttemptComplete = true;
         }
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
@@ -1934,6 +2000,24 @@ export class GuestSpawner {
         if (g.washedHands) delta += 0.15;
         else if (bathroom.sinkCount === 0) delta -= 0.25;
         toiletDelta = delta;
+      }
+    } else if (g.willWashOnly) {
+      // Pre-meal wash-only trip. The toilet doesn't enter into it, but
+      // sink availability matters a lot — diners EXPECT to be able to
+      // wash before eating.
+      if (bathroom.sinkCount === 0) {
+        // Wanted to wash and there was no sink at all — player didn't
+        // provide. Significant negative, same scale as the toilet
+        // "wanted but couldn't" case.
+        toiletDelta = -0.5;
+      } else if (!g.washedHands) {
+        // Sink existed but every one was busy long enough they gave
+        // up. Less the venue's fault — moderate negative.
+        toiletDelta = -0.2;
+      } else {
+        // Actually washed before eating. Quality of the bathroom adds
+        // a small bump on top of the base "clean place" credit.
+        toiletDelta = 0.15 + qNorm * 0.2;
       }
     } else if (bathroom.toiletCount > 0) {
       // Didn't visit, but a tidy bathroom is still part of the
