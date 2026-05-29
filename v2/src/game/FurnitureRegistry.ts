@@ -547,15 +547,17 @@ export class FurnitureRegistry {
     return { toiletCount, sinkCount, quality };
   }
 
-  /** Every visible placed stove. StaffRouter uses this to assign chefs
-   * to stoves 1-to-1; the world position is the stove's footprint
-   * centre and rotY is its model rotation (used to compute the chef
-   * standing position one tile in front of it). */
+  /** Every visible placed stove the chef can actually COOK at — i.e.
+   * the gas/electric stoves themselves, NOT the kitchen sink or
+   * dishwasher (both share the "stove" category but are appliances,
+   * not burners). StaffRouter uses this to assign chefs 1-to-1; the
+   * world position is the stove's footprint centre and rotY is its
+   * model rotation (used to compute the chef standing position one
+   * tile in front of it). */
   getStoves(): { uid: string; x: number; z: number; rotY: number }[] {
     const out: { uid: string; x: number; z: number; rotY: number }[] = [];
     for (const it of this.items) {
-      const def = getFurnitureDef(it.defId);
-      if (def?.category !== "stove") continue;
+      if (it.defId !== "stove" && it.defId !== "stove-electric") continue;
       if (!this.isVisibleInScene(it.model)) continue;
       out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY });
     }

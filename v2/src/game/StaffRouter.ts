@@ -99,6 +99,14 @@ export interface StoveInfo {
 // ticket flow.
 const CHEF_SPEED = 1.2;
 const WAITER_SPEED = 1.44; // +20% over CHEF_SPEED
+
+/** Flip to true (or rebuild) to log every actor's per-frame movement
+ * sample (`[Router/move] state now @ (x, y) target …`). Was on by
+ * default while diagnosing "are the chefs actually moving?" — at ~5%
+ * sampling per moving actor it dominates the console once everyone's
+ * working. Off in production; the once-per-event logs (enqueued, chef
+ * picked up, etc.) still fire so you can trace ticket flow without it. */
+const DEBUG_ROUTER_LOGS = false;
 const ARRIVAL_THRESHOLD = 0.18;
 
 /** Shared geometry/material so all waiters reuse the same allocation. */
@@ -658,11 +666,11 @@ export class StaffRouter {
     // The correct atan2(-dx, -dz) leaves the seat/hardcoded values
     // alone and matches them all to GLB -Z.
     a.character.facingY = Math.atan2(-dx, -dz);
-    // Sanity logging — fires occasionally during an actual walk so we can
-    // confirm in DevTools that groundPos IS being mutated. If you ever
-    // see these lines but the chef still looks frozen in 3D, the
-    // groundPos→model.position link in CharacterAnimator is the suspect.
-    if (Math.random() < 0.05) {
+    // Sanity logging — confirms in DevTools that groundPos IS being
+    // mutated. Gated because at ~5% per moving actor it floods the
+    // console once everyone is working. Flip DEBUG_ROUTER_LOGS at the
+    // top of the file if you need to re-verify movement.
+    if (DEBUG_ROUTER_LOGS && Math.random() < 0.05) {
       console.log(`[Router/move] ${a.state} now @ (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}), target (${a.target.x.toFixed(2)}, ${a.target.y.toFixed(2)}), step=${step.toFixed(3)}`);
     }
   }
