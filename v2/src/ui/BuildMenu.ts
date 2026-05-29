@@ -947,6 +947,19 @@ export class BuildMenu {
       if (needsWall && !this.hasWallAtEdge(e.x, e.z)) {
         return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
       }
+      // Windows on a perimeter wall: force the rotation so the mesh's
+      // interior face always points into the building, no matter which
+      // of the four walls it lands on. The standard snap returns the
+      // same rotY for opposite walls (rotY=0 for both front + back,
+      // rotY=π/2 for both left + right), which leaves the window mesh
+      // pointing the same WORLD direction on both — so on one wall the
+      // glass faces the room and on the opposite wall it faces the
+      // lawn. Same logic applies whether the player clicked from
+      // outside (snap landed directly on the perimeter) or from inside
+      // (snap fell back through snapToNearestPerimeterEdge).
+      if (needsWall && this.isOnPerimeterWall(e.x, e.z)) {
+        e.rotY = this.perimeterInteriorRotY(e.x, e.z);
+      }
       // No tile-overlap check — walls don't claim a tile.
       return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
     }
@@ -1283,6 +1296,22 @@ export class BuildMenu {
     if (minDist === distBack)  return { x: clampAlong(rawX), z: -4.5, rotY: 0 };
     if (minDist === distLeft)  return { x: -4.5, z: clampAlong(rawZ), rotY: Math.PI / 2 };
     return { x: 5.5, z: clampAlong(rawZ), rotY: Math.PI / 2 };
+  }
+
+  /** rotY that points an edge-placed mesh's "front face" (Kenney
+   * convention: -Z in model space) into the BUILDING INTERIOR for the
+   * named perimeter wall. Used so a placed window has its glass /
+   * decorative side facing the room on every wall, instead of facing
+   * outward on the back + left walls (which is what snapToEdge's
+   * symmetric rotY=0 / π/2 default produces). Tolerant about how
+   * close the coords are to the wall plane — uses 0.1 as the same
+   * proximity rule isOnPerimeterWall uses. */
+  private perimeterInteriorRotY(x: number, z: number): number {
+    const TOL = 0.1;
+    if (Math.abs(z - 5.5) < TOL)  return 0;            // front: -Z faces interior (south, into room)
+    if (Math.abs(z + 4.5) < TOL)  return Math.PI;      // back: rotate 180° so +Z faces interior
+    if (Math.abs(x + 4.5) < TOL)  return -Math.PI / 2; // left: -X faces interior, rotate -90°
+    return Math.PI / 2;                                 // right: +X is exterior, default π/2 puts -X facing interior
   }
 
   /** Set every mesh on the preview to the quality color. Materials were
