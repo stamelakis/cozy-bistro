@@ -1482,6 +1482,10 @@ export class GuestSpawner {
           // to chain a handwash at a free sink. If no sink is free,
           // skip straight back to the seat (washedHands stays false
           // so finalizeVisit can dock the rating for it).
+          // Flush plays as the guest stands up — gives the visit a
+          // satisfying audible punctuation in addition to the visual
+          // pose change.
+          this.sfx?.toiletFlush();
           if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
           g.toiletUid = undefined;
           g.toiletCenter = undefined;

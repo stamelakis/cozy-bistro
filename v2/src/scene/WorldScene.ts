@@ -380,6 +380,19 @@ export class WorldScene {
     return false;
   }
 
+  /** The set of station variants currently active (visible flame /
+   * glow / steam / wobble). Engine reads this each tick and toggles
+   * the per-variant SFX loops (gas vs electric stove vs coffee vs
+   * blender etc.) so the player hears whichever appliances are in
+   * use, not a single generic "cooking" hiss. */
+  getActiveStationVariants(): Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave"> {
+    const out = new Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave">();
+    for (const f of this.stationEffects.values()) {
+      if (f.group.visible) out.add(f.variant);
+    }
+    return out;
+  }
+
   /** Build the per-variant effect group for a given station defId.
    * Returns undefined for ids without a built-in visual (e.g. counter
    * — the chef just stands there chopping, no glow needed). */

@@ -176,6 +176,15 @@ export class Engine {
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
       toggleMute: () => { this.sfx.setMuted(!this.sfx.isMuted()); return this.sfx.isMuted(); },
+      // Background music — independent toggle from SFX so the player
+      // can keep appliance sounds and silence the pad (or vice versa).
+      isMusicMuted: () => this.sfx.isMusicMuted(),
+      toggleMusic: () => {
+        const next = !this.sfx.isMusicMuted();
+        this.sfx.setMusicMuted(next);
+        if (!next) this.sfx.startMusic();
+        return next;
+      },
       // Pull live seat-availability off the spawner for the HUD's
       // SEATS card. Optional because the spawner is built after the
       // staff GLBs finish loading — getSpawnerStats may not exist for
@@ -251,6 +260,16 @@ export class Engine {
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
     this.sfx = new SfxPlayer();
+    // Browser autoplay rules block AudioContext sounds until the user
+    // first interacts with the page. Listen for ANY pointer / key
+    // input and kick the background music on (unless the player has
+    // it muted from a previous session). The listeners are { once:
+    // true } so they self-clean after firing.
+    const kickAudio = (): void => {
+      if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
+    };
+    window.addEventListener("pointerdown", kickAudio, { once: true });
+    window.addEventListener("keydown",     kickAudio, { once: true });
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
@@ -900,9 +919,22 @@ export class Engine {
     // the aggregate flag (any flame visible = sizzling).
     this.scene.syncStationEffects(this.registry.getCookStations());
     this.scene.setActiveStations(this.router?.getCookingStoveUids() ?? new Set());
-    const cooking = this.scene.isAnyStationActive();
-    if (cooking) this.sfx.startCookingLoop("stove");
-    else this.sfx.stopCookingLoop();
+    // Per-variant cooking-loop SFX — feed the live "which appliance
+    // visuals are active right now" set straight into the SfxPlayer.
+    // setLoopActive is idempotent, so it's safe to call for every
+    // variant every frame; the player only spends CPU on the ones
+    // that actually flip state.
+    const activeStations = this.scene.getActiveStationVariants();
+    this.sfx.setLoopActive("gas-stove",      activeStations.has("gas"));
+    this.sfx.setLoopActive("electric-stove", activeStations.has("electric"));
+    this.sfx.setLoopActive("toaster",        activeStations.has("toaster"));
+    this.sfx.setLoopActive("coffee",         activeStations.has("coffee"));
+    this.sfx.setLoopActive("blender",        activeStations.has("blender"));
+    this.sfx.setLoopActive("microwave",      activeStations.has("microwave"));
+    // Dishwasher: any plates / glasses mid-cycle = humming away.
+    const dwInflight = this.game.dishware.getDishwasherInFlight("plate")
+                     + this.game.dishware.getDishwasherInFlight("glass");
+    this.sfx.setLoopActive("dishwasher", dwInflight > 0);
     // Open the door when a guest, errand helper, or pedestrian is close.
     this.scene.setDoorOpen(this.anyoneNearDoor());
     // Animate interior doorways — any placed int-doorway opens when a

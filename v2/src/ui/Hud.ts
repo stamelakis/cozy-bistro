@@ -34,6 +34,8 @@ export interface HudActions {
   resetSave: () => void;
   isMuted: () => boolean;
   toggleMute: () => boolean;
+  isMusicMuted: () => boolean;
+  toggleMusic: () => boolean;
   /** Functional seat counts surfaced in the HUD's SEATS card.
    * Optional because the spawner may not exist for the first few
    * frames; HUD shows "—" when this returns undefined. */
@@ -57,6 +59,7 @@ export class Hud {
   private readonly fields: Record<string, HTMLElement> = {};
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
   private muteBtn?: HTMLButtonElement;
+  private musicBtn?: HTMLButtonElement;
   private openCloseBtn?: HTMLButtonElement;
   private devOpen = false;
   private devSection?: HTMLDivElement;
@@ -281,6 +284,14 @@ export class Hud {
     mute.onclick = () => { this.actions.toggleMute(); this.update(); };
     row.appendChild(mute);
     this.muteBtn = mute;
+    // Music toggle — independent from SFX so the player can leave the
+    // pad off but still hear plates clinking + the kitchen sizzling.
+    const music = document.createElement("button");
+    Object.assign(music.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
+    music.style.flex = "0 0 28px";
+    music.onclick = () => { this.actions.toggleMusic(); this.update(); };
+    row.appendChild(music);
+    this.musicBtn = music;
     this.root.appendChild(row);
   }
 
@@ -522,6 +533,12 @@ export class Hud {
       const muted = this.actions.isMuted();
       this.muteBtn.textContent = muted ? "🔇" : "🔈";
       this.muteBtn.title = muted ? "Sound off — click to enable" : "Sound on — click to mute";
+    }
+    if (this.musicBtn) {
+      const muted = this.actions.isMusicMuted();
+      this.musicBtn.textContent = muted ? "🎵̸" : "🎵";
+      this.musicBtn.style.opacity = muted ? "0.45" : "1";
+      this.musicBtn.title = muted ? "Music off — click to enable" : "Music on — click to mute";
     }
     if (this.devToggle) {
       this.devToggle.style.background = this.devOpen ? "rgba(255,245,220,0.18)" : "rgba(180, 180, 180, 0.18)";
