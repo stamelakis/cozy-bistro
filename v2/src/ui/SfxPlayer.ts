@@ -391,12 +391,34 @@ export class SfxPlayer {
         // ends (or its fade hits 0), it just stops. We do NOT pause it
         // here — that would cut the music off the second dusk begins
         // instead of letting it gracefully tail out.
-        if (this.dayAudio) this.dayAudio.loop = false;
+        if (this.dayAudio) {
+          this.dayAudio.loop = false;
+          // Fresh page load OR un-mute mid-dusk: the track was never
+          // started by a prior "day" phase, so it'd be silent for the
+          // whole dusk window. Kick it off from the top — the user
+          // explicitly wanted music from the get-go even when loading
+          // into a transition phase. setDayProgress's next call will
+          // clamp the volume to the correct fade ratio.
+          if (this.dayAudioReady && this.dayAudio.paused) {
+            this.dayAudio.currentTime = 0;
+            this.dayAudio.volume = this.currentMusicVolume(1);
+            this.dayAudio.play().catch(() => { /* autoplay-policy; will retry on next user gesture */ });
+          }
+        }
         if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
         break;
       }
       case "dawn": {
-        if (this.nightAudio) this.nightAudio.loop = false;
+        if (this.nightAudio) {
+          this.nightAudio.loop = false;
+          // Same "start the track on fresh load during a transition"
+          // logic as dusk — see comment above.
+          if (this.nightAudioReady && this.nightAudio.paused) {
+            this.nightAudio.currentTime = 0;
+            this.nightAudio.volume = this.currentMusicVolume(1);
+            this.nightAudio.play().catch(() => { /* */ });
+          }
+        }
         if (this.dayAudio) try { this.dayAudio.pause(); } catch { /* */ }
         break;
       }
