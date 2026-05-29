@@ -1200,6 +1200,157 @@ export class WorldScene {
     this.addLawnTrees();
     this.addRocks();
     this.addPavementAndRoad();
+    this.addGardenArea();
+  }
+
+  /** Bounds of the future tier-6 garden — east of the building, mirror
+   * dimensions of the building footprint along z. Exposed as a static
+   * so the exclusion-zone check and the fence builder share one source
+   * of truth. */
+  private static readonly GARDEN_BOUNDS = {
+    minX: 6.5, maxX: 14.5,
+    minZ: -4.5, maxZ: 5.5,
+  };
+
+  /** Wooden picket fence + "Coming Soon" sign marking the area
+   * reserved for the future tier-6 garden expansion. Pure decor for
+   * now — when tier 6 unlocks, the east perimeter wall will accept
+   * one door cut into it (similar to the windows pipeline) and a
+   * gameplay garden will replace the placeholder. */
+  private addGardenArea(): void {
+    const b = WorldScene.GARDEN_BOUNDS;
+    const fence = new THREE.Group();
+    // Light cosy wood for the rails + posts, slightly darker for the
+    // post caps so the silhouette reads as separate pieces.
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.9 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xa07042, roughness: 0.9 });
+    const capMat  = new THREE.MeshStandardMaterial({ color: 0x6a4220, roughness: 0.85 });
+    const postH = 1.05, postW = 0.10;
+    const railH = 0.06, railD = 0.06;
+    const upperY = 0.78, lowerY = 0.30;
+    const postSpacing = 1.0;  // one post per metre — reads as a real picket fence
+    // Helper to drop a single post at (x, z).
+    const addPost = (x: number, z: number): void => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(postW, postH, postW), postMat);
+      post.position.set(x, postH / 2, z);
+      post.castShadow = true;
+      post.receiveShadow = true;
+      fence.add(post);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(postW * 1.4, 0.07, postW * 1.4), capMat);
+      cap.position.set(x, postH + 0.04, z);
+      cap.castShadow = true;
+      fence.add(cap);
+    };
+    // Posts along the four sides.
+    for (let x = b.minX; x <= b.maxX; x += postSpacing) {
+      addPost(x, b.minZ);
+      addPost(x, b.maxZ);
+    }
+    for (let z = b.minZ + postSpacing; z < b.maxZ; z += postSpacing) {
+      addPost(b.minX, z);
+      addPost(b.maxX, z);
+    }
+    // Horizontal rails spanning each side at upper + lower heights.
+    const addRail = (x: number, z: number, length: number, axis: "x" | "z", y: number): void => {
+      const geom = axis === "x"
+        ? new THREE.BoxGeometry(length, railH, railD)
+        : new THREE.BoxGeometry(railD, railH, length);
+      const rail = new THREE.Mesh(geom, railMat);
+      rail.position.set(x, y, z);
+      rail.castShadow = true;
+      rail.receiveShadow = true;
+      fence.add(rail);
+    };
+    const width = b.maxX - b.minX;
+    const depth = b.maxZ - b.minZ;
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    // North + south rails (along X). Leave a 1.2 m gap in the middle
+    // of the WEST side (facing the building) — a future gate position
+    // so the player can see it'll connect to the east wall.
+    addRail(cx, b.minZ, width, "x", upperY);
+    addRail(cx, b.minZ, width, "x", lowerY);
+    addRail(cx, b.maxZ, width, "x", upperY);
+    addRail(cx, b.maxZ, width, "x", lowerY);
+    // East rail (along Z).
+    addRail(b.maxX, cz, depth, "z", upperY);
+    addRail(b.maxX, cz, depth, "z", lowerY);
+    // West rail (along Z) — split with a 1.2 m centred gap for the
+    // future door opening. Each side spans (depth - gap) / 2.
+    const gateGap = 1.2;
+    const halfSide = (depth - gateGap) / 2;
+    const northHalfCz = b.minZ + halfSide / 2;
+    const southHalfCz = b.maxZ - halfSide / 2;
+    addRail(b.minX, northHalfCz, halfSide, "z", upperY);
+    addRail(b.minX, northHalfCz, halfSide, "z", lowerY);
+    addRail(b.minX, southHalfCz, halfSide, "z", upperY);
+    addRail(b.minX, southHalfCz, halfSide, "z", lowerY);
+    this.threeScene.add(fence);
+    // === Coming Soon sign in the centre ===
+    const signPostH = 1.4;
+    const signPost = new THREE.Mesh(
+      new THREE.BoxGeometry(0.10, signPostH, 0.10),
+      new THREE.MeshStandardMaterial({ color: 0x5a3e1e, roughness: 0.9 }),
+    );
+    signPost.position.set(cx, signPostH / 2, cz);
+    signPost.castShadow = true;
+    this.threeScene.add(signPost);
+    // Sign board — canvas-painted "COMING SOON / GARDEN EXPANSION".
+    const signTex = WorldScene.makeComingSoonTexture();
+    const signMat = new THREE.MeshStandardMaterial({
+      map: signTex, transparent: false, roughness: 0.7,
+      side: THREE.DoubleSide,
+    });
+    const signBoard = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 1.0), signMat);
+    signBoard.position.set(cx, 1.7, cz);
+    // Face north (toward the building) so the player sees the writing
+    // from inside the restaurant.
+    signBoard.rotation.y = Math.PI;
+    signBoard.castShadow = true;
+    this.threeScene.add(signBoard);
+    // Frame around the sign for some depth.
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x3e2810, roughness: 0.85 });
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.1, 1.1, 0.06), frameMat);
+    frame.position.set(cx, 1.7, cz + 0.02);
+    frame.castShadow = true;
+    this.threeScene.add(frame);
+  }
+
+  /** Procedural "COMING SOON" sign texture — warm cream background
+   * with bold dark lettering. Read from across the restaurant. */
+  private static makeComingSoonTexture(): THREE.CanvasTexture {
+    const w = 512, h = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#f4e8c8";
+    ctx.fillRect(0, 0, w, h);
+    // Inner border accent
+    ctx.strokeStyle = "#7a4a20";
+    ctx.lineWidth = 6;
+    ctx.strokeRect(14, 14, w - 28, h - 28);
+    ctx.fillStyle = "#3a1f08";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "900 70px Georgia, serif";
+    ctx.fillText("COMING SOON", w / 2, h / 2 - 38);
+    ctx.font = "700 36px Georgia, serif";
+    ctx.fillStyle = "#5e3a10";
+    ctx.fillText("Garden Expansion", w / 2, h / 2 + 38);
+    // Small leaf accent — two little arcs to suggest greenery.
+    ctx.fillStyle = "#3a7a3a";
+    ctx.beginPath();
+    ctx.ellipse(80, h - 50, 24, 12, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(w - 80, h - 50, 24, 12, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    return tex;
   }
 
   /** Big ground plane painted with a canvas texture of soft green
@@ -1535,13 +1686,15 @@ export class WorldScene {
   }
 
   /** True when (x, z) is too close to the building interior, the door
-   * approach, or the pavement / road strip — keeps grass props out of
-   * the player's view of the front entrance. Bounds match the
-   * perimeter walls (-4.5..5.5) and the pavement/road strip
-   * (z=5.5..16.5) after the +0.5 shift. */
+   * approach, the pavement / road strip, or the future garden area.
+   * Bounds match the perimeter walls (-4.5..5.5), the pavement/road
+   * strip (z=5.5..16.5), and the fenced garden plot east of the
+   * building (GARDEN_BOUNDS). */
   private static isExclusionZone(x: number, z: number, margin: number): boolean {
     if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
     if (z > 5.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
+    const g = WorldScene.GARDEN_BOUNDS;
+    if (x > g.minX - margin && x < g.maxX + margin && z > g.minZ - margin && z < g.maxZ + margin) return true;
     return false;
   }
 
