@@ -77,48 +77,135 @@ export class Hud {
 
   private buildTitle(): void {
     const t = document.createElement("div");
-    t.textContent = "COZY BISTRO 3D";
+    // Two-line title: brand + small "your restaurant" subtitle so the
+    // panel reads as a proper info card instead of a stripped header.
+    t.innerHTML = `<span style="font-size:14px;font-weight:800;letter-spacing:0.06em;">COZY BISTRO 3D</span><div style="font-size:9px;font-weight:600;letter-spacing:0.18em;opacity:0.55;margin-top:1px;">YOUR RESTAURANT</div>`;
     Object.assign(t.style, {
-      fontSize: "13px", fontWeight: "700", letterSpacing: "0.04em",
-      marginBottom: "8px", textAlign: "center", opacity: "0.9",
+      marginBottom: "8px", textAlign: "center", opacity: "0.95",
+      padding: "6px 8px",
+      background: "linear-gradient(180deg, rgba(255,245,220,0.08), rgba(255,245,220,0.02))",
+      border: "1px solid rgba(255,245,220,0.12)",
+      borderRadius: "5px",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(t);
   }
 
-  /** 2-column compact stats grid: label/value pairs. */
+  /** Visually-rich stat cards. Each card is a small chip with:
+   *   - icon (emoji or symbol)
+   *   - uppercase label (small, dimmed)
+   *   - value (large, bold, colour-coded to the stat)
+   * 2-column grid, with the "money" card spanning both columns at the
+   * top because cash on hand is the headline number players check most.
+   *
+   * Hover tooltips on every card explain what the stat means + why it
+   * matters — players opening the game for the first time get the same
+   * vocabulary the menus use ("rating", "served", "lost", etc).
+   */
   private buildStatsGrid(): void {
     const grid = document.createElement("div");
     Object.assign(grid.style, {
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
-      columnGap: "6px",
-      rowGap: "2px",
+      gap: "5px",
       fontSize: "11px",
     } as Partial<CSSStyleDeclaration>);
-    const pairs: { key: string; label: string }[] = [
-      { key: "money", label: "$" },
-      { key: "rating", label: "★" },
-      { key: "day", label: "Day" },
-      { key: "weather", label: "" },
-      { key: "guests", label: "👥" },
-      { key: "daytime", label: "⏳" },
-      { key: "served", label: "✓" },
-      { key: "lost", label: "✗" },
-      { key: "dishes", label: "🍽" },
-      { key: "rent", label: "Rent" },
+    interface StatSpec {
+      key: string; icon: string; label: string;
+      tint: string;        // background pill colour
+      accent: string;      // value text colour
+      tooltip: string;     // shown on hover
+      span?: 1 | 2;
+    }
+    const specs: StatSpec[] = [
+      { key: "money", icon: "💰", label: "CASH",
+        tint: "rgba(120, 200, 120, 0.14)", accent: "#a8e2a8",
+        tooltip: "Cash on hand. Spent on furniture, ingredients, wages, rent. " +
+                 "Earned from customer orders. If it hits $0 you can still play — " +
+                 "but you can't buy anything new until customers pay.",
+        span: 2 },
+      { key: "rating", icon: "⭐", label: "RATING",
+        tint: "rgba(245, 193, 74, 0.14)", accent: "#f5c14a",
+        tooltip: "Average customer rating out of 5. Driven by satisfaction (food, " +
+                 "service speed, decor, bathroom quality). Higher rating attracts more " +
+                 "customers and lets a recipe charge a premium." },
+      { key: "weather", icon: "", label: "WEATHER",
+        tint: "rgba(160, 200, 220, 0.14)", accent: "#a8d4ea",
+        tooltip: "Today's weather. Affects walk-in traffic — sunny days busy, rainy " +
+                 "days quieter. Plan stock + staff for the forecast." },
+      { key: "day", icon: "📅", label: "DAY",
+        tint: "rgba(180, 160, 220, 0.14)", accent: "#c8b5e8",
+        tooltip: "Day counter. Each day ends when the in-game clock hits closing time " +
+                 "and rolls a day-end summary (paying rent, wages, etc)." },
+      { key: "daytime", icon: "⏰", label: "TIME LEFT",
+        tint: "rgba(220, 180, 130, 0.14)", accent: "#e8c89a",
+        tooltip: "Real seconds left in the in-game day. When it hits 0:00 the day ends, " +
+                 "rent and wages are deducted, and a new day starts." },
+      { key: "guests", icon: "👥", label: "IN",
+        tint: "rgba(220, 150, 200, 0.14)", accent: "#e8b5d4",
+        tooltip: "Customers currently inside the restaurant (waiting, seated, or eating). " +
+                 "Watch this for crowding — high in-count + slow turnover = lost orders." },
+      { key: "served", icon: "✓", label: "SERVED",
+        tint: "rgba(120, 200, 120, 0.14)", accent: "#a8e2a8",
+        tooltip: "Customers served today. Each served customer paid their bill and " +
+                 "left a rating contribution. Resets at day end." },
+      { key: "lost", icon: "✗", label: "LOST",
+        tint: "rgba(220, 100, 100, 0.14)", accent: "#ff9a9a",
+        tooltip: "Customers who left without being served today — usually because the " +
+                 "wait was too long. Each lost customer dings your average rating." },
+      { key: "dishes", icon: "🍽", label: "DISHES",
+        tint: "rgba(220, 170, 100, 0.14)", accent: "#e8b878",
+        tooltip: "Dirty dishes piling up. Waiters can't serve fresh food when the dish " +
+                 "stock runs out. Build sinks / dishwashers to wash faster; turns red " +
+                 "when the pile is overwhelming the kitchen." },
+      { key: "rent", icon: "🏠", label: "RENT/DAY",
+        tint: "rgba(180, 180, 200, 0.14)", accent: "#c8c8e0",
+        tooltip: "Daily rent charged at day end. Grows with the size + tier of your " +
+                 "restaurant. Track it against your daily revenue to know if you're " +
+                 "profitable." },
     ];
-    for (const p of pairs) {
-      const row = document.createElement("div");
-      Object.assign(row.style, { display: "flex", gap: "4px", overflow: "hidden" } as Partial<CSSStyleDeclaration>);
-      const lab = document.createElement("span");
-      lab.textContent = p.label;
-      Object.assign(lab.style, { opacity: "0.55", minWidth: "20px" } as Partial<CSSStyleDeclaration>);
-      const val = document.createElement("span");
+    for (const s of specs) {
+      const card = document.createElement("div");
+      Object.assign(card.style, {
+        display: "flex", flexDirection: "column",
+        gap: "1px",
+        padding: "4px 6px",
+        background: s.tint,
+        border: "1px solid rgba(255,245,220,0.10)",
+        borderRadius: "4px",
+        overflow: "hidden",
+        gridColumn: s.span === 2 ? "1 / span 2" : "auto",
+      } as Partial<CSSStyleDeclaration>);
+      const topLine = document.createElement("div");
+      Object.assign(topLine.style, {
+        display: "flex", alignItems: "center", gap: "4px",
+        fontSize: "9px", fontWeight: "700", letterSpacing: "0.08em",
+        opacity: "0.65", textTransform: "uppercase",
+      } as Partial<CSSStyleDeclaration>);
+      if (s.icon) {
+        const iconEl = document.createElement("span");
+        iconEl.textContent = s.icon;
+        iconEl.style.fontSize = "11px";
+        iconEl.style.opacity = "1";
+        topLine.appendChild(iconEl);
+      }
+      const labEl = document.createElement("span");
+      labEl.textContent = s.label;
+      topLine.appendChild(labEl);
+      card.appendChild(topLine);
+      const val = document.createElement("div");
       val.textContent = "—";
-      Object.assign(val.style, { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } as Partial<CSSStyleDeclaration>);
-      row.appendChild(lab); row.appendChild(val);
-      grid.appendChild(row);
-      this.fields[p.key] = val;
+      Object.assign(val.style, {
+        fontSize: s.span === 2 ? "16px" : "13px",
+        fontWeight: "700",
+        color: s.accent,
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        fontVariantNumeric: "tabular-nums",
+        lineHeight: "1.15",
+      } as Partial<CSSStyleDeclaration>);
+      card.appendChild(val);
+      grid.appendChild(card);
+      this.fields[s.key] = val;
+      attachTooltip(card, s.tooltip);
     }
     this.root.appendChild(grid);
   }
@@ -333,17 +420,26 @@ export class Hud {
     const dishes = this.game.getDirtyDishCount();
     const rent = this.game.getDailyRent();
     const w = this.game.weather.getCurrent();
-    this.fields.money.textContent = `$${money}`;
-    this.fields.rating.textContent = `${rating}`;
+    // Cash with thousands separator — $19,716 reads more cleanly than
+    // $19716. Red accent when negative (still rendered: the game lets
+    // you go below zero through wages / rent).
+    this.fields.money.textContent = `$${money.toLocaleString("en-US")}`;
+    this.fields.money.style.color = money < 0 ? "#ff9a9a" : money < 200 ? "#e8c89a" : "#a8e2a8";
+    // Rating shown out of 5 so the number has a built-in scale reference.
+    this.fields.rating.textContent = `${rating} / 5`;
     this.fields.day.textContent = `${day}`;
-    this.fields.weather.textContent = `${w.emoji}${w.label}`;
-    this.fields.weather.title = `Weather: ${w.label}`;
+    // Weather: emoji on its own line above the label so the icon is
+    // unmistakable instead of squished into the value cell.
+    this.fields.weather.textContent = `${w.emoji} ${w.label}`;
     this.fields.guests.textContent = `${guests}`;
     this.fields.served.textContent = `${served}`;
     this.fields.lost.textContent = `${lost}`;
+    // Time left — orange tint when the day is in its last 60 seconds so
+    // the player knows to close out remaining orders.
     this.fields.daytime.textContent = `${mins}:${secs}`;
+    this.fields.daytime.style.color = remaining < 60 ? "#ff9a9a" : "#e8c89a";
     this.fields.dishes.textContent = `${dishes}`;
-    this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#fff5dc";
+    this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#e8b878";
     this.fields.rent.textContent = `$${rent}`;
 
     const open = this.spawner.isOpen();
