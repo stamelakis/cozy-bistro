@@ -304,6 +304,15 @@ export class FurnitureRegistry {
     item.x = x; item.z = z; item.rotY = rotY;
     item.model.position.set(x, item.model.position.y, z);
     item.model.rotation.y = rotY;
+    // Surface items: re-derive localRotY (the rotation offset relative
+    // to the host) from the new rotation. Without this, R-rotating a
+    // microwave in MOVE mode updates the in-scene rotation but the
+    // persisted localRotY stays at its old value — save+load then
+    // applies host.rotY + OLD_localRotY and the rotation reverts.
+    if (item.parentUid) {
+      const host = this.items.find((it) => it.uid === item.parentUid);
+      if (host) item.localRotY = normaliseAngle(rotY - host.rotY);
+    }
     // If this item is a host (has children with parentUid === uid),
     // ride its surface-placed items along to the new pose.
     this.reseatSurfaceChildren(uid);
@@ -961,13 +970,23 @@ export class FurnitureRegistry {
       const wz = host.z - slot.dx * sin + slot.dz * cos;
       child.x = wx;
       child.z = wz;
-      // Honour the player's per-child rotation offset (localRotY) so
-      // a microwave turned 90° via R survives a save+load round-trip.
-      // Falls back to 0 (matches the host) for legacy saves written
-      // before localRotY was persisted, and for items never rotated.
-      const finalRotY = host.rotY + (child.localRotY ?? 0);
-      child.rotY = finalRotY;
       child.model.position.set(wx, topY, wz);
+      // Honour the player's per-child rotation offset (localRotY) so a
+      // microwave turned 90° via R survives a save+load round-trip.
+      // Two paths:
+      //   - NEW save (localRotY persisted): use host.rotY + localRotY,
+      //     which equals the absolute rotation the user saw at save
+      //     time and matches the first-pass model.rotation.y.
+      //   - LEGACY save (localRotY missing): infer the offset from
+      //     child.rotY - host.rotY so even old saves without the
+      //     field hang on to their rotation instead of snapping back
+      //     to host.rotY. This also self-heals the in-memory item —
+      //     future saves write a proper localRotY.
+      if (typeof child.localRotY !== "number") {
+        child.localRotY = normaliseAngle(child.rotY - host.rotY);
+      }
+      const finalRotY = host.rotY + child.localRotY;
+      child.rotY = finalRotY;
       child.model.rotation.y = finalRotY;
     }
   }
