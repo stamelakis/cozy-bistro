@@ -17,16 +17,16 @@ const STORAGE_KEY_MUSIC = "cozy-bistro-3d-music-muted";
 const STORAGE_KEY_SFX_VOLUME = "cozy-bistro-3d-sfx-volume";
 
 /** Bus gain at sfxVolume = 1. Below 1 scales linearly toward silence.
- * The volume slider is now a MASTER level — it scales SFX bus + the
- * HTMLAudio music volume together — so the upper end has to be high
- * enough to make a clear difference between "almost silent" and "the
- * speakers are working hard". 0.7 felt right after testing. Default
- * sfxVolume of 0.4 lands the bus at ~0.28, slightly above the old
- * hardcoded 0.22 so the game feels louder out of the box. */
-const SFX_BUS_MAX_GAIN = 0.7;
-/** Same idea for music. HTMLAudio volume is 0..1; clamp it to keep
- * the music a touch quieter than full so it doesn't dominate the SFX. */
-const MUSIC_MAX_VOLUME = 0.8;
+ * Master ceiling halved from the previous 0.7 after user feedback
+ * that the upper range was too loud overall. Default sfxVolume of
+ * 0.3 (30% of max) lands the bus at ~0.105 — comfortably audible
+ * without being aggressive. Slider all the way right tops out at
+ * 0.35, which is roughly the old hardcoded "always-on" level. */
+const SFX_BUS_MAX_GAIN = 0.35;
+/** Same idea for music. HTMLAudio volume is 0..1; halved from the
+ * previous 0.8 in lockstep with the SFX max so music and SFX scale
+ * together at the same proportions. */
+const MUSIC_MAX_VOLUME = 0.4;
 
 /** Per-appliance loop synth profile. Each variant gets a specialised
  * synthesis chain rather than the old single bandpass-on-noise that
@@ -71,7 +71,7 @@ export class SfxPlayer {
   /** Master volume slider value, 0..1. Drives both the SFX bus gain
    * (×SFX_BUS_MAX_GAIN) and the music audio element volume
    * (×MUSIC_MAX_VOLUME). Persisted across sessions. */
-  private sfxVolume = 0.4;
+  private sfxVolume = 0.3;
   /** Active named loops keyed by LoopId. setLoopActive flips them on
    * and off independently — multiple appliances can run at once. */
   private loops = new Map<LoopId, LoopHandle>();
