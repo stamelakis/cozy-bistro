@@ -23,6 +23,19 @@ export class MenuPanel {
   private readonly content: HTMLElement;
   private collapsed = true;
   private selectedTier: LuxuryTier = 1;
+  /** Persistent tab buttons — built once in the constructor and only
+   * restyled by update(), not destroyed and rebuilt. Earlier versions
+   * cleared `tabsRow.innerHTML` every 200 ms (the HUD update cadence),
+   * which raced with the player's clicks: tap a tab inside the same
+   * window and the button gets ripped out from under your pointer, so
+   * the click never resolves. With a stable button identity the click
+   * always lands. */
+  private tabBtns: HTMLButtonElement[] = [];
+  /** Signature of the last-rendered content state. Recomputed every
+   * update; we only walk the DOM when it actually changes. Same goal
+   * as the persistent tabs — avoid throwing away DOM that the player
+   * is in the middle of interacting with. */
+  private lastContentSig = "";
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -73,53 +86,90 @@ export class MenuPanel {
     this.content = document.createElement("div");
     Object.assign(this.content.style, { maxHeight: "30vh", overflowY: "auto", paddingRight: "4px" } as Partial<CSSStyleDeclaration>);
     this.body.appendChild(this.content);
+
+    // Build the tier-tab buttons ONCE — `update()` later only restyles
+    // them. See `tabBtns` doc for why we don't rebuild every 200 ms.
+    this.buildTabs();
   }
 
-  update(): void {
-    if (this.collapsed) return; // skip work when hidden
-    this.renderTabs();
-    this.renderContent();
-  }
-
-  private renderTabs(): void {
-    this.tabsRow.innerHTML = "";
-    const playerTier = this.game.getLuxuryTier();
+  /** Build the 5 tier-tab buttons one time. Each button's click handler
+   * is a closure over a fixed tier value; subsequent restyles in
+   * `refreshTabs` never touch the click handler or the button identity,
+   * so a tap can't race with a re-render. */
+  private buildTabs(): void {
     const baseProfits = [3, 4, 5, 6, 7];
     for (let t = 1; t <= 5; t += 1) {
       const tier = t as LuxuryTier;
-      const locked = tier > playerTier;
-      const active = tier === this.selectedTier;
       const btn = document.createElement("button");
-      btn.textContent = `Tier ${t}${locked ? " 🔒" : ""}  ·  $${baseProfits[t - 1]}/dish`;
       Object.assign(btn.style, {
         flex: "1",
         padding: "5px 4px",
-        background: active
-          ? "rgba(120, 200, 120, 0.30)"
-          : locked
-            ? "rgba(255,245,220,0.04)"
-            : "rgba(255,245,220,0.10)",
-        color: locked ? "rgba(255,245,220,0.4)" : "#fff5dc",
-        border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
         borderRadius: "4px",
-        cursor: locked ? "not-allowed" : "pointer",
         font: "inherit",
         fontSize: "11px",
-        fontWeight: active ? "700" : "500",
       } as Partial<CSSStyleDeclaration>);
-      btn.disabled = locked;
-      btn.title = locked ? `Unlock with Tier ${t} expansion` : `Base profit per dish at L1: $${baseProfits[t - 1]}`;
+      btn.title = `Base profit per dish at L1: $${baseProfits[t - 1]}`;
       btn.onclick = () => {
-        if (locked) return;
+        if (btn.disabled) return;
+        if (this.selectedTier === tier) return;
         this.selectedTier = tier;
-        this.renderTabs();
+        this.refreshTabs();
+        // Force a content rebuild on tier change — the signature would
+        // catch it next tick anyway, but we don't want a 200 ms flash
+        // of stale rows.
+        this.lastContentSig = "";
         this.renderContent();
       };
+      this.tabBtns.push(btn);
       this.tabsRow.appendChild(btn);
     }
   }
 
+  update(): void {
+    if (this.collapsed) return; // skip work when hidden
+    this.refreshTabs();
+    this.renderContent();
+  }
+
+  /** Mutate the existing tab buttons' styles + labels to match the
+   * current player tier + active selection. No DOM destruction; the
+   * tab the player is clicking right now is never ripped out from
+   * under their pointer. */
+  private refreshTabs(): void {
+    const playerTier = this.game.getLuxuryTier();
+    const baseProfits = [3, 4, 5, 6, 7];
+    for (let i = 0; i < this.tabBtns.length; i += 1) {
+      const tier = (i + 1) as LuxuryTier;
+      const locked = tier > playerTier;
+      const active = tier === this.selectedTier;
+      const btn = this.tabBtns[i];
+      btn.textContent = `Tier ${tier}${locked ? " 🔒" : ""}  ·  $${baseProfits[i]}/dish`;
+      btn.style.background = active
+        ? "rgba(120, 200, 120, 0.30)"
+        : locked
+          ? "rgba(255,245,220,0.04)"
+          : "rgba(255,245,220,0.10)";
+      btn.style.color = locked ? "rgba(255,245,220,0.4)" : "#fff5dc";
+      btn.style.border = active
+        ? "1px solid rgba(120, 200, 120, 0.7)"
+        : "1px solid rgba(255,245,220,0.18)";
+      btn.style.cursor = locked ? "not-allowed" : "pointer";
+      btn.style.fontWeight = active ? "700" : "500";
+      btn.disabled = locked;
+      btn.title = locked ? `Unlock with Tier ${tier} expansion` : `Base profit per dish at L1: $${baseProfits[i]}`;
+    }
+  }
+
   private renderContent(): void {
+    // Cheap signature of the everything that drives the rendered HTML.
+    // When nothing has changed (the common case — the player isn't
+    // touching menus 5×/s) we skip the rebuild entirely, which avoids
+    // throwing away the row checkboxes the player might be about to
+    // click. Without this, every 200 ms tick destroys + recreates the
+    // whole recipe list, costing both real CPU and any in-flight click.
+    const sig = this.computeContentSig();
+    if (sig === this.lastContentSig) return;
+    this.lastContentSig = sig;
     this.content.innerHTML = "";
     const inTier = recipes.filter((r) => getRecipeLuxuryTier(r) === this.selectedTier);
     if (inTier.length === 0) {
@@ -288,6 +338,25 @@ export class MenuPanel {
     row.appendChild(stats);
 
     return row;
+  }
+
+  /** Hash everything that affects the rendered recipe rows into a
+   * short string. The render-content path compares this against the
+   * last-rendered signature and bails when they match, so the 5 Hz
+   * update tick stays free when nothing visible has changed. */
+  private computeContentSig(): string {
+    const playerTier = this.game.getLuxuryTier();
+    const inTier = recipes.filter((r) => getRecipeLuxuryTier(r) === this.selectedTier);
+    const onMenu = this.game.cooking.getMenuRecipeIds();
+    const provided = this.game.getProvidedAppliances?.();
+    const provKey = provided ? Array.from(provided).sort().join(",") : "";
+    const onMenuKey = Array.from(onMenu).sort().join(",");
+    // Per-recipe: upgrade level + effective price (covers global cook
+    // multipliers / staff bonuses changing the displayed $price).
+    const recipeKey = inTier.map((r) =>
+      `${r.id}:${this.game.cooking.getRecipeUpgradeLevel(r)}:${this.game.getEffectiveSellPrice(r)}:${this.game.getEffectiveSatisfaction(r).toFixed(0)}`
+    ).join("|");
+    return `${this.selectedTier}|${playerTier}|${onMenuKey}|${provKey}|${recipeKey}`;
   }
 
   private prettyIng(id: string): string {
