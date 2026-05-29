@@ -574,7 +574,12 @@ export class Engine {
     const out: number[] = [];
     for (const it of this.registry.snapshotItems()) {
       const def = getFurnitureDef(it.defId);
-      if (def?.category === "door" && Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
+      // Windows share the "door" category in the build menu but don't
+      // cut the front wall — they sit IN the wall as a glazed panel.
+      // Skip them so the rebuilt wall doesn't punch a doorway under
+      // every window.
+      if (def?.category !== "door" || def.id.startsWith("window")) continue;
+      if (Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
     }
     return out;
   }

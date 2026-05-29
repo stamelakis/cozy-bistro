@@ -896,11 +896,12 @@ export class BuildMenu {
     // rotY swings 90° so the mesh aligns with the edge direction.
     if (def.placement === "edge") {
       const e = this.snapToEdge(rawPoint.x, rawPoint.z);
-      // For front doors specifically: only allow placement when the
+      // For real doors / doorways: only allow placement when the
       // snapped edge actually coincides with an exterior wall segment.
       // Stops the player from dropping a "front door" floating between
-      // tiles in the middle of the restaurant.
-      if (def.category === "door") {
+      // tiles in the middle of the restaurant. Windows live in the same
+      // category but are placeable on ANY wall — skip them here.
+      if (def.category === "door" && !def.id.startsWith("window")) {
         const onPerimeter = this.isOnPerimeterWall(e.x, e.z);
         if (!onPerimeter) {
           return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
@@ -1248,7 +1249,10 @@ export class BuildMenu {
         return;
       }
       if (itemDef?.category === "lamp") this.onLampRemoved?.(itemModel);
-      if (itemDef?.category === "door") this.onDoorRemoved?.(itemModel);
+      // Windows ride in the "door" category for the build menu UI but
+      // don't trigger door-specific scene rebuilds (no hinged panel,
+      // no front-wall cut).
+      if (itemDef?.category === "door" && !itemDef.id.startsWith("window")) this.onDoorRemoved?.(itemModel);
       this.game.economy.earnMoney(removed.refund, "payment");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
       this.flashRoot(`Sold for $${removed.refund}`, "success");
@@ -1345,7 +1349,9 @@ export class BuildMenu {
         : undefined;
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
-      if (def.category === "door") this.onDoorPlaced?.(solid);
+      // Same "door category but not a window" guard as the removal
+       // path. Windows are decorative panes — no swing, no wall cut.
+      if (def.category === "door" && !def.id.startsWith("window")) this.onDoorPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
       if (def.category === "lamp") this.onLampPlaced?.(solid);
     });

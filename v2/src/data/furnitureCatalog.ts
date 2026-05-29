@@ -552,10 +552,14 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "wall-doorway-w", name: "Wide Doorway", category: "door",
     modelPath: "assets/kenney/wallDoorwayWide.glb", scale: S_DOOR, size: { width: 2, depth: 1 }, cost: 280, ratingBonus: 0.04,
     tier: 3, placement: "edge" },
-  { id: "window",       name: "Window",        category: "decoration",
+  // Windows live alongside doors and doorways in the build menu now —
+  // they were buried under "decoration" before, where players didn't
+  // think to look. They're still edge-placed (same mechanism walls /
+  // doors use) so the placement logic doesn't need to change.
+  { id: "window",       name: "Window",        category: "door",
     modelPath: "assets/kenney/wallWindow.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 90, ratingBonus: 0.01,
     tier: 2, placement: "edge" },
-  { id: "window-slide", name: "Sliding Window", category: "decoration",
+  { id: "window-slide", name: "Sliding Window", category: "door",
     modelPath: "assets/kenney/wallWindowSlide.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 130, ratingBonus: 0.02,
     tier: 2, placement: "edge" },
 
