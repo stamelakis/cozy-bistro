@@ -466,7 +466,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "wall" },
   { id: "wine-wall",       name: "Wine Wall",         category: "decoration",
     modelPath: "proc:wine-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 550, style: 6, ratingBonus: 0.06, attractionBonus: 3,
-    tier: 4 },
+    tier: 4, placement: "wall" },
 
   // Plants — explicit targetHeight per variant so Small / Medium /
   // Tall actually read as a height progression instead of all landing
@@ -493,12 +493,17 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/coatRackStanding.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 22, style: 1,
     tier: 1, targetHeight: 1.7 },
   // Rugs are flat — without an explicit override the decoration default
-  // (0.55m) puffs them into 55cm-tall blocks.
+  // (0.55m) puffs them into 55cm-tall blocks. They stay 1×1 footprint
+  // so they snap to a tile CENTER (odd-sized snap rule); the scale > 1
+  // lets them visually overhang into neighbouring tiles, which is fine
+  // because rugs don't block movement or placement.
   { id: "rug-rectangle",  name: "Rectangular Rug", category: "decoration",
-    modelPath: "assets/kenney/rugRectangle.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 40, style: 3, comfort: 1, ratingBonus: 0.01,
+    modelPath: "assets/kenney/rugRectangle.glb", scale: 1.6, size: { width: 1, depth: 1 }, cost: 40, style: 3, comfort: 1, ratingBonus: 0.01,
     tier: 2, targetHeight: 0.04 },
+  // Round rug: scale 2.0 → ~2-tile diameter, the player gets a
+  // centrepiece that visually covers ~4 tiles around the snapped tile.
   { id: "rug-round",      name: "Round Rug",       category: "decoration",
-    modelPath: "assets/kenney/rugRound.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 30, style: 2, comfort: 1,
+    modelPath: "assets/kenney/rugRound.glb", scale: 2.0, size: { width: 1, depth: 1 }, cost: 30, style: 2, comfort: 1,
     tier: 1, targetHeight: 0.04 },
 
   // Lighting
@@ -655,13 +660,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
 
   // === Entertainment / TV / electronics. ===
   { id: "tv-modern",      name: "Modern TV",       category: "decoration",
-    modelPath: "assets/kenney/televisionModern.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 260, style: 4, attractionBonus: 3, ratingBonus: 0.04,
+    modelPath: "assets/kenney/televisionModern.glb", scale: 0.95, size: { width: 1, depth: 1 }, cost: 260, style: 4, attractionBonus: 3, ratingBonus: 0.04,
     tier: 3, placement: "surface" },
   { id: "tv-vintage",     name: "Vintage TV",      category: "decoration",
-    modelPath: "assets/kenney/televisionVintage.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 180, style: 3, attractionBonus: 2, ratingBonus: 0.03,
+    modelPath: "assets/kenney/televisionVintage.glb", scale: 0.7, size: { width: 1, depth: 1 }, cost: 180, style: 3, attractionBonus: 2, ratingBonus: 0.03,
     tier: 3, placement: "surface" },
   { id: "tv-antenna",     name: "Antenna TV",      category: "decoration",
-    modelPath: "assets/kenney/televisionAntenna.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 120, style: 2, ratingBonus: 0.01,
+    modelPath: "assets/kenney/televisionAntenna.glb", scale: 0.65, size: { width: 1, depth: 1 }, cost: 120, style: 2, ratingBonus: 0.01,
     tier: 2, placement: "surface" },
   { id: "tv-cabinet",     name: "TV Cabinet",      category: "decoration",
     modelPath: "assets/kenney/cabinetTelevision.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 90, style: 2, ratingBonus: 0.01,
@@ -683,21 +688,25 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "surface" },
 
   // === More soft furnishings (rugs). ===
-  // Same flat-height override as the other rugs above.
+  // Same flat-height override as the other rugs above. 1×1 footprint
+  // so they snap to a tile centre; scale > 1 lets them visually
+  // overhang into neighbouring tiles.
   { id: "rug-doormat",    name: "Doormat",         category: "decoration",
-    modelPath: "assets/kenney/rugDoormat.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 18, style: 1,
+    modelPath: "assets/kenney/rugDoormat.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 18, style: 1,
     tier: 1, targetHeight: 0.04 },
   { id: "rug-rounded",    name: "Rounded Rug",     category: "decoration",
-    modelPath: "assets/kenney/rugRounded.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 45, style: 3, comfort: 1, ratingBonus: 0.01,
+    modelPath: "assets/kenney/rugRounded.glb", scale: 1.6, size: { width: 1, depth: 1 }, cost: 45, style: 3, comfort: 1, ratingBonus: 0.01,
     tier: 2, targetHeight: 0.04 },
+  // Square rug: scale 1.4 → ~2 tile area, covers the center tile fully
+  // plus a strip of each neighbour.
   { id: "rug-square",     name: "Square Rug",      category: "decoration",
-    modelPath: "assets/kenney/rugSquare.glb", scale: S_DECOR, size: { width: 2, depth: 2 }, cost: 70, style: 3, comfort: 1, attractionBonus: 1, ratingBonus: 0.02,
+    modelPath: "assets/kenney/rugSquare.glb", scale: 1.4, size: { width: 1, depth: 1 }, cost: 70, style: 3, comfort: 1, attractionBonus: 1, ratingBonus: 0.02,
     tier: 2, targetHeight: 0.04 },
 
   // === Cute/quirky decor. ===
   { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",
-    modelPath: "assets/kenney/bear.glb", scale: S_DECOR * 0.55, size: { width: 1, depth: 1 }, cost: 22, attractionBonus: 1, style: 2,
-    tier: 1, placement: "surface" },
+    modelPath: "assets/kenney/bear.glb", scale: S_DECOR * 0.7, size: { width: 1, depth: 1 }, cost: 22, attractionBonus: 1, style: 2,
+    tier: 1, placement: "wall" },
   { id: "coat-rack-wall", name: "Wall Coat Rack",  category: "decoration",
     modelPath: "assets/kenney/coatRack.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 16, style: 1,
     tier: 1 },
@@ -717,7 +726,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "ceiling" },
   { id: "dessert-display", name: "Dessert Case",   category: "decoration",
     modelPath: "proc:dessert-display", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 250, style: 4, attractionBonus: 4, ratingBonus: 0.04,
-    tier: 3, placement: "surface" },
+    tier: 3 },
 ];
 
 export function getFurnitureDef(id: string): FurnitureDef | undefined {

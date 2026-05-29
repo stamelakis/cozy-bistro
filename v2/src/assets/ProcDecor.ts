@@ -105,19 +105,26 @@ function neonSign(): THREE.Group {
   return g;
 }
 
-/** A wine wall — rows of bottle "shelf" cylinders. */
+/** A wine wall — rows of bottle "shelf" cylinders mounted on the wall.
+ * Authored for placement="wall": children sit at local y=0..~1.4 so
+ * once the world placement adds the wall's 1.5 m chest-height offset,
+ * the rack hangs from chest height up to ~y=2.9 (just below the
+ * ceiling). No base stand — it's literally on the wall, not on a stand. */
 function wineWall(): THREE.Group {
   const g = new THREE.Group();
-  // Backing
+  // Back panel — sits flush against the wall. Authored at +Z so the
+  // model's max.z is near the wall plane (the BuildMenu mount logic
+  // rotates the model so its +Z faces the wall and offsets by 0.07).
   const back = new THREE.Mesh(
-    new THREE.BoxGeometry(1.0, 1.4, 0.18),
+    new THREE.BoxGeometry(1.0, 1.4, 0.05),
     new THREE.MeshStandardMaterial({ color: 0x4a2e1c, roughness: 0.75 }),
   );
-  back.position.y = WALL_HEIGHT - 0.05;
+  back.position.set(0, 0.7, 0.025);
   back.castShadow = true;
   back.receiveShadow = true;
   g.add(back);
-  // Bottle slots — 4 rows × 4 columns of dark green cylinders
+  // Bottle slots — 4 rows × 4 columns of dark green cylinders extending
+  // toward the room (-Z) so the bottle ends face the player.
   const bottleMat = new THREE.MeshStandardMaterial({ color: 0x2a4a28, roughness: 0.4 });
   for (let row = 0; row < 4; row += 1) {
     for (let col = 0; col < 4; col += 1) {
@@ -125,13 +132,12 @@ function wineWall(): THREE.Group {
       bottle.rotation.x = Math.PI / 2;
       bottle.position.set(
         -0.4 + col * 0.27,
-        WALL_HEIGHT - 0.5 + row * 0.32,
-        0.06,
+        0.22 + row * 0.32,
+        -0.09,
       );
       g.add(bottle);
     }
   }
-  g.add(makeBaseStand(1.05));
   return g;
 }
 
