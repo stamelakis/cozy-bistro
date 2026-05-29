@@ -357,12 +357,19 @@ export class Game {
     // dirtyDishCount when both are present. Hydrate sets up the pool
     // (or seeds starter inventory when no save data is present).
     this.dishware.hydrate(save.dishware);
-    // Old-save fallback: dirtyDishCount existed pre-feature. Roll it
-    // into the T1 plate dirty pool ONLY when the new field is absent,
-    // so a fresh save round-trips cleanly.
+    // Old-save fallback: dirtyDishCount existed pre-feature. We MOVE
+    // pieces from clean → dirty rather than ADD to dirty, so total
+    // ownership stays at the starter amount instead of inflating to
+    // 23 / 25 / etc. (the pre-fix bug). When the player had more
+    // legacy dirties than starter clean, we cap at clean — the rest
+    // is lost to time, which is fine for a save migration edge case.
     if (!save.dishware && typeof save.dirtyDishCount === "number") {
       const n = Math.max(0, Math.floor(save.dirtyDishCount));
-      for (let i = 0; i < n; i += 1) this.dishware.markDirty("plate", 1);
+      for (let i = 0; i < n; i += 1) {
+        const tier = this.dishware.reserveOne("plate");
+        if (tier === null) break;
+        this.dishware.markDirty("plate", tier);
+      }
     }
     if (typeof save.stockTarget === "number") {
       this.setStockTarget(save.stockTarget);

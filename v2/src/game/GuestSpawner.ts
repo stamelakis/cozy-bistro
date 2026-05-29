@@ -527,7 +527,16 @@ export class GuestSpawner {
   }
 
   /** Count down patience while the guest is waiting. If it hits zero they
-   * give up: record a lost customer, ding the rating, and walk them out. */
+   * give up: record a lost customer, ding the rating, and walk them out.
+   *
+   * Critically: any plates / glasses they had RESERVED but not yet eaten
+   * get returned to the clean pool. Without that step a customer who
+   * gave up while waiting for food would permanently consume the
+   * reserved piece — over a busy session the dishware inventory would
+   * drift downward (and the legacy load path inflated it the other way
+   * — that's how the player saw "23 plates without buying"). The
+   * plates the customer ALREADY ate before patience ran out still
+   * become dirty + show on the table the same as a finalized visit. */
   private tickPatience(g: ActiveGuest, dt: number): void {
     if (g.state !== "seated" && g.state !== "waitingForFood") return;
     g.patience -= dt;
@@ -535,6 +544,25 @@ export class GuestSpawner {
     // Patience exhausted — angry exit. Route via the door.
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
+    // Return any in-flight reservations to the clean pool.
+    for (let i = g.orderIndex; i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1);
+    }
+    // Eaten courses still leave dirty plates on the table the same as
+    // a normal departure.
+    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
+    }
+    if (g.orderIndex > 0) {
+      this.removePlateForGuest(g.id);
+      this.spawnLeftoversForGuest(g);
+    }
     g.character.action = "walk";
     g.target = DOOR_POSITION.clone();
     this.planPath(g);

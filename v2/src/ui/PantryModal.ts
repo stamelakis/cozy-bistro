@@ -280,6 +280,12 @@ export class PantryModal {
   }
 
   private handleBuyDishSet(set: DishwareSetDef): void {
+    // Luxury-tier gate — match the recipe + furniture unlock pattern.
+    // T2+ dishware needs the player to have expanded to that tier.
+    if (set.tier > this.game.getLuxuryTier()) {
+      this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
+      return;
+    }
     const free = this.game.dishware.getFreeCapacity();
     if (free < set.setSize) {
       this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
@@ -325,6 +331,7 @@ export class PantryModal {
       this.dishStatLine.textContent =
         `${plateClean} plates clean · ${glassClean} glasses clean · ${stored}/${cap} stored${dirtyStr}`;
     }
+    const playerTier = this.game.getLuxuryTier();
     for (const set of [...PLATE_SETS, ...GLASS_SETS]) {
       const entry = this.dishRowEls.get(set.id);
       if (!entry) continue;
@@ -336,17 +343,23 @@ export class PantryModal {
       const bonusTag = set.satisfactionPerPiece > 0
         ? ` <span style="opacity:0.55">+${set.satisfactionPerPiece.toFixed(1)}</span>`
         : "";
+      const locked = set.tier > playerTier;
+      // Locked tiers grey out the name + show a 🔒 button instead of
+      // the price. Matches how the build menu / recipe upgrades behave
+      // — the player has to expand to unlock the tier first.
       entry.tierLine.innerHTML = `${set.name}${ownedTag}${bonusTag}`;
-      // Disable + dim Buy when there's no capacity left or the player
-      // can't afford the set. Tooltip explains why.
+      entry.tierLine.style.opacity = locked ? "0.45" : "1";
       const free = dish.getFreeCapacity();
       const canFit = free >= set.setSize;
       const canAfford = this.game.economy.getMoney() >= set.cost;
-      const enabled = canFit && canAfford;
+      const enabled = !locked && canFit && canAfford;
       entry.buyBtn.disabled = !enabled;
       entry.buyBtn.style.opacity = enabled ? "1" : "0.35";
       entry.buyBtn.style.cursor = enabled ? "pointer" : "not-allowed";
-      entry.buyBtn.title = !canFit
+      entry.buyBtn.textContent = locked ? "🔒" : `$${set.cost}`;
+      entry.buyBtn.title = locked
+        ? `Tier ${set.tier} dishware unlocks when you expand to Luxury Tier ${set.tier}.`
+        : !canFit
         ? `No room for ${set.setSize} more — buy more cabinets first.`
         : !canAfford
         ? `Need $${set.cost} (have $${this.game.economy.getMoney()}).`

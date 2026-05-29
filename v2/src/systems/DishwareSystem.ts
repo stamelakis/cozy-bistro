@@ -219,18 +219,23 @@ export class DishwareSystem {
   }
 
   /** Re-hydrate from a saved snapshot. Unknown / corrupted entries are
-   * silently dropped (we still want the player to be able to load). */
+   * silently dropped (we still want the player to be able to load).
+   *
+   * Dirty pieces in the save are auto-washed on load: we move them
+   * back to the clean pool. The mesh positions aren't persisted, so
+   * leaving the dirty count high would mean those plates are "stuck"
+   * in inventory — no mesh on the table for the waiter to claim, so
+   * the wash loop can never drain them. Mental model: while you were
+   * away, someone cleaned up. */
   hydrate(save: { plates?: Array<[number, number, number]>; glasses?: Array<[number, number, number]> } | null | undefined): void {
     this.plates = new Map();
     this.glasses = new Map();
     if (save?.plates) triplesToPool(save.plates, this.plates);
     if (save?.glasses) triplesToPool(save.glasses, this.glasses);
-    // If a save predates the dishware feature, the pools come back
-    // empty and we should seed the starter inventory the same way the
-    // constructor does — otherwise the player loads in with zero
-    // plates and can't serve.
     if (this.plates.size === 0) this.plates.set(1, { clean: STARTER_PLATE_COUNT, dirty: 0 });
     if (this.glasses.size === 0) this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
+    autoWashPool(this.plates);
+    autoWashPool(this.glasses);
   }
 
   // === Rating bonus ===
@@ -261,6 +266,19 @@ function poolToTriples(pool: Map<number, { clean: number; dirty: number }>): Arr
     out.push([tier, entry.clean, entry.dirty]);
   }
   return out;
+}
+
+/** Move every dirty piece in the pool back to clean. Called from
+ * hydrate so save / load doesn't strand inventory in a state where
+ * dirty pieces exist but no mesh on a table backs them — the wash
+ * loop would never find one to claim. */
+function autoWashPool(pool: Map<number, { clean: number; dirty: number }>): void {
+  for (const entry of pool.values()) {
+    if (entry.dirty > 0) {
+      entry.clean += entry.dirty;
+      entry.dirty = 0;
+    }
+  }
 }
 
 function triplesToPool(triples: Array<[number, number, number]>, into: Map<number, { clean: number; dirty: number }>): void {

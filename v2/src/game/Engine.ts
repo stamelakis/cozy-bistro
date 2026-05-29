@@ -375,12 +375,11 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
-      // Wash callback: when something washes a piece outside the
-      // waiter trip system (rare — only legacy / save migration), we
-      // still want the table visual to drain in lockstep with the
-      // inventory counter. The waiter wash trip path removes the
-      // specific mesh it picked up directly, bypassing this hook.
-      this.game.dishware.onDishWashed = (kind) => this.spawner?.removeOneLeftover(kind);
+      // We deliberately don't wire dishware.onDishWashed: the wash
+      // trip path removes the specific mesh it picked up (via
+      // pickupDirty) and firing onDishWashed afterward would yank a
+      // SECOND unrelated leftover off some other table — the dirty
+      // pile would visually drain twice as fast as it inventory-drains.
       // Wire the waiter wash trip system. Spawner owns the dirty
       // pieces; StaffRouter walks the waiter to them. Without this
       // block (e.g. no router), dirty plates simply pile up.
