@@ -723,7 +723,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 1, placement: "wall" },
   { id: "coat-rack-wall", name: "Wall Coat Rack",  category: "decoration",
     modelPath: "assets/kenney/coatRack.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 16, style: 1,
-    tier: 1 },
+    tier: 1, placement: "wall" },
 
   // === Procedural fancy decor — inspired by polished restaurant sims. ===
   { id: "fountain",       name: "Indoor Fountain", category: "decoration",

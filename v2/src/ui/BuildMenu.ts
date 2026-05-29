@@ -899,11 +899,19 @@ export class BuildMenu {
       // For real doors / doorways: only allow placement when the
       // snapped edge actually coincides with an exterior wall segment.
       // Stops the player from dropping a "front door" floating between
-      // tiles in the middle of the restaurant. Windows live in the same
-      // category but are placeable on ANY wall — skip them here.
+      // tiles in the middle of the restaurant.
       if (def.category === "door" && !def.id.startsWith("window")) {
         const onPerimeter = this.isOnPerimeterWall(e.x, e.z);
         if (!onPerimeter) {
+          return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
+        }
+      }
+      // For windows: must sit ON a wall — exterior perimeter OR an
+      // interior partition the player has already placed. Without
+      // this gate windows snapped to any grid line and floated in
+      // mid-air on the lawn outside the building.
+      if (def.id.startsWith("window")) {
+        if (!this.hasWallAtEdge(e.x, e.z)) {
           return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
         }
       }
@@ -1163,6 +1171,28 @@ export class BuildMenu {
     // Left / right vertical walls.
     if (Math.abs(x - X_MIN) < TOL && z >= Z_MIN - TOL && z <= Z_MAX + TOL) return true;
     if (Math.abs(x - X_MAX) < TOL && z >= Z_MIN - TOL && z <= Z_MAX + TOL) return true;
+    return false;
+  }
+
+  /** True if the snapped edge has a wall — either an exterior
+   * perimeter wall OR an interior partition the player has placed
+   * (int-wall, int-wall-half, int-doorway, int-window). Used for
+   * window placement so a window can only land on something that's
+   * actually a wall, not just any random grid line on the lawn. */
+  private hasWallAtEdge(x: number, z: number): boolean {
+    if (this.isOnPerimeterWall(x, z)) return true;
+    const TOL = 0.05;
+    for (const it of this.registry.snapshotItems()) {
+      const def = furnitureCatalog.find((d) => d.id === it.defId);
+      // Look for items that physically EXIST on a wall edge — interior
+      // partitions (category "wall") or any other edge-placed item.
+      // Excluded: edge-placed items that ARE windows / doors (we don't
+      // want a window snap to satisfy itself).
+      if (def?.placement !== "edge") continue;
+      if (def.id.startsWith("window")) continue;
+      if (def.category === "door") continue;
+      if (Math.abs(it.x - x) < TOL && Math.abs(it.z - z) < TOL) return true;
+    }
     return false;
   }
 
