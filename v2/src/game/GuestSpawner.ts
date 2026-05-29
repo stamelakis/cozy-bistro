@@ -270,6 +270,13 @@ interface ActiveGuest {
    * bump for each plate served. Empty when no course has been reserved
    * yet. */
   reservedDishTiers: number[];
+  /** True once settleGuestDishes has run for this guest — every exit
+   * path (finalize, patience, table-sold, any other premature despawn)
+   * routes through it, but tracks the flag so the second call is a
+   * no-op and dishes don't double-count. Without this a table-sold
+   * guest's reservations would leak silently — the panel showed
+   * dishes "disappearing" as the inventory drifted down. */
+  dishesSettled?: boolean;
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
@@ -667,21 +674,9 @@ export class GuestSpawner {
     // Patience exhausted — angry exit. Route via the door.
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
-    // Return any in-flight reservations to the clean pool.
-    for (let i = g.orderIndex; i < g.reservedDishTiers.length; i += 1) {
-      const recipe = g.order[i];
-      if (!recipe) continue;
-      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
-      this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1);
-    }
-    // Eaten courses still leave dirty plates on the table the same as
-    // a normal departure.
-    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
-      const recipe = g.order[i];
-      if (!recipe) continue;
-      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
-      this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
-    }
+    // Route every reservation through the single chokepoint — eaten
+    // courses become dirty, in-flight ones go back to clean.
+    this.settleGuestDishes(g);
     if (g.orderIndex > 0) {
       this.removePlateForGuest(g.id);
       this.spawnLeftoversForGuest(g);
@@ -691,6 +686,39 @@ export class GuestSpawner {
     this.planPath(g);
     g.state = "walkingToDoor";
     g.stateClock = 0;
+  }
+
+  /** Reconcile every reservation the guest still holds against the
+   * dishware pool. Idempotent — calling twice for the same guest is
+   * a no-op via the `dishesSettled` flag, so finalizeVisit /
+   * tickPatience / table-sold / despawn safety net can all route
+   * through it without double-counting.
+   *
+   *   - reservations 0..orderIndex-1  → marked dirty (those courses
+   *     were eaten and the plates landed on the table)
+   *   - reservations orderIndex..end  → returned to clean (in-flight
+   *     plates the guest never got to use because they bailed out)
+   *
+   * Without this any premature exit (table sold under the guest,
+   * stuck-leaving despawn, generic "give up") would orphan the clean
+   * decrements and the dishware inventory drifted downward over time. */
+  private settleGuestDishes(g: ActiveGuest): void {
+    if (g.dishesSettled) return;
+    g.dishesSettled = true;
+    // Eaten courses become dirty.
+    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
+    }
+    // In-flight (not-yet-eaten) reservations return to the clean pool.
+    for (let i = g.orderIndex; i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1);
+    }
   }
 
   getActiveGuestCount(): number {
@@ -782,8 +810,12 @@ export class GuestSpawner {
     for (const g of this.guests) {
       const slot = byId.get(g.seatId);
       if (!slot) {
-        // Table sold under them. Walk them out gracefully.
+        // Table sold under them. Walk them out gracefully. Reconcile
+        // any reserved plates BEFORE the walk so the dishware inventory
+        // doesn't silently drift down — eaten courses become dirty,
+        // in-flight ones go back to clean.
         if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
+          this.settleGuestDishes(g);
           g.target = DOOR_POSITION.clone();
           this.planPath(g);
           g.state = "walkingToDoor";
@@ -1054,6 +1086,11 @@ export class GuestSpawner {
 
   private despawnGuest(idx: number): void {
     const g = this.guests[idx];
+    // Safety net — if some upstream path forgot to reconcile the
+    // reservations (or a future state transition is added without one),
+    // this catches them here. settleGuestDishes is idempotent so calling
+    // it twice is harmless.
+    this.settleGuestDishes(g);
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
     if (g.waiting) {
@@ -1746,12 +1783,16 @@ export class GuestSpawner {
 
 
   /** Guest gives up (ran out of patience OR couldn't be served) — record
-   * the loss + dock the rating, then walk them out. */
+   * the loss + dock the rating, then walk them out. Reconciles any
+   * reservations they were holding so the dishware inventory stays
+   * balanced even when the give-up happens mid-course (e.g. pantry
+   * runs out at orderIndex>0 followed by a fresh failure). */
   private markLostAndExit(g: ActiveGuest): void {
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
     this.sfx?.thud();
+    this.settleGuestDishes(g);
     g.character.action = "walk";
     g.target = DOOR_POSITION.clone();
     this.planPath(g);
@@ -1865,16 +1906,10 @@ export class GuestSpawner {
     }
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
-    // Every plate / glass actually served becomes dirty in its own tier.
-    // orderIndex points at the next-to-be-served course (or one past
-    // the last if everything was eaten); g.reservedDishTiers up to that
-    // index represents the plates that landed on the table.
-    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
-      const recipe = g.order[i];
-      if (!recipe) continue;
-      const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
-      this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
-    }
+    // Single chokepoint — finalizeVisit only fires when every course
+    // landed, so settleGuestDishes' "eaten" path covers them all and
+    // the "in-flight" path is a no-op.
+    this.settleGuestDishes(g);
     // The live "eating" plate is about to be subsumed by the leftover
     // meshes (which include the last course too). Clear it before we
     // spawn the leftovers so we don't draw both on top of each other.

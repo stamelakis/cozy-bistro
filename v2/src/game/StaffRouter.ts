@@ -455,8 +455,20 @@ export class StaffRouter {
     // Release any wash-trip claims — without this a fired waiter
     // permanently locks up the dirty plate AND the sink they were
     // heading for.
+    //
+    // If the waiter was already CARRYING the dish (phase === "wash"),
+    // the mesh + dirtyTableMeshes entry are already gone but the
+    // DishwareSystem still counts that piece as dirty. Without an
+    // explicit washOne the dirty count stays stuck forever (no mesh
+    // for any future wash trip to claim), and the inventory looks like
+    // it's leaking pieces. Treat the carried dish as auto-washed:
+    // the fired waiter dropped it in the sink on the way out.
     if (removed.washTrip) {
-      this.washCallbacks?.releaseDirtyPickup(removed.washTrip.dirtyId);
+      if (removed.washTrip.phase === "wash") {
+        this.washCallbacks?.washOne(removed.washTrip.kind);
+      } else {
+        this.washCallbacks?.releaseDirtyPickup(removed.washTrip.dirtyId);
+      }
       this.busyWashUids.delete(removed.washTrip.stationUid);
       removed.washTrip = null;
     }
