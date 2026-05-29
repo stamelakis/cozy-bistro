@@ -356,8 +356,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // item reduces the dirty-dish wash interval; the chef never claims
   // these as cook stations.
   { id: "sink",           name: "Sink",            category: "wash",
-    modelPath: "assets/kenney/kitchenSink.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 150,
-    tier: 2 },
+    modelPath: "assets/kenney/kitchenSink.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 100,
+    tier: 1 },
   { id: "dishwasher",     name: "Dishwasher",      category: "wash",
     modelPath: "proc:dishwasher", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 450,
     tier: 3 },
