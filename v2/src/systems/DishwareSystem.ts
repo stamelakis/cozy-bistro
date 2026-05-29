@@ -62,11 +62,13 @@ export class DishwareSystem {
   private dishwasherBatches: Map<string, DishwasherBatch> = new Map();
 
   /** Total pieces ever ADDED to the inventory — bumped by buy / starter
-   * stock / hydrate. Decremented only by an explicit admin-sell (not
-   * implemented today). The DishwareLeakWatcher diffs this against
-   * (clean + dirty + in-flight) to spot when a code path silently
-   * forgot to return a reserved plate. */
-  private lifetimeAdded = 0;
+   * stock. Tracked PER KIND so a save can persist the "high-water" total
+   * for plates and glasses independently. On hydrate the system tops
+   * up the clean pool to match these totals — any pieces that leaked
+   * during the previous session come back as clean plates / glasses,
+   * preventing the slow inventory shrink the player kept seeing. */
+  private lifetimeAddedPlate = 0;
+  private lifetimeAddedGlass = 0;
 
   /** Optional dev-mode logger — every mutation calls this with a
    * one-line description before returning. Wired by Engine to the
@@ -90,7 +92,18 @@ export class DishwareSystem {
   /** Total dishware ever added to the inventory. The watcher diffs
    * this against current (clean + dirty + in-flight) to detect leaks. */
   getLifetimeAdded(): number {
-    return this.lifetimeAdded;
+    return this.lifetimeAddedPlate + this.lifetimeAddedGlass;
+  }
+  /** Per-kind lifetime totals for the save snapshot. Restored on
+   * hydrate to recover any pieces that leaked during the previous
+   * session. */
+  getLifetimeAddedByKind(): { plate: number; glass: number } {
+    return { plate: this.lifetimeAddedPlate, glass: this.lifetimeAddedGlass };
+  }
+  private bumpLifetime(kind: DishKind, n: number): void {
+    if (n <= 0) return;
+    if (kind === "plate") this.lifetimeAddedPlate += n;
+    else this.lifetimeAddedGlass += n;
   }
 
   // washClock removed — Phase 3 replaced the abstract timer-driven
@@ -116,7 +129,8 @@ export class DishwareSystem {
   constructor() {
     this.plates.set(1, { clean: STARTER_PLATE_COUNT, dirty: 0 });
     this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
-    this.lifetimeAdded = STARTER_PLATE_COUNT + STARTER_GLASS_COUNT;
+    this.lifetimeAddedPlate = STARTER_PLATE_COUNT;
+    this.lifetimeAddedGlass = STARTER_GLASS_COUNT;
   }
 
   // === Counts ===
@@ -259,11 +273,11 @@ export class DishwareSystem {
    * Caller is responsible for charging the cost. */
   buySet(set: DishwareSetDef): number {
     const taken = this.addClean(set.kind, set.tier, set.setSize);
-    // Only the buy path inflates lifetimeAdded — settleGuestDishes
+    // Only the buy path inflates lifetime totals — settleGuestDishes
     // also calls addClean to return reservations, and those plates were
-    // already part of lifetimeAdded when bought.
-    this.lifetimeAdded += taken;
-    this.log(`buySet(${set.id ?? set.kind}, t${set.tier}, +${taken}) → lifetime ${this.lifetimeAdded}`);
+    // already part of the lifetime when bought.
+    this.bumpLifetime(set.kind, taken);
+    this.log(`buySet(${set.id ?? set.kind}, t${set.tier}, +${taken}) → lifetime ${this.getLifetimeAdded()}`);
     return taken;
   }
 
@@ -413,6 +427,7 @@ export class DishwareSystem {
   hydrate(
     save: { plates?: Array<[number, number, number]>; glasses?: Array<[number, number, number]> } | null | undefined,
     inFlight?: Array<{ kind: string; tier: number; count: number }>,
+    lifetime?: { plate?: number; glass?: number },
   ): void {
     this.plates = new Map();
     this.glasses = new Map();
@@ -424,9 +439,6 @@ export class DishwareSystem {
     autoWashPool(this.glasses);
     // Restore in-flight reservations. Guests aren't persisted, so a
     // plate they were holding at save time would otherwise vanish.
-    // Treat each entry as "guest left, plate's back in the kitchen" and
-    // add it to the clean pool. Tiers outside [1, 5] are dropped
-    // defensively.
     if (inFlight && Array.isArray(inFlight)) {
       let recovered = 0;
       for (const e of inFlight) {
@@ -441,16 +453,38 @@ export class DishwareSystem {
         pool.set(e.tier, entry);
         recovered += c;
       }
-      if (recovered > 0) {
-        this.log(`hydrate restored ${recovered} in-flight piece(s) to clean`);
-      }
+      if (recovered > 0) this.log(`hydrate restored ${recovered} in-flight piece(s) to clean`);
     }
-    // Re-baseline lifetimeAdded so the watcher's expected total matches
-    // what the save actually held. Save files don't currently persist
-    // lifetimeAdded itself; we infer it from the current pools (now
-    // including the recovered in-flight reservations).
-    this.lifetimeAdded = this.getOwned("plate") + this.getOwned("glass");
-    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime ${this.lifetimeAdded}`);
+    // Adopt persisted lifetime totals (fall back to "current owned"
+    // for old saves that don't have them). Then top up the clean pool
+    // for each kind so any pieces that LEAKED during the previous
+    // session — those that should have been there but weren't — come
+    // back as clean tier-1 pieces. This is the user-requested
+    // "disappeared plates/glasses return as clean on next load".
+    const wantPlate = Math.max(0, Math.floor(lifetime?.plate ?? this.getOwned("plate")));
+    const wantGlass = Math.max(0, Math.floor(lifetime?.glass ?? this.getOwned("glass")));
+    const havePlate = this.getOwned("plate");
+    const haveGlass = this.getOwned("glass");
+    if (wantPlate > havePlate) {
+      const missing = wantPlate - havePlate;
+      const e = this.plates.get(1) ?? { clean: 0, dirty: 0 };
+      e.clean += missing;
+      this.plates.set(1, e);
+      this.log(`hydrate recovered ${missing} missing plate(s) → clean tier 1`);
+    }
+    if (wantGlass > haveGlass) {
+      const missing = wantGlass - haveGlass;
+      const e = this.glasses.get(1) ?? { clean: 0, dirty: 0 };
+      e.clean += missing;
+      this.glasses.set(1, e);
+      this.log(`hydrate recovered ${missing} missing glass(es) → clean tier 1`);
+    }
+    // Re-baseline lifetime totals to the larger of (persisted, current
+    // owned). Players who somehow have MORE than the persisted lifetime
+    // shouldn't be penalised by a re-baseline lowering it.
+    this.lifetimeAddedPlate = Math.max(wantPlate, this.getOwned("plate"));
+    this.lifetimeAddedGlass = Math.max(wantGlass, this.getOwned("glass"));
+    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass}`);
   }
 
   // === Rating bonus ===

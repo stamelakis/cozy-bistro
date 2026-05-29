@@ -391,7 +391,7 @@ export class Game {
     // Per-tier dishware snapshot — preferred over the legacy
     // dirtyDishCount when both are present. Hydrate sets up the pool
     // (or seeds starter inventory when no save data is present).
-    this.dishware.hydrate(save.dishware, save.inFlightDishes);
+    this.dishware.hydrate(save.dishware, save.inFlightDishes, save.dishwareLifetime);
     // Old-save fallback: dirtyDishCount existed pre-feature. We MOVE
     // pieces from clean → dirty rather than ADD to dirty, so total
     // ownership stays at the starter amount instead of inflating to

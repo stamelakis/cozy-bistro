@@ -235,6 +235,10 @@ export class SaveSystem {
       // Snapshot in-flight plate reservations so a refresh doesn't
       // silently lose every plate held by a mid-meal guest.
       inFlightDishes: this.game.getInFlightDishesForSave(),
+      // High-water total of all dishware ever added. On load the
+      // hydrate path tops up the clean pool to match this so any
+      // pieces that leaked during play return as clean.
+      dishwareLifetime: this.game.dishware.getLifetimeAddedByKind(),
       // Per-tier dish/glass snapshot. Legacy dirtyDishCount is no
       // longer written — the new field has strictly more info, and
       // the loader handles either.

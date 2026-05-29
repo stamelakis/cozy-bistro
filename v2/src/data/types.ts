@@ -248,6 +248,13 @@ export interface SaveGameState {
    * each entry back to the clean pool: "the guest left at save time,
    * the plate's back in the kitchen". */
   inFlightDishes?: Array<{ kind: string; tier: number; count: number }>;
+  /** Per-kind "high-water" total pieces ever added to the inventory.
+   * Persisted so the next load can detect leaks (current owned <
+   * persisted total) and TOP UP the clean pool with the missing
+   * pieces. Acts as the source of truth: regardless of what got
+   * silently dropped during the previous session, the inventory comes
+   * back equal to or greater than this number. */
+  dishwareLifetime?: { plate?: number; glass?: number };
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];
