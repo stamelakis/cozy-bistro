@@ -1188,7 +1188,7 @@ export class WorldScene {
     const STEP_WIDTH = 1.0;                                // X span
     const STEP_DEPTH = 0.2;                                // Z span per step
     const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m
-    const X_CENTER   = -3.5;                               // against the left interior wall
+    const X_CENTER   = -3.9;                               // flush against the left interior wall (X=-4.4)
     // The TOP of the flight sits at the back-left corner so the player
     // walks INTO the corner as they climb (rather than starting at the
     // corner, which was the previous orientation). With STEP_DEPTH=0.2
