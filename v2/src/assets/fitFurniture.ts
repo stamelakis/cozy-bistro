@@ -205,6 +205,14 @@ export const WINDOW_SILL_TOP = 0.9;
  * edges. A tile is "wall-adjacent" when its half-tile reaches one of
  * these planes. */
 const WALL_BOUNDS = { minX: -4.5, maxX: 5.5, minZ: -4.5, maxZ: 5.5 };
+/** Perimeter walls are 0.2 m thick BoxGeometry centred on the bounds
+ * (see WorldScene.wallBoxFor + wallSegmentPosition). Half the thickness
+ * lives on the interior side of the bounds plane — so the actual
+ * INTERIOR FACE of the back wall (bound z=-4.5) is at z=-4.4, the
+ * right wall (x=5.5) at x=5.4, etc. snapToAdjacentWall must aim for
+ * this face, not the center plane, or the model's back ends up
+ * clipping through the visible inside surface of the wall. */
+const WALL_HALF_THICKNESS = 0.1;
 
 /** Slide a tile-placed model toward any perimeter wall its cell
  * touches so the model's back face sits flush against the wall plane.
@@ -239,16 +247,23 @@ export function snapToAdjacentWall(model: THREE.Object3D, def: FurnitureDef): vo
   // matches the tile size — only the row of tiles touching a wall
   // qualifies.
   const TILE = 1.0;
+  // Snap to the wall's INTERIOR face — wall meshes are 0.2 m thick
+  // centred on WALL_BOUNDS, so the face the room sees lives half a
+  // thickness inside the bound plane.
+  const maxXFace = WALL_BOUNDS.maxX - WALL_HALF_THICKNESS;
+  const minXFace = WALL_BOUNDS.minX + WALL_HALF_THICKNESS;
+  const maxZFace = WALL_BOUNDS.maxZ - WALL_HALF_THICKNESS;
+  const minZFace = WALL_BOUNDS.minZ + WALL_HALF_THICKNESS;
   let dx = 0, dz = 0;
-  if (WALL_BOUNDS.maxX - cx <= TILE / 2 + 0.01 && box.max.x < WALL_BOUNDS.maxX) {
-    dx = WALL_BOUNDS.maxX - box.max.x;
-  } else if (cx - WALL_BOUNDS.minX <= TILE / 2 + 0.01 && box.min.x > WALL_BOUNDS.minX) {
-    dx = WALL_BOUNDS.minX - box.min.x;
+  if (WALL_BOUNDS.maxX - cx <= TILE / 2 + 0.01 && box.max.x < maxXFace) {
+    dx = maxXFace - box.max.x;
+  } else if (cx - WALL_BOUNDS.minX <= TILE / 2 + 0.01 && box.min.x > minXFace) {
+    dx = minXFace - box.min.x;
   }
-  if (WALL_BOUNDS.maxZ - cz <= TILE / 2 + 0.01 && box.max.z < WALL_BOUNDS.maxZ) {
-    dz = WALL_BOUNDS.maxZ - box.max.z;
-  } else if (cz - WALL_BOUNDS.minZ <= TILE / 2 + 0.01 && box.min.z > WALL_BOUNDS.minZ) {
-    dz = WALL_BOUNDS.minZ - box.min.z;
+  if (WALL_BOUNDS.maxZ - cz <= TILE / 2 + 0.01 && box.max.z < maxZFace) {
+    dz = maxZFace - box.max.z;
+  } else if (cz - WALL_BOUNDS.minZ <= TILE / 2 + 0.01 && box.min.z > minZFace) {
+    dz = minZFace - box.min.z;
   }
   if (dx !== 0 || dz !== 0) {
     model.position.x += dx;
