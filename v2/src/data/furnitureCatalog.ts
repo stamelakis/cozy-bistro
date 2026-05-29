@@ -77,8 +77,13 @@ export interface FurnitureDef {
    *     free slot on the hovered host; doesn't claim a floor tile.
    *     When the host moves, surface items follow; when the host is
    *     sold, surface items are sold too. Used for table lamps,
-   *     toasters, radios, coffee machines, etc. */
-  placement?: "tile" | "edge" | "wall" | "ceiling" | "surface";
+   *     toasters, radios, coffee machines, etc.
+   *   - "wall-shelf": mounts on a wall like "wall" but at upper-cabinet
+   *     height (~1.7m). Requires the cell IN FRONT OF the wall to be
+   *     empty or to contain an item ≤1.2m tall (a counter / sink /
+   *     stove), so the cabinet has clearance above whatever's below.
+   *     Used for upper / corner kitchen cabinets. */
+  placement?: "tile" | "edge" | "wall" | "ceiling" | "surface" | "wall-shelf";
   /** Host items declare an array of local-frame offsets where
    * surface-placed items can sit. dx/dz are in the host's NATURAL
    * orientation (rotY=0); the host's rotation is applied to derive
@@ -607,19 +612,19 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // placement that mounts above shorter counters.
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80, style: 1,
-    tier: 1, stockCapacity: 1 },
+    tier: 1, stockCapacity: 1, placement: "wall-shelf" },
   { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 130, style: 1,
-    tier: 2, stockCapacity: 3 },
+    tier: 2, stockCapacity: 3, placement: "wall-shelf" },
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
-    tier: 1, stockCapacity: 1 },
+    tier: 1, stockCapacity: 1, placement: "wall-shelf" },
   { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120, style: 1,
-    tier: 2, stockCapacity: 2 },
+    tier: 2, stockCapacity: 2, placement: "wall-shelf" },
   { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerRound.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 150, style: 2,
-    tier: 2, stockCapacity: 2 },
+    tier: 2, stockCapacity: 2, placement: "wall-shelf" },
 
   // === Entertainment / TV / electronics. ===
   { id: "tv-modern",      name: "Modern TV",       category: "decoration",

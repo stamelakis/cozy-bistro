@@ -5,7 +5,7 @@ import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
-import { fitFurniture, placementY } from "../assets/fitFurniture";
+import { fitFurniture, placementY, defHeight, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 
 /** A single user action that can be undone. The BuildMenu records one of
  * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
@@ -919,6 +919,40 @@ export class BuildMenu {
         return { quality: "snap-perfect", x: host.x, z: host.z, rotY: host.rotY };
       }
       return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
+    }
+    // Wall-shelf items (upper kitchen cabinets) mount on a wall like
+    // wall art but at chest+ height, hanging out OVER the cells in
+    // front of the wall. The cells beneath must be empty or contain
+    // an item ≤ WALL_SHELF_MAX_BELOW_HEIGHT tall — a counter (0.92m)
+    // is fine, a walk-in fridge (2.2m) is blocked.
+    if (def.placement === "wall-shelf") {
+      const host = this.findNearestWall(rawPoint.x, rawPoint.z, 1.8);
+      if (!host) {
+        return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
+      }
+      // Round the wall's mount-offset point (already pushed 0.07
+      // toward the cursor side) to find the anchor cell — i.e. the
+      // floor cell directly in front of the wall on the player's side.
+      const anchorX = Math.round(host.x);
+      const anchorZ = Math.round(host.z);
+      // Enumerate every cell the cabinet would cover (1×1, 2×1, etc.)
+      // and verify each one is clear or hosts a short-enough item.
+      const cells = footprintCells({ x: anchorX, z: anchorZ, rotY: host.rotY }, def);
+      const excludeUid = this.holdingUid ?? undefined;
+      for (const cell of cells) {
+        const below = this.registry.findAt(cell.x, cell.z, excludeUid);
+        if (!below) continue;
+        const belowDef = furnitureCatalog.find((d) => d.id === below.defId);
+        if (!belowDef) continue;
+        // Only floor-layer items count — wall art / surface items /
+        // ceiling lamps don't actually compete for vertical space here.
+        const belowPlacement = belowDef.placement ?? "tile";
+        if (belowPlacement !== "tile") continue;
+        if (defHeight(belowDef) > WALL_SHELF_MAX_BELOW_HEIGHT) {
+          return { quality: "blocked", x: anchorX, z: anchorZ, rotY: host.rotY };
+        }
+      }
+      return { quality: "snap-perfect", x: anchorX, z: anchorZ, rotY: host.rotY };
     }
     // Surface-placed items (table lamps, toasters, coffee machines)
     // need an existing placed host item that exposes surfaceSlots.

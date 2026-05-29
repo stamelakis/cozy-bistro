@@ -205,8 +205,27 @@ export const CEILING_Y = 3;
  *   - otherwise → whatever fitFurniture left model.position.y at (≈ 0) */
 export function placementY(model: THREE.Object3D, def: FurnitureDef): number {
   if (def.placement === "wall") return 1.5;
+  if (def.placement === "wall-shelf") {
+    // Upper cabinets sit chest+ height. 1.7m clears any counter / sink
+    // / stove (≤1.2m by the wall-shelf placement constraint) and still
+    // leaves head clearance under the 3m ceiling.
+    return 1.7;
+  }
   if (def.placement === "ceiling") {
     return Math.max(0, CEILING_Y - fittedHeight(model));
   }
   return model.position.y;
+}
+
+/** The wall-shelf placement requires the floor cell below to be empty
+ * or to host an item shorter than this many metres. Mirrors the rule
+ * the player picked in the planning round: an upper cabinet over a
+ * counter (0.92m) is fine, over a fridge (2.2m) is blocked. */
+export const WALL_SHELF_MAX_BELOW_HEIGHT = 1.2;
+
+/** Effective Y-height a def will render at — explicit targetHeight
+ * if set, otherwise the per-category fallback. Used by the wall-shelf
+ * clearance check (and any other "is this thing tall?" gate). */
+export function defHeight(def: FurnitureDef): number {
+  return def.targetHeight ?? DEFAULT_HEIGHTS[def.category];
 }
