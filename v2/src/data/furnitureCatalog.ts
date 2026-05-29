@@ -115,6 +115,13 @@ export interface FurnitureDef {
   attractionBonus?: number;
   ratingBonus?: number;
   seatingCapacity?: number;
+  /** Hand-curated BuildMenu tier (1 = starter diner … 5 = flagship/luxury).
+   * When set, overrides the inferQualityTier cost+ratingBonus heuristic.
+   * Use this whenever the cost ladder doesn't match the item's visual
+   * vibe — e.g. a $40 tablecloth-top table that reads as a clear step
+   * up from a $48 bare wood table. Unset means "fall back to the
+   * heuristic", which is fine for items where cost is a decent proxy. */
+  tier?: 1 | 2 | 3 | 4 | 5;
   /** How many extra units of pantry stock this piece adds to the
    * restaurant's max stock per ingredient. Fridges contribute the most,
    * shelves/cabinets a smaller amount. Game sums this across all placed
@@ -203,21 +210,27 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // since they're not dining seating.
   { id: "small-table",   name: "Small Table",   category: "table",
     modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 24, style: 1,
+    tier: 1,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "round-table",   name: "Round Table",   category: "table",
     modelPath: "assets/kenney/tableRound.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 32, style: 2,
+    tier: 2,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "dining-table",  name: "Dining Table",  category: "table",
     modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 48, style: 3,
+    tier: 2,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "fancy-table",   name: "Linen Table",   category: "table",
     modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 64, style: 5, ratingBonus: 0.05,
+    tier: 4,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "cloth-table",   name: "Tablecloth Top", category: "table",
     modelPath: "assets/kenney/tableCloth.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 40, style: 4,
+    tier: 3,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   { id: "glass-table",   name: "Glass Table",   category: "table",
     modelPath: "assets/kenney/tableGlass.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 56, style: 4, ratingBonus: 0.04,
+    tier: 4,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
   // Coffee tables are DRINK surfaces — seats on all 4 sides share the
   // tabletop so up to 4 customers can park their drinks here, but the
@@ -226,10 +239,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // turnover at lower revenue.
   { id: "coffee-table",  name: "Coffee Table",  category: "table",
     modelPath: "assets/kenney/tableCoffee.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 28, style: 2,
-    surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
+    tier: 1, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
   { id: "coffee-glass",  name: "Glass Coffee Table", category: "table",
     modelPath: "assets/kenney/tableCoffeeGlass.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 38, style: 3,
-    surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
+    tier: 2, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
 
   // Chairs
   { id: "wooden-chair",   name: "Wooden Chair",  category: "chair",
@@ -487,10 +500,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // Same drinks-only behaviour as the round coffee tables above.
   { id: "coffee-square",  name: "Square Coffee Table", category: "table",
     modelPath: "assets/kenney/tableCoffeeSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 30, style: 2,
-    surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
+    tier: 1, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
   { id: "coffee-glass-sq", name: "Glass Square Coffee", category: "table",
     modelPath: "assets/kenney/tableCoffeeGlassSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 42, style: 3,
-    surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
+    tier: 2, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS },
 
   // === More chairs / desks. ===
   { id: "chair-desk",     name: "Desk Chair",      category: "chair",
@@ -572,12 +585,14 @@ export function getFurnitureDef(id: string): FurnitureDef | undefined {
 }
 
 /** Group a furniture item into one of the 5 quality tiers (1 = basic,
- * 5 = luxury) for display in the build menu's tier tabs. Heuristic
- * blends cost with the rating-bonus flag so the prestige pieces are
- * reliably in T4/T5 even when their nominal cost is modest. Items
- * have no explicit `tier` field in the catalog yet — this is the
- * single source of truth. */
+ * 5 = luxury) for display in the build menu's tier tabs. Prefers the
+ * def's hand-curated `tier` field when present — that's the explicit
+ * "where this piece belongs" signal we set as we audit each category.
+ * Falls back to a cost+ratingBonus heuristic for anything not stamped
+ * yet, so newly-added defs still land somewhere reasonable without a
+ * manual pass. */
 export function inferQualityTier(def: FurnitureDef): 1 | 2 | 3 | 4 | 5 {
+  if (def.tier) return def.tier;
   // Strong "luxury" signal: explicit rating bonus pieces always land
   // in the prestige tiers regardless of price.
   if ((def.ratingBonus ?? 0) >= 0.06) return 5;
