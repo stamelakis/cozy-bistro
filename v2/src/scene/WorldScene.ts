@@ -805,9 +805,23 @@ export class WorldScene {
         this.ambientLight.intensity *= 1.1;
         break;
       }
-      case "sunny":
+      case "sunny": {
+        // Bright sunshine boost — only meaningful during the day
+        // window (multiplied by dayness so dusk + night stay quiet).
+        // Sun gets up to +60%, ambient +35%, fill +30%, and the sky
+        // mixes toward a near-white warm cream so the lit world reads
+        // as "perfect summer afternoon" instead of just "the default".
+        const boost = dayness;
+        this.sunLight.intensity *= 1 + 0.6 * boost;
+        this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0xfff6e0, 0.35 * boost));
+        this.ambientLight.intensity *= 1 + 0.35 * boost;
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xfff4e0, 0.30 * boost));
+        this.fillLight.intensity *= 1 + 0.30 * boost;
+        skyColor = mixColors(skyColor, 0xf2e1c0, 0.30 * boost);
+        break;
+      }
       default:
-        // Default warm path — already handled by the dayness ramp.
+        // Unknown weather id — leave the dayness ramp alone.
         break;
     }
     return skyColor;
