@@ -3,6 +3,7 @@ import { IsoCamera } from "../scene/IsoCamera";
 import { WorldScene } from "../scene/WorldScene";
 import { Game } from "./Game";
 import { GuestSpawner } from "./GuestSpawner";
+import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { TrashSpawner } from "./TrashSpawner";
@@ -48,6 +49,10 @@ export class Engine {
   readonly game: Game;
   spawner?: GuestSpawner;
   router?: StaffRouter;
+  /** Dev-mode dishware leak detector. Wired after spawner exists; runs
+   * a check every second and prints recent mutation history if the
+   * inventory total drifts below the lifetime-added baseline. */
+  private dishwareLeakWatcher?: DishwareLeakWatcher;
   errand?: ErrandRouter;
   pedestrians?: PedestrianSpawner;
   trash?: TrashSpawner;
@@ -417,6 +422,21 @@ export class Engine {
           canDishwasherLoad: (uid, kind) => dishware.canDishwasherLoad(uid, kind),
           loadDishwasher: (uid, defId, kind) => dishware.loadDishwasher(uid, defId, kind),
         };
+      }
+      // Dishware leak watcher — automatic guard against any future
+      // code path that decrements the clean pool without returning the
+      // plate via dirty or buy. Wires every mutation + context event
+      // into a ring buffer; tick() runs once per second and prints a
+      // warning with the recent history when the inventory total
+      // dips below the lifetime-added baseline.
+      this.dishwareLeakWatcher = new DishwareLeakWatcher(
+        this.game.dishware,
+        { getInFlightDishCount: () => this.spawner?.getInFlightDishCount() ?? 0 },
+      );
+      this.game.dishware.setLogger((msg) => this.dishwareLeakWatcher?.record(msg));
+      this.spawner.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
+      if (this.router) {
+        this.router.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       }
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
@@ -864,6 +884,10 @@ export class Engine {
     // believable rate when the simulation is paused or fast-forwarded.
     // Camera position lets the particle volume follow the player.
     this.scene.updateWeather(rawDt, this.camera.threeCamera.position);
+    // Dishware leak watchdog — fires once per second internally;
+    // surfaces any drop in (clean+dirty+inflight) vs lifetimeAdded
+    // to the console along with the recent action history.
+    this.dishwareLeakWatcher?.tick(rawDt);
     this.scene.update(dt);
     // Swap which two exterior walls render as transparent glass based
     // on which side the camera is currently on. Cheap enough to run

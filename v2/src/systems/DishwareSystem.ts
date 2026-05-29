@@ -61,6 +61,38 @@ export class DishwareSystem {
   /** uid → batch state. Auto-created on first load. */
   private dishwasherBatches: Map<string, DishwasherBatch> = new Map();
 
+  /** Total pieces ever ADDED to the inventory — bumped by buy / starter
+   * stock / hydrate. Decremented only by an explicit admin-sell (not
+   * implemented today). The DishwareLeakWatcher diffs this against
+   * (clean + dirty + in-flight) to spot when a code path silently
+   * forgot to return a reserved plate. */
+  private lifetimeAdded = 0;
+
+  /** Optional dev-mode logger — every mutation calls this with a
+   * one-line description before returning. Wired by Engine to the
+   * DishwareLeakWatcher's ring buffer so the action history is captured
+   * even when leaks happen during background ticks the player never
+   * notices. Off by default; instrumentation overhead is one closure
+   * call per mutation when on. */
+  private logger?: (msg: string) => void;
+
+  /** Wire (or unwire) the per-mutation logger. Pass undefined to mute. */
+  setLogger(fn: ((msg: string) => void) | undefined): void {
+    this.logger = fn;
+  }
+
+  /** Internal logging helper — keeps the log() callsites tidy and
+   * lets us add a global toggle later without touching every emit. */
+  private log(msg: string): void {
+    this.logger?.(msg);
+  }
+
+  /** Total dishware ever added to the inventory. The watcher diffs
+   * this against current (clean + dirty + in-flight) to detect leaks. */
+  getLifetimeAdded(): number {
+    return this.lifetimeAdded;
+  }
+
   // washClock removed — Phase 3 replaced the abstract timer-driven
   // wash with explicit waiter trips. Kept the field name in comments
   // for save-file archaeology.
@@ -84,6 +116,7 @@ export class DishwareSystem {
   constructor() {
     this.plates.set(1, { clean: STARTER_PLATE_COUNT, dirty: 0 });
     this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
+    this.lifetimeAdded = STARTER_PLATE_COUNT + STARTER_GLASS_COUNT;
   }
 
   // === Counts ===
@@ -152,11 +185,15 @@ export class DishwareSystem {
    * sending a ticket; if null, the order can't go through. */
   reserveOne(kind: DishKind): number | null {
     const tier = this.getActiveTier(kind);
-    if (tier === null) return null;
+    if (tier === null) {
+      this.log(`reserveOne(${kind}) → null (no clean stock)`);
+      return null;
+    }
     const pool = this.poolFor(kind);
     const entry = pool.get(tier)!;
     entry.clean -= 1;
     if (entry.clean === 0 && entry.dirty === 0) pool.delete(tier);
+    this.log(`reserveOne(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
     return tier;
   }
 
@@ -167,6 +204,7 @@ export class DishwareSystem {
     const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
     entry.dirty += 1;
     pool.set(tier, entry);
+    this.log(`markDirty(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
   }
 
   /** Wash one dirty piece (any tier — picks the highest-tier dirty so
@@ -179,11 +217,15 @@ export class DishwareSystem {
       if (entry.dirty <= 0) continue;
       if (best === null || tier > best) best = tier;
     }
-    if (best === null) return null;
+    if (best === null) {
+      this.log(`washOne(${kind}) → null (nothing dirty)`);
+      return null;
+    }
     const entry = pool.get(best)!;
     entry.dirty -= 1;
     entry.clean += 1;
     this.onDishWashed?.(kind, best);
+    this.log(`washOne(${kind}, t${best}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
     return best;
   }
 
@@ -193,12 +235,22 @@ export class DishwareSystem {
   addClean(kind: DishKind, tier: number, count: number): number {
     if (count <= 0) return 0;
     const free = this.getFreeCapacity();
-    if (free <= 0) return 0;
+    if (free <= 0) {
+      this.log(`addClean(${kind}, t${tier}, +${count}) → 0 (capacity full)`);
+      return 0;
+    }
     const take = Math.min(count, free);
     const pool = this.poolFor(kind);
     const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
     entry.clean += take;
     pool.set(tier, entry);
+    // NOTE: lifetimeAdded is NOT bumped here. addClean is the shared
+    // "move into the clean pool" path, used both by buySet (genuinely
+    // new dishware) and by GuestSpawner.settleGuestDishes (returning a
+    // reservation that was already counted in lifetimeAdded). buySet
+    // bumps lifetimeAdded itself so only real purchases inflate the
+    // expected total.
+    this.log(`addClean(${kind}, t${tier}, +${take}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
     return take;
   }
 
@@ -206,7 +258,13 @@ export class DishwareSystem {
    * pieces actually added (0 when capacity blocks, setSize on success).
    * Caller is responsible for charging the cost. */
   buySet(set: DishwareSetDef): number {
-    return this.addClean(set.kind, set.tier, set.setSize);
+    const taken = this.addClean(set.kind, set.tier, set.setSize);
+    // Only the buy path inflates lifetimeAdded — settleGuestDishes
+    // also calls addClean to return reservations, and those plates were
+    // already part of lifetimeAdded when bought.
+    this.lifetimeAdded += taken;
+    this.log(`buySet(${set.id ?? set.kind}, t${set.tier}, +${taken}) → lifetime ${this.lifetimeAdded}`);
+    return taken;
   }
 
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===
@@ -328,6 +386,7 @@ export class DishwareSystem {
       batch.glasses = 0;
       batch.cycleTimeRemaining = 0;
     }
+    this.log(`adminWashAll → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}`);
   }
 
   // === Save / load ===
@@ -360,6 +419,13 @@ export class DishwareSystem {
     if (this.glasses.size === 0) this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
     autoWashPool(this.plates);
     autoWashPool(this.glasses);
+    // Re-baseline lifetimeAdded so the watcher's expected total matches
+    // what the save actually held. Save files don't currently persist
+    // lifetimeAdded itself; we infer it from the current pools as the
+    // best floor (any pre-load leak is treated as "already happened,
+    // can't recover history").
+    this.lifetimeAdded = this.getOwned("plate") + this.getOwned("glass");
+    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime ${this.lifetimeAdded}`);
   }
 
   // === Rating bonus ===

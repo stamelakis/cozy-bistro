@@ -705,6 +705,7 @@ export class GuestSpawner {
   private settleGuestDishes(g: ActiveGuest): void {
     if (g.dishesSettled) return;
     g.dishesSettled = true;
+    this.dishwareLogger?.(`settleGuestDishes(g${g.id}, state=${g.state}, orderIndex=${g.orderIndex}, reservations=${g.reservedDishTiers.length})`);
     // Eaten courses become dirty.
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
       const recipe = g.order[i];
@@ -720,6 +721,27 @@ export class GuestSpawner {
       this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1);
     }
   }
+
+  /** Count plates / glasses currently held by guests as reservations
+   * — they're decremented from the clean pool at beginNextCourse but
+   * not yet marked dirty (eating) or returned (giving up). Without
+   * this number the leak watcher would see a phantom deficit any time
+   * a guest is mid-meal: actual = clean + dirty would be < lifetime
+   * by exactly the in-flight count. */
+  getInFlightDishCount(): number {
+    let n = 0;
+    for (const g of this.guests) n += g.reservedDishTiers.length;
+    return n;
+  }
+
+  /** Engine wires a logger here so settleGuestDishes can push context-
+   * rich entries into the leak watcher's ring buffer (guest id, state,
+   * orderIndex, reservation count) alongside the raw DishwareSystem
+   * mutations. Off by default. */
+  setDishwareLogger(fn: ((msg: string) => void) | undefined): void {
+    this.dishwareLogger = fn;
+  }
+  private dishwareLogger?: (msg: string) => void;
 
   getActiveGuestCount(): number {
     return this.guests.length;

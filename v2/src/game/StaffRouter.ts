@@ -242,6 +242,15 @@ export class StaffRouter {
    * waiter gets fired mid-wash. */
   private readonly busyWashUids = new Set<string>();
 
+  /** Engine wires a dev-mode logger here so wash-trip lifecycle events
+   * (pickup, completion, fired-mid-carry) flow into the leak watcher's
+   * ring buffer. Off by default — no instrumentation cost in normal
+   * play. */
+  setDishwareLogger(fn: ((msg: string) => void) | undefined): void {
+    this.dishwareLogger = fn;
+  }
+  private dishwareLogger?: (msg: string) => void;
+
   /** Wash-loop callbacks — wired by Engine after GuestSpawner + the
    * dishware system exist. When unset, the waiter never tries to
    * wash and dirty plates simply pile up on the tables. */
@@ -464,6 +473,7 @@ export class StaffRouter {
     // it's leaking pieces. Treat the carried dish as auto-washed:
     // the fired waiter dropped it in the sink on the way out.
     if (removed.washTrip) {
+      this.dishwareLogger?.(`staff-removed mid-washTrip(phase=${removed.washTrip.phase}, kind=${removed.washTrip.kind})`);
       if (removed.washTrip.phase === "wash") {
         this.washCallbacks?.washOne(removed.washTrip.kind);
       } else {
