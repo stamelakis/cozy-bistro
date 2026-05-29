@@ -5,6 +5,7 @@ import { getIngredientCost } from "../data/ingredients";
 import { APPLIANCE_LABELS } from "../data/types";
 import type { ApplianceId, LuxuryTier, RecipeDefinition } from "../data/types";
 import { attachTooltip } from "./tooltip";
+import { recipeIcon, ingredientIcon } from "./foodIcons";
 
 /**
  * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
@@ -186,6 +187,16 @@ export class MenuPanel {
     Object.assign(left.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
     const nameRow = document.createElement("div");
     Object.assign(nameRow.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
+    // Plate icon — gives the player an immediate visual cue for what
+    // the dish looks like before they read the name. Same map is used
+    // in UpgradeModal so identical recipes look identical across the
+    // two panels.
+    const icon = document.createElement("span");
+    icon.textContent = recipeIcon(recipe.id);
+    Object.assign(icon.style, {
+      fontSize: "16px", lineHeight: "1", flex: "0 0 auto",
+    } as Partial<CSSStyleDeclaration>);
+    nameRow.appendChild(icon);
     const cat = document.createElement("span");
     cat.textContent = this.shortForCategory(recipe.category);
     Object.assign(cat.style, {
@@ -251,11 +262,13 @@ export class MenuPanel {
       left.appendChild(applLine);
     }
     // Ingredient line — list every ingredient with its per-unit cost.
+    // Each entry leads with its emoji so the line is visually scannable
+    // (a row full of 🍅 🍝 🧀 reads as Italian at a glance).
     const ingLine = document.createElement("div");
     ingLine.textContent = recipe.ingredients
-      .map((id) => `${this.prettyIng(id)}($${getIngredientCost(id)})`)
+      .map((id) => `${ingredientIcon(id)} ${this.prettyIng(id)}($${getIngredientCost(id)})`)
       .join(" + ");
-    Object.assign(ingLine.style, { fontSize: "10px", opacity: "0.65", marginTop: "1px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(ingLine.style, { fontSize: "10px", opacity: "0.7", marginTop: "1px" } as Partial<CSSStyleDeclaration>);
     left.appendChild(ingLine);
     row.appendChild(left);
 

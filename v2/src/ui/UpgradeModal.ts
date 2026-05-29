@@ -3,6 +3,7 @@ import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { LuxuryTier } from "../data/types";
 import { STAFF_UPGRADE_MAX, getTrainingDurationHours, type StaffRole } from "../systems/StaffSystem";
+import { ingredientIcon, recipeIcon } from "./foodIcons";
 
 /**
  * Upgrades browser. Outer tabs split the modal into:
@@ -210,8 +211,10 @@ export class UpgradeModal {
       const activeChip = isOnMenu
         ? `<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:rgba(120,200,120,0.85);color:#1b1410;font-weight:700;margin-left:6px;">ACTIVE</span>`
         : "";
+      // Plate icon leads the head row so the player can pick out the
+      // dish at a glance, same as on the MenuPanel.
       const head = document.createElement("div");
-      head.innerHTML = `<span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;background:${lvlBg};color:${lvlColor};font-weight:800;margin-right:6px;">L${level}</span><b>${recipe.name}</b>${activeChip} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
+      head.innerHTML = `<span style="font-size:16px;margin-right:6px;vertical-align:-2px;">${recipeIcon(recipe.id)}</span><span style="display:inline-block;font-size:10px;padding:2px 6px;border-radius:3px;background:${lvlBg};color:${lvlColor};font-weight:800;margin-right:6px;">L${level}</span><b>${recipe.name}</b>${activeChip} &nbsp; <span style="color:#a8e2a8">$${price}</span> <span style="opacity:0.55">(+$${profit})</span> · ${sat}😋`;
       label.appendChild(head);
       if (level < 10) {
         const mats = this.game.getRecipeUpgradeMaterials(recipe);
@@ -219,7 +222,9 @@ export class UpgradeModal {
           const have = this.game.cooking.getIngredientQuantity(m.id);
           const short = have >= m.qty ? "" : ` (need ${m.qty - have})`;
           const color = have >= m.qty ? "#9be09b" : "#ff9a9a";
-          return `<span style="color:${color}">${this.pretty(m.id)}×${m.qty}${short}</span>`;
+          // Ingredient icon so the materials list is visually scannable
+          // without reading every label.
+          return `<span style="color:${color}">${ingredientIcon(m.id)} ${this.pretty(m.id)}×${m.qty}${short}</span>`;
         }).join(" + ");
         const matLine = document.createElement("div");
         matLine.innerHTML = `<span style="opacity:0.6">Materials:</span> ${matText}`;

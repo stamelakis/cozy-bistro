@@ -1,6 +1,7 @@
 import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
 import { GLASS_SETS, PLATE_SETS, type DishwareSetDef } from "../data/dishwareCatalog";
+import { ingredientIcon } from "./foodIcons";
 
 /**
  * Pantry browser — full list of stocked ingredients with Ingredient /
@@ -85,11 +86,12 @@ export class PantryModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
-    // Column headers.
+    // Column headers. First column is a 22 px icon strip; the visible
+    // "Ingredient" header sits in the second column above the names.
     const headerRow = document.createElement("div");
     Object.assign(headerRow.style, {
       display: "grid",
-      gridTemplateColumns: "1fr 60px 50px 50px",
+      gridTemplateColumns: "22px 1fr 60px 50px 50px",
       gap: "10px",
       padding: "4px 6px",
       fontSize: "10px",
@@ -100,7 +102,7 @@ export class PantryModal {
       borderBottom: "1px solid rgba(255,245,220,0.18)",
       marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
-    headerRow.innerHTML = `<span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span>`;
+    headerRow.innerHTML = `<span></span><span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span>`;
     body.appendChild(headerRow);
 
     this.list = document.createElement("div");
@@ -490,12 +492,18 @@ export class PantryModal {
       const row = document.createElement("div");
       Object.assign(row.style, {
         display: "grid",
-        gridTemplateColumns: "1fr 60px 50px 50px",
+        gridTemplateColumns: "22px 1fr 60px 50px 50px",
         gap: "10px",
         padding: "4px 6px",
         borderBottom: "1px solid rgba(255,245,220,0.06)",
         fontVariantNumeric: "tabular-nums",
+        alignItems: "center",
       } as Partial<CSSStyleDeclaration>);
+      const iconEl = document.createElement("span");
+      iconEl.textContent = ingredientIcon(stock.id);
+      iconEl.style.fontSize = "16px";
+      iconEl.style.textAlign = "center";
+      iconEl.style.lineHeight = "1";
       const nameEl = document.createElement("span");
       nameEl.textContent = stock.name;
       const costEl = document.createElement("span");
@@ -517,6 +525,7 @@ export class PantryModal {
       usedEl.style.fontWeight = "600";
       usedEl.style.color = "#e0a050";
       usedEl.style.fontSize = "11px";
+      row.appendChild(iconEl);
       row.appendChild(nameEl);
       row.appendChild(costEl);
       row.appendChild(qtyEl);
