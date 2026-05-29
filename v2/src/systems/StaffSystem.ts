@@ -95,6 +95,25 @@ export class StaffSystem {
     return this.members.filter((m) => m.role === role);
   }
 
+  /** Storey the member calls home. Defaults to 0 (ground floor) when
+   * unset — matches the legacy single-storey behaviour. */
+  getMemberHomeFloor(id: string): number {
+    return this.getMember(id)?.homeFloor ?? 0;
+  }
+
+  /** Reassign a member to a new home floor. Returns true if changed.
+   * Caller (Engine) is responsible for visually relocating the
+   * AnimatedCharacter to the new floor's home position. */
+  setMemberHomeFloor(id: string, floor: number): boolean {
+    const m = this.getMember(id);
+    if (!m) return false;
+    const clamped = Math.max(0, Math.floor(floor));
+    if ((m.homeFloor ?? 0) === clamped) return false;
+    if (clamped === 0) delete m.homeFloor;
+    else m.homeFloor = clamped;
+    return true;
+  }
+
   getMember(id: string): HiredStaffMember | undefined {
     return this.members.find((m) => m.id === id);
   }
@@ -390,6 +409,10 @@ export class StaffSystem {
           };
           if (typeof m.trainingCompletesAt === "number" && Number.isFinite(m.trainingCompletesAt)) {
             restored.trainingCompletesAt = m.trainingCompletesAt;
+          }
+          // homeFloor missing on legacy saves → default to 0 (ground).
+          if (typeof m.homeFloor === "number" && Number.isInteger(m.homeFloor) && m.homeFloor >= 0) {
+            restored.homeFloor = m.homeFloor;
           }
           this.members.push(restored);
         }

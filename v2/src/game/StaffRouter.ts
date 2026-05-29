@@ -441,6 +441,42 @@ export class StaffRouter {
     return this.popPreferIdle(this.waiters);
   }
 
+  /** Find the AnimatedCharacter wired to a specific HiredStaffMember.id
+   * across both pools. Returns null if no actor maps to that id
+   * (e.g. the spawn promise hasn't resolved yet). Used by Engine when
+   * the player reassigns a member's home floor — the visual model
+   * needs to be re-parented + Y-shifted to the new storey. */
+  getCharacterByMemberId(id: string): AnimatedCharacter | null {
+    for (const pool of [this.chefs, this.waiters]) {
+      for (const a of pool) {
+        if (a.memberId === id) return a.character;
+      }
+    }
+    return null;
+  }
+
+  /** Update the cached home + target for the actor whose memberId
+   * matches. Called right after Engine moves the model vertically so
+   * the router stops trying to walk back to a now-stale Y. (X/Z stay
+   * the same — only the world frame's parent changes.) */
+  updateActorHomeFloor(memberId: string, fromFloor: number, toFloor: number, storeyHeight: number): void {
+    for (const pool of [this.chefs, this.waiters]) {
+      for (const a of pool) {
+        if (a.memberId !== memberId) continue;
+        const dy = (toFloor - fromFloor) * storeyHeight;
+        // groundPos is XZ — Y isn't tracked here. We only need to nudge
+        // any cached path so the actor doesn't keep walking toward the
+        // old storey's pickup/work spot.
+        a.path = [];
+        a.replanAccum = 0;
+        a.target.copy(a.character.groundPos);
+        // Surface API for future floor-aware routing; signature lives
+        // here so phase 7d can branch on a.character.root.position.y.
+        void dy;
+      }
+    }
+  }
+
   private popPreferIdle(pool: StaffActor[]): AnimatedCharacter | null {
     if (pool.length === 0) return null;
     const idleIdx = pool.findIndex((a) => a.state === "idle");

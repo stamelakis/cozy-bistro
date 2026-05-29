@@ -222,6 +222,19 @@ export class Engine {
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
+    // Hook the floor-reassign UI: when the player switches a member's
+    // home storey, move their 3D character to the new floor's slab
+    // and clear any cached path on the router so they don't try to
+    // walk back to the old floor's home spot.
+    this.staffPanel.onStaffFloorChanged = (memberId, oldFloor, newFloor) => {
+      const fromChefWaiter = this.router?.getCharacterByMemberId(memberId);
+      const fromErrand = this.errand?.findCharacterByMemberId(memberId);
+      const char = fromChefWaiter ?? fromErrand;
+      if (char) {
+        this.scene.relocateStaff(char, oldFloor, newFloor);
+        this.router?.updateActorHomeFloor(memberId, oldFloor, newFloor, WorldScene.getStoreyHeight());
+      }
+    };
     // Modals still live on the page-level container so they overlay the world.
     // (SfxPlayer + kickAudio listeners constructed earlier — see above.)
     this.pantryModal = new PantryModal(container, this.game);
@@ -834,7 +847,7 @@ export class Engine {
       // members and link each to its HiredStaffMember.id.
       for (let i = have; i < members.length; i += 1) {
         const member = members[i];
-        const char = await this.scene.spawnExtraStaff(role, i);
+        const char = await this.scene.spawnExtraStaff(role, i, member.homeFloor ?? 0);
         if (!char) {
           console.warn(`[syncStaff] ${role} extra #${i} (${member.name}) failed to load`);
           continue;
@@ -869,7 +882,9 @@ export class Engine {
       return;
     }
     // Spawn the model first so we know its actual world pose for the toast.
-    const char = await this.scene.spawnExtraStaff(role, offsetSlot);
+    // Newly hired staff default to ground floor — the player reassigns
+    // via the StaffPanel floor selector after-the-fact.
+    const char = await this.scene.spawnExtraStaff(role, offsetSlot, member.homeFloor ?? 0);
     if (!char) {
       // Loading failed — still tell the player something visible.
       this.floatingText?.pop(0, -2.2, `+1 ${this.labelForRole(role)}: ${member.name} (load failed)`, "#ff9a9a");

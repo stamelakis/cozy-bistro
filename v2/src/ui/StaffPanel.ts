@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import type { StaffRole } from "../systems/StaffSystem";
+import { WorldScene } from "../scene/WorldScene";
 import { attachTooltip } from "./tooltip";
 
 /**
@@ -16,8 +17,13 @@ export class StaffPanel {
   private readonly rows: Record<StaffRole, {
     label: HTMLElement; activity: HTMLElement;
     hire: HTMLButtonElement; fire: HTMLButtonElement;
-  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement }>;
+    members: HTMLElement;
+  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement; members: HTMLElement }>;
   private payrollLine?: HTMLElement;
+  /** Fired when the player reassigns a member to a new home floor.
+   * Engine wires this to WorldScene.relocateStaff so the model is
+   * re-parented + Y-shifted to the new storey. */
+  onStaffFloorChanged?: (memberId: string, oldFloor: number, newFloor: number) => void;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -82,8 +88,85 @@ export class StaffPanel {
     Object.assign(activity.style, { fontSize: "10px", opacity: "0.75", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
     block.appendChild(activity);
 
+    // Per-member floor-assignment rows. Only populated when the current
+    // tier has unlocked at least one upper storey (no point showing a
+    // single-button picker on a ground-only restaurant).
+    const members = document.createElement("div");
+    Object.assign(members.style, { marginTop: "3px", display: "none" } as Partial<CSSStyleDeclaration>);
+    block.appendChild(members);
+
     this.root.appendChild(block);
-    this.rows[role] = { label, activity, hire, fire };
+    this.rows[role] = { label, activity, hire, fire, members };
+  }
+
+  /** Build (or rebuild) the per-member roster with one floor selector
+   * per member. Called from `update` whenever the panel refreshes so
+   * a hire/fire/reassign immediately reflects in the strip. */
+  private renderMembers(role: StaffRole, hostEl: HTMLElement): void {
+    const tier = this.game.getLuxuryTier();
+    const numStoreys = WorldScene.getNumStoreys();
+    // Hide the whole strip on tier 1 — only one floor exists, no
+    // assignment to make.
+    if (tier < 2) {
+      hostEl.style.display = "none";
+      hostEl.innerHTML = "";
+      return;
+    }
+    hostEl.innerHTML = "";
+    hostEl.style.display = "block";
+    const members = this.game.staff.getMembers(role);
+    for (const member of members) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex", alignItems: "center", gap: "3px",
+        padding: "2px 0",
+        fontSize: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      const name = document.createElement("span");
+      name.textContent = member.name;
+      Object.assign(name.style, {
+        flex: "1", overflow: "hidden", textOverflow: "ellipsis",
+        whiteSpace: "nowrap", opacity: "0.9",
+      } as Partial<CSSStyleDeclaration>);
+      row.appendChild(name);
+      const current = member.homeFloor ?? 0;
+      for (let idx = 0; idx < numStoreys; idx += 1) {
+        const unlocked = idx === 0 || tier >= idx + 1;
+        const isActive = idx === current;
+        const btn = document.createElement("button");
+        btn.textContent = idx === 0 ? "G" : String(idx);
+        btn.title = unlocked
+          ? (idx === 0 ? "Ground" : `Floor ${idx}`)
+          : `Floor ${idx} — unlocks at tier ${idx + 1}`;
+        btn.disabled = !unlocked;
+        Object.assign(btn.style, {
+          width: "16px", height: "18px", padding: "0",
+          fontSize: "10px", fontWeight: "700",
+          background: isActive
+            ? "rgba(255, 210, 120, 0.45)"
+            : "rgba(120, 180, 200, 0.18)",
+          color: isActive ? "#fffff0" : "#fff5dc",
+          border: isActive
+            ? "1px solid rgba(255, 220, 150, 0.85)"
+            : "1px solid rgba(255,245,220,0.22)",
+          borderRadius: "3px",
+          cursor: unlocked ? "pointer" : "not-allowed",
+          opacity: unlocked ? "1" : "0.4",
+          font: "inherit",
+        } as Partial<CSSStyleDeclaration>);
+        if (unlocked && !isActive) {
+          btn.onclick = () => {
+            const old = member.homeFloor ?? 0;
+            if (this.game.staff.setMemberHomeFloor(member.id, idx)) {
+              this.onStaffFloorChanged?.(member.id, old, idx);
+              this.update();
+            }
+          };
+        }
+        row.appendChild(btn);
+      }
+      hostEl.appendChild(row);
+    }
   }
 
   private makeBtn(text: string, bg: string): HTMLButtonElement {
@@ -124,6 +207,7 @@ export class StaffPanel {
       row.hire.style.opacity = canHire ? "1" : "0.4";
       row.fire.disabled = count === 0;
       row.fire.style.opacity = count === 0 ? "0.4" : "1";
+      this.renderMembers(role, row.members);
       totalCount += count;
       totalPayroll += rolePayroll;
     });

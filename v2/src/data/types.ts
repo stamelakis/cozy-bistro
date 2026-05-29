@@ -139,6 +139,11 @@ export interface HiredStaffMember {
    * completes and the member's level ticks up. Absent when the
    * member is idle / not currently training. */
   trainingCompletesAt?: number;
+  /** Storey the staff member calls home — they spawn at, idle on, and
+   * work tasks for this floor. Default 0 (ground) for any save written
+   * before the multi-storey expansion. Players reassign via the
+   * StaffPanel floor selector once an upper storey is unlocked. */
+  homeFloor?: number;
 }
 
 export interface AdminSettings {

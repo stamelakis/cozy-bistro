@@ -2462,9 +2462,10 @@ export class WorldScene {
 
   /** Spawn an extra staff character at runtime (when player hires another).
    * Slots them in just to the right of the existing crew so they don't
-   * overlap. Returns the AnimatedCharacter, or null if the GLB failed
-   * to load. */
-  async spawnExtraStaff(role: "chef" | "waiter" | "errand", offsetSlot: number): Promise<AnimatedCharacter | null> {
+   * overlap. `homeFloor` (default 0) parents the model into that
+   * storey's mount so visibility tracks the focused floor. Returns the
+   * AnimatedCharacter, or null if the GLB failed to load. */
+  async spawnExtraStaff(role: "chef" | "waiter" | "errand", offsetSlot: number, homeFloor = 0): Promise<AnimatedCharacter | null> {
     // Matches the new starter homes in populateCharacters — further south
     // so the walking distance to the kitchen line is large enough to read.
     const homeByRole: Record<"chef" | "waiter" | "errand", { x: number; z: number; facingY: number; action: CharacterAction }> = {
@@ -2487,13 +2488,29 @@ export class WorldScene {
         phase: Math.random() * 5,
         seatHeight: 0.5,
       };
-      this.threeScene.add(model);
+      // Lift the model's Y by the home-floor's slab so an upper-floor
+      // chef stands ON Floor 1+ instead of floating at y=0. Parent it
+      // into the storey mount so the storey-visibility rules apply.
+      model.position.y += homeFloor * WorldScene.STOREY_HEIGHT;
+      this.getStoreyMount(homeFloor).add(model);
       this.animator.add(animated);
       return animated;
     } catch (err) {
       console.warn(`Failed to spawn extra ${role}:`, err);
       return null;
     }
+  }
+
+  /** Re-parent a previously spawned staff character to a different
+   * floor. Adjusts the model's Y by the storey-height delta and moves
+   * it under the new storey's mount. Called by Engine when the player
+   * changes a member's homeFloor in StaffPanel. */
+  relocateStaff(character: AnimatedCharacter, fromFloor: number, toFloor: number): void {
+    if (fromFloor === toFloor) return;
+    const dy = (toFloor - fromFloor) * WorldScene.STOREY_HEIGHT;
+    character.root.position.y += dy;
+    const newMount = this.getStoreyMount(toFloor);
+    if (character.root.parent !== newMount) newMount.add(character.root);
   }
 
   /** Place the static staff models (chef + waiter + errand) at the kitchen
