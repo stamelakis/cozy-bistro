@@ -279,6 +279,7 @@ export class Engine {
     // Let the Game read counts of placed sinks/dishwashers when scaling
     // the dish-wash interval.
     this.game.countPlacedById = (id) => this.registry.countById(id);
+    this.game.getProvidedAppliances = () => this.registry.getProvidedAppliances();
     this.game.registry = this.registry;
     // StaffPanel queries this to show "X working" badges.
     this.game.getStaffWorkingCount = (role) => {

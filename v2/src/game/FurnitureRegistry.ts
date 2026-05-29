@@ -684,6 +684,19 @@ export class FurnitureRegistry {
     return n;
   }
 
+  /** Set of every appliance id at least one placed item provides.
+   * Used by the cooking system to gate recipes by their required
+   * equipment — a recipe with appliances: ["toaster"] is only
+   * makeable when this set contains "toaster". */
+  getProvidedAppliances(): Set<string> {
+    const out = new Set<string>();
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.provides) out.add(def.provides);
+    }
+    return out;
+  }
+
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). Surface-placed
    * items override their Y from the host's measured top after the host

@@ -1,4 +1,4 @@
-import type { IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
+import type { ApplianceId, IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 import { recipes } from "../data/recipes";
 
 import { clamp } from "../data/util";
@@ -201,6 +201,35 @@ export class CookingSystem {
 
   getActiveRecipeCountForCategory(category: RecipeDefinition["category"]): number {
     return recipes.filter((recipe) => recipe.category === category && this.menuRecipeIds.includes(recipe.id)).length;
+  }
+
+  // === Appliance gating ===
+  //
+  // Each recipe declares which kitchen appliances it needs to be makeable.
+  // Items in the catalog declare what they provide. The cooking system
+  // gates the menu UI off "do you actually own one of each required
+  // appliance?" — recipes that aren't makeable can't be added to the
+  // active menu.
+
+  /** The set of appliance ids needed for the recipe. Falls back to
+   * `[stationNeeded]` for recipes that haven't opted into an explicit
+   * `appliances` list — keeps the 53 existing recipes working without
+   * a manual touch-up pass on every one. */
+  getRecipeAppliances(recipe: RecipeDefinition): readonly ApplianceId[] {
+    if (recipe.appliances && recipe.appliances.length > 0) return recipe.appliances;
+    return [recipe.stationNeeded as ApplianceId];
+  }
+
+  /** True iff every appliance the recipe needs is currently provided
+   * by at least one placed item. `provided` is the set returned by
+   * FurnitureRegistry.getProvidedAppliances(). When the callback is
+   * absent (early boot, save migration), recipes are treated as
+   * makeable so the legacy behaviour is preserved. */
+  canMakeRecipe(recipe: RecipeDefinition, provided: ReadonlySet<string> | undefined): boolean {
+    if (!provided) return true;
+    const needs = this.getRecipeAppliances(recipe);
+    for (const a of needs) if (!provided.has(a)) return false;
+    return true;
   }
 
   // === Pantry & ingredient inventory ===

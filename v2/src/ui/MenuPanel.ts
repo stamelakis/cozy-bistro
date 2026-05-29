@@ -2,7 +2,8 @@ import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import { getIngredientCost } from "../data/ingredients";
-import type { LuxuryTier, RecipeDefinition } from "../data/types";
+import { APPLIANCE_LABELS } from "../data/types";
+import type { ApplianceId, LuxuryTier, RecipeDefinition } from "../data/types";
 
 /**
  * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
@@ -118,15 +119,34 @@ export class MenuPanel {
     const onMenu = new Set(this.game.cooking.getMenuRecipeIds());
     const playerTier = this.game.getLuxuryTier();
     const tierUnlocked = this.selectedTier <= playerTier;
+    // Snapshot the currently-provided appliances ONCE per render so
+    // every row checks against the same set (and we don't walk the
+    // registry n times).
+    const provided = this.game.getProvidedAppliances?.();
     // Sort within tier by category (appetizer, main, dessert, drink, side) then name.
     const order = { appetizer: 0, main: 1, dessert: 2, drink: 3, side: 4 } as const;
     inTier.sort((a, b) => (order[a.category] - order[b.category]) || a.name.localeCompare(b.name));
     for (const recipe of inTier) {
-      this.content.appendChild(this.renderRecipe(recipe, onMenu.has(recipe.id), tierUnlocked));
+      this.content.appendChild(this.renderRecipe(recipe, onMenu.has(recipe.id), tierUnlocked, provided));
     }
   }
 
-  private renderRecipe(recipe: RecipeDefinition, on: boolean, unlocked: boolean): HTMLElement {
+  private renderRecipe(
+    recipe: RecipeDefinition, on: boolean, unlocked: boolean,
+    provided: ReadonlySet<string> | undefined,
+  ): HTMLElement {
+    // Recipes whose required appliances aren't all placed in the
+    // restaurant can't be put on the menu. The row still renders so
+    // the player knows the recipe exists and what they need to build
+    // to unlock it.
+    const appliances = this.game.cooking.getRecipeAppliances(recipe);
+    const missing: ApplianceId[] = [];
+    if (provided) {
+      for (const a of appliances) if (!provided.has(a)) missing.push(a);
+    }
+    const makeable = missing.length === 0;
+    const usable = unlocked && makeable;
+
     const row = document.createElement("div");
     Object.assign(row.style, {
       display: "flex",
@@ -134,13 +154,19 @@ export class MenuPanel {
       gap: "8px",
       padding: "4px 6px",
       borderBottom: "1px solid rgba(255,245,220,0.06)",
-      opacity: unlocked ? "1" : "0.45",
+      opacity: usable ? "1" : "0.45",
     } as Partial<CSSStyleDeclaration>);
 
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = on;
-    cb.disabled = !unlocked;
+    cb.disabled = !usable;
+    // Tooltip on the checkbox itself so the player knows WHY it's disabled.
+    if (!unlocked) {
+      cb.title = `Locked — unlock with Tier ${this.selectedTier} expansion`;
+    } else if (!makeable) {
+      cb.title = `Needs: ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
+    }
     cb.onchange = () => {
       if (cb.checked) this.game.cooking.addToMenu(recipe.id);
       else this.game.cooking.removeFromMenu(recipe.id);
@@ -190,6 +216,31 @@ export class MenuPanel {
       nameRow.appendChild(activeBadge);
     }
     left.appendChild(nameRow);
+    // Appliance requirements — one chip per appliance the recipe needs.
+    // Provided ones render green, missing ones render dim red so the
+    // player can see at a glance "this recipe needs a toaster I don't
+    // own". Skip the row entirely when the recipe only needs whichever
+    // station has historically been universal so it doesn't add noise
+    // for the basic counter / stove recipes.
+    if (appliances.length > 0) {
+      const applLine = document.createElement("div");
+      Object.assign(applLine.style, {
+        display: "flex", gap: "3px", marginTop: "2px", flexWrap: "wrap",
+      } as Partial<CSSStyleDeclaration>);
+      for (const a of appliances) {
+        const have = provided ? provided.has(a) : true;
+        const chip = document.createElement("span");
+        chip.textContent = APPLIANCE_LABELS[a];
+        Object.assign(chip.style, {
+          fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
+          background: have ? "rgba(120, 200, 120, 0.30)" : "rgba(200, 90, 90, 0.25)",
+          color: have ? "#cbe6cb" : "#f0c8c8",
+          fontWeight: "600",
+        } as Partial<CSSStyleDeclaration>);
+        applLine.appendChild(chip);
+      }
+      left.appendChild(applLine);
+    }
     // Ingredient line — list every ingredient with its per-unit cost.
     const ingLine = document.createElement("div");
     ingLine.textContent = recipe.ingredients

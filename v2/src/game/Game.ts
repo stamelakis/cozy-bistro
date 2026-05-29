@@ -159,6 +159,11 @@ export class Game {
   /** Optional: when set, the dish-wash interval queries this for
    * counts of placed sinks / dishwashers. */
   countPlacedById?: (id: string) => number;
+  /** Optional: when set, the cooking system queries this to decide
+   * which recipes can currently be put on the menu (gated by required
+   * appliances). Returns the set of appliance ids at least one placed
+   * item provides. */
+  getProvidedAppliances?: () => Set<string>;
   /** Optional: Engine sets this to query how many staff of a role are
    * currently working (non-idle). Used by StaffPanel for the
    * "X working / Y idle" badge. */

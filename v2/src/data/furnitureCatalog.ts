@@ -128,6 +128,11 @@ export interface FurnitureDef {
   attractionBonus?: number;
   ratingBonus?: number;
   seatingCapacity?: number;
+  /** Kitchen appliance this item provides. Used by the recipe gating
+   * system: a recipe with `appliances: ["toaster"]` is only orderable
+   * when at least one placed item has `provides: "toaster"`. Items
+   * without `provides` don't contribute to any recipe's makeability. */
+  provides?: import("./types").ApplianceId;
   /** Hand-curated BuildMenu tier (1 = starter diner … 5 = flagship/luxury).
    * When set, overrides the inferQualityTier cost+ratingBonus heuristic.
    * Use this whenever the cost ladder doesn't match the item's visual
@@ -337,9 +342,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // live in "wash" below so the chef-assignment + per-stove flame
   // systems only see actual burners.
   { id: "stove",          name: "Gas Stove",       category: "stove",
-    modelPath: "assets/kenney/kitchenStove.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 240 },
+    modelPath: "assets/kenney/kitchenStove.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 240,
+    provides: "stove" },
   { id: "stove-electric", name: "Electric Stove",  category: "stove",
-    modelPath: "assets/kenney/kitchenStoveElectric.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 320 },
+    modelPath: "assets/kenney/kitchenStoveElectric.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 320,
+    provides: "stove" },
   // Dishwashing — sinks + dishwashers ("wash" category). Each placed
   // item reduces the dirty-dish wash interval; the chef never claims
   // these as cook stations.
@@ -351,7 +358,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "proc:dishwasher-pro", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 540 },
   { id: "microwave",      name: "Microwave",       category: "counter",
     modelPath: "assets/kenney/kitchenMicrowave.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80,
-    placement: "surface" },
+    placement: "surface", provides: "microwave" },
   { id: "fridge",         name: "Fridge",          category: "counter",
     modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 360,
     stockCapacity: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
@@ -364,16 +371,16 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90,
-    surfaceSlots: [{ dx: 0, dz: 0 }] },
+    surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
   { id: "coffee-machine", name: "Coffee Machine",  category: "counter",
     modelPath: "assets/kenney/kitchenCoffeeMachine.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140,
-    placement: "surface" },
+    placement: "surface", provides: "coffee" },
   { id: "blender",        name: "Blender",         category: "counter",
     modelPath: "assets/kenney/kitchenBlender.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60,
-    placement: "surface" },
+    placement: "surface", provides: "blender" },
   { id: "toaster",        name: "Toaster",         category: "counter",
     modelPath: "assets/kenney/toaster.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 35,
-    placement: "surface" },
+    placement: "surface", provides: "toaster" },
   { id: "kitchen-hood",   name: "Range Hood",      category: "decoration",
     modelPath: "assets/kenney/hoodModern.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 110 },
   { id: "kitchen-hood-l", name: "Large Range Hood", category: "decoration",

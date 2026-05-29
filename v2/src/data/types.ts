@@ -55,6 +55,23 @@ export interface PlacedFurniture {
   disabledSeatIndexes?: number[];
 }
 
+/** Kitchen appliance types a recipe can require. Each id is provided
+ * by one or more catalog items via FurnitureDef.provides. A recipe is
+ * "makeable" iff every appliance in its `appliances` list is provided
+ * by at least one placed item. */
+export type ApplianceId = "stove" | "counter" | "toaster" | "coffee" | "blender" | "microwave";
+
+/** Human labels for the appliance ids — used by the menu UI to show
+ * "needs Toaster + Counter" badges on each recipe row. */
+export const APPLIANCE_LABELS: Record<ApplianceId, string> = {
+  stove: "Stove",
+  counter: "Counter",
+  toaster: "Toaster",
+  coffee: "Coffee Machine",
+  blender: "Blender",
+  microwave: "Microwave",
+};
+
 export interface RecipeDefinition {
   id: string;
   name: string;
@@ -62,7 +79,12 @@ export interface RecipeDefinition {
   luxuryTier?: LuxuryTier;
   ingredients: string[];
   preparationTimeSeconds: number;
+  /** @deprecated kept for save compatibility — use `appliances` instead. */
   stationNeeded: "stove" | "counter";
+  /** Every appliance that must be placed in the restaurant for the
+   * recipe to be makeable. Empty / undefined falls back to deriving
+   * one from stationNeeded. */
+  appliances?: readonly ApplianceId[];
   sellPrice: number;
   satisfactionEffect: number;
   unlockedByDefault: boolean;
