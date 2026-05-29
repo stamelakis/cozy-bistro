@@ -516,15 +516,29 @@ export class WorldScene {
     const box = new THREE.Box3().setFromObject(model);
     const worldTopY = Number.isFinite(box.max.y) ? box.max.y : 1.5;
     const bulbWorldY = Math.max(0.3, worldTopY - 0.12);
+    // For wall sconces fitFurniture shifts the model so its +Z face
+    // sits flush with the wall — that means the model origin is at
+    // the WALL plane, and the candle / sconce body sticks out in -Z.
+    // Anchoring the bulb at local (0, _, 0) parked it at the wall
+    // plane, so the light pooled on the wall right behind the candle
+    // instead of on the candle itself. Use the model's measured
+    // bounding-box centre in world space, converted back to local,
+    // so the bulb sits inside the sconce body for wall lamps and
+    // stays at the model origin for floor / table / ceiling lamps
+    // (whose centroid is already at the origin).
+    const worldCentre = new THREE.Vector3(
+      Number.isFinite(box.min.x) ? (box.min.x + box.max.x) / 2 : model.position.x,
+      bulbWorldY,
+      Number.isFinite(box.min.z) ? (box.min.z + box.max.z) / 2 : model.position.z,
+    );
+    const localCentre = model.worldToLocal(worldCentre.clone());
+
     const sx = model.scale.x || 1;
     const sy = model.scale.y || 1;
     const sz = model.scale.z || 1;
-    // Convert the desired WORLD Y back into the model's LOCAL frame so
-    // the child transform composes correctly through model.scale.
-    const localY = (bulbWorldY - model.position.y) / sy;
 
     const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
-    light.position.set(0, localY, 0);
+    light.position.copy(localCentre);
     light.castShadow = false; // shadow maps for many lamps tank perf
     model.add(light);
     // A tiny emissive sphere makes the bulb itself visibly "lit" at
@@ -536,7 +550,7 @@ export class WorldScene {
         transparent: true, opacity: 0.0,
       }),
     );
-    bulb.position.set(0, localY, 0);
+    bulb.position.copy(localCentre);
     // Inverse-scale so the bulb's WORLD radius stays at 0.08 even when
     // the parent lamp is stretched 8x vertically by fitFurniture.
     bulb.scale.set(1 / sx, 1 / sy, 1 / sz);
