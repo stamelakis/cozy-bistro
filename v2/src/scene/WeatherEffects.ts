@@ -307,51 +307,51 @@ export class WeatherEffects {
     }
   }
 
-  /** Procedural cloud-shadow texture. Many overlapping soft radial
-   * gradients painted with a NEUTRAL-WARM dark colour so the blend
-   * over grass + tile doesn't go toxic-green. All blobs are clamped
-   * to the central 70% of the canvas so the gradients reach alpha=0
-   * inside the texture — guarantees a transparent margin around the
-   * cloud and prevents the plane's square edge from showing through.
+  /** A single soft dark patch — that's all a cloud shadow is. We're
+   * NOT painting a cloud silhouette here; the clouds themselves are
+   * imagined to live in the sky above and only their shadows fall on
+   * the ground. So each plane gets one large blurry blob that fades
+   * to full transparency at the edge.
    *
-   * Why warm-dark instead of cool-blue:
-   * Mixing rgb(60, 72, 90) (cool blue) with the warm tan / brown
-   * ground at ~40% alpha pushes the result toward green / cyan —
-   * that's the "toxic fog" the previous pass landed on. A neutral
-   * dark warm grey (~rgb 40, 32, 24) just darkens whatever's under
-   * it without injecting blue, which is what a real soft shadow on
-   * any surface looks like.
-   *
-   * Why higher canvas resolution:
-   * 384 px instead of 256 lets us draw more, smaller blobs and the
-   * mip-filtered result reads softer at draw size. */
+   * Implementation: ONE big base radial gradient covering most of the
+   * canvas, then 2-3 tiny offset blobs to nudge the silhouette away
+   * from a perfect circle (real cloud shadows have slightly organic
+   * edges). No internal mottling — a shadow doesn't have texture, it
+   * just darkens what's underneath. */
   private static makeCloudTexture(): THREE.CanvasTexture {
-    const sz = 384;
+    const sz = 256;
     const canvas = document.createElement("canvas");
     canvas.width = sz;
     canvas.height = sz;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, sz, sz);
-    // Confine blob centres + radii so (cx + r) <= 95% of canvas. This
-    // guarantees the radial gradient reaches alpha=0 BEFORE the canvas
-    // edge — without it the gradient gets clipped, leaving a hard
-    // straight edge that gives away the underlying square plane.
-    const margin = 0.18;     // keep blobs in the central 64% of canvas
-    const maxR = 0.16;       // max radius as a fraction of canvas
-    const blobs = 20 + Math.floor(Math.random() * 8);
-    for (let i = 0; i < blobs; i += 1) {
-      const cx = sz * (margin + Math.random() * (1 - 2 * margin));
-      const cy = sz * (margin + Math.random() * (1 - 2 * margin));
-      const r  = sz * (0.06 + Math.random() * (maxR - 0.06));
-      // Per-blob random peak so the cloud has uneven internal density.
-      // Lower max (0.30 vs old 0.40) because the warm-dark colour reads
-      // strongly even at low alpha — overshooting turns it into a
-      // solid sticker again.
-      const peak = 0.10 + Math.random() * 0.20;
+    // Base patch — one big soft radial blob centred near the middle.
+    // Radius leaves a generous transparent margin so the plane edge
+    // is never visible.
+    const cx0 = sz * (0.45 + Math.random() * 0.10);
+    const cy0 = sz * (0.45 + Math.random() * 0.10);
+    const r0  = sz * 0.42;
+    const baseAlpha = 0.28 + Math.random() * 0.10;
+    const grad0 = ctx.createRadialGradient(cx0, cy0, 0, cx0, cy0, r0);
+    grad0.addColorStop(0,    `rgba(40, 32, 24, ${baseAlpha.toFixed(3)})`);
+    grad0.addColorStop(0.55, `rgba(40, 32, 24, ${(baseAlpha * 0.55).toFixed(3)})`);
+    grad0.addColorStop(1.0,  `rgba(40, 32, 24, 0)`);
+    ctx.fillStyle = grad0;
+    ctx.fillRect(0, 0, sz, sz);
+    // 2-3 small bumps to break up the perfect circular outline. Each
+    // is significantly smaller than the base so it just nudges the
+    // silhouette rather than adding visible spots.
+    const bumps = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < bumps; i += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist  = sz * (0.18 + Math.random() * 0.12);
+      const cx = cx0 + Math.cos(angle) * dist;
+      const cy = cy0 + Math.sin(angle) * dist;
+      const r  = sz * (0.16 + Math.random() * 0.08);
+      const a  = baseAlpha * 0.5;
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grad.addColorStop(0,    `rgba(40, 32, 24, ${peak.toFixed(3)})`);
-      grad.addColorStop(0.6,  `rgba(40, 32, 24, ${(peak * 0.35).toFixed(3)})`);
-      grad.addColorStop(1.0,  `rgba(40, 32, 24, 0)`);
+      grad.addColorStop(0,   `rgba(40, 32, 24, ${a.toFixed(3)})`);
+      grad.addColorStop(1.0, `rgba(40, 32, 24, 0)`);
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, sz, sz);
     }
