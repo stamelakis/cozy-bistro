@@ -605,7 +605,23 @@ export class BuildMenu {
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
         this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
-        this.preview.rotation.y = this.rotationY;
+        // Patch currentPlan too — otherwise a click immediately after R
+        // (no mouse move in between) consumes the plan that
+        // onPointerMove captured at the OLD rotation, and the item lands
+        // facing the original direction even though the preview looks
+        // rotated. Adding π/2 mirrors the same delta that just went
+        // into this.rotationY, so the formula
+        //   tile items:    plan.rotY = this.rotationY
+        //   surface items: plan.rotY = snap.rotY + this.rotationY
+        // both stay in sync. Wall / wall-shelf items will re-clamp
+        // back to host.rotY on the next pointer move (their rotation
+        // is forced and R has never affected them).
+        if (this.currentPlan) {
+          this.currentPlan.rotY = (this.currentPlan.rotY + Math.PI / 2) % (Math.PI * 2);
+          this.preview.rotation.y = this.currentPlan.rotY;
+        } else {
+          this.preview.rotation.y = this.rotationY;
+        }
       }
     });
   }
