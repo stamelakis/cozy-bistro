@@ -242,6 +242,7 @@ export class FurnitureRegistry {
     const item = this.items[idx];
     this.scene.remove(item.model);
     this.items.splice(idx, 1);
+    this.surfaceExtentCache.delete(item.uid);
     const def = getFurnitureDef(item.defId);
     if (!def) return { defId: item.defId, refund: 0 };
     // Mirror of 2D's value formula, scaled down to roughly 50%-of-cost-plus-stats.
@@ -299,6 +300,10 @@ export class FurnitureRegistry {
       this.scene.remove(this.items[finalIdx].model);
       this.items.splice(finalIdx, 1);
     }
+    // Drop the cached surface extent for both the host and any
+    // cascaded surface children so the map doesn't grow unbounded.
+    this.surfaceExtentCache.delete(uid);
+    for (const child of children) this.surfaceExtentCache.delete(child.uid);
     const def = getFurnitureDef(item.defId);
     return { defId: item.defId, refund: (def?.cost ?? 0) + totalChildRefund };
   }
@@ -569,8 +574,53 @@ export class FurnitureRegistry {
     return best;
   }
 
+  /** Cached per-table local-frame half-extents of the actual placed
+   * model. Lets rotateSlotOffset derive plate positions from the
+   * table's ACTUAL visible size instead of hard-coded seat-slot
+   * offsets — which only happened to fit a fully-square 2×2 model and
+   * left plates floating in mid-air on tables whose Kenney mesh
+   * comes in with a more rectangular aspect ratio. Rotation-invariant
+   * by construction so the cache survives a setPose. */
+  private readonly surfaceExtentCache = new Map<string, { halfW: number; halfD: number }>();
+
+  /** Measure the placed model's local-frame surface half-extents. The
+   * scene-graph world box is what THREE.Box3 gives us cheaply; because
+   * items snap to 90° increments we can recover the natural-frame
+   * (rotY=0) extents by swapping X/Z when the item is at π/2 or 3π/2. */
+  private getLocalSurfaceExtent(item: PlacedFurnitureItem): { halfW: number; halfD: number } {
+    const cached = this.surfaceExtentCache.get(item.uid);
+    if (cached) return cached;
+    item.model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(item.model);
+    if (!Number.isFinite(box.max.x) || box.max.x === -Infinity) {
+      // Model hasn't loaded yet — return a sensible fallback derived
+      // from the footprint and DON'T cache (so we retry next call).
+      const def = getFurnitureDef(item.defId);
+      const halfW = def ? def.size.width / 2 - 0.05 : 0.5;
+      const halfD = def ? def.size.depth / 2 - 0.05 : 0.5;
+      return { halfW, halfD };
+    }
+    const worldHalfX = (box.max.x - box.min.x) / 2;
+    const worldHalfZ = (box.max.z - box.min.z) / 2;
+    const swap = Math.abs(Math.sin(item.rotY)) > 0.5;
+    const result = {
+      halfW: swap ? worldHalfZ : worldHalfX,
+      halfD: swap ? worldHalfX : worldHalfZ,
+    };
+    this.surfaceExtentCache.set(item.uid, result);
+    return result;
+  }
+
   /** Internal: apply the table's rotation to a slot offset so a rotated
-   * table's seats still land in the right world positions. */
+   * table's seats still land in the right world positions.
+   *
+   * Plate position is COMPUTED from the table's measured local-frame
+   * surface extent (not the seat slot's static platePos). The seat's
+   * (dx, dz) tells us which side of the table the chair sits on; the
+   * plate is placed on that edge of the actual model, PLATE_MARGIN
+   * inside. That way a rectangular Kenney dining-table mesh with a
+   * 2-tile footprint gets plates ON its tabletop instead of floating
+   * 30 cm off the short edge. */
   private rotateSlotOffset(slot: SeatSlot, table: PlacedFurnitureItem):
     { dx: number; dz: number; platePos: { dx: number; dz: number } } {
     const c = Math.cos(table.rotY);
@@ -580,7 +630,24 @@ export class FurnitureRegistry {
       dz: -s * dx + c * dz,
     });
     const seat = rot(slot.dx, slot.dz);
-    const plate = rot(slot.platePos.dx, slot.platePos.dz);
+
+    const extent = this.getLocalSurfaceExtent(table);
+    const PLATE_MARGIN = 0.15;
+    const maxX = Math.max(0, extent.halfW - PLATE_MARGIN);
+    const maxZ = Math.max(0, extent.halfD - PLATE_MARGIN);
+    let plateDx: number;
+    let plateDz: number;
+    if (Math.abs(slot.dz) >= Math.abs(slot.dx)) {
+      // Chair is more N/S of centre than E/W — plate sits on the
+      // table's near Z-edge.
+      plateDz = Math.sign(slot.dz) * maxZ;
+      plateDx = Math.max(-maxX, Math.min(maxX, slot.dx));
+    } else {
+      plateDx = Math.sign(slot.dx) * maxX;
+      plateDz = Math.max(-maxZ, Math.min(maxZ, slot.dz));
+    }
+    const plate = rot(plateDx, plateDz);
+
     return { dx: seat.dx, dz: seat.dz, platePos: { dx: plate.dx, dz: plate.dz } };
   }
 
