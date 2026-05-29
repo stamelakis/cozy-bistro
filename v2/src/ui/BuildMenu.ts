@@ -111,6 +111,11 @@ export class BuildMenu {
   /** uid of the item the player is currently moving (between the two
    * clicks of a move). null = not holding anything yet. */
   private holdingUid: string | null = null;
+  /** Public read of holdingUid — Engine uses this to exclude the held
+   * window / door from the perimeter-wall opening derivation while it
+   * floats with the cursor, so the wall fills back in mid-move instead
+   * of keeping a hole at the old position. */
+  get heldUid(): string | null { return this.holdingUid; }
   /** Original pose of the item being moved, for undo + cancel-restore. */
   private holdingFrom: { x: number; z: number; rotY: number } | null = null;
   /** The actual placed model that's being carried — we hide it while the
@@ -900,7 +905,16 @@ export class BuildMenu {
     // wall sits between two adjacent cells; both cells stay usable.
     // rotY swings 90° so the mesh aligns with the edge direction.
     if (def.placement === "edge") {
-      const e = this.snapToEdge(rawPoint.x, rawPoint.z);
+      // Clamp the raw point to the building's perimeter bounds before
+      // snapping. The iso camera + ground-plane raycast means hovering
+      // OVER a tall item (plant pot, tall fridge) projects the ground
+      // hit PAST the wall behind it — which then snaps to a grid line
+      // outside the building and reads as "blocked". Clamping pulls
+      // the snap target back onto the building so a window can land
+      // on the wall even when the cursor approach is occluded.
+      const clampedX = Math.max(-4.5, Math.min(5.5, rawPoint.x));
+      const clampedZ = Math.max(-4.5, Math.min(5.5, rawPoint.z));
+      const e = this.snapToEdge(clampedX, clampedZ);
       // For real doors / doorways: only allow placement when the
       // snapped edge actually coincides with an exterior wall segment.
       // Stops the player from dropping a "front door" floating between
@@ -1326,6 +1340,13 @@ export class BuildMenu {
         // Now hide the original — done after cloning so the clone above
         // never inherited an invisible source.
         item.model.visible = false;
+        // Fire the same removed-callback the sell path uses so the
+        // perimeter wall fills back in mid-move. Engine's handler
+        // reads heldUid (now set) and excludes this item from the
+        // openings derivation, so the hole at the old position
+        // disappears as soon as the player picks up.
+        if (def?.category === "door" && !def.id.startsWith("window")) this.onDoorRemoved?.(item.model);
+        if (def?.id.startsWith("window")) this.onWindowRemoved?.(item.model);
         this.flashRoot(`Picked up — click destination`, "success");
       } else {
         // Second click: drop using the latest plan from pointermove.
@@ -1335,6 +1356,8 @@ export class BuildMenu {
           return;
         }
         const fromPose = this.holdingFrom!;
+        const movedItem = this.registry.snapshotItems().find((it) => it.uid === this.holdingUid);
+        const movedDef = movedItem ? furnitureCatalog.find((d) => d.id === movedItem.defId) : undefined;
         this.registry.setPose(this.holdingUid, plan.x, plan.z, plan.rotY);
         if (this.movingOriginalModel) {
           this.movingOriginalModel.visible = true;
@@ -1344,6 +1367,14 @@ export class BuildMenu {
         this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY });
         this.holdingUid = null;
         this.holdingFrom = null;
+        // Fire the placed-callback so the wall re-cuts a hole at the
+        // new position. heldUid is null now so the rebuild sees this
+        // item where it just landed and the openings derivation
+        // includes it.
+        if (movedItem && movedDef) {
+          if (movedDef.category === "door" && !movedDef.id.startsWith("window")) this.onDoorPlaced?.(movedItem.model);
+          if (movedDef.id.startsWith("window")) this.onWindowPlaced?.(movedItem.model);
+        }
         this.flashRoot(plan.quality === "snap-perfect" ? "Moved — perfect seat!" : "Moved", "success");
       }
       return;

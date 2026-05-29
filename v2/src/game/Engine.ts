@@ -320,16 +320,19 @@ export class Engine {
       // Door event invalidates the front-wall layout — rebuild every
       // perimeter wall so the gap + lintel land in the right places
       // and any window cuts on neighbouring walls stay correct.
-      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+      // heldUid is non-null mid-move (pickup fires onDoorRemoved with
+      // heldUid set; drop fires onDoorPlaced with heldUid cleared).
+      // Either way the rebuild reflects the right state.
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings(buildMenu.heldUid));
     };
     buildMenu.onDoorRemoved = () => {
-      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings(buildMenu.heldUid));
     };
     buildMenu.onWindowPlaced = () => {
-      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings(buildMenu.heldUid));
     };
     buildMenu.onWindowRemoved = () => {
-      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings(buildMenu.heldUid));
     };
     // Per-stove flame pins are now driven by Engine.update via
     // scene.syncStoveFlames(registry.getCookingStoves()) — no place-
@@ -596,7 +599,7 @@ export class Engine {
    * of one of those coords belongs to that wall. Windows can live on
    * any perimeter wall; real doors stay confined to the front wall as
    * before. */
-  private allPerimeterOpenings(): { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } } {
+  private allPerimeterOpenings(excludeUid: string | null = null): { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } } {
     const out = {
       front: { doors: [] as number[], windows: [] as number[] },
       back:  { doors: [] as number[], windows: [] as number[] },
@@ -604,6 +607,11 @@ export class Engine {
       right: { doors: [] as number[], windows: [] as number[] },
     };
     for (const it of this.registry.snapshotItems()) {
+      // Skip the door / window currently floating with the player's
+      // cursor during a move so the wall fills back in at its old
+      // position. BuildMenu fires onWindowRemoved on pickup with
+      // heldUid set, and onWindowPlaced on drop with heldUid cleared.
+      if (excludeUid && it.uid === excludeUid) continue;
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "door") continue;
       const isWindow = def.id.startsWith("window");
