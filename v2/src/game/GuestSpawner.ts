@@ -27,6 +27,11 @@ interface DirtyTableMesh {
    * null while it's free for any waiter to claim. */
   claimedBy: string | null;
   pos: THREE.Vector2;
+  /** Which seat (tableUid#slotIndex) the dirty piece belongs to.
+   * spawnLeftoversForGuest reads back the COUNT of existing dirty
+   * pieces with the same seatId so a second customer's plates start
+   * past the first customer's pile instead of stacking on top. */
+  seatId?: string;
 }
 
 /** Snapshot of a dirty piece for the wash router. */
@@ -43,6 +48,123 @@ type SeatId = string;
 function makeSeatId(slot: ResolvedSeatSlot): SeatId {
   return `${slot.tableUid}#${slot.slotIndex}`;
 }
+
+// ============================================================================
+//                              DISH VISUALS
+// ============================================================================
+// Pluggable builders for the plate and glass meshes we drop on tables.
+// Swap these out (or fork per-tier) when nicer art lands without touching
+// the seat-slot or wash-trip code. Each builder declares its approximate
+// world-space `radius` so the leftover layout below can space pieces by
+// the right amount regardless of how big the model gets.
+//
+// build() must return a mesh whose visible origin lies at (0, tableTop, 0)
+// — the spawner translates it into world position. The model can have a
+// taller bounding box (glasses do), but its base should rest on y = 0
+// of its own frame.
+// ============================================================================
+
+interface DishBuilder {
+  /** Approximate world-space half-width of the piece, used to space
+   * leftovers in the layout pattern below. */
+  readonly radius: number;
+  /** Builds one mesh. tier is the catalog tier of the inventory piece
+   * being represented (1..5). Default builders ignore it; future
+   * higher-fidelity builders can vary colour / shape per tier. */
+  build(tier: number): THREE.Object3D;
+}
+
+/** Default leftover-plate look: cream cylinder with a dark crumb mound
+ * in the middle. Replace with a textured Kenney plate (or per-tier
+ * meshes) by swapping this binding in DISH_BUILDERS. */
+const DEFAULT_PLATE_BUILDER: DishBuilder = {
+  radius: 0.16,
+  build: (_tier: number): THREE.Object3D => {
+    if (!sharedDirtyPlateGeo) {
+      sharedDirtyPlateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
+      sharedDirtyPlateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
+    }
+    const plate = new THREE.Mesh(sharedDirtyPlateGeo, sharedDirtyPlateMat!);
+    plate.castShadow = true;
+    plate.receiveShadow = true;
+    const crumbs = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x5a3a1f, roughness: 0.95 }),
+    );
+    crumbs.position.set(0, 0.025, 0);
+    crumbs.scale.set(1.1, 0.25, 1.1);
+    plate.add(crumbs);
+    return plate;
+  },
+};
+
+/** Default leftover-glass look: short transparent cylinder with a
+ * yellowish puddle at the bottom (the "dregs"). */
+const DEFAULT_GLASS_BUILDER: DishBuilder = {
+  radius: 0.07,
+  build: (_tier: number): THREE.Object3D => {
+    const group = new THREE.Group();
+    const glass = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.065, 0.055, 0.14, 12, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0xb8d0d8, roughness: 0.15, metalness: 0.05,
+        transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+      }),
+    );
+    glass.position.y = 0.07;
+    glass.castShadow = true;
+    group.add(glass);
+    const dregs = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.055, 0.02, 12),
+      new THREE.MeshStandardMaterial({ color: 0xb88a3a, roughness: 0.6 }),
+    );
+    dregs.position.y = 0.015;
+    group.add(dregs);
+    return group;
+  },
+};
+
+/** Lookup table the spawner reads. Swap entries here to change every
+ * dirty plate / glass in one place. Future per-tier variants could
+ * store an array keyed by tier; for now both kinds use a single
+ * design across all tiers. */
+const DISH_BUILDERS: Record<DishKind, DishBuilder> = {
+  plate: DEFAULT_PLATE_BUILDER,
+  glass: DEFAULT_GLASS_BUILDER,
+};
+
+/** Shared geometry / material for the default plate builder. Cached
+ * outside the function so spawning N plates doesn't reallocate. */
+let sharedDirtyPlateGeo: THREE.CylinderGeometry | undefined;
+let sharedDirtyPlateMat: THREE.MeshStandardMaterial | undefined;
+
+/** Layout pattern for leftover pieces piling up at a seat.
+ *
+ * Each entry is an offset in CUSTOMER-LOCAL frame (rightR = +1 means
+ * "one piece-radius to the customer's right"; depthR = +1 means "one
+ * piece-radius further INTO the table away from the customer"). The
+ * spawner multiplies by the dish builder's radius so plates and
+ * glasses each get spacing appropriate to their own size.
+ *
+ * Priority: slot 0 is closest to the customer (their plate). 1–2
+ * spread sideways along the table edge; 3–5 push deeper into the
+ * table for stack-overflow.
+ *
+ * Today a single customer orders at most:
+ *   • food  → appetizer + main + dessert  = 3 plates
+ *   • drink → drink + maybe a second drink = 2 glasses
+ * so a single visit fills slots 0..2 at most. The extra slots (3..5)
+ * exist so a SECOND customer arriving at the same seat before the
+ * waiter has cleared the first pile keeps piling sideways/back
+ * instead of stacking on top of the previous plates. */
+const LEFTOVER_SLOTS: ReadonlyArray<{ rightR: number; depthR: number }> = [
+  { rightR:  0,    depthR: 0    },
+  { rightR: -2.1,  depthR: 0    },
+  { rightR:  2.1,  depthR: 0    },
+  { rightR:  0,    depthR: 2.1  },
+  { rightR: -2.1,  depthR: 2.1  },
+  { rightR:  2.1,  depthR: 2.1  },
+];
 
 /**
  * Drives the visible gameplay loop for guests:
@@ -318,14 +440,8 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
 
 /** Cheap color hash so different recipes look different on the plate
  * without us shipping per-recipe textures. */
-/** Cheap deterministic string hash for seeding visual jitter (where
- * each guest's leftover plates should land on the table). djb2-ish,
- * inline since the GuestSpawner is the only caller. */
-function hashStr(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i += 1) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
-  return h;
-}
+// hashStr removed — the leftover layout no longer needs random jitter
+// now that LEFTOVER_SLOTS gives every piece a deterministic spot.
 
 function recipeFoodColor(recipe: RecipeDefinition): number {
   if (recipe.category === "dessert") return 0xe09acb;     // pink
@@ -1005,25 +1121,45 @@ export class GuestSpawner {
    * course jitter so multi-course customers leave a clearly-stacked
    * mess instead of one z-fighting blob. */
   private spawnLeftoversForGuest(g: ActiveGuest): void {
-    const baseSeed = hashStr(g.id);
     const tableTop = this.getTableTopForGuest(g);
+    // Customer-local frame.
+    //   facing direction (= direction customer looks, towards table) is
+    //   (-sin facingY, -cos facingY). Rotating that 90° CW gives the
+    //   customer's right-hand axis: (-cos facingY, sin facingY). Slots
+    //   use these so the layout "rotates" with the seat.
+    const facingY = g.seatFacingY;
+    const depthX = -Math.sin(facingY);
+    const depthZ = -Math.cos(facingY);
+    const rightX = -Math.cos(facingY);
+    const rightZ =  Math.sin(facingY);
+
+    // Skip past dirty pieces that already exist at this seat. That way
+    // a second customer arriving at a seat before the waiter has
+    // cleared the first customer's pile keeps building OUT instead of
+    // dropping their plate on top of the existing one.
+    const seatId = g.seatId;
+    const startSlot = seatId
+      ? this.dirtyTableMeshes.reduce((n, d) => d.seatId === seatId ? n + 1 : n, 0)
+      : 0;
+
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
       const recipe = g.order[i];
       if (!recipe) continue;
       const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
-      // Deterministic jitter so a save/load doesn't shuffle visible
-      // plates around their owner's seat. ±0.10 keeps them on the table.
-      const angle = ((baseSeed + i * 37) % 360) * (Math.PI / 180);
-      const r = 0.07 + (i * 0.04);
-      const jx = Math.cos(angle) * r;
-      const jz = Math.sin(angle) * r;
-      const x = g.platePos.x + jx;
-      const z = g.platePos.y + jz;
-      const mesh = this.makeLeftoverMesh(x, z, kind, tableTop);
+      const builder = DISH_BUILDERS[kind];
+      const slot = LEFTOVER_SLOTS[Math.min(startSlot + i, LEFTOVER_SLOTS.length - 1)];
+      const dx = slot.rightR * builder.radius * rightX + slot.depthR * builder.radius * depthX;
+      const dz = slot.rightR * builder.radius * rightZ + slot.depthR * builder.radius * depthZ;
+      const x = g.platePos.x + dx;
+      const z = g.platePos.y + dz;
+      const tier = g.reservedDishTiers[i];
+      const mesh = builder.build(tier);
+      mesh.position.set(x, tableTop, z);
       this.scene.add(mesh);
       this.dirtyTableMeshes.push({
         id: this.nextDirtyId, mesh, kind, claimedBy: null,
         pos: new THREE.Vector2(x, z),
+        seatId,
       });
       this.nextDirtyId += 1;
     }
@@ -1084,47 +1220,9 @@ export class GuestSpawner {
    * with a slick of leftover liquid. Reuses the shared plate geom for
    * plates so we don't churn through allocations during a busy
    * service. */
-  private makeLeftoverMesh(x: number, z: number, kind: DishKind, tableTopY: number): THREE.Object3D {
-    if (kind === "glass") {
-      const group = new THREE.Group();
-      const glass = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.065, 0.055, 0.14, 12, 1, true),
-        new THREE.MeshStandardMaterial({
-          color: 0xb8d0d8, roughness: 0.15, metalness: 0.05,
-          transparent: true, opacity: 0.55, side: THREE.DoubleSide,
-        }),
-      );
-      glass.position.y = 0.07;
-      group.add(glass);
-      // Small puddle of leftover liquid at the bottom — yellowish.
-      const dregs = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.055, 0.02, 12),
-        new THREE.MeshStandardMaterial({ color: 0xb88a3a, roughness: 0.6 }),
-      );
-      dregs.position.y = 0.015;
-      group.add(dregs);
-      group.position.set(x, tableTopY, z);
-      glass.castShadow = true;
-      return group;
-    }
-    // Plate with crumbs
-    if (!GuestSpawner.plateGeo) {
-      GuestSpawner.plateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
-      GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
-    }
-    const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
-    plate.position.set(x, tableTopY, z);
-    plate.castShadow = true;
-    plate.receiveShadow = true;
-    const crumbs = new THREE.Mesh(
-      new THREE.SphereGeometry(0.06, 8, 6),
-      new THREE.MeshStandardMaterial({ color: 0x5a3a1f, roughness: 0.95 }),
-    );
-    crumbs.position.set(0, 0.025, 0);
-    crumbs.scale.set(1.1, 0.25, 1.1);
-    plate.add(crumbs);
-    return plate;
-  }
+  // makeLeftoverMesh has been replaced by the DishBuilder records up
+  // top of the file (DEFAULT_PLATE_BUILDER, DEFAULT_GLASS_BUILDER).
+  // spawnLeftoversForGuest calls builder.build(tier) directly.
 
   /** Remove the oldest UNCLAIMED dirty mesh of the matching kind.
    * Used by DishwareSystem.onDishWashed when a wash event happens

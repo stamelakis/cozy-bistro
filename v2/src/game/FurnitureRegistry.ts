@@ -484,6 +484,16 @@ export class FurnitureRegistry {
     return box.max.y;
   }
 
+  /** Public wrapper around the cached local-frame half-extents. Lets
+   * GuestSpawner clamp leftover plates onto the actual tabletop
+   * regardless of how rectangular the Kenney mesh's aspect comes in.
+   * Returns null when the uid isn't known. */
+  getTableSurfaceExtent(tableUid: string): { halfW: number; halfD: number } | null {
+    const it = this.items.find((x) => x.uid === tableUid);
+    if (!it) return null;
+    return this.getLocalSurfaceExtent(it);
+  }
+
   /** All integer cells this placed item's footprint actually occupies.
    * Multi-tile items expand to all their cells; L-shaped items honour
    * their explicit footprint mask. Caller cares about the cells either
