@@ -6,36 +6,39 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
  * Compact at-a-glance ingredient status panel that sits above the
  * StaffPanel.
  *
- * Layout (collapsed):
+ * Layout (always five lines — the widget NEVER changes height):
  *   📦 STOCK
- *   📋 6 below target · 16 used today  ▾   ← hover reveals item list
+ *   📋 6 below target · 16 used today
  *   🛒 Auto-shop ON · 7 in transit
- *   ❄️ Storage 14/18 per item  ▾           ← hover reveals breakdown
+ *   ❄️ Storage 14/18 per item
  *   🍳 5 queued · 0 cooking · 0 delivering
  *
+ * Hovering the 📋 or ❄️ row pops a floating tooltip after a 1s delay
+ * with the detail breakdown. The tooltip is appended to document.body
+ * and positioned with `position: fixed`, so showing it never reflows
+ * the sidebar — the widget stays the same size at all times.
+ *
  * The summary line reflects the worst severity (OUT / LOW / below
- * target / all good) so its color is meaningful at a glance. Detail
- * lists only appear on hover, so the widget stays small when nothing
- * needs attention. Hover state is preserved across update() ticks
- * because the DOM is built once in the constructor — update() only
- * rewrites text content, never destroys and rebuilds nodes.
+ * target / all good); its color reads at a glance.
+ *
+ * DOM is built once in the constructor — update() only rewrites text
+ * content. That way the floating tooltip can stay open across ticks
+ * without snapping shut, and any scrolling the player has done inside
+ * the tooltip is preserved.
  */
 export class StockStatusWidget {
   private readonly game: Game;
   private readonly root: HTMLElement;
 
-  // Stable DOM — created once in constructor. Update() mutates text
-  // content only so hover-revealed details don't snap shut on each
-  // tick.
   private readonly needRow: HTMLElement;
   private readonly needBadge: HTMLElement;
   private readonly needCaret: HTMLElement;
-  private readonly needDetails: HTMLElement;
+  private readonly needTooltip: HTMLElement;
   private readonly autoShop: HTMLElement;
   private readonly storageRow: HTMLElement;
   private readonly storageBadge: HTMLElement;
   private readonly storageCaret: HTMLElement;
-  private readonly storageDetails: HTMLElement;
+  private readonly storageTooltip: HTMLElement;
   private readonly pipeline: HTMLElement;
 
   constructor(parent: HTMLElement, game: Game) {
@@ -55,16 +58,16 @@ export class StockStatusWidget {
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(title);
 
-    // === Need badge + expandable detail list ===
+    // === Need badge — tooltip lives on document.body ===
     this.needRow = makeHoverRow();
     this.needBadge = document.createElement("span");
     this.needCaret = makeCaret();
     this.needRow.appendChild(this.needBadge);
     this.needRow.appendChild(this.needCaret);
     this.root.appendChild(this.needRow);
-    this.needDetails = makeDetailsPanel();
-    this.root.appendChild(this.needDetails);
-    attachHover(this.needRow, this.needDetails, this.needCaret);
+    this.needTooltip = makeFloatingTooltip();
+    document.body.appendChild(this.needTooltip);
+    attachHoverTooltip(this.needRow, this.needTooltip, this.needCaret);
 
     // === Auto-shop status ===
     this.autoShop = document.createElement("div");
@@ -73,16 +76,16 @@ export class StockStatusWidget {
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.autoShop);
 
-    // === Storage badge + expandable breakdown ===
+    // === Storage badge — tooltip lives on document.body ===
     this.storageRow = makeHoverRow();
     this.storageBadge = document.createElement("span");
     this.storageCaret = makeCaret();
     this.storageRow.appendChild(this.storageBadge);
     this.storageRow.appendChild(this.storageCaret);
     this.root.appendChild(this.storageRow);
-    this.storageDetails = makeDetailsPanel();
-    this.root.appendChild(this.storageDetails);
-    attachHover(this.storageRow, this.storageDetails, this.storageCaret);
+    this.storageTooltip = makeFloatingTooltip();
+    document.body.appendChild(this.storageTooltip);
+    attachHoverTooltip(this.storageRow, this.storageTooltip, this.storageCaret);
 
     // === Kitchen pipeline ===
     this.pipeline = document.createElement("div");
@@ -105,10 +108,10 @@ export class StockStatusWidget {
       .sort((a, b) => a.quantity - b.quantity);
     const usedToday = this.game.cooking.getTotalConsumedToday();
 
-    // Below-target detail rows for the hover-revealed list. Inclusion
-    // is qty<target (not qty+pending<target) so a currently-empty
-    // shelf is listed even when a helper's already running to refill
-    // it — the player needs to see it's empty NOW.
+    // Below-target detail rows. Inclusion is qty<target (not
+    // qty+pending<target) so a currently-empty shelf is listed even
+    // when a helper's already running to refill it — the player needs
+    // to see it's empty NOW.
     const needRows: string[] = [];
     for (const s of pantry) {
       if (s.quantity >= target) continue;
@@ -118,13 +121,11 @@ export class StockStatusWidget {
       needRows.push(`<div>${s.name}: need ${need} <span style="opacity:0.7">(have ${s.quantity}${wayStr})</span></div>`);
     }
 
-    // === Need badge (always visible) ===
+    // === Need badge ===
     const usedTodaySpan = usedToday > 0
       ? ` <span style="opacity:0.65">· ${usedToday} used today</span>`
       : "";
     if (out.length > 0) {
-      // Spell out OUT count + LOW count alongside it, since both are
-      // urgent. Hover reveals which specific items.
       const lowSuffix = low.length > 0
         ? ` · <span style="color:#ffd47a">LOW: ${low.length}</span>`
         : "";
@@ -149,18 +150,24 @@ export class StockStatusWidget {
       this.needBadge.innerHTML = `<span style="color:#a8e2a8">✓ All stocked</span>${usedTodaySpan}`;
     }
 
-    // === Need details (hover-revealed) ===
+    // === Need tooltip body ===
+    // Preserve scroll position across ticks so the player can read
+    // through a long list without it snapping back to the top.
+    const needScroll = this.needTooltip.scrollTop;
     if (needRows.length === 0) {
-      // Nothing useful to expand — hide the caret hint and put a quiet
-      // confirmation in the panel for the rare hovering player.
-      this.needDetails.innerHTML = `<div style="opacity:0.6">All ingredients at target.</div>`;
+      this.needTooltip.innerHTML =
+        `<div style="font-weight:700;margin-bottom:3px">📋 In Need</div>` +
+        `<div style="opacity:0.7">All ingredients at target.</div>`;
       this.needCaret.style.visibility = "hidden";
       this.needRow.style.cursor = "default";
     } else {
-      this.needDetails.innerHTML = needRows.join("");
+      this.needTooltip.innerHTML =
+        `<div style="font-weight:700;margin-bottom:3px">📋 In Need</div>` +
+        needRows.join("");
       this.needCaret.style.visibility = "visible";
       this.needRow.style.cursor = "help";
     }
+    this.needTooltip.scrollTop = needScroll;
 
     // === Auto-shop status ===
     if (this.game.autoShopEnabled) {
@@ -178,13 +185,10 @@ export class StockStatusWidget {
       this.autoShop.textContent = "🛒 Auto-shop OFF — restock manually";
     }
 
-    // === Storage badge (always visible) ===
+    // === Storage badge ===
     const cap = this.game.getMaxStockTarget();
     const current = this.game.getStockTarget();
     const pct = cap > 0 ? current / cap : 0;
-    // Number color tracks how close we are to maxed out. Green when
-    // there's plenty of room, amber when 85%+, red when capped — same
-    // ladder as the stock severity above so the eye reads them together.
     const capColor = pct >= 1 ? "#ff9a9a" : pct >= 0.85 ? "#ffd47a" : "#a8e2a8";
     this.storageBadge.innerHTML =
       `❄️ Storage ` +
@@ -192,9 +196,11 @@ export class StockStatusWidget {
       `<span style="opacity:0.6">/${cap}</span>` +
       ` <span style="opacity:0.6">per item</span>`;
 
-    // === Storage details (hover-revealed) ===
+    // === Storage tooltip body ===
+    const storageScroll = this.storageTooltip.scrollTop;
     const base = this.game.getMinStockTarget();
     const lines: string[] = [];
+    lines.push(`<div style="font-weight:700;margin-bottom:3px">❄️ Storage Cap</div>`);
     lines.push(`<div style="opacity:0.75">Base (no fridges): +${base}</div>`);
     const registry = this.game.registry;
     if (registry) {
@@ -222,7 +228,8 @@ export class StockStatusWidget {
         `Cap: <b>${cap}</b> · using <b>${current}</b>` +
       `</div>`
     );
-    this.storageDetails.innerHTML = lines.join("");
+    this.storageTooltip.innerHTML = lines.join("");
+    this.storageTooltip.scrollTop = storageScroll;
 
     // === Pipeline ===
     const ts = this.game.getTicketStats?.();
@@ -239,9 +246,9 @@ export class StockStatusWidget {
   }
 }
 
-/** A summary row that brightens slightly on hover so it reads as
- * "click here for more". Hover handlers for the actual expand /
- * collapse are attached separately via attachHover(). */
+/** Summary row that brightens slightly on hover so it reads as "hover
+ * for details". The actual show/hide of the tooltip is handled by
+ * attachHoverTooltip(). */
 function makeHoverRow(): HTMLElement {
   const row = document.createElement("div");
   Object.assign(row.style, {
@@ -253,8 +260,8 @@ function makeHoverRow(): HTMLElement {
   return row;
 }
 
-/** Down-caret shown beside an expandable summary; flips to up-caret
- * when the details panel is open. */
+/** Down-caret beside an expandable summary; flips to up-caret while
+ * the tooltip is open. */
 function makeCaret(): HTMLElement {
   const caret = document.createElement("span");
   caret.textContent = "▾";
@@ -264,42 +271,108 @@ function makeCaret(): HTMLElement {
   return caret;
 }
 
-/** Hidden-by-default detail panel that pops out under a hover row. */
-function makeDetailsPanel(): HTMLElement {
-  const details = document.createElement("div");
-  Object.assign(details.style, {
-    display: "none", fontSize: "10px",
-    maxHeight: "140px", overflowY: "auto",
-    background: "rgba(0,0,0,0.22)", borderRadius: "3px",
-    padding: "4px 6px", marginTop: "2px",
+/** A free-floating tooltip element. Appended to document.body and
+ * positioned with `position: fixed` so it never affects the sidebar
+ * layout when it appears/disappears. */
+function makeFloatingTooltip(): HTMLElement {
+  const tip = document.createElement("div");
+  Object.assign(tip.style, {
+    display: "none",
+    position: "fixed",
+    font: "11px/1.4 system-ui, sans-serif",
+    color: "#fff5dc",
+    background: "rgba(28,22,16,0.97)",
+    border: "1px solid rgba(255,245,220,0.22)",
+    borderRadius: "5px",
+    padding: "6px 8px",
+    boxShadow: "0 6px 18px rgba(0,0,0,0.55)",
+    maxHeight: "260px", overflowY: "auto",
+    minWidth: "180px", maxWidth: "300px",
+    zIndex: "10000",
+    pointerEvents: "auto",
   } as Partial<CSSStyleDeclaration>);
-  return details;
+  return tip;
 }
 
-/** Wire mouseenter/leave on the row AND the details panel so the
- * cursor can travel from row into the popped-out details without it
- * collapsing. The small leave-delay covers the cursor crossing the
- * 1-2px gap between row and panel. */
-function attachHover(row: HTMLElement, details: HTMLElement, caret: HTMLElement): void {
+/** Hook a summary row to its floating tooltip. The tooltip appears
+ * after a 1s hover delay and is positioned next to the row on
+ * whichever side has more viewport space — so the sidebar's own side
+ * (left or right) doesn't matter. Hovering INTO the tooltip keeps it
+ * open; the small close delay covers the cursor gap between row and
+ * tooltip. */
+function attachHoverTooltip(
+  row: HTMLElement,
+  tip: HTMLElement,
+  caret: HTMLElement,
+): void {
+  const OPEN_DELAY = 1000;
+  const CLOSE_DELAY = 150;
+  let openTimer: number | null = null;
+  let closeTimer: number | null = null;
   let hovering = false;
-  const open = () => {
-    hovering = true;
-    details.style.display = "block";
+
+  const clearOpen = () => {
+    if (openTimer != null) { clearTimeout(openTimer); openTimer = null; }
+  };
+  const clearClose = () => {
+    if (closeTimer != null) { clearTimeout(closeTimer); closeTimer = null; }
+  };
+
+  const showNow = () => {
+    // Two-pass position: render invisibly first so we can measure
+    // the tooltip's actual size, then place it where it fits.
+    tip.style.visibility = "hidden";
+    tip.style.display = "block";
+    const r = row.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const margin = 8;
+    // Pick the side of the row with more space; that way it works
+    // whether the sidebar is on the left or right of the screen.
+    const spaceLeft = r.left;
+    const spaceRight = vw - r.right;
+    let left = spaceLeft > spaceRight
+      ? r.left - tw - margin
+      : r.right + margin;
+    left = Math.max(margin, Math.min(vw - tw - margin, left));
+    let top = r.top;
+    if (top + th > vh - margin) top = Math.max(margin, vh - th - margin);
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+    tip.style.visibility = "visible";
     caret.textContent = "▴";
     row.style.background = "rgba(255,245,220,0.08)";
   };
-  const close = () => {
-    hovering = false;
-    setTimeout(() => {
-      if (!hovering) {
-        details.style.display = "none";
-        caret.textContent = "▾";
-        row.style.background = "";
-      }
-    }, 80);
+
+  const hideNow = () => {
+    tip.style.display = "none";
+    caret.textContent = "▾";
+    row.style.background = "";
   };
-  row.addEventListener("mouseenter", open);
-  row.addEventListener("mouseleave", close);
-  details.addEventListener("mouseenter", open);
-  details.addEventListener("mouseleave", close);
+
+  const onEnter = () => {
+    hovering = true;
+    clearClose();
+    if (tip.style.display === "block") return; // already open
+    if (openTimer != null) return;             // already scheduled
+    openTimer = window.setTimeout(() => {
+      openTimer = null;
+      if (hovering) showNow();
+    }, OPEN_DELAY);
+  };
+
+  const onLeave = () => {
+    hovering = false;
+    clearOpen();
+    clearClose();
+    closeTimer = window.setTimeout(() => {
+      closeTimer = null;
+      if (!hovering) hideNow();
+    }, CLOSE_DELAY);
+  };
+
+  row.addEventListener("mouseenter", onEnter);
+  row.addEventListener("mouseleave", onLeave);
+  tip.addEventListener("mouseenter", onEnter);
+  tip.addEventListener("mouseleave", onLeave);
 }
