@@ -583,10 +583,15 @@ export class Engine {
       this.scene.updateInternalDoors(doors, dt);
       return;
     }
-    // Snapshot every walkable actor's ground position once.
+    // Snapshot every walkable actor's ground position. SKIP pinned
+    // guests (waiting for a seat, seated, eating, on the toilet, etc.)
+    // — they're stationary by intent and shouldn't make a nearby door
+    // flap open. Only actors actually walking somewhere can "want" to
+    // pass through a door.
     const positions: { x: number; z: number }[] = [];
     if (this.spawner) {
       for (const g of this.spawner.snapshotMovable()) {
+        if (g.pinned) continue;
         positions.push({ x: g.character.groundPos.x, z: g.character.groundPos.y });
       }
     }
@@ -600,14 +605,36 @@ export class Engine {
         positions.push({ x: h.character.groundPos.x, z: h.character.groundPos.y });
       }
     }
-    const OPEN_DIST_SQ = 1.5 * 1.5;
+    // Per-door trigger zone: a thin corridor along the door's local
+    // passage axis. In the door's local frame:
+    //   |local_x| < PANEL_HALF   → inside the door's own column along
+    //                              the wall (an actor walking parallel
+    //                              to the wall on a neighbouring cell
+    //                              has |local_x| ≥ 1 and is excluded)
+    //   |local_z| < PASSAGE_HALF → within the door cell + the two
+    //                              passage cells (one tile on each
+    //                              side that an actor would actually
+    //                              step on to enter)
+    // The previous radius-1.5 check fired for any actor in a 3-tile
+    // bubble — including waiting customers on adjacent chairs.
+    const PASSAGE_HALF = 1.4;
+    const PANEL_HALF   = 0.5;
     for (const it of items) {
       if (it.defId !== "int-doorway") continue;
+      const cosR = Math.cos(it.rotY);
+      const sinR = Math.sin(it.rotY);
       let open = false;
       for (const p of positions) {
         const dx = p.x - it.x;
         const dz = p.z - it.z;
-        if (dx * dx + dz * dz < OPEN_DIST_SQ) { open = true; break; }
+        // Project the actor's offset into the door's local frame
+        // (inverse Y-axis rotation by rotY). local_x runs along the
+        // door's wall panel; local_z runs through the doorway.
+        const localX = cosR * dx - sinR * dz;
+        const localZ = sinR * dx + cosR * dz;
+        if (Math.abs(localX) < PANEL_HALF && Math.abs(localZ) < PASSAGE_HALF) {
+          open = true; break;
+        }
       }
       doors.push({ uid: it.uid, model: it.model, open });
     }
