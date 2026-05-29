@@ -308,6 +308,28 @@ export class DishwareSystem {
     return DISHWASHER_CAPACITY[kind];
   }
 
+  /** Admin / dev-tool: move every dirty piece (in pools + dishwasher
+   * batches) back into the clean pool. Useful for testing the
+   * post-rush "everything is clean again" state without waiting for
+   * the wash cycles. */
+  adminWashAll(): void {
+    for (const entry of this.plates.values()) {
+      entry.clean += entry.dirty;
+      entry.dirty = 0;
+    }
+    for (const entry of this.glasses.values()) {
+      entry.clean += entry.dirty;
+      entry.dirty = 0;
+    }
+    for (const batch of this.dishwasherBatches.values()) {
+      for (let i = 0; i < batch.plates; i += 1) this.washOne("plate");
+      for (let i = 0; i < batch.glasses; i += 1) this.washOne("glass");
+      batch.plates = 0;
+      batch.glasses = 0;
+      batch.cycleTimeRemaining = 0;
+    }
+  }
+
   // === Save / load ===
 
   /** Compact serialisation for the save file: per-kind list of

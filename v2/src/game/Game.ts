@@ -935,6 +935,58 @@ export class Game {
     this.onLuxuryTierChanged?.(this.luxuryTier);
     return true;
   }
+
+  // === Admin / dev-tool helpers — NOT exposed in normal gameplay ===
+  //
+  // Each method skips the usual cost / cooldown checks and is intended
+  // to be wired only into the AdminModal. They mirror the cancel /
+  // demote helpers above so the panel can drive everything through
+  // Game without poking into private state.
+
+  /** Set the luxury tier directly (clamped to 1..MAX). Re-syncs recipe
+   * unlocks and fires onLuxuryTierChanged. */
+  adminSetLuxuryTier(tier: number): void {
+    const clamped = Math.max(1, Math.min(MAX_LUXURY_TIER, Math.round(tier))) as LuxuryTier;
+    if (clamped === this.luxuryTier) return;
+    this.luxuryTier = clamped;
+    this.cooking.syncLuxuryUnlocks(this.luxuryTier);
+    this.onLuxuryTierChanged?.(this.luxuryTier);
+  }
+
+  /** Bump a recipe's upgrade level up by `delta` (negative for down).
+   * Cancels any in-flight upgrade on it. Clamped to [1, maxLevel]. No
+   * cost charged. */
+  adminAdjustRecipeLevel(recipe: RecipeDefinition, delta: number): void {
+    this.cooking.cancelRecipeUpgrade(recipe.id);
+    const cur = this.cooking.getRecipeUpgradeLevel(recipe);
+    this.cooking.setRecipeUpgradeLevel(recipe.id, cur + delta);
+  }
+
+  /** Bump a staff member's upgrade level up by `delta` (negative for
+   * down). Cancels any in-flight training. */
+  adminAdjustMemberLevel(id: string, delta: number): void {
+    this.staff.adminAdjustLevel(id, delta);
+  }
+
+  /** Top up every ingredient to the active stock target. */
+  adminFillPantry(): void {
+    const target = this.getStockTarget();
+    for (const stock of this.cooking.getPantryRaw()) {
+      if (stock.quantity < target) stock.quantity = target;
+    }
+  }
+
+  /** Drop every ingredient to zero. Useful for testing the out-of-
+   * stock / auto-shop pipeline. */
+  adminEmptyPantry(): void {
+    for (const stock of this.cooking.getPantryRaw()) stock.quantity = 0;
+  }
+
+  /** Reset all reputation history so the next customer's rating is
+   * the starting average. */
+  adminResetReputation(): void {
+    this.reputation.adminReset();
+  }
 }
 
 /** Turn "olive-oil" / "olive_oil" / "olive oil" into "Olive Oil". */

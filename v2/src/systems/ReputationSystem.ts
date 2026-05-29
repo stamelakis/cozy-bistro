@@ -53,6 +53,12 @@ export class ReputationSystem {
   }
 
   /** Append a new 1–5 customer rating. Older entries past maxRatingHistory are dropped. */
+  /** Admin / dev-tool: wipe rating history so the next customer's
+   * rating fully determines the running average again. */
+  adminReset(): void {
+    this.ratingHistory = [];
+  }
+
   recordRating(rating: number): void {
     this.ratingHistory.push(clamp(Math.round(rating), 1, 5));
     if (this.ratingHistory.length > maxRatingHistory) {

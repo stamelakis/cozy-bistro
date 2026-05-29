@@ -1,12 +1,17 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
+import { STAFF_UPGRADE_MAX } from "../systems/StaffSystem";
 
 /**
- * Dev-mode tuning sliders. Mutates Game.admin live so changes take
- * effect immediately — useful for balance testing without recompiling.
+ * Dev-mode panel — tuning sliders for live balance changes plus a
+ * whole pile of one-shot "cheat" affordances (money, tier jump,
+ * recipe / staff promote and demote, refill pantry, wash everything,
+ * reset reputation, etc.). Nothing here is meant to ship to a regular
+ * gameplay path — every method it calls on Game / its systems is
+ * prefixed `admin*` so the boundary stays obvious.
  *
- * Each slider is a small range input with a numeric label. "Reset"
- * snaps every slider back to the default.
+ * Each block of controls is a small section with its own header. Reset
+ * snaps the sliders back; the actions are fire-and-forget.
  */
 
 interface SliderDef {
@@ -39,10 +44,20 @@ const DEFAULTS: Record<string, number> = {
   rentMultiplier: 1,
 };
 
+/** Quick-adjust deltas for the money buttons. */
+const MONEY_DELTAS = [100, 1000, 10000, 100000] as const;
+
 export class AdminModal {
   private readonly game: Game;
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
+
+  // === Section refs the show() refresh path reads back ===
+  private readonly controls: { input: HTMLInputElement; valueEl: HTMLElement; key: string }[] = [];
+  private upgradesBody!: HTMLElement;
+  private moneyValue!: HTMLElement;
+  private tierValue!: HTMLElement;
+  private ratingValue!: HTMLElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -61,7 +76,8 @@ export class AdminModal {
 
     const body = document.createElement("div");
     Object.assign(body.style, {
-      width: "min(440px, calc(100vw - 40px))",
+      width: "min(480px, calc(100vw - 40px))",
+      maxHeight: "92vh",
       display: "flex", flexDirection: "column",
       padding: "18px 22px",
       background: "rgba(28, 20, 14, 0.96)",
@@ -70,6 +86,7 @@ export class AdminModal {
       borderRadius: "12px",
       border: "2px solid #d8b98f",
       boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+      overflowY: "auto",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(body);
 
@@ -98,92 +115,218 @@ export class AdminModal {
     Object.assign(this.body.style, { display: "flex", flexDirection: "column", gap: "10px" } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.body);
 
+    // === Tuning sliders ===
     for (const def of SLIDERS) this.body.appendChild(this.renderSlider(def));
-
-    const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Reset to defaults";
-    Object.assign(resetBtn.style, {
-      marginTop: "12px",
-      padding: "6px 12px",
-      background: "rgba(200, 120, 120, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      font: "inherit",
-      alignSelf: "center",
-    } as Partial<CSSStyleDeclaration>);
-    resetBtn.onclick = () => {
+    const resetBtn = this.actionButton("Reset sliders", "danger", () => {
       for (const def of SLIDERS) {
         (this.game.admin as unknown as Record<string, number>)[def.key as string] = DEFAULTS[def.key as string];
       }
       this.refreshControls();
-    };
-    body.appendChild(resetBtn);
+    });
+    resetBtn.style.alignSelf = "center";
+    resetBtn.style.marginTop = "4px";
+    this.body.appendChild(resetBtn);
 
-    // Upgrade rollback panel. Lets the developer drop any upgraded
-    // recipe or staff member back a level for live testing without
-    // having to restart from a fresh save. No refunds — this is a
-    // debugging affordance, not gameplay.
-    const upgradesSection = document.createElement("div");
-    Object.assign(upgradesSection.style, {
-      marginTop: "16px", paddingTop: "12px",
-      borderTop: "1px solid rgba(255,245,220,0.15)",
-      display: "flex", flexDirection: "column", gap: "6px",
-    } as Partial<CSSStyleDeclaration>);
-    const upgradesTitle = document.createElement("div");
-    upgradesTitle.textContent = "MANAGE UPGRADES (rollback)";
-    Object.assign(upgradesTitle.style, {
-      fontSize: "12px", fontWeight: "700",
-      letterSpacing: "0.04em", opacity: "0.85",
-    } as Partial<CSSStyleDeclaration>);
-    upgradesSection.appendChild(upgradesTitle);
-    this.upgradesBody = document.createElement("div");
-    Object.assign(this.upgradesBody.style, {
-      maxHeight: "30vh", overflowY: "auto",
-      display: "flex", flexDirection: "column", gap: "4px",
-    } as Partial<CSSStyleDeclaration>);
-    upgradesSection.appendChild(this.upgradesBody);
-    body.appendChild(upgradesSection);
+    // === Money section ===
+    body.appendChild(this.buildMoneySection());
+
+    // === Luxury tier section ===
+    body.appendChild(this.buildTierSection());
+
+    // === Reputation section ===
+    body.appendChild(this.buildReputationSection());
+
+    // === Quick actions ===
+    body.appendChild(this.buildQuickActionsSection());
+
+    // === Upgrades (recipes + staff) ===
+    body.appendChild(this.buildUpgradesSection());
   }
 
-  /** Container for the dynamic rollback rows — repopulated each show. */
-  private upgradesBody!: HTMLElement;
+  // ============================================================
+  //                          SECTIONS
+  // ============================================================
 
-  /** Populate the rollback section with one row per upgraded recipe +
-   * one row per upgraded staff member. Each row has a "↓" button that
-   * drops the level by 1. */
+  private buildMoneySection(): HTMLElement {
+    const section = this.sectionShell("💰 MONEY");
+    const stat = document.createElement("div");
+    Object.assign(stat.style, {
+      fontSize: "13px", fontWeight: "700",
+      color: "#ffd986", marginBottom: "4px",
+      fontVariantNumeric: "tabular-nums",
+    } as Partial<CSSStyleDeclaration>);
+    this.moneyValue = stat;
+    section.appendChild(stat);
+    // Grid of +N / -N buttons.
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gap: "4px",
+      gridTemplateColumns: "repeat(4, 1fr)",
+    } as Partial<CSSStyleDeclaration>);
+    const fmt = (n: number) => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${n}`;
+    for (const delta of MONEY_DELTAS) {
+      row.appendChild(this.actionButton(`+${fmt(delta)}`, "good", () => {
+        this.game.economy.earnMoney(delta, "payment");
+        this.refreshStats();
+      }));
+    }
+    for (const delta of MONEY_DELTAS) {
+      row.appendChild(this.actionButton(`-${fmt(delta)}`, "danger", () => {
+        this.game.economy.forceSpendMoney(delta, "charge");
+        this.refreshStats();
+      }));
+    }
+    section.appendChild(row);
+    // Direct set.
+    const setRow = document.createElement("div");
+    Object.assign(setRow.style, {
+      display: "grid", gap: "4px",
+      gridTemplateColumns: "1fr 60px",
+      marginTop: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    const input = document.createElement("input");
+    input.type = "number";
+    input.placeholder = "Set exact amount";
+    input.min = "0";
+    Object.assign(input.style, {
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.18)",
+      borderRadius: "3px",
+      padding: "4px 6px", font: "inherit", fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    setRow.appendChild(input);
+    const setBtn = this.actionButton("Set", "neutral", () => {
+      const v = Number(input.value);
+      if (!Number.isFinite(v) || v < 0) return;
+      this.game.economy.setMoney(Math.round(v));
+      this.refreshStats();
+    });
+    setRow.appendChild(setBtn);
+    section.appendChild(setRow);
+    return section;
+  }
+
+  private buildTierSection(): HTMLElement {
+    const section = this.sectionShell("🏛️ LUXURY TIER");
+    const stat = document.createElement("div");
+    Object.assign(stat.style, {
+      fontSize: "13px", fontWeight: "700",
+      color: "#ffd986", marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    this.tierValue = stat;
+    section.appendChild(stat);
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    for (let t = 1; t <= 5; t += 1) {
+      row.appendChild(this.actionButton(`T${t}`, "neutral", () => {
+        this.game.adminSetLuxuryTier(t);
+        this.refreshStats();
+      }));
+    }
+    section.appendChild(row);
+    return section;
+  }
+
+  private buildReputationSection(): HTMLElement {
+    const section = this.sectionShell("⭐ REPUTATION");
+    const stat = document.createElement("div");
+    Object.assign(stat.style, {
+      fontSize: "13px", fontWeight: "700",
+      color: "#ffd986", marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    this.ratingValue = stat;
+    section.appendChild(stat);
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    // Pump one rating value through the system (1..5) per click.
+    for (let r = 1; r <= 5; r += 1) {
+      row.appendChild(this.actionButton(`${"★".repeat(r)}`, "neutral", () => {
+        this.game.reputation.recordRating(r);
+        this.refreshStats();
+      }));
+    }
+    row.appendChild(this.actionButton("Reset", "danger", () => {
+      this.game.adminResetReputation();
+      this.refreshStats();
+    }));
+    section.appendChild(row);
+    return section;
+  }
+
+  private buildQuickActionsSection(): HTMLElement {
+    const section = this.sectionShell("⚡ QUICK ACTIONS");
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    row.appendChild(this.actionButton("Fill pantry", "good", () => {
+      this.game.adminFillPantry();
+    }));
+    row.appendChild(this.actionButton("Empty pantry", "danger", () => {
+      this.game.adminEmptyPantry();
+    }));
+    row.appendChild(this.actionButton("Wash everything", "good", () => {
+      this.game.dishware.adminWashAll();
+    }));
+    row.appendChild(this.actionButton("Toggle auto-shop", "neutral", () => {
+      this.game.autoShopEnabled = !this.game.autoShopEnabled;
+    }));
+    section.appendChild(row);
+    return section;
+  }
+
+  private buildUpgradesSection(): HTMLElement {
+    const section = this.sectionShell("📈 MANAGE UPGRADES");
+    this.upgradesBody = document.createElement("div");
+    Object.assign(this.upgradesBody.style, {
+      maxHeight: "32vh", overflowY: "auto",
+      display: "flex", flexDirection: "column", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(this.upgradesBody);
+    return section;
+  }
+
+  // ============================================================
+  //                       UPGRADE ROWS
+  // ============================================================
+
+  /** Populate the upgrades section with one row per recipe + one row
+   * per staff member. Rows are sorted so the highest-level entries
+   * sit at the top. */
   private renderUpgradesPanel(): void {
     this.upgradesBody.innerHTML = "";
-    // Recipes with level > 1 (level 1 = no upgrades bought yet).
-    const upgradedRecipes = recipes
+    // Recipes: only the ones the player can currently see (unlocked
+    // tier and known to the cooking system).
+    const recipeRows = recipes
       .map((r) => ({ recipe: r, level: this.game.cooking.getRecipeUpgradeLevel(r) }))
-      .filter((e) => e.level > 1)
+      .filter((e) => this.game.cooking.isRecipeUnlocked(e.recipe, this.game.getLuxuryTier()))
       .sort((a, b) => b.level - a.level || a.recipe.name.localeCompare(b.recipe.name));
-    for (const { recipe, level } of upgradedRecipes) {
+    for (const { recipe, level } of recipeRows) {
       this.upgradesBody.appendChild(
-        this.renderUpgradeRow(`🍽️ ${recipe.name}`, level, () => {
-          if (this.game.demoteRecipe(recipe)) this.renderUpgradesPanel();
-        }),
+        this.renderUpgradeRow(`🍽️ ${recipe.name}`, level, /* max */ 10,
+          (delta) => this.game.adminAdjustRecipeLevel(recipe, delta)),
       );
     }
-    // Staff members with level > 0.
+    // Staff members.
     const trainedMembers = this.game.staff
       .getMembers()
-      .filter((m) => m.upgradeLevel > 0)
       .slice()
       .sort((a, b) => b.upgradeLevel - a.upgradeLevel || a.name.localeCompare(b.name));
     for (const m of trainedMembers) {
       const roleEmoji = m.role === "chef" ? "🧑‍🍳" : m.role === "waiter" ? "🍽️" : "📦";
       this.upgradesBody.appendChild(
-        this.renderUpgradeRow(`${roleEmoji} ${m.name}`, m.upgradeLevel, () => {
-          if (this.game.demoteMember(m.id)) this.renderUpgradesPanel();
-        }),
+        this.renderUpgradeRow(`${roleEmoji} ${m.name}`, m.upgradeLevel, STAFF_UPGRADE_MAX,
+          (delta) => this.game.adminAdjustMemberLevel(m.id, delta)),
       );
     }
     if (this.upgradesBody.childElementCount === 0) {
       const empty = document.createElement("div");
-      empty.textContent = "No upgrades to roll back.";
+      empty.textContent = "No upgradable rows.";
       Object.assign(empty.style, {
         opacity: "0.55", fontSize: "11px",
         padding: "8px 0", textAlign: "center",
@@ -192,10 +335,16 @@ export class AdminModal {
     }
   }
 
-  private renderUpgradeRow(label: string, level: number, onDemote: () => void): HTMLElement {
+  private renderUpgradeRow(
+    label: string,
+    level: number,
+    maxLevel: number,
+    onAdjust: (delta: number) => void,
+  ): HTMLElement {
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "flex", alignItems: "center", gap: "8px",
+      display: "grid", gridTemplateColumns: "1fr 36px 36px",
+      alignItems: "center", gap: "4px",
       padding: "4px 6px",
       background: "rgba(255,245,220,0.04)",
       borderRadius: "4px",
@@ -203,25 +352,66 @@ export class AdminModal {
     } as Partial<CSSStyleDeclaration>);
     const labelEl = document.createElement("span");
     labelEl.innerHTML = `<b>${label}</b> <span style="opacity:0.7">— L${level}</span>`;
-    labelEl.style.flex = "1";
     row.appendChild(labelEl);
-    const btn = document.createElement("button");
-    btn.textContent = "↓ L" + (level - 1);
-    btn.title = "Drop one level (no refund)";
-    Object.assign(btn.style, {
-      padding: "3px 8px",
-      background: "rgba(200, 120, 120, 0.22)",
-      color: "#fff5dc",
-      border: "1px solid rgba(200, 120, 120, 0.45)",
-      borderRadius: "3px",
-      cursor: "pointer", font: "inherit", fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    btn.onclick = onDemote;
-    row.appendChild(btn);
+    const downBtn = this.actionButton("↓", "danger", () => {
+      onAdjust(-1);
+      this.renderUpgradesPanel();
+    });
+    downBtn.disabled = level <= 0;
+    if (downBtn.disabled) downBtn.style.opacity = "0.3";
+    row.appendChild(downBtn);
+    const upBtn = this.actionButton("↑", "good", () => {
+      onAdjust(+1);
+      this.renderUpgradesPanel();
+    });
+    upBtn.disabled = level >= maxLevel;
+    if (upBtn.disabled) upBtn.style.opacity = "0.3";
+    row.appendChild(upBtn);
     return row;
   }
 
-  private readonly controls: { input: HTMLInputElement; valueEl: HTMLElement; key: string }[] = [];
+  // ============================================================
+  //                       UI helpers
+  // ============================================================
+
+  private sectionShell(title: string): HTMLElement {
+    const section = document.createElement("div");
+    Object.assign(section.style, {
+      marginTop: "12px", paddingTop: "10px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
+      display: "flex", flexDirection: "column", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const t = document.createElement("div");
+    t.textContent = title;
+    Object.assign(t.style, {
+      fontSize: "12px", fontWeight: "700",
+      letterSpacing: "0.04em", opacity: "0.85",
+      marginBottom: "2px",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(t);
+    return section;
+  }
+
+  private actionButton(label: string, tone: "good" | "danger" | "neutral", onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    const colors = tone === "good"
+      ? { bg: "rgba(120, 200, 120, 0.18)", border: "rgba(120, 200, 120, 0.40)" }
+      : tone === "danger"
+      ? { bg: "rgba(200, 120, 120, 0.18)", border: "rgba(200, 120, 120, 0.40)" }
+      : { bg: "rgba(255, 245, 220, 0.10)", border: "rgba(255, 245, 220, 0.25)" };
+    Object.assign(btn.style, {
+      padding: "5px 8px",
+      background: colors.bg,
+      color: "#fff5dc",
+      border: `1px solid ${colors.border}`,
+      borderRadius: "3px",
+      cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = onClick;
+    return btn;
+  }
 
   private renderSlider(def: SliderDef): HTMLElement {
     const row = document.createElement("div");
@@ -264,8 +454,25 @@ export class AdminModal {
     }
   }
 
+  /** Refresh the section header value rows (money, tier, rating).
+   * Cheap; runs on every action-button click so the displays stay
+   * in sync without polling. */
+  private refreshStats(): void {
+    if (this.moneyValue) {
+      this.moneyValue.textContent = `Current: $${this.game.economy.getMoney().toLocaleString()}`;
+    }
+    if (this.tierValue) {
+      this.tierValue.textContent = `Current: T${this.game.getLuxuryTier()}`;
+    }
+    if (this.ratingValue) {
+      const r = this.game.reputation.getAverageRating();
+      this.ratingValue.textContent = `Current: ${r.toFixed(2)} ★`;
+    }
+  }
+
   show(): void {
     this.refreshControls();
+    this.refreshStats();
     this.renderUpgradesPanel();
     this.root.style.display = "flex";
   }

@@ -272,6 +272,20 @@ export class StaffSystem {
     return changed;
   }
 
+  /** Admin / dev-tool: bump a member's upgradeLevel by `delta`
+   * (positive promotes, negative demotes). Clamped to [0, MAX].
+   * Cancels any in-flight training so the deadline doesn't fire on a
+   * level the player no longer holds. No cost. */
+  adminAdjustLevel(id: string, delta: number): boolean {
+    const m = this.getMember(id);
+    if (!m) return false;
+    if (typeof m.trainingCompletesAt === "number") delete m.trainingCompletesAt;
+    const target = Math.max(0, Math.min(STAFF_UPGRADE_MAX, m.upgradeLevel + delta));
+    if (target === m.upgradeLevel) return false;
+    m.upgradeLevel = target;
+    return true;
+  }
+
   // === Per-member effect multipliers ===
 
   /** Chef cook-time multiplier for a SPECIFIC chef. Recipe prep
