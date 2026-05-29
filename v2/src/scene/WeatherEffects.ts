@@ -60,12 +60,17 @@ export class WeatherEffects {
   private static readonly CONFETTI_COUNT = 240;
 
   // === Cloud shadows ===
-  // Four large dark soft-tinted planes that drift across the ground.
-  // Visible for cloudy / rainy / heavy-rain / snowy weather; opacity
-  // scales with how overcast the weather is.
+  // 12 dark soft-edged blobs drifting across the ground. Each is a
+  // ProceduralCanvas texture (irregular Gaussian-blob silhouette) so
+  // the shadows read as organic clouds rather than tidy squares.
+  // Visible for cloudy / rainy / heavy-rain / cold / snowy weather;
+  // opacity scales with how overcast the weather is.
   private cloudShadows: THREE.Mesh[] = [];
   private cloudShadowDrifts!: { vx: number; vz: number; phaseY: number }[];
-  private static readonly CLOUD_SHADOW_COUNT = 4;
+  private static readonly CLOUD_SHADOW_COUNT = 12;
+  /** Larger spread for cloud shadows so they cover the whole visible
+   * yard, not pile up over the building. */
+  private static readonly CLOUD_AREA_HALF = 30;
 
   /** Shared horizontal/vertical extents. The play area is 10×10 m
    * (perimeter -4.5..5.5); 36×36 covers the building plus a generous
@@ -76,6 +81,13 @@ export class WeatherEffects {
 
   /** Time accumulator for sine-wave sways. */
   private clock = 0;
+
+  /** Per-system wind velocity. Picked when the weather flips so each
+   * storm has its own "the wind is blowing from over there" angle —
+   * makes rain + snow fall at a believable slant instead of straight
+   * down. Heavy weathers get a stronger wind. */
+  private windX = 0;
+  private windZ = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -90,16 +102,38 @@ export class WeatherEffects {
 
   /** Show only the particle system that matches the current weather
    * id; hide everything else. Cloud shadows show for any "overcast"
-   * weather. */
+   * weather. Also re-rolls the wind angle so each storm slants
+   * differently — straight-down rain reads as artificial. */
   setWeather(id: WeatherKind): void {
+    if (this.current === id) return;
     this.current = id;
     if (this.rain)        this.rain.visible        = (id === "rainy");
     if (this.heavyRain)   this.heavyRain.visible   = (id === "heavy-rain");
     if (this.snow)        this.snow.visible        = (id === "cold");
     if (this.heavySnow)   this.heavySnow.visible   = (id === "snowy");
     if (this.confetti)    this.confetti.visible    = (id === "festival");
+    this.rollWind(id);
     // Cloud-shadow visibility is set per-frame in update() because we
     // also lerp the opacity into / out of the overcast set.
+  }
+
+  /** Pick a random wind direction + strength for the current weather.
+   * Heavy variants get stronger gusts; light rain / snow get a gentle
+   * slant. The angle is in the XZ plane so all particles get the same
+   * horizontal drift this storm. */
+  private rollWind(id: WeatherKind): void {
+    const angle = Math.random() * Math.PI * 2;
+    let strength = 0;
+    switch (id) {
+      case "rainy":      strength = 3.5 + Math.random() * 2;  break;
+      case "heavy-rain": strength = 7.5 + Math.random() * 3;  break;
+      case "cold":       strength = 1.5 + Math.random() * 1.5; break;
+      case "snowy":      strength = 3.5 + Math.random() * 2;  break;
+      case "festival":   strength = 1.0 + Math.random() * 1;  break;
+      default:           strength = 0;                          break;
+    }
+    this.windX = Math.cos(angle) * strength;
+    this.windZ = Math.sin(angle) * strength;
   }
 
   /** Wetness multiplier the renderer applies to the floor material.
@@ -147,13 +181,13 @@ export class WeatherEffects {
   // === Builders ====================================================
 
   private buildRain(): void {
-    // Particle sizes are in WORLD units (sizeAttenuation defaults to
-    // true). Each droplet is now ~0.55 m across, so a few rows of
-    // rain visibly fill the iso frame instead of reading as dust.
+    // Particle sizes are in WORLD units (sizeAttenuation on). Bumped
+    // up another ~3× from the last pass so droplets read as clearly
+    // visible streaks at iso distance instead of pinpricks.
     this.rain = this.makePoints(
       WeatherEffects.RAIN_COUNT,
       0xb8d4ec,
-      0.55,
+      1.50,
       0.85,
     );
     this.rainVelocities = this.makeVelocities(WeatherEffects.RAIN_COUNT, 14, 8);
@@ -161,12 +195,10 @@ export class WeatherEffects {
   }
 
   private buildHeavyRain(): void {
-    // Heavy droplets noticeably fatter than light rain to sell the
-    // intensity difference at a glance.
     this.heavyRain = this.makePoints(
       WeatherEffects.HEAVY_RAIN_COUNT,
       0x9cb8d4,
-      0.75,
+      2.20,
       0.95,
     );
     this.heavyRainVelocities = this.makeVelocities(WeatherEffects.HEAVY_RAIN_COUNT, 22, 10);
@@ -177,8 +209,8 @@ export class WeatherEffects {
     this.snow = this.makePoints(
       WeatherEffects.SNOW_COUNT,
       0xfaf7f1,
-      0.60,
-      0.85,
+      1.70,
+      0.90,
     );
     this.snowPhases = this.makePhases(WeatherEffects.SNOW_COUNT);
     this.seedPositions(this.snow, WeatherEffects.SNOW_COUNT);
@@ -188,7 +220,7 @@ export class WeatherEffects {
     this.heavySnow = this.makePoints(
       WeatherEffects.HEAVY_SNOW_COUNT,
       0xffffff,
-      0.80,
+      2.40,
       0.95,
     );
     this.heavySnowPhases = this.makePhases(WeatherEffects.HEAVY_SNOW_COUNT);
@@ -219,7 +251,7 @@ export class WeatherEffects {
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
-      size: 0.55, transparent: true, opacity: 0.92,
+      size: 1.40, transparent: true, opacity: 0.92,
       vertexColors: true, depthWrite: false,
     });
     this.confetti = new THREE.Points(geom, mat);
@@ -231,39 +263,83 @@ export class WeatherEffects {
 
   private buildCloudShadows(): void {
     this.cloudShadowDrifts = [];
+    const half = WeatherEffects.CLOUD_AREA_HALF;
     for (let i = 0; i < WeatherEffects.CLOUD_SHADOW_COUNT; i += 1) {
-      // 12-22 m square soft-edged shadow patch. Random vertex jitter
-      // gives each one a slightly irregular outline so the overcast
-      // doesn't read as four tidy squares.
-      const size = 12 + Math.random() * 10;
+      // Per-cloud procedural texture — composite of 10-14 overlapping
+      // soft Gaussian blobs giving each plane a unique chaotic
+      // silhouette instead of a clean square edge.
+      const tex = WeatherEffects.makeCloudTexture();
+      // 14-26 m plane — bigger than before so each cloud reads as a
+      // whole patch of overcast rather than a tiny spot.
+      const size = 14 + Math.random() * 12;
       const geom = new THREE.PlaneGeometry(size, size, 1, 1);
-      // Lay flat on the ground.
       geom.rotateX(-Math.PI / 2);
       const mat = new THREE.MeshBasicMaterial({
-        color: 0x1a1f24,
+        map: tex,
+        // White base so the texture's painted dark-grey alpha drives
+        // the visible tone. opacity multiplies on top for the per-
+        // weather overcast scale.
+        color: 0xffffff,
         transparent: true,
         opacity: 0,
         depthWrite: false,
       });
       const mesh = new THREE.Mesh(geom, mat);
+      // Spread far + wide so 12 clouds cover the whole yard rather
+      // than piling up. Tiny per-cloud y stagger prevents z-fight.
       mesh.position.set(
-        (Math.random() - 0.5) * WeatherEffects.AREA_HALF * 2,
-        0.02 + i * 0.001,           // float just above the floor; per-cloud y-offset to avoid z-fighting
-        (Math.random() - 0.5) * WeatherEffects.AREA_HALF * 2,
+        (Math.random() - 0.5) * half * 2,
+        0.02 + i * 0.001,
+        (Math.random() - 0.5) * half * 2,
       );
+      // Random Y-rotation so the silhouette doesn't read as a tiled
+      // pattern across multiple clouds.
+      mesh.rotation.y = Math.random() * Math.PI * 2;
       mesh.frustumCulled = false;
       mesh.renderOrder = 1;
       this.scene.add(mesh);
       this.cloudShadows.push(mesh);
-      // Each cloud drifts with its own velocity + a slow opacity bob
-      // so the shadow patches feel organic instead of marching in
-      // lock-step.
       this.cloudShadowDrifts.push({
         vx: 0.4 + Math.random() * 0.5,
         vz: 0.2 + Math.random() * 0.3,
         phaseY: Math.random() * Math.PI * 2,
       });
     }
+  }
+
+  /** Procedural cloud-shadow texture. 14 overlapping soft radial
+   * gradients on a transparent background — each cloud gets a unique
+   * irregular silhouette without shipping any image assets. The
+   * gradient stops paint dark grey (with falling alpha) so the
+   * texture's RGBA itself is the "shadow tone × alpha" curve and the
+   * plane material doesn't need an alphaMap or shader. */
+  private static makeCloudTexture(): THREE.CanvasTexture {
+    const sz = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = sz;
+    canvas.height = sz;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, sz, sz);
+    const blobs = 12 + Math.floor(Math.random() * 5);
+    for (let i = 0; i < blobs; i += 1) {
+      // Place each blob within the inner 75% so the outer edge of the
+      // canvas stays mostly transparent — gives the cloud a soft
+      // feathered border, not a hard square cut-off.
+      const cx = sz * (0.13 + Math.random() * 0.74);
+      const cy = sz * (0.13 + Math.random() * 0.74);
+      const r  = sz * (0.12 + Math.random() * 0.18);
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      grad.addColorStop(0,    "rgba(20, 24, 30, 0.55)");
+      grad.addColorStop(0.6,  "rgba(20, 24, 30, 0.20)");
+      grad.addColorStop(1.0,  "rgba(20, 24, 30, 0.00)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, sz, sz);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
   }
 
   // === Per-frame updaters =========================================
@@ -283,9 +359,15 @@ export class WeatherEffects {
     const attr = points.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
     const half = WeatherEffects.AREA_HALF;
+    const wx = this.windX * dt;
+    const wz = this.windZ * dt;
     for (let i = 0; i < n; i += 1) {
       const base = i * 3;
       pos[base + 1] -= velocities[i] * dt;
+      // Apply shared wind for the slant + a small per-particle jitter
+      // so the column doesn't look like a single rigid sheet.
+      pos[base]     += wx + (Math.random() - 0.5) * 0.05;
+      pos[base + 2] += wz + (Math.random() - 0.5) * 0.05;
       if (pos[base + 1] < 0
           || Math.abs(pos[base]     - cam.x) > half
           || Math.abs(pos[base + 2] - cam.z) > half) {
@@ -314,11 +396,15 @@ export class WeatherEffects {
     const pos = attr.array as Float32Array;
     const half = WeatherEffects.AREA_HALF;
     const t = this.clock;
+    const wx = this.windX * dt;
+    const wz = this.windZ * dt;
     for (let i = 0; i < n; i += 1) {
       const base = i * 3;
       pos[base + 1] -= fallSpeed * dt;
-      pos[base]     += Math.sin(t * 0.7 + phases[i]) * swayAmplitude * dt;
-      pos[base + 2] += Math.cos(t * 0.6 + phases[i]) * swayAmplitude * dt;
+      // Per-particle sway (keeps it organic) PLUS shared wind so the
+      // overall snowfall slants in one direction.
+      pos[base]     += wx + Math.sin(t * 0.7 + phases[i]) * swayAmplitude * dt;
+      pos[base + 2] += wz + Math.cos(t * 0.6 + phases[i]) * swayAmplitude * dt;
       if (pos[base + 1] < 0
           || Math.abs(pos[base]     - cam.x) > half
           || Math.abs(pos[base + 2] - cam.z) > half) {
@@ -355,36 +441,31 @@ export class WeatherEffects {
 
   /** Drift cloud shadows across the ground + lerp each one's opacity
    * toward its overcast-driven target. Wraps around the camera so the
-   * patches stay in view across long pans. */
+   * patches stay in view across long pans. Uses the cloud-specific
+   * wider area so 12 patches cover the whole visible yard. */
   private updateCloudShadows(dt: number, cam: THREE.Vector3): void {
     const overcast = this.getOvercast();
-    // Target opacity per-cloud — sum across all 4 needs to LOOK like
-    // a continuous overcast for heavy weather but not turn the ground
-    // pitch-black. 0.18 max per patch lands in the right zone.
-    const half = WeatherEffects.AREA_HALF;
+    const half = WeatherEffects.CLOUD_AREA_HALF;
     const t = this.clock;
     for (let i = 0; i < this.cloudShadows.length; i += 1) {
       const mesh = this.cloudShadows[i];
       const drift = this.cloudShadowDrifts[i];
-      // Drift across XZ. Subtle Y-axis bob from the phase gives the
-      // illusion of opacity changes the cloud overhead.
       mesh.position.x += drift.vx * dt;
       mesh.position.z += drift.vz * dt;
-      // Wrap each axis around the camera so the patches always
-      // overlap the visible area no matter how far the camera pans.
       if (mesh.position.x - cam.x > half) mesh.position.x -= half * 2;
       if (mesh.position.x - cam.x < -half) mesh.position.x += half * 2;
       if (mesh.position.z - cam.z > half) mesh.position.z -= half * 2;
       if (mesh.position.z - cam.z < -half) mesh.position.z += half * 2;
       // Per-cloud opacity wobble — gives the overcast a breathing
-      // feel rather than four solid blobs.
+      // feel rather than 12 solid blobs.
       const wobble = 0.5 + 0.5 * Math.sin(t * 0.25 + drift.phaseY);
-      const target = overcast * (0.10 + 0.10 * wobble);
+      // Cap higher than the old version (was 0.20) because the cloud
+      // texture itself already has fractional alpha — the visible
+      // shadow ends up multiplied by the painted blob's alpha.
+      const target = overcast * (0.55 + 0.30 * wobble);
       const mat = mesh.material as THREE.MeshBasicMaterial;
-      // Snap-in is fine — the day-end weather flip is meant to be
-      // noticeable, not subtle.
       mat.opacity = target;
-      mesh.visible = target > 0.005;
+      mesh.visible = target > 0.01;
     }
   }
 
