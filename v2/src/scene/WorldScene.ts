@@ -1239,9 +1239,12 @@ export class WorldScene {
       lowerY + WorldScene.STOREY_HEIGHT / 2 + 0.85,        // ~hand height above the steps
       Z_BOTTOM - runLen / 2,
     );
-    // Negative sign so the rail tilts up toward the back (−Z) end
-    // — the +Z end of the local mesh is the bottom of the flight.
-    rail.rotation.x = -Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
+    // Positive rotation so the rail's high end sits at the TOP of the
+    // flight (Z=-4.4, near the back wall) and the low end at the BOTTOM
+    // (Z=-2.4, out in the open). Without this sign the rail tilts
+    // backwards — high at the south end, low at the corner — which
+    // reads as a misaligned support bar against the steps.
+    rail.rotation.x = Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
     rail.castShadow = true;
     parent.add(rail);
     // Two short posts: one at the bottom (Z_BOTTOM, ground level) and
