@@ -214,6 +214,11 @@ export class FurnitureRegistry {
       if (!def) continue;
       const placement = def.placement ?? "tile";
       if (placement !== layer) continue;
+      // Flat ground decor (rugs, doormats) never blocks anything — by
+      // design any tile-layer item can land on top of a rug. The rug's
+      // own placement also skips this loop entirely via the BuildMenu
+      // gate, so two rugs may overlap too.
+      if (def.flat) continue;
       if (footprintCoversCell(it, def, cellX, cellZ)) return true;
     }
     return false;

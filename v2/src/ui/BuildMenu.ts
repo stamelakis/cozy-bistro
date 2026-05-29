@@ -1100,10 +1100,17 @@ export class BuildMenu {
     // table inside its 0.6 tolerance and report "blocked" even though
     // the table sat in the sofa's open elbow (mask = 0).
     const layer: "tile" | "ceiling" = def.placement === "ceiling" ? "ceiling" : "tile";
-    const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
-    for (const cell of previewCells) {
-      if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer)) {
-        return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+    // Flat ground decor (rugs) skips the occupancy check entirely so a
+    // rug can land under any furniture or another rug. The reverse
+    // direction (other items placing ON a rug) is handled in
+    // FurnitureRegistry.isCellBlocked, which skips flat items in its
+    // blocker scan.
+    if (!def.flat) {
+      const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
+      for (const cell of previewCells) {
+        if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer)) {
+          return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+        }
       }
     }
     return { quality: "ok", x: cellX, z: cellZ, rotY: this.rotationY };

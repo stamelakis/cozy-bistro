@@ -126,6 +126,12 @@ export interface FurnitureDef {
    * stretch on cushion meshes is way better than a sofa that reads as
    * a regular sofa. */
   stretchFootprint?: boolean;
+  /** Flat ground decor (rugs, doormats). Skips the occupancy check
+   * BOTH ways — a flat item can be placed under anything, and any
+   * tile-layer item can be placed on top of a flat item. Visually
+   * fine because flat items have targetHeight ≈ 0.04 so they sit
+   * essentially on the floor under everything else. */
+  flat?: boolean;
 
   // === Gameplay stats (Game.getFurnitureBonuses sums these across all placed) ===
   style?: number;
@@ -509,12 +515,12 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // because rugs don't block movement or placement.
   { id: "rug-rectangle",  name: "Rectangular Rug", category: "decoration",
     modelPath: "assets/kenney/rugRectangle.glb", scale: 1.6, size: { width: 1, depth: 1 }, cost: 40, style: 3, comfort: 1, ratingBonus: 0.01,
-    tier: 2, targetHeight: 0.04 },
+    tier: 2, targetHeight: 0.04, flat: true },
   // Round rug: scale 2.0 → ~2-tile diameter, the player gets a
   // centrepiece that visually covers ~4 tiles around the snapped tile.
   { id: "rug-round",      name: "Round Rug",       category: "decoration",
     modelPath: "assets/kenney/rugRound.glb", scale: 2.0, size: { width: 1, depth: 1 }, cost: 30, style: 2, comfort: 1,
-    tier: 1, targetHeight: 0.04 },
+    tier: 1, targetHeight: 0.04, flat: true },
 
   // Lighting
   { id: "floor-lamp",     name: "Round Floor Lamp",  category: "lamp",
@@ -712,15 +718,15 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // overhang into neighbouring tiles.
   { id: "rug-doormat",    name: "Doormat",         category: "decoration",
     modelPath: "assets/kenney/rugDoormat.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 18, style: 1,
-    tier: 1, targetHeight: 0.04 },
+    tier: 1, targetHeight: 0.04, flat: true },
   { id: "rug-rounded",    name: "Rounded Rug",     category: "decoration",
     modelPath: "assets/kenney/rugRounded.glb", scale: 1.6, size: { width: 1, depth: 1 }, cost: 45, style: 3, comfort: 1, ratingBonus: 0.01,
-    tier: 2, targetHeight: 0.04 },
+    tier: 2, targetHeight: 0.04, flat: true },
   // Square rug: scale 1.4 → ~2 tile area, covers the center tile fully
   // plus a strip of each neighbour.
   { id: "rug-square",     name: "Square Rug",      category: "decoration",
     modelPath: "assets/kenney/rugSquare.glb", scale: 1.4, size: { width: 1, depth: 1 }, cost: 70, style: 3, comfort: 1, attractionBonus: 1, ratingBonus: 0.02,
-    tier: 2, targetHeight: 0.04 },
+    tier: 2, targetHeight: 0.04, flat: true },
 
   // === Cute/quirky decor. ===
   { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",
