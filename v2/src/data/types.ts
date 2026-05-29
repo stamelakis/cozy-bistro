@@ -53,6 +53,16 @@ export interface PlacedFurniture {
   position: GridPosition;
   rotation?: number;
   disabledSeatIndexes?: number[];
+  /** Surface-placed items only — uid of the host they sit on (a
+   * counter, table, etc.). Persisted so save/load can re-snap the
+   * surface item to the host's measured top instead of dropping it
+   * to y=0 (which is what we got before — toasters and coffee
+   * machines visibly "fell through" their counters after every
+   * reload). */
+  parentUid?: string;
+  /** Surface-placed items only — index into the host def's
+   * surfaceSlots array (which dx/dz on the host the item sits at). */
+  slotIndex?: number;
 }
 
 /** Kitchen appliance types a recipe can require. Each id is provided

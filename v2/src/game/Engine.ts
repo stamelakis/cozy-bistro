@@ -229,6 +229,13 @@ export class Engine {
         x: p.position.x,
         z: p.position.y,
         rotY: ((p.rotation ?? 0) * Math.PI) / 180,
+        // Forward the surface-host link so restore's second pass
+        // can re-snap surface items (toaster, coffee machine, etc.)
+        // to their counter / cabinet top. Without this they loaded
+        // at y=0 and visibly fell THROUGH the host counter every
+        // time the player reopened the save.
+        parentUid: p.parentUid,
+        slotIndex: p.slotIndex,
       }));
       // After restore, the demo's door (with its hinge panel captured)
       // gets removed and the save's restored door comes in fresh —

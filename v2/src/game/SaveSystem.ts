@@ -195,12 +195,20 @@ export class SaveSystem {
       // is multiples of 90° (BuildMenu only rotates in quarters), so degree
       // rounding is also lossless.
       furniture: this.registry
-        ? (this.registry.snapshot().map((p) => ({
-            uid: p.uid,
-            furnitureId: p.defId,
-            position: { x: p.x, y: p.z },
-            rotation: Math.round((p.rotY * 180) / Math.PI),
-          })) as PlacedFurniture[])
+        ? (this.registry.snapshot().map((p) => {
+            const out: PlacedFurniture = {
+              uid: p.uid,
+              furnitureId: p.defId,
+              position: { x: p.x, y: p.z },
+              rotation: Math.round((p.rotY * 180) / Math.PI),
+            };
+            // Persist surface-host link so toasters / coffee machines
+            // / blenders re-snap to their counter top on reload
+            // instead of dropping to y=0.
+            if (p.parentUid) out.parentUid = p.parentUid;
+            if (typeof p.slotIndex === "number") out.slotIndex = p.slotIndex;
+            return out;
+          }))
         : [],
       ingredients: this.game.cooking.getPantrySnapshot(),
       preparedServings: this.game.cooking.getPreparedServingsSnapshot(),

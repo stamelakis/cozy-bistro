@@ -864,7 +864,42 @@ export class FurnitureRegistry {
     // top and a fresh pose computed from the host's current (x, z, rotY).
     // This survives the host having been moved / rotated between save
     // and load — the slot offset is in the host's local frame.
+    //
+    // LEGACY SAVE RESCUE: saves written before the parentUid/slotIndex
+    // fields were persisted lose the host link on reload. Surface
+    // items in those saves come back here with no parentUid and we
+    // used to leave them at y=0 — the visible "appliances falling
+    // through the counters every patch" bug. Below, for any surface-
+    // placed item still missing a parentUid, we scan placed hosts
+    // looking for a surfaceSlot whose world-space (x,z) matches the
+    // surface item's stored position; the first match becomes the
+    // inferred parent.
     for (const child of this.items) {
+      const childDef = getFurnitureDef(child.defId);
+      if (childDef?.placement !== "surface") continue;
+      // Patch up missing host link from a legacy save.
+      if (!child.parentUid || typeof child.slotIndex !== "number") {
+        for (const candidate of this.items) {
+          if (candidate.uid === child.uid) continue;
+          const cDef = getFurnitureDef(candidate.defId);
+          const slots = cDef?.surfaceSlots;
+          if (!slots || slots.length === 0) continue;
+          const ccos = Math.cos(candidate.rotY), csin = Math.sin(candidate.rotY);
+          let matched = false;
+          for (let i = 0; i < slots.length; i += 1) {
+            const slot = slots[i];
+            const wx = candidate.x + slot.dx * ccos + slot.dz * csin;
+            const wz = candidate.z - slot.dx * csin + slot.dz * ccos;
+            if (Math.abs(wx - child.x) < 0.25 && Math.abs(wz - child.z) < 0.25) {
+              child.parentUid = candidate.uid;
+              child.slotIndex = i;
+              matched = true;
+              break;
+            }
+          }
+          if (matched) break;
+        }
+      }
       if (!child.parentUid || typeof child.slotIndex !== "number") continue;
       const host = this.items.find((it) => it.uid === child.parentUid);
       if (!host) continue;
