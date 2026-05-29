@@ -308,46 +308,58 @@ export class WeatherEffects {
   }
 
   /** Procedural cloud-shadow texture. Many overlapping soft radial
-   * gradients on a transparent background — each cloud gets a unique
-   * irregular silhouette + patchy internal density so it reads as a
-   * REAL cloud shadow (diffused, varied opacity, cool tone) rather
-   * than a solid dark sticker.
+   * gradients painted with a NEUTRAL-WARM dark colour so the blend
+   * over grass + tile doesn't go toxic-green. All blobs are clamped
+   * to the central 70% of the canvas so the gradients reach alpha=0
+   * inside the texture — guarantees a transparent margin around the
+   * cloud and prevents the plane's square edge from showing through.
    *
-   * Key tweaks vs the first pass:
-   *  - Cool blue-grey colour (~rgb 60, 72, 90) instead of near-black,
-   *    matching the skylight tint that fills in a sun-occluded patch
-   *  - Per-blob random opacity 0.15-0.40 instead of a flat 0.55 max,
-   *    giving the cloud internal mottling — some spots dark, some
-   *    lighter, like real cloud cover
-   *  - More blobs per cloud (16-22) with overall smaller radii so the
-   *    silhouette has more detail and softer edges */
+   * Why warm-dark instead of cool-blue:
+   * Mixing rgb(60, 72, 90) (cool blue) with the warm tan / brown
+   * ground at ~40% alpha pushes the result toward green / cyan —
+   * that's the "toxic fog" the previous pass landed on. A neutral
+   * dark warm grey (~rgb 40, 32, 24) just darkens whatever's under
+   * it without injecting blue, which is what a real soft shadow on
+   * any surface looks like.
+   *
+   * Why higher canvas resolution:
+   * 384 px instead of 256 lets us draw more, smaller blobs and the
+   * mip-filtered result reads softer at draw size. */
   private static makeCloudTexture(): THREE.CanvasTexture {
-    const sz = 256;
+    const sz = 384;
     const canvas = document.createElement("canvas");
     canvas.width = sz;
     canvas.height = sz;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, sz, sz);
-    const blobs = 16 + Math.floor(Math.random() * 7);
+    // Confine blob centres + radii so (cx + r) <= 95% of canvas. This
+    // guarantees the radial gradient reaches alpha=0 BEFORE the canvas
+    // edge — without it the gradient gets clipped, leaving a hard
+    // straight edge that gives away the underlying square plane.
+    const margin = 0.18;     // keep blobs in the central 64% of canvas
+    const maxR = 0.16;       // max radius as a fraction of canvas
+    const blobs = 20 + Math.floor(Math.random() * 8);
     for (let i = 0; i < blobs; i += 1) {
-      const cx = sz * (0.12 + Math.random() * 0.76);
-      const cy = sz * (0.12 + Math.random() * 0.76);
-      const r  = sz * (0.10 + Math.random() * 0.16);
-      // Each blob gets its own peak opacity so the cloud has internal
-      // density variation rather than a smooth gradient from a single
-      // dark centre.
-      const peak = 0.15 + Math.random() * 0.25;
+      const cx = sz * (margin + Math.random() * (1 - 2 * margin));
+      const cy = sz * (margin + Math.random() * (1 - 2 * margin));
+      const r  = sz * (0.06 + Math.random() * (maxR - 0.06));
+      // Per-blob random peak so the cloud has uneven internal density.
+      // Lower max (0.30 vs old 0.40) because the warm-dark colour reads
+      // strongly even at low alpha — overshooting turns it into a
+      // solid sticker again.
+      const peak = 0.10 + Math.random() * 0.20;
       const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      grad.addColorStop(0,    `rgba(60, 72, 90, ${peak.toFixed(3)})`);
-      grad.addColorStop(0.55, `rgba(60, 72, 90, ${(peak * 0.4).toFixed(3)})`);
-      grad.addColorStop(1.0,  `rgba(60, 72, 90, 0)`);
+      grad.addColorStop(0,    `rgba(40, 32, 24, ${peak.toFixed(3)})`);
+      grad.addColorStop(0.6,  `rgba(40, 32, 24, ${(peak * 0.35).toFixed(3)})`);
+      grad.addColorStop(1.0,  `rgba(40, 32, 24, 0)`);
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, sz, sz);
     }
     const tex = new THREE.CanvasTexture(canvas);
     tex.needsUpdate = true;
-    tex.minFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
     return tex;
   }
 
@@ -467,11 +479,12 @@ export class WeatherEffects {
       if (mesh.position.z - cam.z < -half) mesh.position.z += half * 2;
       // Per-cloud opacity wobble — gives the overcast a breathing feel.
       const wobble = 0.5 + 0.5 * Math.sin(t * 0.25 + drift.phaseY);
-      // Lower cap than before — the new texture paints internal
-      // mottling so the shadow needs less material-level opacity to
-      // read. Keeping it subtle (0.50-0.85 of overcast) prevents the
-      // patches from feeling like solid stickers laid over the floor.
-      const target = overcast * (0.50 + 0.35 * wobble);
+      // Material opacity scales the texture's already-fractional
+      // alpha. Keep this very low — the new warm-dark texture reads
+      // strongly even at low alpha and overdriving turns the shadow
+      // into a sticker again. Range 0.35-0.65 of overcast lands in
+      // "soft natural darkening" territory.
+      const target = overcast * (0.35 + 0.30 * wobble);
       const mat = mesh.material as THREE.MeshBasicMaterial;
       mat.opacity = target;
       mesh.visible = target > 0.01;
