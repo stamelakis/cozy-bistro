@@ -179,6 +179,17 @@ export class Game {
   getInFlightDishesForSave(): Array<{ kind: "plate" | "glass"; tier: number; count: number }> {
     return this.gatherInFlightDishes?.() ?? [];
   }
+  /** Total plates + glasses currently held by eating customers
+   * (clean was decremented at beginNextCourse, not yet marked dirty
+   * via finalizeVisit). Used by the HUD's DIRTY DISHES card so the
+   * "/ total" denominator stays stable during normal play instead of
+   * dropping by 1 each time a customer starts eating. */
+  getInFlightDishCount(): number {
+    let n = 0;
+    const list = this.gatherInFlightDishes?.() ?? [];
+    for (const e of list) n += e.count;
+    return n;
+  }
   /** Optional: when set, the dish-wash interval queries this for
    * counts of placed sinks / dishwashers. */
   countPlacedById?: (id: string) => number;

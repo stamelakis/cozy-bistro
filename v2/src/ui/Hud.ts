@@ -468,10 +468,12 @@ export class Hud {
     // the player knows to close out remaining orders.
     this.fields.daytime.textContent = `${mins}:${secs}`;
     this.fields.daytime.style.color = remaining < 60 ? "#ff9a9a" : "#e8c89a";
-    // Dirty count / total owned. Tells the player at a glance how
-    // many of their plates+glasses are currently dirty vs the full
-    // inventory (e.g. "3 / 40").
-    const totalDish = this.game.dishware.getTotalOwned();
+    // Dirty count / true total owned (clean + dirty + in-flight).
+    // Without the in-flight term the denominator dropped by 1 each
+    // time a customer started eating — the user (rightly) read that
+    // as a 1-per-second leak. Now the total reflects everything the
+    // restaurant actually owns regardless of who's holding the plate.
+    const totalDish = this.game.dishware.getTotalOwned() + this.game.getInFlightDishCount();
     this.fields.dishes.textContent = `${dishes} / ${totalDish}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#e8b878";
     this.fields.rent.textContent = `$${rent}`;
