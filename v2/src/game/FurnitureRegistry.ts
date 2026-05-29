@@ -77,6 +77,13 @@ export interface ResolvedSeatSlot {
   platePos: { x: number; z: number };
   /** uid of the chair currently sitting in this slot, or null if none. */
   chairUid: string | null;
+  /** Storey the table sits on (0 = ground). Phase 8 uses this to route
+   * guests to the correct floor based on their drink/food preference. */
+  floor: number;
+  /** What this table is good for — "food" tables serve any course; "drink"
+   * tables only serve drink-only orders. Mirrors the def's surface flag
+   * (default "food" when unset). */
+  surface: "food" | "drink";
 }
 
 let nextUidCounter = 1;
@@ -474,6 +481,31 @@ export class FurnitureRegistry {
     return true;
   }
 
+  /** Count placed items by category on a given floor. Phase 8's seat
+   * selection uses this to break ties between candidate floors —
+   * "more decor / windows wins". Returns a tiny stat record per call
+   * so the GuestSpawner can score floors without re-iterating items
+   * itself.
+   *
+   * `decor`  = anything with `category: "decoration"`
+   * `window` = the perimeter-window items (id starts with "window") +
+   *            the interior-window placements (id starts with
+   *            "int-window"). Mirrors the id-prefix recognition the
+   *            wall builder uses.
+   */
+  countFloorFeatures(floor: number): { decor: number; window: number } {
+    let decor = 0;
+    let window = 0;
+    for (const it of this.items) {
+      if (it.floor !== floor) continue;
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      if (def.category === "decoration") decor += 1;
+      if (it.defId.startsWith("window") || it.defId.startsWith("int-window")) window += 1;
+    }
+    return { decor, window };
+  }
+
   /** Snapshot for save. Strips the model ref. parentUid / slotIndex
    * are persisted so surface items re-snap to their hosts on load.
    * floor is only emitted when non-zero — keeps ground-floor saves
@@ -532,6 +564,8 @@ export class FurnitureRegistry {
           facingY: this.normalizeAngle(slot.facingY + it.rotY),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
           chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid),
+          floor: it.floor,
+          surface: def.surface ?? "food",
         });
       }
     }

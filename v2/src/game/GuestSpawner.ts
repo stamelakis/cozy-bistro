@@ -233,6 +233,10 @@ interface ActiveGuest {
    * via FurnitureRegistry so the guest follows even if the table is moved. */
   seatPos: THREE.Vector2;
   seatFacingY: number;
+  /** Storey the seat is on (0 = ground). Phase 8 lifts the guest's
+   * world Y by floor × storey height when they sit so they appear on
+   * the right slab even before the stair-climbing path lands. */
+  seatFloor: number;
   platePos: THREE.Vector2;
   /** If true, the guest entered the restaurant but no functional seat was
    * free, so they're parked at a yellow overflow chair until a real seat
@@ -280,6 +284,11 @@ interface ActiveGuest {
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
+  /** What this guest came in for. "drink" → only drinks (sips a coffee
+   * etc.); "food" → only food courses; "any" → either is fine. Drives
+   * the floor pick at spawn — a drink-only guest prefers a drink-only
+   * floor, a food-only guest prefers a non-drink-only floor. */
+  wantsDrinks: "drink" | "food" | "any";
   /** Remaining waypoints from the most recent pathfind. Re-planned each
    * time the guest's target changes. */
   path: PathStep[];
@@ -853,6 +862,124 @@ export class GuestSpawner {
     return this.registry.getResolvedSeatSlots(true).filter((s) => s.chairUid != null);
   }
 
+  /** Roll a fresh guest's seat preference. Tuned so a healthy mix of
+   * food + drink seats stays useful — most guests are food-curious
+   * and a quarter want pure drink visits. */
+  private rollGuestSeatPref(): "drink" | "food" | "any" {
+    const r = Math.random();
+    if (r < 0.25) return "drink";
+    if (r < 0.75) return "food";
+    return "any";
+  }
+
+  /** Group free functional seats by storey. Output values are arrays of
+   * seats with chairs (the same seats `listFunctionalSeats` returns)
+   * that aren't currently occupied / dirty. Used by the floor-picker
+   * below to decide which storey a fresh guest should sit on. */
+  private freeSeatsByFloor(): Map<number, ResolvedSeatSlot[]> {
+    const out = new Map<number, ResolvedSeatSlot[]>();
+    for (const s of this.listFunctionalSeats()) {
+      const id = makeSeatId(s);
+      if (this.occupiedSeats.has(id)) continue;
+      if (this.dirtyUntil.has(id)) continue;
+      if (this.inFlightSpawnSeats.has(id)) continue;
+      let bucket = out.get(s.floor);
+      if (!bucket) { bucket = []; out.set(s.floor, bucket); }
+      bucket.push(s);
+    }
+    return out;
+  }
+
+  /** Categorise a floor by which surface types of seats it offers.
+   *   - "drink-only" → has drink seats and NO food seats
+   *   - "food"       → has no drink seats (food-only, or empty)
+   *   - "mixed"      → has BOTH drink and food seats
+   * Floors with no free seats at all return "food" (treated as a food
+   * floor since they have no drink-only seats either — matches the
+   * user-described rule "no seats for drinks only = food floor"). */
+  private classifyFloor(seats: readonly ResolvedSeatSlot[]): "drink-only" | "food" | "mixed" {
+    let hasDrink = false;
+    let hasFood = false;
+    for (const s of seats) {
+      if (s.surface === "drink") hasDrink = true;
+      else hasFood = true;
+      if (hasDrink && hasFood) return "mixed";
+    }
+    if (hasDrink && !hasFood) return "drink-only";
+    return "food";
+  }
+
+  /** Score a floor for the tie-breaker pick. Lower is better:
+   *   1. Distance to the entrance (ground = 0, Floor 1 = 1, …)
+   *   2. Negative decor count (more decor → lower → wins)
+   *   3. Negative window count (more windows → lower → wins)
+   * Compared lexicographically by the caller. */
+  private floorScore(floor: number): [number, number, number] {
+    const features = this.registry?.countFloorFeatures(floor) ?? { decor: 0, window: 0 };
+    return [floor, -features.decor, -features.window];
+  }
+
+  /** Pick a floor for a guest with `pref` from the supplied
+   * free-seats-by-floor map. Returns the floor index, or null when
+   * every floor is full. Preference logic per the user's seating
+   * design: drink-only guests favour drink-only floors first, food-
+   * only guests favour non-drink-only floors first; otherwise (mixed
+   * floors, or fallback) we tie-break with the floorScore tuple
+   * (ground > decor > windows). */
+  private pickFloorForPref(pref: "drink" | "food" | "any", freeByFloor: Map<number, ResolvedSeatSlot[]>): number | null {
+    const usable: { floor: number; classification: "drink-only" | "food" | "mixed" }[] = [];
+    for (const [floor, seats] of freeByFloor) {
+      // Filter floors whose remaining free seats can actually host this
+      // guest. A drink-only guest needs at least one drink seat free,
+      // a food-only guest needs a food seat, and "any" takes anything.
+      let candidates = seats;
+      if (pref === "drink") candidates = seats.filter((s) => s.surface === "drink");
+      else if (pref === "food") candidates = seats.filter((s) => s.surface === "food");
+      if (candidates.length === 0) continue;
+      usable.push({ floor, classification: this.classifyFloor(seats) });
+    }
+    if (usable.length === 0) return null;
+    // Preferred-class pass: drink-only guests look for a drink-only
+    // floor, food-only guests look for any floor that ISN'T drink-only.
+    let preferred: typeof usable;
+    if (pref === "drink") preferred = usable.filter((u) => u.classification === "drink-only");
+    else if (pref === "food") preferred = usable.filter((u) => u.classification !== "drink-only");
+    else preferred = usable;
+    if (preferred.length === 0) preferred = usable; // fall back to anything
+    // Tie-break by the floorScore tuple — lexicographic comparison so
+    // the floor closest to the entrance wins, then the one with the
+    // most decor, then the one with the most windows.
+    preferred.sort((a, b) => {
+      const sa = this.floorScore(a.floor);
+      const sb = this.floorScore(b.floor);
+      for (let i = 0; i < sa.length; i += 1) {
+        if (sa[i] !== sb[i]) return sa[i] - sb[i];
+      }
+      return 0;
+    });
+    return preferred[0].floor;
+  }
+
+  /** Public for spawn — chooses a seat for a guest with `pref`, taking
+   * the preferred floor + a free seat on it. Returns null when no
+   * viable seat exists anywhere. */
+  private pickSeatForGuestPref(pref: "drink" | "food" | "any"): ResolvedSeatSlot | null {
+    const freeByFloor = this.freeSeatsByFloor();
+    const floor = this.pickFloorForPref(pref, freeByFloor);
+    if (floor === null) return null;
+    const seats = freeByFloor.get(floor)!;
+    // Same surface filter the picker applied, so a drink-only guest
+    // doesn't end up at a food seat on a mixed floor.
+    let candidates = seats;
+    if (pref === "drink") candidates = seats.filter((s) => s.surface === "drink");
+    else if (pref === "food") candidates = seats.filter((s) => s.surface === "food");
+    if (candidates.length === 0) candidates = seats;
+    // First-fit within the chosen floor — keeps the existing behaviour
+    // (older guests with no preference picked the first available
+    // seat) for the common case.
+    return candidates[0];
+  }
+
   /** Count of functional seats not currently occupied + not in the dirty
    * cleanup window. The previous tier-gated SEATS array has been replaced
    * by the actual placed-chair situation. */
@@ -1035,12 +1162,12 @@ export class GuestSpawner {
   }
 
   private async spawnGuest(): Promise<void> {
-    // Prefer a real functional seat. If none, fall back to an overflow
-    // chair (yellow) when attractiveness allows.
-    const available = this.listFunctionalSeats().find((s) => {
-      const id = makeSeatId(s);
-      return !this.occupiedSeats.has(id) && !this.dirtyUntil.has(id);
-    });
+    // Roll the guest's preference BEFORE picking a seat — the pick
+    // routes drink-only guests to drink-only floors and food-only
+    // guests away from drink-only floors per the user-specified seat
+    // assignment rules.
+    const seatPref = this.rollGuestSeatPref();
+    const available = this.pickSeatForGuestPref(seatPref);
     const waitingChair = available ? null : this.findFreeOverflowChair();
     if (!available && !waitingChair) return;
     let seatId: SeatId = "";
@@ -1103,6 +1230,7 @@ export class GuestSpawner {
         seatId,
         seatPos,
         seatFacingY: seatFacing,
+        seatFloor: available?.floor ?? 0,
         platePos,
         target: targetPos,
         passedDoor: false,
@@ -1115,6 +1243,7 @@ export class GuestSpawner {
         totalPaid: 0,
         totalSatisfaction: 0,
         archetype,
+        wantsDrinks: seatPref,
         path: [],
         replanAccum: 0,
         willUseToilet: false,           // assigned just below
@@ -1380,6 +1509,17 @@ export class GuestSpawner {
             g.character.action = "sit";
             g.state = "seated";
             g.stateClock = 0;
+            // Multi-storey: lift the guest onto their seat's slab so
+            // an upper-floor seat shows them on the right floor. The
+            // CharacterAnimator caches _baseY off root.position.y, so
+            // updating it before the next animator tick makes the
+            // sit / idle pose stick at the right height. Stair-walking
+            // pathfinding (P8c) replaces this snap with a smooth Y
+            // ride up the staircase.
+            if (g.seatFloor > 0) {
+              g.character.root.position.y = g.seatFloor * 3;
+              g.character._baseY = g.character.root.position.y;
+            }
           }
         }
         break;
