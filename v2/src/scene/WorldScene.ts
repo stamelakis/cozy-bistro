@@ -987,6 +987,28 @@ export class WorldScene {
     ["right", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
   ]);
 
+  // === Multi-storey building ===========================================
+  // The original building was a single ground floor. The tier-expansion
+  // system extends it upward: every luxury-tier purchase past T1 unlocks
+  // one more storey above the ground floor (T2 → storey 1, T3 → storey
+  // 2, … T5 → storey 4). Each storey is STOREY_HEIGHT (3 m) tall and
+  // sits on the same 10×10 m footprint as the ground floor.
+  //
+  // Phase 1 ships the geometry only — hidden by default, no per-floor
+  // furniture, no camera focus, no walking between floors. Subsequent
+  // phases will layer those on top.
+  private static readonly STOREY_HEIGHT = 3;
+  private static readonly NUM_STOREYS = 5;
+  /** Per-storey geometry groups keyed by storey index (1..NUM_STOREYS-1).
+   * The ground floor (storey 0) keeps its existing scene-attached
+   * meshes; only the new upper storeys live here. setStoreyVisible
+   * toggles each group independently. */
+  private upperStoreys = new Map<number, THREE.Group>();
+  /** Roof cap at y = NUM_STOREYS * STOREY_HEIGHT. Visible whenever any
+   * upper storey is — gives the building a finished top instead of an
+   * open box. */
+  private buildingRoof?: THREE.Mesh;
+
   private addBuilding(): void {
     // === Exterior ground + props ===
     // addGrassyExterior() owns the lawn, pavement, road, lane lines,
@@ -1059,6 +1081,76 @@ export class WorldScene {
     // as the back-of-house workflow it actually is). Procedural so it
     // shows for both new and existing saves regardless of registry state.
     this.buildSupplyCounter();
+
+    // Upper storeys (tier expansions). Hidden by default; setLuxuryTier
+    // toggles them as the player buys each expansion.
+    this.addUpperStoreys();
+  }
+
+  /** Build the empty white shell for each storey above the ground floor.
+   * Each storey gets a floor plane, four solid perimeter walls, and the
+   * top storey carries the building's roof. All hidden by default; the
+   * setLuxuryTier pass toggles the appropriate ones on per tier. */
+  private addUpperStoreys(): void {
+    const W = 10;                                          // footprint, same as ground floor
+    const T = 0.2;                                         // wall thickness, matches wallBoxFor
+    const H = WorldScene.STOREY_HEIGHT;
+    // Same x,z anchors as the ground-floor segmented walls so the upper
+    // boxes sit directly on top of them. wallSegmentPosition is the
+    // authoritative reference for these coordinates.
+    const wallSpecs: { xz: [number, number]; horizontal: boolean }[] = [
+      { xz: [0.5,  5.5], horizontal: true  }, // front
+      { xz: [0.5, -4.5], horizontal: true  }, // back
+      { xz: [-4.5, 0.5], horizontal: false }, // left
+      { xz: [ 5.5, 0.5], horizontal: false }, // right
+    ];
+    // Slightly off-white storey floor / ceiling material so the player
+    // can tell "blank canvas" upper floors apart from the ground floor's
+    // themed floor. Bumped to DoubleSide so the same plane reads as
+    // the floor (from above) AND the ceiling of the storey below (from
+    // below the iso camera, once we move it up there).
+    const slabMat = new THREE.MeshStandardMaterial({
+      color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+    });
+    for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
+      const group = new THREE.Group();
+      group.visible = false;
+      const baseY = idx * H;
+      // Floor of this storey == ceiling of the storey below.
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), slabMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(0.5, baseY, 0.5);
+      floor.receiveShadow = true;
+      group.add(floor);
+      // 4 perimeter walls — solid 3 m boxes, same materials as the
+      // ground floor walls. No doors / windows on upper storeys yet.
+      for (const spec of wallSpecs) {
+        const geom = spec.horizontal
+          ? new THREE.BoxGeometry(W, H, T)
+          : new THREE.BoxGeometry(T, H, W);
+        const mesh = new THREE.Mesh(geom, this.wallMat);
+        mesh.position.set(spec.xz[0], baseY + H / 2, spec.xz[1]);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+      }
+      this.upperStoreys.set(idx, group);
+      this.threeScene.add(group);
+    }
+    // Roof at the top of the topmost storey. Lives outside the per-
+    // storey groups because it's the same cap regardless of which upper
+    // floor is "topmost visible" — setStoreyVisible drives its
+    // visibility from the highest unlocked storey.
+    const roof = new THREE.Mesh(
+      new THREE.PlaneGeometry(W, W),
+      new THREE.MeshStandardMaterial({ color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide }),
+    );
+    roof.rotation.x = -Math.PI / 2;
+    roof.position.set(0.5, WorldScene.NUM_STOREYS * H, 0.5);
+    roof.receiveShadow = true;
+    roof.visible = false;
+    this.threeScene.add(roof);
+    this.buildingRoof = roof;
   }
 
   // === Dynamic perimeter walls ===============================================
@@ -2055,7 +2147,10 @@ export class WorldScene {
   }
 
   /** Show/hide tier-locked dining sections based on the player's current
-   * expansion. Called by Engine on init and after Game.buyExpansion. */
+   * expansion. Called by Engine on init and after Game.buyExpansion.
+   * Also drives the multi-storey reveal — each tier past 1 unlocks one
+   * upper storey (T2 → storey 1, T3 → storey 2, T4 → storey 3,
+   * T5 → storey 4). The roof shows as long as ANY upper storey is up. */
   setLuxuryTier(tier: number): void {
     this.currentTierVisible = tier;
     for (const [tierKey, items] of this.tierGroups) {
@@ -2063,6 +2158,11 @@ export class WorldScene {
       const visible = tierKey <= tier;
       for (const obj of items) obj.visible = visible;
     }
+    // Upper storeys. Storey index = tier - 1 (so T2 → storey 1, etc.).
+    for (const [storeyIdx, group] of this.upperStoreys) {
+      group.visible = tier >= storeyIdx + 1;
+    }
+    if (this.buildingRoof) this.buildingRoof.visible = tier >= 2;
   }
 
   /** Current applied tier (used by the door animator). */
