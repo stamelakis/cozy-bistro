@@ -1014,13 +1014,11 @@ export class WorldScene {
    * open box. Also ghost-able so the iso camera can see down through it
    * when focused on a lower storey. */
   private buildingRoof?: THREE.Mesh;
-  /** Solid + ghost materials for upper-storey slabs (floor / ceiling
-   * planes) and walls. Each storey's mesh swaps between the two based
-   * on whether it's above or below the focused storey. */
+  /** Material for upper-storey floor slabs. Only one variant needed
+   * now that storeys above the focused floor are hidden outright;
+   * the ghost-when-above variant we used previously is gone. */
   private slabMatSolid!: THREE.MeshStandardMaterial;
-  private slabMatGhost!: THREE.MeshStandardMaterial;
   private roofMatSolid!: THREE.MeshStandardMaterial;
-  private roofMatGhost!: THREE.MeshStandardMaterial;
   /** Which storey the camera is currently focused on (0 = ground).
    * Everything above this storey gets the ghost treatment so the player
    * can see down into the focused floor. Phase 4 will let the player
@@ -1129,18 +1127,8 @@ export class WorldScene {
     this.slabMatSolid = new THREE.MeshStandardMaterial({
       color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
     });
-    this.slabMatGhost = new THREE.MeshStandardMaterial({
-      color: 0xf6f4ef, roughness: 0.6,
-      transparent: true, opacity: 0.01, depthWrite: false,
-      side: THREE.DoubleSide,
-    });
     this.roofMatSolid = new THREE.MeshStandardMaterial({
       color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
-    });
-    this.roofMatGhost = new THREE.MeshStandardMaterial({
-      color: 0xe8d8b8, roughness: 0.6,
-      transparent: true, opacity: 0.01, depthWrite: false,
-      side: THREE.DoubleSide,
     });
     for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
       const group = new THREE.Group();
