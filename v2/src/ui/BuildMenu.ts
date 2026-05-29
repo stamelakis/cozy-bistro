@@ -644,10 +644,20 @@ export class BuildMenu {
           c.transparent = true;
           c.opacity = 0.55;
           (c as THREE.Material).depthWrite = false;
+          // depthTest off so the ghost is visible through solid
+          // geometry. Without this, snapping a window from inside the
+          // building lands the preview at a perimeter wall that may be
+          // BEHIND a solid wall from the camera POV — the player saw
+          // nothing and assumed the placement wasn't registering.
+          (c as THREE.Material).depthTest = false;
           return c;
         };
         o.material = Array.isArray(o.material) ? o.material.map(cloneOne) : cloneOne(o.material);
         o.castShadow = false;
+        // Push the ghost to the top of the render order so it draws
+        // last (after the solid walls + furniture) and the off-depth-
+        // test pixels actually win.
+        o.renderOrder = 999;
       }
     });
     return ghost;
@@ -668,8 +678,17 @@ export class BuildMenu {
           // Preview must not write depth — otherwise the floor markers
           // get z-occluded by the ghost when it's right over them.
           (m as THREE.Material).depthWrite = false;
+          // depthTest off + max renderOrder so the ghost is visible
+          // through walls + furniture. Especially important for window
+          // placement from inside the building: the snap target can
+          // be a perimeter wall BEHIND a solid back/left wall from
+          // the camera's POV, and without this the ghost rendered
+          // invisible — the player had no idea where the placement
+          // would land.
+          (m as THREE.Material).depthTest = false;
           o.material = m;
           o.castShadow = false;
+          o.renderOrder = 999;
         }
       });
       return model;
