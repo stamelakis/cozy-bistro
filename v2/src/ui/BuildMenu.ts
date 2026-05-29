@@ -367,9 +367,11 @@ export class BuildMenu {
   }
 
   /** Re-render the content area for the active tier — categories
-   * with item buttons, hiding categories that have no items in this
-   * tier. The category sections stay collapsible so a tier with lots
-   * of items doesn't dominate the panel. */
+   * with item buttons. EVERY category is rendered for every tier so the
+   * player sees the full taxonomy at a glance — empty (Cat, 0) sections
+   * collapsed and labelled "no items yet" — instead of having to guess
+   * which buckets the game even supports. Category sections stay
+   * collapsible so a tier with lots of items doesn't dominate the panel. */
   private renderTierContent(): void {
     if (!this.tierContentEl) return;
     this.tierContentEl.innerHTML = "";
@@ -382,16 +384,19 @@ export class BuildMenu {
       wall: "Walls & Partitions", door: "Doors & Windows", bathroom: "Bathroom",
       decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };
-    let anyShown = false;
+    // Track whether we've already auto-opened a section. The first
+    // non-empty category in this tier expands by default so the player
+    // immediately sees something they can buy; everything else (and
+    // every empty section) stays collapsed.
+    let firstPopulatedOpened = false;
     for (const cat of categoryOrder) {
       const items = furnitureCatalog.filter(
         (d) => d.category === cat && inferQualityTier(d) === this.selectedTier,
       );
-      if (items.length === 0) continue;
-      anyShown = true;
-      // First non-empty category for this tier auto-opens so the
-      // player sees something useful right away.
-      let open = !this.tierContentEl.firstChild;
+      const empty = items.length === 0;
+      const shouldAutoOpen = !empty && !firstPopulatedOpened;
+      if (shouldAutoOpen) firstPopulatedOpened = true;
+      let open = shouldAutoOpen;
       const header = document.createElement("div");
       Object.assign(header.style, {
         marginTop: "8px",
@@ -399,7 +404,9 @@ export class BuildMenu {
         padding: "3px 4px",
         fontSize: "11px",
         fontWeight: "700",
-        opacity: "0.85",
+        // Dim empty headers so the eye can skip them — but keep the row
+        // visible so the player knows the category exists in this tier.
+        opacity: empty ? "0.45" : "0.85",
         letterSpacing: "0.05em",
         textTransform: "uppercase",
         cursor: "pointer",
@@ -419,22 +426,20 @@ export class BuildMenu {
         refreshHeader();
       };
       this.tierContentEl.appendChild(header);
-      for (const def of items) this.appendItemButton(itemsWrap, def);
+      if (empty) {
+        const placeholder = document.createElement("div");
+        placeholder.textContent = "no items in this tier yet";
+        Object.assign(placeholder.style, {
+          opacity: "0.5",
+          fontStyle: "italic",
+          fontSize: "11px",
+          padding: "4px 6px 6px 14px",
+        } as Partial<CSSStyleDeclaration>);
+        itemsWrap.appendChild(placeholder);
+      } else {
+        for (const def of items) this.appendItemButton(itemsWrap, def);
+      }
       this.tierContentEl.appendChild(itemsWrap);
-    }
-    if (!anyShown) {
-      // Empty tier — the player's catalog doesn't have anything in this
-      // quality bracket yet. Show a placeholder so the panel doesn't
-      // look broken when they hop to an empty tab.
-      const empty = document.createElement("div");
-      empty.textContent = "No items in this tier yet.";
-      Object.assign(empty.style, {
-        opacity: "0.55",
-        textAlign: "center",
-        padding: "16px 0",
-        fontSize: "11px",
-      } as Partial<CSSStyleDeclaration>);
-      this.tierContentEl.appendChild(empty);
     }
   }
 
