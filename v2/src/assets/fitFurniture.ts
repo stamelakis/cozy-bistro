@@ -41,6 +41,7 @@ const DEFAULT_HEIGHTS: Record<FurnitureDef["category"], number> = {
   table: 0.75,        // realistic dining height — plates land here
   chair: 0.95,        // chair-back to character chest
   stove: 0.92,        // appliance height
+  wash: 0.92,         // sinks + dishwashers — same kitchen-counter line
   counter: 0.92,
   decoration: 0.55,   // small props (crates, books, pillows)
   plant: 0.85,        // potted plant + foliage

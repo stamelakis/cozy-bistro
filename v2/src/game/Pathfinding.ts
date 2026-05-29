@@ -248,6 +248,7 @@ function isBlockingCategory(category: string, placement: string | undefined): bo
     case "table":
     case "chair":
     case "stove":
+    case "wash":
     case "counter":
     case "bathroom":
     case "plant":

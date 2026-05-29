@@ -376,13 +376,13 @@ export class BuildMenu {
     if (!this.tierContentEl) return;
     this.tierContentEl.innerHTML = "";
     const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "counter", "wall", "door", "bathroom",
+      "table", "chair", "stove", "wash", "counter", "wall", "door", "bathroom",
       "decoration", "plant", "lamp",
     ];
     const categoryLabels: Record<FurnitureDef["category"], string> = {
-      table: "Tables", chair: "Chairs", stove: "Cooking", counter: "Counters",
-      wall: "Walls & Partitions", door: "Doors & Windows", bathroom: "Bathroom",
-      decoration: "Decor", plant: "Plants", lamp: "Lighting",
+      table: "Tables", chair: "Chairs", stove: "Cooking", wash: "Dishwashing",
+      counter: "Counters", wall: "Walls & Partitions", door: "Doors & Windows",
+      bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };
     // Track whether we've already auto-opened a section. The first
     // non-empty category in this tier expands by default so the player

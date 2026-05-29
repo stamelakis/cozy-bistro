@@ -43,7 +43,7 @@ export interface FurnitureDef {
   /** Human label for the build menu. */
   name: string;
   /** Game category (mirrors 2D categories). */
-  category: "table" | "chair" | "stove" | "counter" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
+  category: "table" | "chair" | "stove" | "wash" | "counter" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
   /** Relative path under v2/public — fed to ModelLoader.load(). */
   modelPath: string;
   /** Fill ratio used by fitFurniture as a multiplier on top of the
@@ -309,16 +309,21 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 1800, comfort: 5, style: 6, ratingBonus: 0.09, seatingCapacity: 2,
     tier: 5, surface: "drink" },
 
-  // Kitchen / cooking
+  // Kitchen — cooking burners ("stove" category). Sinks and dishwashers
+  // live in "wash" below so the chef-assignment + per-stove flame
+  // systems only see actual burners.
   { id: "stove",          name: "Gas Stove",       category: "stove",
     modelPath: "assets/kenney/kitchenStove.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 240 },
   { id: "stove-electric", name: "Electric Stove",  category: "stove",
     modelPath: "assets/kenney/kitchenStoveElectric.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 320 },
-  { id: "sink",           name: "Sink",            category: "stove",
+  // Dishwashing — sinks + dishwashers ("wash" category). Each placed
+  // item reduces the dirty-dish wash interval; the chef never claims
+  // these as cook stations.
+  { id: "sink",           name: "Sink",            category: "wash",
     modelPath: "assets/kenney/kitchenSink.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180 },
-  { id: "dishwasher",     name: "Dishwasher",      category: "stove",
+  { id: "dishwasher",     name: "Dishwasher",      category: "wash",
     modelPath: "proc:dishwasher", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 320 },
-  { id: "dishwasher-pro", name: "Pro Dishwasher Line", category: "stove",
+  { id: "dishwasher-pro", name: "Pro Dishwasher Line", category: "wash",
     modelPath: "proc:dishwasher-pro", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 540 },
   { id: "microwave",      name: "Microwave",       category: "counter",
     modelPath: "assets/kenney/kitchenMicrowave.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80 },
