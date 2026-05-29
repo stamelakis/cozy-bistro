@@ -376,12 +376,20 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "fridge",         name: "Fridge",          category: "storage",
     modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 400,
     tier: 2, stockCapacity: 4, targetHeight: 1.75, surfaceSlots: [{ dx: 0, dz: 0 }] },
-  // Walk-in is a "room" — actually 2×2 tiles and stretched tall. Holds
-  // multiple regular fridges' worth of stock. Top is broad enough for
-  // two surface items.
+  // Double fridge — T4 between built-in (T3) and walk-in (T5). 2-tile
+  // wide, full height; uses the regular fridge mesh with
+  // stretchFootprint so the model spans both tiles instead of leaving
+  // half the footprint empty.
+  { id: "fridge-double",  name: "Double Fridge",   category: "storage",
+    modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 1500,
+    tier: 4, targetHeight: 2.0, stockCapacity: 18, stretchFootprint: true,
+    surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+  // Walk-in is a "room" — 2×2 tiles, stretched tall. Top tier flagship
+  // for serious kitchens; carries by far the most stock of any single
+  // unit. Top is broad enough for two surface items.
   { id: "fridge-large",   name: "Walk-in Fridge",  category: "storage",
-    modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 2, depth: 2 }, cost: 1200,
-    tier: 4, targetHeight: 2.2, stockCapacity: 15,
+    modelPath: "assets/kenney/kitchenFridgeLarge.glb", scale: S_KITCHEN, size: { width: 2, depth: 2 }, cost: 3000,
+    tier: 5, targetHeight: 2.2, stockCapacity: 45,
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90,
@@ -411,9 +419,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
     tier: 3, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }] },
+  // Built-in slots into a cabinet run flush with the wall — reads as
+  // bigger/taller than a free-standing fridge for the same footprint.
   { id: "fridge-built-in", name: "Built-in Fridge", category: "storage",
     modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 700,
-    tier: 3, stockCapacity: 7 },
+    tier: 3, stockCapacity: 7, targetHeight: 2.0 },
   { id: "fridge-small",   name: "Mini Fridge",     category: "storage",
     modelPath: "assets/kenney/kitchenFridgeSmall.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 180,
     tier: 1, stockCapacity: 2 },
