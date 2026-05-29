@@ -375,6 +375,11 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
+      // Wash callback: when DishwareSystem.update washes one piece,
+      // remove the matching dirty mesh from the table the spawner
+      // dropped it on. Hooked here because GuestSpawner is the owner
+      // of the world meshes; DishwareSystem only knows about counts.
+      this.game.dishware.onDishWashed = (kind) => this.spawner?.removeOneLeftover(kind);
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.

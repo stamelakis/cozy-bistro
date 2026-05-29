@@ -47,6 +47,11 @@ export class DishwareSystem {
    * station is placed the loop pauses (dirty plates pile up). */
   countWashStations?: () => { sinks: number; dishwashers: number; dishwasherPro: number };
 
+  /** Engine-provided callback fired AFTER a successful wash. GuestSpawner
+   * wires this so the matching dirty-plate mesh disappears from the
+   * world the same tick the inventory counter ticks up. */
+  onDishWashed?: (kind: DishKind, tier: number) => void;
+
   constructor() {
     this.plates.set(1, { clean: STARTER_PLATE_COUNT, dirty: 0 });
     this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
@@ -149,6 +154,7 @@ export class DishwareSystem {
     const entry = pool.get(best)!;
     entry.dirty -= 1;
     entry.clean += 1;
+    this.onDishWashed?.(kind, best);
     return best;
   }
 

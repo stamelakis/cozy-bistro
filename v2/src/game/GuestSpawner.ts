@@ -8,6 +8,7 @@ import type { SfxPlayer } from "../ui/SfxPlayer";
 import type { FurnitureRegistry, ResolvedSeatSlot } from "./FurnitureRegistry";
 import { recipes } from "../data/recipes";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import type { DishKind } from "../data/dishwareCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
@@ -289,6 +290,15 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
 
 /** Cheap color hash so different recipes look different on the plate
  * without us shipping per-recipe textures. */
+/** Cheap deterministic string hash for seeding visual jitter (where
+ * each guest's leftover plates should land on the table). djb2-ish,
+ * inline since the GuestSpawner is the only caller. */
+function hashStr(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
 function recipeFoodColor(recipe: RecipeDefinition): number {
   if (recipe.category === "dessert") return 0xe09acb;     // pink
   if (recipe.category === "drink")   return 0x8aa8c4;     // pale blue
@@ -335,6 +345,13 @@ export class GuestSpawner {
   /** Shared plate geometry/material so we don't re-allocate per plate. */
   private static plateGeo?: THREE.CylinderGeometry;
   private static plateMat?: THREE.MeshStandardMaterial;
+  /** Dirty plates / glasses left on tables after customers walk out.
+   * One entry per course actually served — each is rendered as a
+   * crumb-strewn plate or empty glass at the platePos the guest used.
+   * Drained by DishwareSystem.onDishWashed: each wash event removes the
+   * oldest matching-kind entry so the table the player sees clears in
+   * lockstep with the inventory counter. */
+  private readonly dirtyTableMeshes: Array<{ mesh: THREE.Object3D; kind: DishKind }> = [];
   /** Total elapsed seconds (matches Game.day.getTotalPlaySeconds vibe but
    * we don't need to share it — used only for dirty-seat timing). */
   private elapsed = 0;
@@ -920,6 +937,90 @@ export class GuestSpawner {
     this.scene.remove(plate);
     // Children (the food sphere) are auto-removed with the parent.
     this.tablePlates.delete(guestId);
+  }
+
+  /** Spawn one "leftover" mesh per course this guest actually ate.
+   * Used by finalizeVisit after the active plate has been cleared so
+   * the dirty pieces stay visible on the table until a wash happens.
+   * Each piece is positioned at the guest's platePos with a small per-
+   * course jitter so multi-course customers leave a clearly-stacked
+   * mess instead of one z-fighting blob. */
+  private spawnLeftoversForGuest(g: ActiveGuest): void {
+    const baseSeed = hashStr(g.id);
+    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      // Deterministic jitter so a save/load doesn't shuffle visible
+      // plates around their owner's seat. ±0.10 keeps them on the table.
+      const angle = ((baseSeed + i * 37) % 360) * (Math.PI / 180);
+      const r = 0.07 + (i * 0.04);
+      const jx = Math.cos(angle) * r;
+      const jz = Math.sin(angle) * r;
+      const mesh = this.makeLeftoverMesh(g.platePos.x + jx, g.platePos.y + jz, kind);
+      this.scene.add(mesh);
+      this.dirtyTableMeshes.push({ mesh, kind });
+    }
+  }
+
+  /** Build a single dirty piece's visual. Plates get a crumb mound
+   * (small darker sphere); glasses get a short transparent cylinder
+   * with a slick of leftover liquid. Reuses the shared plate geom for
+   * plates so we don't churn through allocations during a busy
+   * service. */
+  private makeLeftoverMesh(x: number, z: number, kind: DishKind): THREE.Object3D {
+    if (kind === "glass") {
+      const group = new THREE.Group();
+      const glass = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.065, 0.055, 0.14, 12, 1, true),
+        new THREE.MeshStandardMaterial({
+          color: 0xb8d0d8, roughness: 0.15, metalness: 0.05,
+          transparent: true, opacity: 0.55, side: THREE.DoubleSide,
+        }),
+      );
+      glass.position.y = 0.07;
+      group.add(glass);
+      // Small puddle of leftover liquid at the bottom — yellowish.
+      const dregs = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.055, 0.055, 0.02, 12),
+        new THREE.MeshStandardMaterial({ color: 0xb88a3a, roughness: 0.6 }),
+      );
+      dregs.position.y = 0.015;
+      group.add(dregs);
+      group.position.set(x, TABLE_HEIGHT_Y, z);
+      glass.castShadow = true;
+      return group;
+    }
+    // Plate with crumbs
+    if (!GuestSpawner.plateGeo) {
+      GuestSpawner.plateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
+      GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
+    }
+    const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
+    plate.position.set(x, TABLE_HEIGHT_Y, z);
+    plate.castShadow = true;
+    plate.receiveShadow = true;
+    const crumbs = new THREE.Mesh(
+      new THREE.SphereGeometry(0.06, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0x5a3a1f, roughness: 0.95 }),
+    );
+    crumbs.position.set(0, 0.025, 0);
+    crumbs.scale.set(1.1, 0.25, 1.1);
+    plate.add(crumbs);
+    return plate;
+  }
+
+  /** Remove the oldest dirty mesh of the matching kind from the world.
+   * Wired to DishwareSystem.onDishWashed so a wash event clears one
+   * piece of table visual at the same time the inventory counter ticks.
+   * No-op when the system count drifts ahead of the visual (e.g. after
+   * a save/load that didn't persist the meshes) — the wash still
+   * succeeds, just with no animation. */
+  removeOneLeftover(kind: DishKind): void {
+    const idx = this.dirtyTableMeshes.findIndex((d) => d.kind === kind);
+    if (idx < 0) return;
+    const entry = this.dirtyTableMeshes.splice(idx, 1)[0];
+    this.scene.remove(entry.mesh);
   }
 
   private tickGuest(g: ActiveGuest, dt: number): void {
@@ -1541,6 +1642,11 @@ export class GuestSpawner {
       const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
       this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
     }
+    // The live "eating" plate is about to be subsumed by the leftover
+    // meshes (which include the last course too). Clear it before we
+    // spawn the leftovers so we don't draw both on top of each other.
+    this.removePlateForGuest(g.id);
+    this.spawnLeftoversForGuest(g);
     // Food critics swing the rating average harder. Record their rating
     // three times — same direction, triple weight on overall reputation.
     const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;
