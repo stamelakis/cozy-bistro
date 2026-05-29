@@ -348,6 +348,10 @@ export class Engine {
         // R-rotated microwave / coffee machine / blender survives
         // reload.
         localRotY: p.localRotY,
+        // Multi-storey: which floor the item lives on. Missing in
+        // pre-multi-storey saves → undefined → registry treats as
+        // floor 0 (ground).
+        floor: p.floor,
       }));
       // After restore, the demo's door (with its hinge panel captured)
       // gets removed and the save's restored door comes in fresh —

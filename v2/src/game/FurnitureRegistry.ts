@@ -240,9 +240,12 @@ export class FurnitureRegistry {
    *              (they don't claim a tile) AND skips ceiling items
    *              (different plane).
    *   - "ceiling": only checks other ceiling items at this cell. A
-   *              floor item underneath a hanging lamp doesn't block. */
-  isOccupied(x: number, z: number, excludeUid?: string, layer: "tile" | "ceiling" = "tile"): boolean {
-    return this.findIndexNear(x, z, excludeUid, layer) >= 0;
+   *              floor item underneath a hanging lamp doesn't block.
+   * `floor` filters by storey — only items on the same floor block.
+   * Without it, a ground-floor chair at (0,0) would block placement
+   * on Floor 1 at the same XZ, even though they're 3 m apart. */
+  isOccupied(x: number, z: number, excludeUid?: string, layer: "tile" | "ceiling" = "tile", floor?: number): boolean {
+    return this.findIndexNear(x, z, excludeUid, layer, floor) >= 0;
   }
 
   /** True if any same-layer item's FOOTPRINT covers the integer cell
@@ -253,9 +256,13 @@ export class FurnitureRegistry {
    * falsely blocking it. This is the right per-cell test when you've
    * already enumerated the would-be placement's footprint cells via
    * {@link footprintCells} and need to verify each one is clear. */
-  isCellBlocked(cellX: number, cellZ: number, excludeUid: string | undefined, layer: "tile" | "ceiling"): boolean {
+  isCellBlocked(cellX: number, cellZ: number, excludeUid: string | undefined, layer: "tile" | "ceiling", floor?: number): boolean {
     for (const it of this.items) {
       if (excludeUid && it.uid === excludeUid) continue;
+      // Multi-storey: an item only blocks placements on the SAME
+      // storey. A ground-floor chair doesn't stop you putting a chair
+      // directly above it on Floor 1.
+      if (typeof floor === "number" && it.floor !== floor) continue;
       const def = getFurnitureDef(it.defId);
       if (!def) continue;
       const placement = def.placement ?? "tile";
@@ -275,8 +282,8 @@ export class FurnitureRegistry {
    * can still be picked by Move/Sell mode. Most recently-placed wins.
    * Considers ALL placement layers so Sell mode can target walls,
    * ceilings, and floor items by clicking the cell. */
-  findAt(x: number, z: number, excludeUid?: string): PlacedFurnitureItem | null {
-    const i = this.findIndexNear(x, z, excludeUid, "any");
+  findAt(x: number, z: number, excludeUid?: string, floor?: number): PlacedFurnitureItem | null {
+    const i = this.findIndexNear(x, z, excludeUid, "any", floor);
     return i >= 0 ? this.items[i] : null;
   }
 
@@ -286,13 +293,18 @@ export class FurnitureRegistry {
    *     edge/wall/ceiling).
    *   - layer="ceiling": consider only ceiling items.
    *   - layer="any": include every item (used by Move/Sell pickup). */
-  private findIndexNear(x: number, z: number, excludeUid: string | undefined, layer: "tile" | "ceiling" | "any"): number {
+  private findIndexNear(x: number, z: number, excludeUid: string | undefined, layer: "tile" | "ceiling" | "any", floor?: number): number {
     const TOL = 0.6;
     let bestIdx = -1;
     let bestDist = Infinity;
     for (let i = this.items.length - 1; i >= 0; i -= 1) {
       const it = this.items[i];
       if (excludeUid && it.uid === excludeUid) continue;
+      // Multi-storey: when the caller passes a `floor`, only consider
+      // items on that storey. Without this, a chair on Floor 0 at
+      // (X,Z) would still register as "occupied" when the player is
+      // trying to place a chair at the SAME (X,Z) on Floor 1.
+      if (typeof floor === "number" && it.floor !== floor) continue;
       if (layer !== "any") {
         const placement = getFurnitureDef(it.defId)?.placement ?? "tile";
         if (layer === "tile") {

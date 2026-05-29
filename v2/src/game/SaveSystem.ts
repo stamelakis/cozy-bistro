@@ -212,6 +212,12 @@ export class SaveSystem {
             // the registry's restore second pass forces the child
             // back to host.rotY.
             if (typeof p.localRotY === "number") out.localRotY = p.localRotY;
+            // Multi-storey: persist which floor the item lives on so
+            // upper-floor placements survive reload. Without this an
+            // item placed on Floor 1 round-trips as floor=0 and lands
+            // on the ground after refresh — the visible "items vanish
+            // on Floor 1 after reload" symptom.
+            if (typeof p.floor === "number" && p.floor > 0) out.floor = p.floor;
             return out;
           }))
         : [],

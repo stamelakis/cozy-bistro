@@ -652,6 +652,15 @@ export class BuildMenu {
       return;
     }
     this.scene.add(this.preview);
+    // Seed the preview with the focused floor's Y so the ghost shows
+    // up immediately on upper floors — otherwise it starts at world
+    // Y=0 (ground) and the camera (looking at Floor N's slab) just
+    // doesn't see it until the user wiggles the cursor to trigger
+    // onPointerMove. Surface items keep Y from the host so we leave
+    // them alone.
+    if (def.placement !== "surface") {
+      this.preview.position.y = placementY(this.preview, def) + this.currentFloorY();
+    }
     // Surface seat-slot markers as a placement aid.
     this.seatMarkers?.setEnabled(true);
   }
@@ -1096,7 +1105,7 @@ export class BuildMenu {
       const cells = footprintCells({ x: anchorX, z: anchorZ, rotY: host.rotY }, def);
       const excludeUid = this.holdingUid ?? undefined;
       for (const cell of cells) {
-        const below = this.registry.findAt(cell.x, cell.z, excludeUid);
+        const below = this.registry.findAt(cell.x, cell.z, excludeUid, this.currentFloor());
         if (!below) continue;
         const belowDef = furnitureCatalog.find((d) => d.id === below.defId);
         if (!belowDef) continue;
@@ -1175,7 +1184,7 @@ export class BuildMenu {
     if (!def.flat) {
       const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
       for (const cell of previewCells) {
-        if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer)) {
+        if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer, this.currentFloor())) {
           return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
         }
       }
@@ -1453,7 +1462,7 @@ export class BuildMenu {
       // search, since iso-projection often misses by 1-2 cells.
       const item = this.hoveredItemUid
         ? this.registry.snapshotItems().find((it) => it.uid === this.hoveredItemUid) ?? null
-        : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z));
+        : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z), undefined, this.currentFloor());
       if (!item) {
         this.flashRoot("Nothing to sell there", "error");
         return;
@@ -1485,7 +1494,7 @@ export class BuildMenu {
         // takes priority over the floor-cell fallback for iso angles).
         const item = this.hoveredItemUid
           ? this.registry.snapshotItems().find((it) => it.uid === this.hoveredItemUid) ?? null
-          : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z));
+          : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z), undefined, this.currentFloor());
         if (!item) { this.flashRoot("Nothing to move there", "error"); return; }
         this.holdingUid = item.uid;
         this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
