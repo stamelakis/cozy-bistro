@@ -914,25 +914,30 @@ export class BuildMenu {
       // on the wall even when the cursor approach is occluded.
       const clampedX = Math.max(-4.5, Math.min(5.5, rawPoint.x));
       const clampedZ = Math.max(-4.5, Math.min(5.5, rawPoint.z));
-      const e = this.snapToEdge(clampedX, clampedZ);
-      // For real doors / doorways: only allow placement when the
-      // snapped edge actually coincides with an exterior wall segment.
-      // Stops the player from dropping a "front door" floating between
-      // tiles in the middle of the restaurant.
-      if (def.category === "door" && !def.id.startsWith("window")) {
-        const onPerimeter = this.isOnPerimeterWall(e.x, e.z);
-        if (!onPerimeter) {
-          return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
-        }
+      let e = this.snapToEdge(clampedX, clampedZ);
+      const needsPerimeter = def.category === "door" && !def.id.startsWith("window");
+      const needsWall = def.id.startsWith("window");
+      // For perimeter-required edge items (real doors, windows), the
+      // standard "nearest grid line" snap is wrong when the cursor is
+      // INSIDE the building near a wall — it snaps to the closer
+      // interior grid line, not to the perimeter wall behind it. So
+      // when the natural snap doesn't land on a valid wall, fall back
+      // to the nearest perimeter wall edge. That way the player can
+      // place a window from the inside view (clicking near the wall
+      // from a tile centre) just as easily as from the outside view.
+      if (needsPerimeter && !this.isOnPerimeterWall(e.x, e.z)) {
+        e = this.snapToNearestPerimeterEdge(clampedX, clampedZ);
+      } else if (needsWall && !this.hasWallAtEdge(e.x, e.z)) {
+        e = this.snapToNearestPerimeterEdge(clampedX, clampedZ);
       }
-      // For windows: must sit ON a wall — exterior perimeter OR an
-      // interior partition the player has already placed. Without
-      // this gate windows snapped to any grid line and floated in
-      // mid-air on the lawn outside the building.
-      if (def.id.startsWith("window")) {
-        if (!this.hasWallAtEdge(e.x, e.z)) {
-          return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
-        }
+      // Final validation — if even the fallback didn't land on a wall
+      // (shouldn't happen for the perimeter fallback, but defensive
+      // for future placement rules) mark as blocked.
+      if (needsPerimeter && !this.isOnPerimeterWall(e.x, e.z)) {
+        return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
+      }
+      if (needsWall && !this.hasWallAtEdge(e.x, e.z)) {
+        return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
       }
       // No tile-overlap check — walls don't claim a tile.
       return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
@@ -1246,6 +1251,30 @@ export class BuildMenu {
       z: Math.floor(rawZ) + 0.5,
       rotY: 0,
     };
+  }
+
+  /** Snap to the nearest PERIMETER wall edge. Used as the fallback for
+   * windows + perimeter-only doors when the regular nearest-grid-line
+   * snap lands on an interior tile boundary (which happens when the
+   * cursor is INSIDE the building close to a wall — the inside tile
+   * line is geometrically closer than the wall plane behind it).
+   * Picks whichever of the 4 perimeter walls is nearest to the raw
+   * point, then snaps the along-axis coord to the nearest integer
+   * (clamped to the wall's valid placement range). */
+  private snapToNearestPerimeterEdge(rawX: number, rawZ: number): { x: number; z: number; rotY: number } {
+    const distFront = Math.abs(rawZ - 5.5);
+    const distBack  = Math.abs(rawZ + 4.5);
+    const distLeft  = Math.abs(rawX + 4.5);
+    const distRight = Math.abs(rawX - 5.5);
+    const minDist = Math.min(distFront, distBack, distLeft, distRight);
+    // Tiles along a 10-wide wall sit at integer x ∈ [-4, 5] (front/back)
+    // or integer z ∈ [-4, 5] (left/right). Clamp to keep the window
+    // anchor inside the wall span.
+    const clampAlong = (v: number): number => Math.max(-4, Math.min(5, Math.round(v)));
+    if (minDist === distFront) return { x: clampAlong(rawX), z: 5.5, rotY: 0 };
+    if (minDist === distBack)  return { x: clampAlong(rawX), z: -4.5, rotY: 0 };
+    if (minDist === distLeft)  return { x: -4.5, z: clampAlong(rawZ), rotY: Math.PI / 2 };
+    return { x: 5.5, z: clampAlong(rawZ), rotY: Math.PI / 2 };
   }
 
   /** Set every mesh on the preview to the quality color. Materials were
