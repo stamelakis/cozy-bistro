@@ -201,6 +201,21 @@ export class Engine {
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
+    // SfxPlayer is constructed BEFORE the modals so any modal that
+    // wants to fire SFX (e.g. AdminModal's audio test panel) can take
+    // a reference. The actual sounds stay silent until the first user
+    // interaction (browser autoplay rules + see kickAudio below).
+    this.sfx = new SfxPlayer();
+    // Browser autoplay rules block AudioContext sounds until the user
+    // first interacts with the page. Listen for ANY pointer / key
+    // input and kick the background music on (unless the player has
+    // it muted from a previous session). The listeners are { once:
+    // true } so they self-clean after firing.
+    const kickAudio = (): void => {
+      if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
+    };
+    window.addEventListener("pointerdown", kickAudio, { once: true });
+    window.addEventListener("keydown",     kickAudio, { once: true });
     // Modals still live on the page-level container so they overlay the world.
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
@@ -222,7 +237,7 @@ export class Engine {
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
-    this.adminModal = new AdminModal(container, this.game);
+    this.adminModal = new AdminModal(container, this.game, this.sfx);
     this.cloudModal = new CloudModal(container, this.cloud);
     // Door-plaque editor: click the plaque on the door lintel to edit
     // the restaurant name + sign style. Wire the scene-update callback
@@ -259,17 +274,6 @@ export class Engine {
     if (!HelpModal.hasBeenSeen()) this.helpModal.show();
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
-    this.sfx = new SfxPlayer();
-    // Browser autoplay rules block AudioContext sounds until the user
-    // first interacts with the page. Listen for ANY pointer / key
-    // input and kick the background music on (unless the player has
-    // it muted from a previous session). The listeners are { once:
-    // true } so they self-clean after firing.
-    const kickAudio = (): void => {
-      if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
-    };
-    window.addEventListener("pointerdown", kickAudio, { once: true });
-    window.addEventListener("keydown",     kickAudio, { once: true });
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
@@ -946,7 +950,14 @@ export class Engine {
     this.scene.setWeather(this.game.weather.getCurrent().id);
     // Day/night lighting follows the in-game day timer; applyDayNight
     // layers any weather tints on top of the base dayness ramp.
-    const day = this.scene.applyDayNight(this.game.day.getDayProgress());
+    const dayProgress = this.game.day.getDayProgress();
+    // Swap the background-music track between the daytime and
+    // nighttime MP3s based on where we are in the day. Anything past
+    // 80% of the cycle (early evening onwards) counts as night; the
+    // first 5% (pre-dawn) too. setMusicPhase is idempotent so we can
+    // call every frame without churn.
+    this.sfx.setMusicPhase((dayProgress >= 0.80 || dayProgress < 0.05) ? "night" : "day");
+    const day = this.scene.applyDayNight(dayProgress);
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);

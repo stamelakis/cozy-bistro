@@ -1,6 +1,35 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { STAFF_UPGRADE_MAX } from "../systems/StaffSystem";
+import type { SfxPlayer } from "./SfxPlayer";
+
+/** Every appliance loop the SfxPlayer can drive, plus a couple of
+ * one-shots, exposed in the admin "Audio test" section so the dev can
+ * audition them in isolation. Each loop entry maps to the LoopId in
+ * SfxPlayer.setLoopActive. */
+const AUDIO_LOOPS: { id: string; label: string }[] = [
+  { id: "gas-stove",      label: "🔥 Gas stove"      },
+  { id: "electric-stove", label: "⚡ Electric stove" },
+  { id: "microwave",      label: "📡 Microwave"      },
+  { id: "coffee",         label: "☕ Coffee"         },
+  { id: "blender",        label: "🌀 Blender"        },
+  { id: "toaster",        label: "🍞 Toaster"        },
+  { id: "hood",           label: "💨 Hood fan"       },
+  { id: "sink",           label: "🚰 Sink"           },
+  { id: "bathtub",        label: "🛁 Bathtub"        },
+  { id: "dishwasher",     label: "🧽 Dishwasher"     },
+];
+
+const AUDIO_ONESHOTS: { id: string; label: string }[] = [
+  { id: "toiletFlush", label: "🚽 Toilet flush" },
+  { id: "ding",        label: "🔔 Ding"         },
+  { id: "chime",       label: "✨ Chime"         },
+  { id: "chaching",    label: "💰 Cha-ching"    },
+  { id: "gong",        label: "🪘 Gong"         },
+  { id: "alert",       label: "⚠️ Alert"         },
+  { id: "thud",        label: "👎 Thud"         },
+  { id: "drip",        label: "💧 Drip"         },
+];
 
 /**
  * Dev-mode panel — tuning sliders for live balance changes plus a
@@ -49,6 +78,7 @@ const MONEY_DELTAS = [100, 1000, 10000, 100000] as const;
 
 export class AdminModal {
   private readonly game: Game;
+  private readonly sfx: SfxPlayer;
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
 
@@ -58,9 +88,16 @@ export class AdminModal {
   private moneyValue!: HTMLElement;
   private tierValue!: HTMLElement;
   private ratingValue!: HTMLElement;
+  /** Audio-test buttons keyed by loop id — restyled when toggled so the
+   * dev can see at a glance which loops are currently playing. */
+  private audioLoopBtns = new Map<string, HTMLButtonElement>();
+  /** Local mirror of which loops the test panel started — flipped back
+   * off when the modal closes so a hidden loop doesn't keep playing. */
+  private audioTestActive = new Set<string>();
 
-  constructor(parent: HTMLElement, game: Game) {
+  constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer) {
     this.game = game;
+    this.sfx = sfx;
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
@@ -139,6 +176,10 @@ export class AdminModal {
     // === Weather section — preview rain / snow / festival visuals
     // without waiting for the day-end roll. ===
     body.appendChild(this.buildWeatherSection());
+
+    // === Audio test — toggle individual appliance loops + fire
+    // one-shots so the dev can audition each sound in isolation. ===
+    body.appendChild(this.buildAudioTestSection());
 
     // === Quick actions ===
     body.appendChild(this.buildQuickActionsSection());
@@ -287,6 +328,81 @@ export class AdminModal {
     }
     section.appendChild(row);
     return section;
+  }
+
+  private buildAudioTestSection(): HTMLElement {
+    const section = this.sectionShell("🔊 AUDIO TEST");
+    const hint = document.createElement("div");
+    hint.textContent = "Click a loop to start/stop it. Multiple can play at once.";
+    Object.assign(hint.style, {
+      fontSize: "10px", opacity: "0.65", marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(hint);
+    // Loop toggles — one button per LoopId. Click highlights green
+    // while the loop is running, click again to stop it.
+    const loopGrid = document.createElement("div");
+    Object.assign(loopGrid.style, {
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    for (const loop of AUDIO_LOOPS) {
+      const btn = this.actionButton(loop.label, "neutral", () => {
+        const wasActive = this.audioTestActive.has(loop.id);
+        const nextActive = !wasActive;
+        if (nextActive) this.audioTestActive.add(loop.id);
+        else this.audioTestActive.delete(loop.id);
+        this.sfx.setLoopActive(loop.id as Parameters<SfxPlayer["setLoopActive"]>[0], nextActive);
+        this.refreshAudioLoopBtn(loop.id, nextActive);
+      });
+      this.audioLoopBtns.set(loop.id, btn);
+      loopGrid.appendChild(btn);
+    }
+    section.appendChild(loopGrid);
+    // Stop-all row — kill every loop the panel started in one click.
+    const stopAll = this.actionButton("■ Stop all loops", "danger", () => {
+      for (const id of Array.from(this.audioTestActive)) {
+        this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+        this.refreshAudioLoopBtn(id, false);
+      }
+      this.audioTestActive.clear();
+    });
+    Object.assign(stopAll.style, { marginTop: "4px" } as Partial<CSSStyleDeclaration>);
+    section.appendChild(stopAll);
+    // One-shots — small grid below the loops.
+    const oneshotHeader = document.createElement("div");
+    oneshotHeader.textContent = "One-shots";
+    Object.assign(oneshotHeader.style, {
+      fontSize: "10px", opacity: "0.7", margin: "6px 0 2px 0",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(oneshotHeader);
+    const oneshotGrid = document.createElement("div");
+    Object.assign(oneshotGrid.style, {
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    for (const o of AUDIO_ONESHOTS) {
+      oneshotGrid.appendChild(this.actionButton(o.label, "neutral", () => {
+        // Hand off to the matching method on the SfxPlayer. Cast to
+        // any here is contained: AUDIO_ONESHOTS lists only valid
+        // method ids and the call shape is identical for each.
+        const fn = (this.sfx as unknown as Record<string, () => void>)[o.id];
+        if (typeof fn === "function") fn.call(this.sfx);
+      }));
+    }
+    section.appendChild(oneshotGrid);
+    return section;
+  }
+
+  /** Recolor a loop test button so the dev can see active loops at
+   * a glance. Green = currently playing. */
+  private refreshAudioLoopBtn(id: string, active: boolean): void {
+    const btn = this.audioLoopBtns.get(id);
+    if (!btn) return;
+    if (active) {
+      btn.style.background = "rgba(120, 200, 120, 0.32)";
+      btn.style.border = "1px solid rgba(120, 200, 120, 0.65)";
+    } else {
+      btn.style.background = "rgba(255, 245, 220, 0.10)";
+      btn.style.border = "1px solid rgba(255, 245, 220, 0.25)";
+    }
   }
 
   private buildQuickActionsSection(): HTMLElement {
@@ -507,5 +623,14 @@ export class AdminModal {
     this.renderUpgradesPanel();
     this.root.style.display = "flex";
   }
-  hide(): void { this.root.style.display = "none"; }
+  hide(): void {
+    // Stop every audio-test loop the dev started — otherwise a forgotten
+    // "blender" toggle keeps running invisibly after the modal closes.
+    for (const id of Array.from(this.audioTestActive)) {
+      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      this.refreshAudioLoopBtn(id, false);
+    }
+    this.audioTestActive.clear();
+    this.root.style.display = "none";
+  }
 }
