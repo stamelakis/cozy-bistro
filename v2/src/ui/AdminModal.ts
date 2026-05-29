@@ -132,9 +132,10 @@ export class AdminModal {
   private moneyValue!: HTMLElement;
   private tierValue!: HTMLElement;
   private ratingValue!: HTMLElement;
-  /** Audio-test buttons keyed by loop id — restyled when toggled so the
-   * dev can see at a glance which loops are currently playing. */
-  private audioLoopBtns = new Map<string, HTMLButtonElement>();
+  /** Audio-test rows keyed by loop id. Each row hosts a label plus
+   * a ▶ and ■ button; refresh adds/removes the shimmer class so the
+   * dev can see which loops are playing without relying on speakers. */
+  private audioLoopRows = new Map<string, HTMLElement>();
   /** Local mirror of which loops the test panel started — flipped back
    * off when the modal closes so a hidden loop doesn't keep playing. */
   private audioTestActive = new Set<string>();
@@ -380,28 +381,21 @@ export class AdminModal {
   private buildAudioTestSection(): HTMLElement {
     const section = this.sectionShell("🔊 AUDIO TEST");
     const hint = document.createElement("div");
-    hint.textContent = "Click a loop to start/stop it. Multiple can play at once.";
+    hint.textContent = "▶ starts a loop, ■ stops it. Multiple can play at once. Shimmer = playing.";
     Object.assign(hint.style, {
       fontSize: "10px", opacity: "0.65", marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
     section.appendChild(hint);
-    // Loop toggles — one button per LoopId. Click highlights green
-    // while the loop is running, click again to stop it.
+    // One row per loop: [label .........] [▶] [■]. Splitting the
+    // toggle into a Play and a Stop fixes the "click does nothing"
+    // confusion — Play always (re)starts, Stop always stops, regardless
+    // of the current state.
     const loopGrid = document.createElement("div");
     Object.assign(loopGrid.style, {
-      display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
+      display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px",
     } as Partial<CSSStyleDeclaration>);
     for (const loop of AUDIO_LOOPS) {
-      const btn = this.actionButton(loop.label, "neutral", () => {
-        const wasActive = this.audioTestActive.has(loop.id);
-        const nextActive = !wasActive;
-        if (nextActive) this.audioTestActive.add(loop.id);
-        else this.audioTestActive.delete(loop.id);
-        this.sfx.setLoopActive(loop.id as Parameters<SfxPlayer["setLoopActive"]>[0], nextActive);
-        this.refreshAudioLoopBtn(loop.id, nextActive);
-      });
-      this.audioLoopBtns.set(loop.id, btn);
-      loopGrid.appendChild(btn);
+      loopGrid.appendChild(this.buildAudioLoopRow(loop.id, loop.label));
     }
     section.appendChild(loopGrid);
     // Stop-all row — kill every loop the panel started in one click.
@@ -445,19 +439,92 @@ export class AdminModal {
     return section;
   }
 
-  /** Recolor a loop test button so the dev can see active loops at
-   * a glance. Adds an animated shimmer when playing so it's obvious
-   * which loop is producing sound (the previous flat-tint version
-   * looked the same as a regular hover state). */
+  /** Build one loop row: [label] [▶] [■]. Play always (re)starts the
+   * loop — useful when a game-driven loop (e.g. the chef's stove)
+   * was already running and the dev wants to confirm what it sounds
+   * like. Stop always stops. */
+  private buildAudioLoopRow(id: string, label: string): HTMLElement {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", alignItems: "center", gap: "4px",
+      padding: "3px 4px 3px 8px",
+      background: "rgba(255,245,220,0.10)",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px",
+      position: "relative", overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    const labelEl = document.createElement("span");
+    labelEl.textContent = label;
+    Object.assign(labelEl.style, {
+      flex: "1", fontSize: "11px", fontWeight: "600",
+      position: "relative", zIndex: "1",
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+    } as Partial<CSSStyleDeclaration>);
+    row.appendChild(labelEl);
+    // Play and Stop as tiny side-by-side buttons. They live above the
+    // shimmer overlay (z-index:1) so the shimmer can't eat their clicks.
+    const playBtn = this.miniIconButton("▶", "good", () => {
+      // Force a fresh start: stop any in-flight loop (engine-driven or
+      // previous test) before starting so the dev always hears the
+      // sound fade in from zero.
+      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      this.audioTestActive.add(id);
+      // Small delay to let the 240 ms stop fade complete before the
+      // restart — otherwise the new fade-in races the old fade-out and
+      // the dev hears nothing for ~half a second.
+      window.setTimeout(() => {
+        if (!this.audioTestActive.has(id)) return;
+        this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], true);
+        this.refreshAudioLoopBtn(id, true);
+      }, 260);
+      // Paint active immediately so the dev sees the click landed.
+      this.refreshAudioLoopBtn(id, true);
+    });
+    row.appendChild(playBtn);
+    const stopBtn = this.miniIconButton("■", "danger", () => {
+      this.audioTestActive.delete(id);
+      this.sfx.setLoopActive(id as Parameters<SfxPlayer["setLoopActive"]>[0], false);
+      this.refreshAudioLoopBtn(id, false);
+    });
+    row.appendChild(stopBtn);
+    this.audioLoopRows.set(id, row);
+    return row;
+  }
+
+  /** Small ▶ / ■ button used in the audio-test loop rows. Same tone
+   * palette as actionButton, but compact + raised above the shimmer
+   * layer so the click always lands. */
+  private miniIconButton(label: string, tone: "good" | "danger", onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    const colors = tone === "good"
+      ? { bg: "rgba(120, 200, 120, 0.30)", border: "rgba(120, 200, 120, 0.60)" }
+      : { bg: "rgba(200, 120, 120, 0.30)", border: "rgba(200, 120, 120, 0.60)" };
+    Object.assign(btn.style, {
+      width: "22px", height: "22px",
+      padding: "0",
+      background: colors.bg,
+      color: "#fff5dc",
+      border: `1px solid ${colors.border}`,
+      borderRadius: "3px",
+      cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "700",
+      lineHeight: "1",
+      flex: "0 0 22px",
+      position: "relative", zIndex: "2",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = onClick;
+    return btn;
+  }
+
+  /** Toggle the shimmer overlay on a loop row. */
   private refreshAudioLoopBtn(id: string, active: boolean): void {
-    const btn = this.audioLoopBtns.get(id);
-    if (!btn) return;
+    const row = this.audioLoopRows.get(id);
+    if (!row) return;
     if (active) {
-      btn.classList.add("admin-audio-loop-active");
+      row.classList.add("admin-audio-loop-active");
     } else {
-      btn.classList.remove("admin-audio-loop-active");
-      btn.style.background = "rgba(255, 245, 220, 0.10)";
-      btn.style.border = "1px solid rgba(255, 245, 220, 0.25)";
+      row.classList.remove("admin-audio-loop-active");
     }
   }
 
