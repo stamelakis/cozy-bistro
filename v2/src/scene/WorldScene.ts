@@ -691,14 +691,48 @@ export class WorldScene {
 
     // Lamp intensity tracks `1 - dayness` so bulbs warm up over the
     // dusk window, stay lit through deep night, then dim out across
-    // the dawn window. Rainy / cold weather bumps the lamp glow a
-    // little so the interior reads as the cozy refuge from the storm.
+    // the dawn window. Bad weather bumps the lamp glow a little so the
+    // interior reads as the cozy refuge from the storm.
     let lampBoost = 0;
-    if (this.currentWeather === "rainy") lampBoost = 0.15;
-    else if (this.currentWeather === "cold") lampBoost = 0.1;
+    if (this.currentWeather === "heavy-rain") lampBoost = 0.30;
+    else if (this.currentWeather === "rainy") lampBoost = 0.18;
+    else if (this.currentWeather === "snowy") lampBoost = 0.20;
+    else if (this.currentWeather === "cold") lampBoost = 0.10;
+    else if (this.currentWeather === "cloudy") lampBoost = 0.05;
     this.updateLamps(Math.min(1, (1 - dayness) + lampBoost));
+    // Floor wetness — drives the rainy / heavy-rain "wet pavement"
+    // look. Driven by WeatherEffects so the renderer + the particles
+    // share one source of truth.
+    this.applyFloorWetness();
     return { skyColor };
   }
+
+  /** Apply the WeatherEffects wetness value to the floor material.
+   * Higher wetness = glossier + slightly darker = wet asphalt look.
+   * The slight darkening comes from a lerp toward a cool damp brown so
+   * heavy rain visibly soaks the floor compared to a light shower. */
+  private applyFloorWetness(): void {
+    if (!this.floorMat) return;
+    const wetness = this.weatherEffects?.getWetness() ?? 0;
+    // Cache the dry roughness + colour on first call so we can lerp
+    // toward it whenever wetness returns to zero without re-deriving
+    // it from theme state.
+    if (!this.floorDryState) {
+      this.floorDryState = {
+        roughness: this.floorMat.roughness,
+        color: this.floorMat.color.getHex(),
+      };
+    }
+    const dry = this.floorDryState;
+    // Wet floor: roughness 0.85 → 0.30 = strongly reflective. Colour
+    // mixes toward a cool damp slate so the wetness reads even without
+    // strong specular highlights.
+    const wetRoughness = 0.30;
+    const wetColor = 0x4a4238;
+    this.floorMat.roughness = dry.roughness + (wetRoughness - dry.roughness) * wetness;
+    this.floorMat.color.setHex(mixColors(dry.color, wetColor, wetness * 0.55));
+  }
+  private floorDryState?: { roughness: number; color: number };
 
   /** Layer weather-specific tints on top of the day/night ambient.
    * Rainy + cold cool the sun + ambient and shift the sky grey/blue.
@@ -721,6 +755,17 @@ export class WorldScene {
         this.ambientLight.intensity *= 0.80;
         break;
       }
+      case "heavy-rain": {
+        // Dramatic storm — much darker sky + cooler tint, sun nearly
+        // gone behind the cloudbank. Reads as "you really don't want
+        // to be outside right now".
+        skyColor = mixColors(skyColor, 0x2c343e, 0.80);
+        this.sunLight.intensity *= 0.18;
+        this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0x6680a0, 0.75));
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0x5a6878, 0.7));
+        this.ambientLight.intensity *= 0.65;
+        break;
+      }
       case "cold": {
         // Pale cool-white snowstorm tint. Snow reflects so it's not as
         // dark as rain — sun keeps ~60% intensity but its colour goes
@@ -729,6 +774,17 @@ export class WorldScene {
         this.sunLight.intensity *= 0.70;
         this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0xe0e8f4, 0.5));
         this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xcdd5e2, 0.4));
+        break;
+      }
+      case "snowy": {
+        // Heavy snowfall — pale silver-grey overcast, sun much weaker,
+        // ambient gets a cooler white. Visibility through the falling
+        // snow stays high because the flakes themselves reflect light.
+        skyColor = mixColors(skyColor, 0xbcc4d0, 0.65);
+        this.sunLight.intensity *= 0.50;
+        this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0xd8e0ec, 0.65));
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xc0c8d4, 0.55));
+        this.ambientLight.intensity *= 0.95;
         break;
       }
       case "cloudy": {

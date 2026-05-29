@@ -3,23 +3,26 @@ import * as THREE from "three";
 /**
  * Procedural weather visuals layered over the iso scene.
  *
- * Three particle systems share a single Points-based representation:
- *   - rain    : fast pale-blue droplets falling straight down (rainy)
- *   - snow    : slow drifting white flakes (cold snap)
- *   - confetti: multicoloured slow drifters (festival day)
+ * Five particle systems share a single show-the-right-one contract:
+ *   - rain        : pale-blue droplets falling fast (rainy)
+ *   - heavyRain   : ~4× more droplets, bigger + darker (heavy-rain)
+ *   - snow        : light dusting (cold)
+ *   - heavySnow   : thick snowfall (snowy)
+ *   - confetti    : multicoloured slow drifters (festival)
  *
- * Only one is visible at a time, picked by setWeather(id). Each system
- * is recentred on the camera every update so the particle volume tracks
- * wherever the player is looking, no matter how far the camera pans.
+ * On top of that we have:
+ *   - cloudShadows : 4 large soft-edged dark planes drifting across the
+ *                    ground for cloudy / overcast / rainy / heavy-rain
+ *                    / snowy. Sells "diffused sun behind moving clouds".
+ *   - wetness      : 0..1 value the renderer reads to modify the floor
+ *                    material (glossier + slightly darker = looks wet).
  *
- * Particles are pure GPU-friendly THREE.Points geometry. No textures,
- * no shaders to author — the visual is intentionally toy / cozy so it
- * sits next to the Kenney furniture without out-of-place realism.
+ * Each volume tracks the camera per frame so a long-running session
+ * doesn't end up with rain falling 50 m off-screen.
  *
- * Lighting tints (sun colour, ambient, sky background) are NOT done
- * here — they live in WorldScene.applyDayNight where the day-night
- * code already mixes them, so the weather modifiers stack cleanly on
- * top of the existing dayness ramp.
+ * Pure GPU-friendly THREE.Points + THREE.PlaneGeometry — no textures
+ * shipped or shaders authored. The visual fits the cozy toy aesthetic
+ * without out-of-place realism.
  */
 
 /** Catalog ids in WeatherSystem. Kept as a wide string so the system
@@ -32,30 +35,37 @@ export class WeatherEffects {
   private current: WeatherKind = "sunny";
 
   // === Rain ===
-  // 800 droplets in a 36×36 m volume centred on the camera. Each has
-  // its own fall speed so the column reads as motion rather than a
-  // sheet sliding down. Reset to the top of the volume when they hit
-  // the ground.
   private rain?: THREE.Points;
   private rainVelocities!: Float32Array;
-  private static readonly RAIN_COUNT = 800;
+  private static readonly RAIN_COUNT = 1700;
 
-  // === Snow ===
-  // 500 flakes; slower; each gets a sine-wave horizontal drift driven
-  // by a per-particle phase + a shared time accumulator so the sheet
-  // feels alive.
+  // === Heavy rain (≈ 4× density + faster fall) ===
+  private heavyRain?: THREE.Points;
+  private heavyRainVelocities!: Float32Array;
+  private static readonly HEAVY_RAIN_COUNT = 3500;
+
+  // === Snow (light dusting) ===
   private snow?: THREE.Points;
   private snowPhases!: Float32Array;
-  private static readonly SNOW_COUNT = 500;
+  private static readonly SNOW_COUNT = 600;
 
-  // === Confetti (festival) ===
-  // 240 multicoloured square-ish dots drifting down with sway. Per-
-  // particle colour set on the BufferGeometry so each piece keeps its
-  // hue across resets — the eye reads a confetti shower instead of a
-  // uniform spray.
+  // === Heavy snow (thick snowfall) ===
+  private heavySnow?: THREE.Points;
+  private heavySnowPhases!: Float32Array;
+  private static readonly HEAVY_SNOW_COUNT = 1600;
+
+  // === Festival confetti ===
   private confetti?: THREE.Points;
   private confettiPhases!: Float32Array;
   private static readonly CONFETTI_COUNT = 240;
+
+  // === Cloud shadows ===
+  // Four large dark soft-tinted planes that drift across the ground.
+  // Visible for cloudy / rainy / heavy-rain / snowy weather; opacity
+  // scales with how overcast the weather is.
+  private cloudShadows: THREE.Mesh[] = [];
+  private cloudShadowDrifts!: { vx: number; vz: number; phaseY: number }[];
+  private static readonly CLOUD_SHADOW_COUNT = 4;
 
   /** Shared horizontal/vertical extents. The play area is 10×10 m
    * (perimeter -4.5..5.5); 36×36 covers the building plus a generous
@@ -70,92 +80,114 @@ export class WeatherEffects {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.buildRain();
+    this.buildHeavyRain();
     this.buildSnow();
+    this.buildHeavySnow();
     this.buildConfetti();
+    this.buildCloudShadows();
     this.setWeather("sunny");
   }
 
   /** Show only the particle system that matches the current weather
-   * id; hide everything else. Cheap — toggles a single visibility
-   * flag per system. */
+   * id; hide everything else. Cloud shadows show for any "overcast"
+   * weather. */
   setWeather(id: WeatherKind): void {
     this.current = id;
-    if (this.rain)     this.rain.visible     = (id === "rainy");
-    if (this.snow)     this.snow.visible     = (id === "cold");
-    if (this.confetti) this.confetti.visible = (id === "festival");
+    if (this.rain)        this.rain.visible        = (id === "rainy");
+    if (this.heavyRain)   this.heavyRain.visible   = (id === "heavy-rain");
+    if (this.snow)        this.snow.visible        = (id === "cold");
+    if (this.heavySnow)   this.heavySnow.visible   = (id === "snowy");
+    if (this.confetti)    this.confetti.visible    = (id === "festival");
+    // Cloud-shadow visibility is set per-frame in update() because we
+    // also lerp the opacity into / out of the overcast set.
+  }
+
+  /** Wetness multiplier the renderer applies to the floor material.
+   *   0   = bone dry (sunny / cold / festival)
+   *   0.4 = puddly (rainy)
+   *   1.0 = soaked (heavy-rain)
+   * WorldScene reads this each tick and tweaks roughness + colour. */
+  getWetness(): number {
+    switch (this.current) {
+      case "heavy-rain": return 1.0;
+      case "rainy":      return 0.45;
+      default:           return 0;
+    }
+  }
+
+  /** Sky-overcast amount in [0, 1]. Drives the cloud-shadow plane
+   * opacity so cloudy days have soft hints, heavy rain has dramatic
+   * patches. */
+  private getOvercast(): number {
+    switch (this.current) {
+      case "heavy-rain": return 1.0;
+      case "rainy":      return 0.75;
+      case "snowy":      return 0.85;
+      case "cold":       return 0.50;
+      case "cloudy":     return 0.65;
+      default:           return 0;
+    }
   }
 
   /** Advance whichever particle system is active. Other systems sit
-   * idle (no geometry updates) when hidden.
-   *
-   * cameraPos is consumed so the particle volume follows the player's
-   * camera — without that, a long-running session leaves rain spawning
-   * 50 m off-screen where the camera started. */
+   * idle (no geometry updates) when hidden. cameraPos is consumed so
+   * the particle volume tracks the player's camera. */
   update(dt: number, cameraPos: THREE.Vector3): void {
     this.clock += dt;
     switch (this.current) {
-      case "rainy":    this.updateRain(dt, cameraPos);    break;
-      case "cold":     this.updateSnow(dt, cameraPos);    break;
-      case "festival": this.updateConfetti(dt, cameraPos); break;
+      case "rainy":      this.updateRain(dt, cameraPos);      break;
+      case "heavy-rain": this.updateHeavyRain(dt, cameraPos); break;
+      case "cold":       this.updateSnow(dt, cameraPos);      break;
+      case "snowy":      this.updateHeavySnow(dt, cameraPos); break;
+      case "festival":   this.updateConfetti(dt, cameraPos);  break;
     }
+    this.updateCloudShadows(dt, cameraPos);
   }
 
   // === Builders ====================================================
 
   private buildRain(): void {
-    const n = WeatherEffects.RAIN_COUNT;
-    const half = WeatherEffects.AREA_HALF;
-    const positions = new Float32Array(n * 3);
-    this.rainVelocities = new Float32Array(n);
-    for (let i = 0; i < n; i += 1) {
-      positions[i * 3]     = (Math.random() - 0.5) * half * 2;
-      positions[i * 3 + 1] = Math.random() * WeatherEffects.CEILING_Y;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * half * 2;
-      // 12-19 units/s — fast enough to read as rain, slow enough to
-      // see the streak rather than blur.
-      this.rainVelocities[i] = 12 + Math.random() * 7;
-    }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xb8d4ec,
-      size: 0.10,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-    });
-    this.rain = new THREE.Points(geom, mat);
-    this.rain.frustumCulled = false;
-    this.rain.visible = false;
-    this.rain.renderOrder = 2;
-    this.scene.add(this.rain);
+    this.rain = this.makePoints(
+      WeatherEffects.RAIN_COUNT,
+      0xb8d4ec,
+      0.18,
+      0.85,
+    );
+    this.rainVelocities = this.makeVelocities(WeatherEffects.RAIN_COUNT, 14, 8);
+    this.seedPositions(this.rain, WeatherEffects.RAIN_COUNT);
+  }
+
+  private buildHeavyRain(): void {
+    this.heavyRain = this.makePoints(
+      WeatherEffects.HEAVY_RAIN_COUNT,
+      0x9cb8d4,
+      0.22,
+      0.95,
+    );
+    this.heavyRainVelocities = this.makeVelocities(WeatherEffects.HEAVY_RAIN_COUNT, 22, 10);
+    this.seedPositions(this.heavyRain, WeatherEffects.HEAVY_RAIN_COUNT);
   }
 
   private buildSnow(): void {
-    const n = WeatherEffects.SNOW_COUNT;
-    const half = WeatherEffects.AREA_HALF;
-    const positions = new Float32Array(n * 3);
-    this.snowPhases = new Float32Array(n);
-    for (let i = 0; i < n; i += 1) {
-      positions[i * 3]     = (Math.random() - 0.5) * half * 2;
-      positions[i * 3 + 1] = Math.random() * WeatherEffects.CEILING_Y;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * half * 2;
-      this.snowPhases[i] = Math.random() * Math.PI * 2;
-    }
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({
-      color: 0xfaf7f1,
-      size: 0.16,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-    });
-    this.snow = new THREE.Points(geom, mat);
-    this.snow.frustumCulled = false;
-    this.snow.visible = false;
-    this.snow.renderOrder = 2;
-    this.scene.add(this.snow);
+    this.snow = this.makePoints(
+      WeatherEffects.SNOW_COUNT,
+      0xfaf7f1,
+      0.18,
+      0.85,
+    );
+    this.snowPhases = this.makePhases(WeatherEffects.SNOW_COUNT);
+    this.seedPositions(this.snow, WeatherEffects.SNOW_COUNT);
+  }
+
+  private buildHeavySnow(): void {
+    this.heavySnow = this.makePoints(
+      WeatherEffects.HEAVY_SNOW_COUNT,
+      0xffffff,
+      0.24,
+      0.95,
+    );
+    this.heavySnowPhases = this.makePhases(WeatherEffects.HEAVY_SNOW_COUNT);
+    this.seedPositions(this.heavySnow, WeatherEffects.HEAVY_SNOW_COUNT);
   }
 
   private buildConfetti(): void {
@@ -164,14 +196,9 @@ export class WeatherEffects {
     const positions = new Float32Array(n * 3);
     const colors = new Float32Array(n * 3);
     this.confettiPhases = new Float32Array(n);
-    // Festive palette — bright pop colours.
     const palette = [
-      [0xff, 0x6b, 0x6b],
-      [0xff, 0xc8, 0x4a],
-      [0x6b, 0xc8, 0xff],
-      [0xa8, 0xe2, 0x80],
-      [0xff, 0x90, 0xd8],
-      [0xff, 0xf0, 0x6b],
+      [0xff, 0x6b, 0x6b], [0xff, 0xc8, 0x4a], [0x6b, 0xc8, 0xff],
+      [0xa8, 0xe2, 0x80], [0xff, 0x90, 0xd8], [0xff, 0xf0, 0x6b],
     ];
     for (let i = 0; i < n; i += 1) {
       positions[i * 3]     = (Math.random() - 0.5) * half * 2;
@@ -187,11 +214,8 @@ export class WeatherEffects {
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
-      size: 0.20,
-      transparent: true,
-      opacity: 0.92,
-      vertexColors: true,
-      depthWrite: false,
+      size: 0.20, transparent: true, opacity: 0.92,
+      vertexColors: true, depthWrite: false,
     });
     this.confetti = new THREE.Points(geom, mat);
     this.confetti.frustumCulled = false;
@@ -200,19 +224,63 @@ export class WeatherEffects {
     this.scene.add(this.confetti);
   }
 
+  private buildCloudShadows(): void {
+    this.cloudShadowDrifts = [];
+    for (let i = 0; i < WeatherEffects.CLOUD_SHADOW_COUNT; i += 1) {
+      // 12-22 m square soft-edged shadow patch. Random vertex jitter
+      // gives each one a slightly irregular outline so the overcast
+      // doesn't read as four tidy squares.
+      const size = 12 + Math.random() * 10;
+      const geom = new THREE.PlaneGeometry(size, size, 1, 1);
+      // Lay flat on the ground.
+      geom.rotateX(-Math.PI / 2);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x1a1f24,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(
+        (Math.random() - 0.5) * WeatherEffects.AREA_HALF * 2,
+        0.02 + i * 0.001,           // float just above the floor; per-cloud y-offset to avoid z-fighting
+        (Math.random() - 0.5) * WeatherEffects.AREA_HALF * 2,
+      );
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1;
+      this.scene.add(mesh);
+      this.cloudShadows.push(mesh);
+      // Each cloud drifts with its own velocity + a slow opacity bob
+      // so the shadow patches feel organic instead of marching in
+      // lock-step.
+      this.cloudShadowDrifts.push({
+        vx: 0.4 + Math.random() * 0.5,
+        vz: 0.2 + Math.random() * 0.3,
+        phaseY: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
   // === Per-frame updaters =========================================
 
   private updateRain(dt: number, cam: THREE.Vector3): void {
-    if (!this.rain) return;
-    const attr = this.rain.geometry.attributes.position as THREE.BufferAttribute;
+    this.updateRainLike(this.rain!, this.rainVelocities, dt, cam, WeatherEffects.RAIN_COUNT);
+  }
+
+  private updateHeavyRain(dt: number, cam: THREE.Vector3): void {
+    this.updateRainLike(this.heavyRain!, this.heavyRainVelocities, dt, cam, WeatherEffects.HEAVY_RAIN_COUNT);
+  }
+
+  private updateRainLike(
+    points: THREE.Points, velocities: Float32Array,
+    dt: number, cam: THREE.Vector3, n: number,
+  ): void {
+    const attr = points.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
-    const n = WeatherEffects.RAIN_COUNT;
     const half = WeatherEffects.AREA_HALF;
     for (let i = 0; i < n; i += 1) {
       const base = i * 3;
-      pos[base + 1] -= this.rainVelocities[i] * dt;
-      // Hit ground OR drifted out of the camera's box → respawn at top
-      // inside the camera's current footprint.
+      pos[base + 1] -= velocities[i] * dt;
       if (pos[base + 1] < 0
           || Math.abs(pos[base]     - cam.x) > half
           || Math.abs(pos[base + 2] - cam.z) > half) {
@@ -225,20 +293,27 @@ export class WeatherEffects {
   }
 
   private updateSnow(dt: number, cam: THREE.Vector3): void {
-    if (!this.snow) return;
-    const attr = this.snow.geometry.attributes.position as THREE.BufferAttribute;
+    this.updateSnowLike(this.snow!, this.snowPhases, dt, cam, WeatherEffects.SNOW_COUNT, 1.1, 0.35);
+  }
+
+  private updateHeavySnow(dt: number, cam: THREE.Vector3): void {
+    this.updateSnowLike(this.heavySnow!, this.heavySnowPhases, dt, cam, WeatherEffects.HEAVY_SNOW_COUNT, 1.4, 0.5);
+  }
+
+  private updateSnowLike(
+    points: THREE.Points, phases: Float32Array,
+    dt: number, cam: THREE.Vector3, n: number,
+    fallSpeed: number, swayAmplitude: number,
+  ): void {
+    const attr = points.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
-    const n = WeatherEffects.SNOW_COUNT;
     const half = WeatherEffects.AREA_HALF;
     const t = this.clock;
     for (let i = 0; i < n; i += 1) {
       const base = i * 3;
-      // 0.9 - 1.4 m/s drop with mild horizontal sway driven by a per-
-      // particle phase. Pure sine wave is fine — readers don't pixel-
-      // perfect inspect a snowfall.
-      pos[base + 1] -= 1.1 * dt;
-      pos[base]     += Math.sin(t * 0.7 + this.snowPhases[i]) * 0.35 * dt;
-      pos[base + 2] += Math.cos(t * 0.6 + this.snowPhases[i]) * 0.35 * dt;
+      pos[base + 1] -= fallSpeed * dt;
+      pos[base]     += Math.sin(t * 0.7 + phases[i]) * swayAmplitude * dt;
+      pos[base + 2] += Math.cos(t * 0.6 + phases[i]) * swayAmplitude * dt;
       if (pos[base + 1] < 0
           || Math.abs(pos[base]     - cam.x) > half
           || Math.abs(pos[base + 2] - cam.z) > half) {
@@ -259,7 +334,6 @@ export class WeatherEffects {
     const t = this.clock;
     for (let i = 0; i < n; i += 1) {
       const base = i * 3;
-      // Slower than snow, wider sway. Reads as floating, party-style.
       pos[base + 1] -= 0.65 * dt;
       pos[base]     += Math.sin(t * 1.1 + this.confettiPhases[i]) * 0.55 * dt;
       pos[base + 2] += Math.cos(t * 0.9 + this.confettiPhases[i]) * 0.55 * dt;
@@ -270,6 +344,88 @@ export class WeatherEffects {
         pos[base + 1] = WeatherEffects.CEILING_Y;
         pos[base + 2] = cam.z + (Math.random() - 0.5) * half * 2;
       }
+    }
+    attr.needsUpdate = true;
+  }
+
+  /** Drift cloud shadows across the ground + lerp each one's opacity
+   * toward its overcast-driven target. Wraps around the camera so the
+   * patches stay in view across long pans. */
+  private updateCloudShadows(dt: number, cam: THREE.Vector3): void {
+    const overcast = this.getOvercast();
+    // Target opacity per-cloud — sum across all 4 needs to LOOK like
+    // a continuous overcast for heavy weather but not turn the ground
+    // pitch-black. 0.18 max per patch lands in the right zone.
+    const half = WeatherEffects.AREA_HALF;
+    const t = this.clock;
+    for (let i = 0; i < this.cloudShadows.length; i += 1) {
+      const mesh = this.cloudShadows[i];
+      const drift = this.cloudShadowDrifts[i];
+      // Drift across XZ. Subtle Y-axis bob from the phase gives the
+      // illusion of opacity changes the cloud overhead.
+      mesh.position.x += drift.vx * dt;
+      mesh.position.z += drift.vz * dt;
+      // Wrap each axis around the camera so the patches always
+      // overlap the visible area no matter how far the camera pans.
+      if (mesh.position.x - cam.x > half) mesh.position.x -= half * 2;
+      if (mesh.position.x - cam.x < -half) mesh.position.x += half * 2;
+      if (mesh.position.z - cam.z > half) mesh.position.z -= half * 2;
+      if (mesh.position.z - cam.z < -half) mesh.position.z += half * 2;
+      // Per-cloud opacity wobble — gives the overcast a breathing
+      // feel rather than four solid blobs.
+      const wobble = 0.5 + 0.5 * Math.sin(t * 0.25 + drift.phaseY);
+      const target = overcast * (0.10 + 0.10 * wobble);
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      // Snap-in is fine — the day-end weather flip is meant to be
+      // noticeable, not subtle.
+      mat.opacity = target;
+      mesh.visible = target > 0.005;
+    }
+  }
+
+  // === Helpers ===================================================
+
+  private makePoints(count: number, color: number, size: number, opacity: number): THREE.Points {
+    const positions = new Float32Array(count * 3);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color, size,
+      transparent: true, opacity,
+      depthWrite: false,
+    });
+    const p = new THREE.Points(geom, mat);
+    p.frustumCulled = false;
+    p.visible = false;
+    p.renderOrder = 2;
+    this.scene.add(p);
+    return p;
+  }
+
+  private makeVelocities(count: number, base: number, jitter: number): Float32Array {
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) out[i] = base + Math.random() * jitter;
+    return out;
+  }
+
+  private makePhases(count: number): Float32Array {
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i += 1) out[i] = Math.random() * Math.PI * 2;
+    return out;
+  }
+
+  /** Initial random seeding inside the shared XZ volume + the vertical
+   * range from 0 to CEILING_Y. Without this every particle starts at
+   * the origin and the first second of weather reads as a falling
+   * needle instead of a spread sheet. */
+  private seedPositions(points: THREE.Points, count: number): void {
+    const half = WeatherEffects.AREA_HALF;
+    const attr = points.geometry.attributes.position as THREE.BufferAttribute;
+    const pos = attr.array as Float32Array;
+    for (let i = 0; i < count; i += 1) {
+      pos[i * 3]     = (Math.random() - 0.5) * half * 2;
+      pos[i * 3 + 1] = Math.random() * WeatherEffects.CEILING_Y;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * half * 2;
     }
     attr.needsUpdate = true;
   }

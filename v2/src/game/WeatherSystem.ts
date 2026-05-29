@@ -21,11 +21,13 @@ export interface WeatherType {
 }
 
 export const WEATHER_TYPES: readonly WeatherType[] = [
-  { id: "sunny",    emoji: "☀️",  label: "Sunny",        spawnRateMultiplier: 1.0,  tipMultiplier: 1.0,  weight: 40 },
-  { id: "cloudy",   emoji: "⛅",  label: "Cloudy",       spawnRateMultiplier: 1.0,  tipMultiplier: 1.0,  weight: 30 },
-  { id: "rainy",    emoji: "🌧️",  label: "Rainy",        spawnRateMultiplier: 1.8,  tipMultiplier: 1.0,  weight: 15 },
-  { id: "festival", emoji: "🎉",  label: "Festival Day", spawnRateMultiplier: 0.65, tipMultiplier: 1.25, weight: 10 },
-  { id: "cold",     emoji: "🥶",  label: "Cold Snap",    spawnRateMultiplier: 1.4,  tipMultiplier: 1.2,  weight:  5 },
+  { id: "sunny",       emoji: "☀️",  label: "Sunny",        spawnRateMultiplier: 1.0,  tipMultiplier: 1.0,  weight: 35 },
+  { id: "cloudy",      emoji: "⛅",  label: "Cloudy",       spawnRateMultiplier: 1.0,  tipMultiplier: 1.0,  weight: 25 },
+  { id: "rainy",       emoji: "🌧️",  label: "Rainy",        spawnRateMultiplier: 1.8,  tipMultiplier: 1.0,  weight: 14 },
+  { id: "heavy-rain",  emoji: "⛈️",  label: "Heavy Rain",   spawnRateMultiplier: 2.6,  tipMultiplier: 1.1,  weight:  6 },
+  { id: "festival",    emoji: "🎉",  label: "Festival Day", spawnRateMultiplier: 0.65, tipMultiplier: 1.25, weight:  8 },
+  { id: "cold",        emoji: "🥶",  label: "Cold Snap",    spawnRateMultiplier: 1.4,  tipMultiplier: 1.2,  weight:  6 },
+  { id: "snowy",       emoji: "❄️",  label: "Snowy",        spawnRateMultiplier: 1.9,  tipMultiplier: 1.15, weight:  6 },
 ];
 
 export class WeatherSystem {
