@@ -562,6 +562,21 @@ export class FurnitureRegistry {
     return out;
   }
 
+  /** Stoves that can actually COOK — i.e. the gas / electric stoves
+   * themselves, excluding the kitchen-sink and dishwasher items that
+   * share the "stove" category. Each entry carries the defId + model
+   * so the WorldScene can pin a per-stove flame to the model and color
+   * it based on stove type (gas → orange, electric → blue). */
+  getCookingStoves(): { uid: string; defId: string; model: THREE.Object3D }[] {
+    const out: { uid: string; defId: string; model: THREE.Object3D }[] = [];
+    for (const it of this.items) {
+      if (it.defId !== "stove" && it.defId !== "stove-electric") continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      out.push({ uid: it.uid, defId: it.defId, model: it.model });
+    }
+    return out;
+  }
+
   /** Count of placed items of a specific id. Used to detect sinks /
    * dishwashers for the wash-rate calculation. */
   countById(defId: string): number {

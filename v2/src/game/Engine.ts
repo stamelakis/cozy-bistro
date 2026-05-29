@@ -237,22 +237,12 @@ export class Engine {
       // restored stove model so it sits on the actual burner instead
       // of the default fallback height.
       //
-      // For stoves we deliberately pick a SINGLE primary stove (the one
-      // closest to the chef's working spot, scene.stovePos). The old
-      // version iterated every stove and let the last one win, which
-      // is why the player saw the flame on a stove the chef wasn't
-      // working at.
+      // Walk the restored items to re-attach scene refs (door panel,
+      // lamp lighting). Per-stove flames don't need a save-time pin
+      // anymore — syncStoveFlames picks them up the next frame.
       void this.registry.restore(restored).then(() => {
-        let primaryStove: THREE.Object3D | undefined;
-        let bestDist = Infinity;
-        const sx = this.scene.stovePos.x, sz = this.scene.stovePos.y;
         for (const it of this.registry.snapshotItems()) {
           if (it.defId === "door") this.scene.attachDoorPanel(it.model);
-          if (it.defId === "stove" || it.defId === "stove-electric") {
-            const dx = it.x - sx, dz = it.z - sz;
-            const d = dx * dx + dz * dz;
-            if (d < bestDist) { bestDist = d; primaryStove = it.model; }
-          }
           // Re-register lamps so a freshly-loaded save still gets the
           // night illumination on every placed lamp without the player
           // having to move them. Category lookup beats id-by-id checks
@@ -261,7 +251,6 @@ export class Engine {
           const def = getFurnitureDef(it.defId);
           if (def?.category === "lamp") this.scene.registerLamp(it.model);
         }
-        if (primaryStove) this.scene.alignStoveFlameToStove(primaryStove);
         // Doors restored from save → rebuild the front wall so the
         // gaps reflect where they actually live now.
         this.scene.rebuildFrontWall(this.frontWallDoorXs());
@@ -326,7 +315,9 @@ export class Engine {
     buildMenu.onDoorRemoved = () => {
       this.scene.rebuildFrontWall(this.frontWallDoorXs());
     };
-    buildMenu.onStovePlaced = (model) => this.scene.alignStoveFlameToStove(model);
+    // Per-stove flame pins are now driven by Engine.update via
+    // scene.syncStoveFlames(registry.getCookingStoves()) — no place-
+    // time hook required.
     buildMenu.onLampPlaced = (model) => this.scene.registerLamp(model);
     buildMenu.onLampRemoved = (model) => this.scene.unregisterLamp(model);
 
@@ -753,12 +744,15 @@ export class Engine {
       if (this.pedestrians) actors.push(...this.pedestrians.snapshotMovable());
       PersonalSpace.apply(actors, dt);
     }
-    // Stove flame mirrors chef working state. Drive it before scene.update
-    // so the flame's flicker animation runs this frame. The cooking sizzle
-    // tracks the same flag (per-stove-type profile to come once we wire
-    // chefs to specific stoves).
-    const cooking = this.router?.isAnyChefCooking() ?? false;
-    this.scene.setStoveFlame(cooking);
+    // Per-stove flames — reconcile the flame map with the registry's
+    // current cooking-stoves (adds new flames, removes ones for sold
+    // stoves), then light only the stoves whose own chef is currently
+    // at the burner. Driven before scene.update so the per-frame
+    // flicker animation runs this frame. The cooking-loop SFX tracks
+    // the aggregate flag (any flame visible = sizzling).
+    this.scene.syncStoveFlames(this.registry.getCookingStoves());
+    this.scene.setCookingStoves(this.router?.getCookingStoveUids() ?? new Set());
+    const cooking = this.scene.isAnyStoveLit();
     if (cooking) this.sfx.startCookingLoop("stove");
     else this.sfx.stopCookingLoop();
     // Open the door when a guest, errand helper, or pedestrian is close.

@@ -334,6 +334,20 @@ export class StaffRouter {
     return this.chefs.some((c) => c.state === "working");
   }
 
+  /** Uids of every stove that has a chef ACTIVELY cooking on it right
+   * now (state="working", not just walking there). WorldScene drives
+   * per-stove flame visibility from this set, so each stove only lights
+   * up while its own chef is at the burner. Chefs cooking on the legacy
+   * fallback shared stovePos (no assignedStoveUid) contribute nothing
+   * here — that path is degenerate anyway. */
+  getCookingStoveUids(): ReadonlySet<string> {
+    const out = new Set<string>();
+    for (const c of this.chefs) {
+      if (c.state === "working" && c.assignedStoveUid) out.add(c.assignedStoveUid);
+    }
+    return out;
+  }
+
   /** Snapshot used by the UI status-bubble layer. Returns one entry per
    * staff member with their current activity label. Empty label = no bubble. */
   snapshotStatus(): { character: AnimatedCharacter; role: "chef" | "waiter"; label: string }[] {

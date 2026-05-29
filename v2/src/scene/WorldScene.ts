@@ -34,11 +34,18 @@ export class WorldScene {
   chefChar?: AnimatedCharacter;
   waiterChar?: AnimatedCharacter;
   errandChar?: AnimatedCharacter;
-  /** Glowing point light + emissive sphere over the stove. Toggled by
-   * setStoveFlame(visible) based on whether a chef is actively cooking. */
-  private stoveFlameGroup?: THREE.Group;
-  private stoveFlameMesh?: THREE.Mesh;
-  private stoveFlameLight?: THREE.PointLight;
+  /** Per-stove flames, keyed by furniture uid. Each cooking stove
+   * (gas / electric) gets its own glowing sphere + point light pinned
+   * to the top of its model. Engine.update calls syncStoveFlames each
+   * frame to keep this map in lockstep with the placed stoves, then
+   * setCookingStoves(uids) flips the per-stove visibility based on
+   * which chefs are actively at the burner. */
+  private stoveFlames = new Map<string, {
+    group: THREE.Group;
+    mesh: THREE.Mesh;
+    light: THREE.PointLight;
+    variant: "gas" | "electric";
+  }>();
   private stoveFlamePhase = 0;
   /** The hinged door panel (sub-object of the procedural front-door
    * group, exposed via userData.panel). Rotating this swings the door
@@ -98,17 +105,27 @@ export class WorldScene {
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
     this.addBuilding();
-    this.addStoveFlame();
+    // Per-stove flames are created lazily by syncStoveFlames() once
+    // a stove is placed — no global flame to set up here.
     void this.populateDemoRestaurant();
   }
 
   update(dt: number): void {
     this.animator.update(dt);
-    if (this.stoveFlameGroup && this.stoveFlameGroup.visible) {
+    // Stove-flame flicker — drive every currently-visible flame off a
+    // single phase so they flicker in sync (looks like the same kitchen
+    // physics rather than each burner doing its own thing). Both gas
+    // and electric variants animate; the per-variant color is baked
+    // into the materials at flame-build time.
+    if (this.stoveFlames.size > 0) {
       this.stoveFlamePhase += dt;
       const flick = 0.85 + Math.sin(this.stoveFlamePhase * 22) * 0.1 + Math.random() * 0.1;
-      if (this.stoveFlameMesh) this.stoveFlameMesh.scale.setScalar(flick);
-      if (this.stoveFlameLight) this.stoveFlameLight.intensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
+      const lightIntensity = 1.6 + Math.sin(this.stoveFlamePhase * 18) * 0.3;
+      for (const f of this.stoveFlames.values()) {
+        if (!f.group.visible) continue;
+        f.mesh.scale.setScalar(flick);
+        f.light.intensity = lightIntensity;
+      }
     }
     // Lerp door open amount toward target and apply rotation to the
     // hinged panel only (the frame stays put).
@@ -181,72 +198,93 @@ export class WorldScene {
     }
   }
 
-  /** Show or hide the cooking flame above the stove. Engine calls this
-   * every frame based on whether any chef is in "working" state. */
-  setStoveFlame(visible: boolean): void {
-    if (this.stoveFlameGroup) this.stoveFlameGroup.visible = visible;
+  /** Reconcile the per-stove flame map with the registry's current set
+   * of cooking stoves. Engine calls this each frame; it adds a flame
+   * for every newly-placed stove (colored per stove type) and removes
+   * flames for stoves that have been sold or moved. Cheap — the map is
+   * tiny and we only do allocation when something actually changed. */
+  syncStoveFlames(stoves: readonly { uid: string; defId: string; model: THREE.Object3D }[]): void {
+    const live = new Set(stoves.map((s) => s.uid));
+    for (const uid of [...this.stoveFlames.keys()]) {
+      if (!live.has(uid)) {
+        const f = this.stoveFlames.get(uid)!;
+        this.threeScene.remove(f.group);
+        this.stoveFlames.delete(uid);
+      }
+    }
+    for (const s of stoves) {
+      if (this.stoveFlames.has(s.uid)) {
+        // Already have a flame for this stove — but the model might
+        // have been re-positioned (move-mode). Refresh the anchor.
+        this.alignFlameToModel(this.stoveFlames.get(s.uid)!.group, s.model);
+        continue;
+      }
+      const variant: "gas" | "electric" = s.defId === "stove-electric" ? "electric" : "gas";
+      const flame = this.buildStoveFlame(variant);
+      this.alignFlameToModel(flame.group, s.model);
+      this.threeScene.add(flame.group);
+      this.stoveFlames.set(s.uid, { ...flame, variant });
+    }
   }
 
-  /** Build the stove flame (small orange emissive bead + point light) once.
-   * The flame is constructed empty at the origin; its actual world
-   * position is patched in later by alignStoveFlameToStove() once the
-   * stove model has loaded and we can read its real bounding box. This
-   * avoids the prior hardcoded y=0.85 which only happened to look right
-   * before furniture auto-fit landed (post-auto-fit the stove's top is
-   * a different height per asset).
-   *
-   * TODO: differentiate per stove type (gas vs electric → blue vs orange
-   * glow, plus different sound). For now the starter restaurant only has
-   * the gas stove so a single flame is fine. */
-  private addStoveFlame(): void {
+  /** Flip per-stove flame visibility. `uids` is the set of stoves with
+   * a chef ACTIVELY cooking (router.getCookingStoveUids()). Stoves
+   * outside the set go dark. */
+  setCookingStoves(uids: ReadonlySet<string>): void {
+    for (const [uid, f] of this.stoveFlames) {
+      f.group.visible = uids.has(uid);
+    }
+  }
+
+  /** True if at least one per-stove flame is currently visible — i.e.
+   * a chef is cooking somewhere right now. Engine uses this to drive
+   * the kitchen sizzle SFX loop. */
+  isAnyStoveLit(): boolean {
+    for (const f of this.stoveFlames.values()) if (f.group.visible) return true;
+    return false;
+  }
+
+  /** Build a single stove flame — sphere + point light — with colours
+   * tuned to the stove variant. Gas stoves get the classic warm orange
+   * glow; electric stoves use a cool blue induction-coil look so the
+   * player can tell at a glance which appliance is which. */
+  private buildStoveFlame(variant: "gas" | "electric"): {
+    group: THREE.Group;
+    mesh: THREE.Mesh;
+    light: THREE.PointLight;
+  } {
+    const palette = variant === "electric"
+      ? { color: 0x4d8eff, emissive: 0x1d4fc8, light: 0x88aaff }
+      : { color: 0xff7a3c, emissive: 0xff5500, light: 0xff8844 };
     const group = new THREE.Group();
     group.visible = false;
     const mesh = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 12, 12),
       new THREE.MeshStandardMaterial({
-        color: 0xff7a3c,
-        emissive: 0xff5500,
+        color: palette.color,
+        emissive: palette.emissive,
         emissiveIntensity: 1.8,
         transparent: true,
         opacity: 0.85,
       }),
     );
     group.add(mesh);
-    const light = new THREE.PointLight(0xff8844, 1.2, 2.5, 2);
+    const light = new THREE.PointLight(palette.light, 1.2, 2.5, 2);
     light.position.set(0, 0.05, 0);
     group.add(light);
-    this.threeScene.add(group);
-    this.stoveFlameGroup = group;
-    this.stoveFlameMesh = mesh;
-    this.stoveFlameLight = light;
+    return { group, mesh, light };
   }
 
-  /** Pin the stove flame to a specific stove model's measured top. Call
-   * this whenever a stove is placed (demo restaurant, build-menu place,
-   * save restore). If no stove model is provided we fall back to a
-   * reasonable height above stoveFurniturePos. */
-  alignStoveFlameToStove(stoveModel?: THREE.Object3D): void {
-    if (!this.stoveFlameGroup) return;
-    if (stoveModel) {
-      // World-space top of the stove model — the flame sits a hair
-      // above the burners. Use the model's bounding box so this works
-      // regardless of which stove type the player has placed.
-      stoveModel.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(stoveModel);
-      // Center the flame on the stove's XZ footprint, not the chef-
-      // standing waypoint — that's what made the flame visibly drift
-      // off the burner.
-      const cx = (box.min.x + box.max.x) / 2;
-      const cz = (box.min.z + box.max.z) / 2;
-      const topY = box.max.y + 0.03;
-      this.stoveFlameGroup.position.set(cx, topY, cz);
-    } else {
-      // Fallback when we haven't seen a stove model yet — sit a bit
-      // above where the back-wall stove would be.
-      this.stoveFlameGroup.position.set(
-        this.stoveFurniturePos.x, 0.55, this.stoveFurniturePos.y,
-      );
-    }
+  /** Pin a flame group to a stove model's measured top. Same bounding-
+   * box maths as the previous global flame — works regardless of which
+   * stove asset (gas or electric) is in play. */
+  private alignFlameToModel(group: THREE.Group, model: THREE.Object3D): void {
+    model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(model);
+    const cx = (box.min.x + box.max.x) / 2;
+    const cz = (box.min.z + box.max.z) / 2;
+    const topY = box.max.y + 0.03;
+    group.position.set(cx, topY, cz);
   }
 
   /** Exposed for Engine to drive the day-night cycle each frame. */
@@ -880,13 +918,10 @@ export class WorldScene {
           const panel = model.userData?.panel as THREE.Object3D | undefined;
           if (panel) this.doorPanel = panel;
         }
-        // Pin the cooking flame onto whichever stove just landed at the
-        // canonical demo position so the flame reads as part of the
-        // appliance instead of a separate floating ball.
-        if ((p.id === "stove" || p.id === "stove-electric") &&
-            p.x === this.stoveFurniturePos.x && p.z === this.stoveFurniturePos.y) {
-          this.alignStoveFlameToStove(model);
-        }
+        // Per-stove flames are reconciled every frame by the Engine via
+        // syncStoveFlames(registry.getCookingStoves()) — no need to pin
+        // one here. Demo-stove placements show up in the registry just
+        // like player placements and are picked up on the next frame.
       } catch (err) {
         console.error(`Failed to load ${def.id} (${def.modelPath})`, err);
       }

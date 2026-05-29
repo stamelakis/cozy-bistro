@@ -142,9 +142,24 @@ interface ActiveGuest {
   /** uid of the toilet they reserved while in walkingToToilet /
    * atToilet states. Cleared on visit complete or abandonment. */
   toiletUid?: string;
+  /** Rotation (Y) of the reserved toilet. Used so atToilet snaps the
+   * guest onto the bowl facing outward (away from the wall) instead of
+   * facing wherever the last moveToward call left them looking. */
+  toiletRotY?: number;
+  /** World position of the reserved toilet's centre (NOT the stand-in-
+   * front spot). atToilet snaps the guest here so they actually sit ON
+   * the toilet during the dwell. */
+  toiletCenter?: THREE.Vector2;
+  /** Original seatHeight saved before we lower it for the toilet sit
+   * pose. Restored when the guest stands up to walk to the sink / seat
+   * so the next "sit" (back at the dining chair) lands at chair height. */
+  originalSeatHeight?: number;
   /** uid of the sink they reserved while in walkingToSink / atSink.
    * Cleared after the wash dwell or on despawn. */
   sinkUid?: string;
+  /** Rotation (Y) of the reserved sink so atSink can face the guest
+   * toward the basin instead of leaving them looking sideways. */
+  sinkRotY?: number;
   /** Set true after they successfully wash at a sink. Feeds back into
    * finalizeVisit so the cleanliness of the bathroom also shows up
    * in the rating, not just the toilet step. */
@@ -200,6 +215,15 @@ const TIME_AT_TOILET = 6.0;
 /** Dwell at a sink (in seconds). Quick handwash beat — the visual is
  * just "stop and stand at the sink" so 3s is enough. */
 const TIME_AT_SINK = 3.0;
+/** Seat height (Y) the guest drops to while sitting on a toilet.
+ * Lower than the dining chair value (0.62) because toilet seats are
+ * physically lower; using the chair height would make the guest hover
+ * above the bowl. */
+const TOILET_SIT_HEIGHT = 0.42;
+/** Flip to true (or rebuild after editing) to log every guest's
+ * spawn/WC/sink/wash transition. Off in production — the per-tick
+ * volume is too high for normal play. */
+const DEBUG_GUEST_LOGS = false;
 /** How long a WC-needing customer will wait for a busy toilet to free
  * up before giving up. Short on purpose — annoyance reads as a real
  * restaurant queue, not a 30s standoff. */
@@ -572,10 +596,24 @@ export class GuestSpawner {
       g.seatPos.set(slot.x, slot.z);
       g.seatFacingY = slot.facingY;
       g.platePos.set(slot.platePos.x, slot.platePos.z);
+      // If the guest is currently on a bathroom side-trip (anywhere
+      // between leaving the seat and returning to it), keep the
+      // remembered "where to walk back to" target in sync with the
+      // moved table. Without this, a table relocated during a 10s WC
+      // visit would strand the guest at the table's OLD position.
+      if (g.returnSeatPos) {
+        g.returnSeatPos.copy(g.seatPos);
+      }
       if (g.state === "walkingIn") {
         g.target.copy(g.seatPos);
         // Re-plan whenever the seat moves mid-walk so the guest still
         // routes around obstacles after a table relocation.
+        this.planPath(g);
+      }
+      // If the guest is currently HEADED back to the seat after the
+      // bathroom, retarget them too so they don't aim for empty floor.
+      if (g.state === "returningFromToilet") {
+        g.target.copy(g.seatPos);
         this.planPath(g);
       }
     }
@@ -604,26 +642,39 @@ export class GuestSpawner {
   }
 
   /** First placed toilet not currently reserved by another guest.
-   * Returns the uid + the customer's "stand in front" pose; null when
-   * either no toilet exists or every one is busy. */
-  private findFreeToilet(): { uid: string; standPos: THREE.Vector2 } | null {
+   * Returns the uid, the rotY of the toilet (so the guest can face
+   * outward when sitting), the toilet's centre (where they snap onto
+   * the bowl), and the "stand in front" walk target. Null when either
+   * no toilet exists or every one is busy. */
+  private findFreeToilet(): {
+    uid: string;
+    rotY: number;
+    center: THREE.Vector2;
+    standPos: THREE.Vector2;
+  } | null {
     if (!this.registry) return null;
     const toilets = this.registry.getToilets();
     for (const t of toilets) {
       if (this.reservedToilets.has(t.uid)) continue;
-      return { uid: t.uid, standPos: t.standPos.clone() };
+      return {
+        uid: t.uid,
+        rotY: t.rotY,
+        center: new THREE.Vector2(t.x, t.z),
+        standPos: t.standPos.clone(),
+      };
     }
     return null;
   }
 
   /** First placed bathroom sink not currently reserved. Mirrors
-   * findFreeToilet. */
-  private findFreeSink(): { uid: string; standPos: THREE.Vector2 } | null {
+   * findFreeToilet — returns rotY too so atSink can face the guest
+   * toward the basin. */
+  private findFreeSink(): { uid: string; rotY: number; standPos: THREE.Vector2 } | null {
     if (!this.registry) return null;
     const sinks = this.registry.getBathroomSinks();
     for (const s of sinks) {
       if (this.reservedSinks.has(s.uid)) continue;
-      return { uid: s.uid, standPos: s.standPos.clone() };
+      return { uid: s.uid, rotY: s.rotY, standPos: s.standPos.clone() };
     }
     return null;
   }
@@ -774,7 +825,9 @@ export class GuestSpawner {
         willUseToilet: Math.random() < archetype.wcUseChance,
         usedToilet: false,
       };
-      console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
+      if (DEBUG_GUEST_LOGS) {
+        console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
+      }
       this.planPath(guest);
       if (!available && waitingChair) {
         guest.waiting = {
@@ -813,9 +866,15 @@ export class GuestSpawner {
       this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
     }
     // Release any toilet / sink reservation they were holding so
-    // a guest fired mid-trip doesn't deadlock the bathroom.
+    // a guest fired mid-trip doesn't deadlock the bathroom. Also
+    // restore the chair-sized seatHeight in case the guest left mid-
+    // toilet-sit — harmless on the dead model but keeps the field
+    // consistent if anyone introspects it post-despawn.
     if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
     if (g.sinkUid) this.reservedSinks.delete(g.sinkUid);
+    if (g.originalSeatHeight !== undefined) {
+      g.character.seatHeight = g.originalSeatHeight;
+    }
     // Clear any plate left on their table when they walk out.
     this.removePlateForGuest(g.id);
     this.guests.splice(idx, 1);
@@ -920,7 +979,7 @@ export class GuestSpawner {
           // Log once per attempt — the first time we enter this block.
           // toiletWaitRemaining is only set on busy retries, so its
           // undefined state is a clean "first attempt" signal.
-          if (g.toiletWaitRemaining === undefined) {
+          if (DEBUG_GUEST_LOGS && g.toiletWaitRemaining === undefined) {
             const toiletCountTotal = this.registry?.getToilets().length ?? 0;
             const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
             console.log(`[Guest ${g.id}] WC user — toilet search: ${toilet ? `uid=${toilet.uid}` : `null (${toiletCountTotal} toilets placed, ${this.reservedToilets.size} reserved)`} · sinks placed: ${sinkCountTotal}`);
@@ -928,6 +987,8 @@ export class GuestSpawner {
           if (toilet) {
             this.reservedToilets.add(toilet.uid);
             g.toiletUid = toilet.uid;
+            g.toiletRotY = toilet.rotY;
+            g.toiletCenter = toilet.center;
             g.returnSeatPos = g.seatPos.clone();
             g.target = toilet.standPos.clone();
             this.planPath(g);
@@ -974,10 +1035,25 @@ export class GuestSpawner {
       case "walkingToToilet": {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
-          g.character.action = "idle";
+          // Snap the guest ONTO the toilet (not just the in-front
+          // standing spot) so they look like they're actually using
+          // it. Face them outward — i.e. away from the wall the
+          // toilet is mounted to — and drop their seatHeight so the
+          // sit pose lands on the bowl instead of hovering at chair
+          // height. The original seatHeight is preserved so the next
+          // "sit" (back at the dining chair) is at the right height.
+          if (g.toiletCenter) g.character.groundPos.copy(g.toiletCenter);
+          if (g.toiletRotY !== undefined) {
+            g.character.facingY = g.toiletRotY + Math.PI;
+          }
+          if (g.originalSeatHeight === undefined) {
+            g.originalSeatHeight = g.character.seatHeight;
+          }
+          g.character.seatHeight = TOILET_SIT_HEIGHT;
+          g.character.action = "sit";
           g.state = "atToilet";
           g.stateClock = 0;
-          console.log(`[Guest ${g.id}] arrived at toilet → atToilet (dwell ${TIME_AT_TOILET}s)`);
+          if (DEBUG_GUEST_LOGS) console.log(`[Guest ${g.id}] arrived at toilet → atToilet (dwell ${TIME_AT_TOILET}s)`);
         }
         break;
       }
@@ -989,17 +1065,25 @@ export class GuestSpawner {
           // so finalizeVisit can dock the rating for it).
           if (g.toiletUid) this.reservedToilets.delete(g.toiletUid);
           g.toiletUid = undefined;
+          g.toiletCenter = undefined;
+          g.toiletRotY = undefined;
           g.usedToilet = true;
           g.toiletAttemptComplete = true;
+          // Restore the chair-sized seatHeight for the rest of the
+          // trip — the next "sit" will be back at the dining table.
+          if (g.originalSeatHeight !== undefined) {
+            g.character.seatHeight = g.originalSeatHeight;
+            g.originalSeatHeight = undefined;
+          }
           const sink = this.findFreeSink();
-          // Diagnostic — log the sink search result so the player can
-          // tell from the console whether the sink visit was skipped
-          // because no sink was placed vs. some other issue.
-          const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
-          console.log(`[Guest ${g.id}] left toilet → findFreeSink: ${sink ? `uid=${sink.uid} at (${sink.standPos.x.toFixed(2)}, ${sink.standPos.y.toFixed(2)})` : `null (${sinkCountTotal} placed, ${this.reservedSinks.size} reserved)`}`);
+          if (DEBUG_GUEST_LOGS) {
+            const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
+            console.log(`[Guest ${g.id}] left toilet → findFreeSink: ${sink ? `uid=${sink.uid} at (${sink.standPos.x.toFixed(2)}, ${sink.standPos.y.toFixed(2)})` : `null (${sinkCountTotal} placed, ${this.reservedSinks.size} reserved)`}`);
+          }
           if (sink) {
             this.reservedSinks.add(sink.uid);
             g.sinkUid = sink.uid;
+            g.sinkRotY = sink.rotY;
             g.target = sink.standPos.clone();
             this.planPath(g);
             g.character.action = "walk";
@@ -1020,16 +1104,25 @@ export class GuestSpawner {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
           // Snap the guest exactly to the sink stand position and
-          // freeze them there for the wash dwell. Without the snap,
-          // a near-but-not-equal arrival left them ~0.1 units off the
-          // sink and PersonalSpace nudges could push them around even
+          // turn them to face the basin. Without the snap, a near-
+          // but-not-equal arrival left them ~0.1 units off the sink
+          // and PersonalSpace nudges could push them around even
           // before the pin took effect, making the pause invisible.
           g.character.groundPos.copy(g.target);
+          if (g.sinkRotY !== undefined) {
+            // The sink's standPos sits at +Z relative to the sink (its
+            // rotated front face). To look back AT the sink, the guest
+            // walks "into" -Z of the sink frame — which the character's
+            // GLB-forward-is-(-Z) convention translates to facingY =
+            // sink.rotY. (See StaffRouter.moveActor for the same
+            // derivation in reverse.)
+            g.character.facingY = g.sinkRotY;
+          }
           g.character.action = "idle";
           g.state = "atSink";
           g.stateClock = 0;
           this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "🧼 washing…", "#a8d8f0");
-          console.log(`[Guest ${g.id}] arrived at sink → atSink (dwell ${TIME_AT_SINK}s)`);
+          if (DEBUG_GUEST_LOGS) console.log(`[Guest ${g.id}] arrived at sink → atSink (dwell ${TIME_AT_SINK}s)`);
         }
         break;
       }
@@ -1040,6 +1133,7 @@ export class GuestSpawner {
           // back to the seat via the existing return path.
           if (g.sinkUid) this.reservedSinks.delete(g.sinkUid);
           g.sinkUid = undefined;
+          g.sinkRotY = undefined;
           g.washedHands = true;
           g.target = (g.returnSeatPos ?? g.seatPos).clone();
           g.returnSeatPos = undefined;
@@ -1047,7 +1141,7 @@ export class GuestSpawner {
           g.character.action = "walk";
           g.state = "returningFromToilet";
           g.stateClock = 0;
-          console.log(`[Guest ${g.id}] washed hands → returning to seat`);
+          if (DEBUG_GUEST_LOGS) console.log(`[Guest ${g.id}] washed hands → returning to seat`);
         }
         break;
       }
