@@ -242,7 +242,7 @@ export class PantryModal {
   private buildDishwareRow(set: DishwareSetDef): HTMLElement {
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "26px 1fr 64px",
+      display: "grid", gridTemplateColumns: "26px 1fr 42px",
       alignItems: "center", gap: "4px",
       padding: "2px 2px",
       borderBottom: "1px solid rgba(255,245,220,0.05)",
@@ -260,17 +260,14 @@ export class PantryModal {
     // current ownership immediately.
     tierLine.textContent = set.name;
     const buyBtn = document.createElement("button");
-    // Show BOTH the per-click set size and the price up-front — without
-    // it the button just says "$12" and the player has to hover the
-    // tooltip to learn each click buys 4. Two lines so a small set size
-    // ("+4") and a price ($420) both stay readable on narrow rows.
-    buyBtn.innerHTML = `<span style="font-size:9px;opacity:0.75;line-height:1">+${set.setSize}</span>` +
-      `<br><span style="line-height:1.1">$${set.cost}</span>`;
+    // Just the price — the per-click quantity is shown in the row
+    // text now ("×4") so there's no value to repeating it here.
+    buyBtn.textContent = `$${set.cost}`;
     Object.assign(buyBtn.style, {
       background: "rgba(255,245,220,0.10)", color: "#fff5dc",
       border: "1px solid rgba(255,245,220,0.28)", borderRadius: "3px",
       cursor: "pointer", font: "inherit", fontSize: "10px",
-      padding: "3px 4px", lineHeight: "1",
+      padding: "3px 4px",
     } as Partial<CSSStyleDeclaration>);
     buyBtn.title = `Buy a set of ${set.setSize} ${set.name.toLowerCase()} for $${set.cost}` +
       (set.satisfactionPerPiece > 0
@@ -340,19 +337,19 @@ export class PantryModal {
     for (const set of [...PLATE_SETS, ...GLASS_SETS]) {
       const entry = this.dishRowEls.get(set.id);
       if (!entry) continue;
-      const pool = dish.getTierBreakdown(set.kind).find((t) => t.tier === set.tier);
-      const owned = pool ? pool.clean + pool.dirty : 0;
-      const ownedTag = owned > 0
-        ? ` <span style="opacity:0.7">×${owned}</span>`
-        : "";
       const bonusTag = set.satisfactionPerPiece > 0
-        ? ` <span style="opacity:0.55">+${set.satisfactionPerPiece.toFixed(1)}</span>`
+        ? ` <span style="opacity:0.6">+${set.satisfactionPerPiece.toFixed(1)}</span>`
         : "";
+      // Set size — "what you'd buy with one click" — is the most useful
+      // number on a per-row basis. Current ownership ("×44") was easy
+      // to mistake for the buy quantity, so it lives only in the
+      // summary line above the section now.
+      const buyTag = ` <span style="opacity:0.6">×${set.setSize}</span>`;
       const locked = set.tier > playerTier;
       // Locked tiers grey out the name + show a 🔒 button instead of
       // the price. Matches how the build menu / recipe upgrades behave
       // — the player has to expand to unlock the tier first.
-      entry.tierLine.innerHTML = `${set.name}${ownedTag}${bonusTag}`;
+      entry.tierLine.innerHTML = `${set.name}${bonusTag}${buyTag}`;
       entry.tierLine.style.opacity = locked ? "0.45" : "1";
       const free = dish.getFreeCapacity();
       const canFit = free >= set.setSize;
@@ -361,12 +358,8 @@ export class PantryModal {
       entry.buyBtn.disabled = !enabled;
       entry.buyBtn.style.opacity = enabled ? "1" : "0.35";
       entry.buyBtn.style.cursor = enabled ? "pointer" : "not-allowed";
-      // Locked tiers collapse the two-line "+4 / $cost" label to just
-      // the padlock; the tooltip explains what unlocks it.
-      entry.buyBtn.innerHTML = locked
-        ? "🔒"
-        : `<span style="font-size:9px;opacity:0.75;line-height:1">+${set.setSize}</span>` +
-          `<br><span style="line-height:1.1">$${set.cost}</span>`;
+      // Just the price — the per-click ×4 lives in the row text now.
+      entry.buyBtn.textContent = locked ? "🔒" : `$${set.cost}`;
       entry.buyBtn.title = locked
         ? `Tier ${set.tier} dishware unlocks when you expand to Luxury Tier ${set.tier}.`
         : !canFit
