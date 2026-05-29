@@ -15,6 +15,27 @@ import { type CustomerArchetype, rollArchetype } from "../data/customerArchetype
 import type { Pathfinding, PathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
+/** A dirty plate or glass left on a table by a departed customer. The
+ * waiter wash loop claims one by id, walks to its position to "pick it
+ * up" (which removes the mesh), then walks to a wash station. The
+ * `claimedBy` field prevents two waiters from chasing the same piece. */
+interface DirtyTableMesh {
+  id: number;
+  mesh: THREE.Object3D;
+  kind: DishKind;
+  /** memberId of the waiter currently walking toward this piece, or
+   * null while it's free for any waiter to claim. */
+  claimedBy: string | null;
+  pos: THREE.Vector2;
+}
+
+/** Snapshot of a dirty piece for the wash router. */
+export interface DirtyPickupInfo {
+  id: number;
+  kind: DishKind;
+  pos: THREE.Vector2;
+}
+
 /** Stable seat identifier: `${tableUid}#${slotIndex}`. Lets a seated guest
  * remember their slot even when other seats are added/removed by player
  * placement edits. */
@@ -346,12 +367,15 @@ export class GuestSpawner {
   private static plateGeo?: THREE.CylinderGeometry;
   private static plateMat?: THREE.MeshStandardMaterial;
   /** Dirty plates / glasses left on tables after customers walk out.
-   * One entry per course actually served — each is rendered as a
-   * crumb-strewn plate or empty glass at the platePos the guest used.
-   * Drained by DishwareSystem.onDishWashed: each wash event removes the
-   * oldest matching-kind entry so the table the player sees clears in
-   * lockstep with the inventory counter. */
-  private readonly dirtyTableMeshes: Array<{ mesh: THREE.Object3D; kind: DishKind }> = [];
+   * Each carries a stable id used by the waiter wash loop to claim a
+   * specific piece, a kind (plate vs glass) that picks the right
+   * inventory pool when washed, the world position the waiter walks
+   * to, and a `claimed` flag so two waiters can't grab the same
+   * plate. Drained by either the waiter wash trip (real flow) or
+   * DishwareSystem.onDishWashed (fallback when no waiter / no station,
+   * which keeps the inventory in sync visually). */
+  private readonly dirtyTableMeshes: Array<DirtyTableMesh> = [];
+  private nextDirtyId = 1;
   /** Total elapsed seconds (matches Game.day.getTotalPlaySeconds vibe but
    * we don't need to share it — used only for dirty-seat timing). */
   private elapsed = 0;
@@ -957,10 +981,66 @@ export class GuestSpawner {
       const r = 0.07 + (i * 0.04);
       const jx = Math.cos(angle) * r;
       const jz = Math.sin(angle) * r;
-      const mesh = this.makeLeftoverMesh(g.platePos.x + jx, g.platePos.y + jz, kind);
+      const x = g.platePos.x + jx;
+      const z = g.platePos.y + jz;
+      const mesh = this.makeLeftoverMesh(x, z, kind);
       this.scene.add(mesh);
-      this.dirtyTableMeshes.push({ mesh, kind });
+      this.dirtyTableMeshes.push({
+        id: this.nextDirtyId, mesh, kind, claimedBy: null,
+        pos: new THREE.Vector2(x, z),
+      });
+      this.nextDirtyId += 1;
     }
+  }
+
+  // === Waiter wash-trip API ===
+  //
+  // The waiter's wash loop in StaffRouter calls these to discover dirty
+  // pieces, claim a specific one, then "pick it up" (mesh removed) once
+  // they arrive. Two waiters can't grab the same plate because the
+  // claim is tracked per-piece.
+
+  /** Snapshot of every dirty piece currently free for any waiter to
+   * claim. Sorted by id (oldest first) so plates clear in the order
+   * they appeared. */
+  getDirtyPickups(): DirtyPickupInfo[] {
+    const out: DirtyPickupInfo[] = [];
+    for (const d of this.dirtyTableMeshes) {
+      if (d.claimedBy) continue;
+      out.push({ id: d.id, kind: d.kind, pos: d.pos.clone() });
+    }
+    return out;
+  }
+
+  /** Try to mark a specific dirty piece as claimed by `memberId`.
+   * Returns false if the piece doesn't exist or another waiter already
+   * grabbed it — the caller (StaffRouter) then defers and tries again
+   * next tick. */
+  claimDirtyPickup(id: number, memberId: string): boolean {
+    const d = this.dirtyTableMeshes.find((x) => x.id === id);
+    if (!d || d.claimedBy) return false;
+    d.claimedBy = memberId;
+    return true;
+  }
+
+  /** Drop a claim without picking up — used when the waiter gets fired
+   * mid-trip or the wash station they were heading to disappears. */
+  releaseDirtyPickup(id: number): void {
+    const d = this.dirtyTableMeshes.find((x) => x.id === id);
+    if (d) d.claimedBy = null;
+  }
+
+  /** Waiter arrived at the table and "picked up" the plate — remove
+   * the mesh from the world and the piece from the dirty list. The
+   * waiter still has to walk to the sink before the inventory clean
+   * count ticks up (StaffRouter will call dishware.washOne when they
+   * finish dwelling at the station). */
+  pickupDirty(id: number): DishKind | null {
+    const idx = this.dirtyTableMeshes.findIndex((x) => x.id === id);
+    if (idx < 0) return null;
+    const entry = this.dirtyTableMeshes.splice(idx, 1)[0];
+    this.scene.remove(entry.mesh);
+    return entry.kind;
   }
 
   /** Build a single dirty piece's visual. Plates get a crumb mound
@@ -1010,14 +1090,14 @@ export class GuestSpawner {
     return plate;
   }
 
-  /** Remove the oldest dirty mesh of the matching kind from the world.
-   * Wired to DishwareSystem.onDishWashed so a wash event clears one
-   * piece of table visual at the same time the inventory counter ticks.
-   * No-op when the system count drifts ahead of the visual (e.g. after
-   * a save/load that didn't persist the meshes) — the wash still
-   * succeeds, just with no animation. */
+  /** Remove the oldest UNCLAIMED dirty mesh of the matching kind.
+   * Used by DishwareSystem.onDishWashed when a wash event happens
+   * outside the waiter trip system (e.g. a save/load orphan, or any
+   * future "auto-wash via dishwasher" path). The waiter wash trip
+   * uses pickupDirty(id) directly instead so it removes the SPECIFIC
+   * piece it was sent for. */
   removeOneLeftover(kind: DishKind): void {
-    const idx = this.dirtyTableMeshes.findIndex((d) => d.kind === kind);
+    const idx = this.dirtyTableMeshes.findIndex((d) => d.kind === kind && !d.claimedBy);
     if (idx < 0) return;
     const entry = this.dirtyTableMeshes.splice(idx, 1)[0];
     this.scene.remove(entry.mesh);

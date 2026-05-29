@@ -375,11 +375,30 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
-      // Wash callback: when DishwareSystem.update washes one piece,
-      // remove the matching dirty mesh from the table the spawner
-      // dropped it on. Hooked here because GuestSpawner is the owner
-      // of the world meshes; DishwareSystem only knows about counts.
+      // Wash callback: when something washes a piece outside the
+      // waiter trip system (rare — only legacy / save migration), we
+      // still want the table visual to drain in lockstep with the
+      // inventory counter. The waiter wash trip path removes the
+      // specific mesh it picked up directly, bypassing this hook.
       this.game.dishware.onDishWashed = (kind) => this.spawner?.removeOneLeftover(kind);
+      // Wire the waiter wash trip system. Spawner owns the dirty
+      // pieces; StaffRouter walks the waiter to them. Without this
+      // block (e.g. no router), dirty plates simply pile up.
+      if (this.router) {
+        const spawner = this.spawner;
+        const registry = this.registry;
+        const dishware = this.game.dishware;
+        this.router.washCallbacks = {
+          getDirtyPickups: () => spawner.getDirtyPickups(),
+          claimDirtyPickup: (id, memberId) => spawner.claimDirtyPickup(id, memberId),
+          releaseDirtyPickup: (id) => spawner.releaseDirtyPickup(id),
+          pickupDirty: (id) => spawner.pickupDirty(id),
+          getWashStations: () => registry.getWashStations().map((s) => ({
+            uid: s.uid, standPos: s.standPos, dwell: s.dwell,
+          })),
+          washOne: (kind) => { dishware.washOne(kind); },
+        };
+      }
       this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.

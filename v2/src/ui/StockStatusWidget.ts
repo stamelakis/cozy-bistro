@@ -236,10 +236,12 @@ export class StockStatusWidget {
         `Stored: <b>${totalOwned}</b> / ${dishCap} slots` +
       `</div>`,
     );
+    // Wash is driven by waiter trips — no abstract interval to surface.
+    // We only need to warn the player when their kitchen LITERALLY
+    // can't wash anything (no sink + no dishwasher) AND dirty pieces
+    // are piling up.
     const washInterval = dish.getWashInterval();
-    if (Number.isFinite(washInterval)) {
-      dishLines.push(`<div style="opacity:0.7;margin-top:2px">Wash: 1 / ${washInterval.toFixed(1)}s</div>`);
-    } else if (totalDirty > 0) {
+    if (!Number.isFinite(washInterval) && totalDirty > 0) {
       dishLines.push(`<div style="color:#ff9a9a;margin-top:2px">No sink or dishwasher — wash paused.</div>`);
     }
     this.dishTooltip.innerHTML = dishLines.join("");

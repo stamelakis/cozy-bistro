@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, PathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
+import type { DishKind } from "../data/dishwareCatalog";
 
 /**
  * Drives staff (chef + waiter) movement & state machines so they actually
@@ -46,6 +47,36 @@ export interface Ticket {
   appliance: string;
 }
 
+/** Snapshot of a dirty piece's id + world position + kind (plate vs
+ * glass). The waiter wash loop receives a list of these and picks
+ * the closest free one. */
+export interface DirtyPickupInfo {
+  id: number;
+  kind: DishKind;
+  pos: THREE.Vector2;
+}
+
+/** Snapshot of a placed wash station — sink or dishwasher. `dwell` is
+ * how many seconds the waiter scrubs / loads before the dish goes back
+ * to clean. */
+export interface WashStationInfo {
+  uid: string;
+  standPos: THREE.Vector2;
+  dwell: number;
+}
+
+/** Waiter wash trip state. The waiter walks from idle → pickup the
+ * specified dirty piece → wash at the specified station → home. */
+interface WashTrip {
+  dirtyId: number;
+  dirtyPos: THREE.Vector2;
+  kind: DishKind;
+  stationUid: string;
+  stationPos: THREE.Vector2;
+  dwell: number;
+  phase: "pickup" | "wash";
+}
+
 interface StaffActor {
   character: AnimatedCharacter;
   /** Which pool this actor belongs to. Used by moveActor to apply the
@@ -88,6 +119,12 @@ interface StaffActor {
    * the anchor for their idle "loiter" zone — same vibe as the errand
    * helper hanging out near the supply counter. */
   lastStoveUid?: string | null;
+  /** Waiter only: current wash trip, or null when on a serve task /
+   * idle. While set, the state machine's movingToWork / working
+   * states reinterpret to mean "walking the wash trip" / "scrubbing
+   * at the station" instead of "going to pick up a plate" / "carrying
+   * to a seat". */
+  washTrip?: WashTrip | null;
 }
 
 /** Snapshot of a placed stove the router can assign a chef to. */
@@ -189,6 +226,24 @@ export class StaffRouter {
    * Cleared when the chef leaves the "working" state OR when they're
    * fired mid-cook. */
   private readonly busyStoveUids = new Set<string>();
+
+  /** uids of wash stations currently occupied by a waiter mid-trip.
+   * Same pattern as busyStoveUids — prevents two waiters from piling
+   * onto the same sink. Cleared when the wash trip ends OR when the
+   * waiter gets fired mid-wash. */
+  private readonly busyWashUids = new Set<string>();
+
+  /** Wash-loop callbacks — wired by Engine after GuestSpawner + the
+   * dishware system exist. When unset, the waiter never tries to
+   * wash and dirty plates simply pile up on the tables. */
+  washCallbacks?: {
+    getDirtyPickups: () => DirtyPickupInfo[];
+    claimDirtyPickup: (id: number, memberId: string) => boolean;
+    releaseDirtyPickup: (id: number) => void;
+    pickupDirty: (id: number) => DishKind | null;
+    getWashStations: () => WashStationInfo[];
+    washOne: (kind: DishKind) => void;
+  };
 
   constructor(
     chefChar: AnimatedCharacter,
@@ -342,6 +397,7 @@ export class StaffRouter {
       speed: WAITER_SPEED,
       path: [],
       replanAccum: 0,
+      washTrip: null,
     });
   }
 
@@ -375,6 +431,14 @@ export class StaffRouter {
     if (removed.assignedStoveUid) {
       this.busyStoveUids.delete(removed.assignedStoveUid);
       removed.assignedStoveUid = null;
+    }
+    // Release any wash-trip claims — without this a fired waiter
+    // permanently locks up the dirty plate AND the sink they were
+    // heading for.
+    if (removed.washTrip) {
+      this.washCallbacks?.releaseDirtyPickup(removed.washTrip.dirtyId);
+      this.busyWashUids.delete(removed.washTrip.stationUid);
+      removed.washTrip = null;
     }
     pool.splice(idx, 1);
     return removed.character;
@@ -607,6 +671,9 @@ export class StaffRouter {
 
     switch (w.state) {
       case "idle": {
+        // Priority 1: deliver a ready ticket. Plates that are already
+        // cooked and waiting on the pass take precedence over wash
+        // work — keep customers fed first.
         const ticket = this.tickets.find((t) => t.state === "ready");
         if (ticket) {
           ticket.state = "delivering";
@@ -614,16 +681,59 @@ export class StaffRouter {
           w.ticketId = ticket.id;
           w.target = this.pickupPos.clone();
           this.planPath(w);
-          w.state = "movingToWork"; // movingToWork = first goes to kitchen, then to seat
+          w.state = "movingToWork";
           w.clock = 0;
           w.character.action = "walk";
           console.log(`[Router] waiter picked up ${ticket.id} → walking to pickup`);
+          break;
+        }
+        // Priority 2: bus a dirty plate to the sink.
+        const trip = this.tryStartWashTrip(w);
+        if (trip) {
+          w.washTrip = trip;
+          w.target = trip.dirtyPos.clone();
+          this.planPath(w);
+          w.state = "movingToWork";
+          w.clock = 0;
+          w.character.action = "walk";
         }
         break;
       }
       case "movingToWork": {
         this.moveActor(w, dt);
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
+          // Wash trips reinterpret movingToWork — same shared walking
+          // code, branch on whether we're heading to a dirty pickup or
+          // to the wash station after picking up.
+          if (w.washTrip) {
+            if (w.washTrip.phase === "pickup") {
+              // Reached the dirty table. "Pick up" by removing the mesh
+              // from the world, then walk to the station carrying it.
+              const removed = this.washCallbacks?.pickupDirty(w.washTrip.dirtyId);
+              if (!removed) {
+                // Mesh disappeared between claim and arrival (e.g. a
+                // save reload). Bail out cleanly.
+                this.abandonWashTrip(w);
+                break;
+              }
+              // Show the held-plate mesh as a "carrying dirty" cue.
+              if (!w.heldPlate) {
+                w.heldPlate = makePlate();
+                w.character.root.add(w.heldPlate);
+              }
+              w.heldPlate.visible = true;
+              w.character.action = "carry";
+              w.washTrip.phase = "wash";
+              w.target = w.washTrip.stationPos.clone();
+              this.planPath(w);
+              break; // stay in movingToWork
+            }
+            // Reached the wash station — start the dwell timer.
+            w.state = "working";
+            w.clock = 0;
+            break;
+          }
+          // Serve flow: arrived at the chef pickup.
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (!ticket) {
             w.target = w.home.clone();
@@ -651,13 +761,28 @@ export class StaffRouter {
         break;
       }
       case "working": {
-        // "working" for the waiter = walking to seat carrying the plate.
+        if (w.washTrip) {
+          // Dwelling at the sink / dishwasher. When the dwell elapses
+          // the plate goes back into the clean pool (washOne picks the
+          // tier) and the waiter walks home empty-handed.
+          if (w.clock >= w.washTrip.dwell) {
+            this.washCallbacks?.washOne(w.washTrip.kind);
+            this.busyWashUids.delete(w.washTrip.stationUid);
+            if (w.heldPlate) w.heldPlate.visible = false;
+            w.washTrip = null;
+            w.target = w.home.clone();
+            this.planPath(w);
+            w.state = "returningHome";
+            w.character.action = "walk";
+            w.clock = 0;
+          }
+          break;
+        }
+        // Serve flow: walking the plate to the seat.
         this.moveActor(w, dt);
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (ticket) ticket.state = "delivered";
-          // Plate handed off — hide the held plate; the table-plate
-          // spawned by GuestSpawner takes over the visual.
           if (w.heldPlate) w.heldPlate.visible = false;
           w.target = w.home.clone();
           this.planPath(w);
@@ -678,6 +803,68 @@ export class StaffRouter {
         break;
       }
     }
+  }
+
+  /** Try to start a wash trip for this idle waiter. Picks the closest
+   * unclaimed dirty piece + the closest free wash station, claims
+   * both, and returns the trip. Returns null when any prereq is
+   * missing (no callbacks wired, no dirty plates, no free station).
+   *
+   * Distance is straight-line ground distance — good enough for
+   * picking "nearest" since the pathfinder takes over once we hand
+   * off the trip; a slightly-suboptimal pick is fine. */
+  private tryStartWashTrip(w: StaffActor): WashTrip | null {
+    if (!this.washCallbacks) return null;
+    const stations = this.washCallbacks.getWashStations();
+    if (stations.length === 0) return null;
+    const dirties = this.washCallbacks.getDirtyPickups();
+    if (dirties.length === 0) return null;
+    const here = w.character.groundPos;
+    // Nearest unclaimed dirty piece.
+    let pickedDirty: DirtyPickupInfo | null = null;
+    let pickedDirtyDist = Infinity;
+    for (const d of dirties) {
+      const dist = Math.hypot(d.pos.x - here.x, d.pos.y - here.y);
+      if (dist < pickedDirtyDist) { pickedDirty = d; pickedDirtyDist = dist; }
+    }
+    if (!pickedDirty) return null;
+    // Nearest free wash station (skip ones another waiter has claimed).
+    let pickedStation: WashStationInfo | null = null;
+    let pickedStationDist = Infinity;
+    for (const s of stations) {
+      if (this.busyWashUids.has(s.uid)) continue;
+      const dist = Math.hypot(s.standPos.x - here.x, s.standPos.y - here.y);
+      if (dist < pickedStationDist) { pickedStation = s; pickedStationDist = dist; }
+    }
+    if (!pickedStation) return null;
+    if (!this.washCallbacks.claimDirtyPickup(pickedDirty.id, w.memberId)) return null;
+    this.busyWashUids.add(pickedStation.uid);
+    return {
+      dirtyId: pickedDirty.id,
+      dirtyPos: pickedDirty.pos.clone(),
+      kind: pickedDirty.kind,
+      stationUid: pickedStation.uid,
+      stationPos: pickedStation.standPos.clone(),
+      dwell: pickedStation.dwell,
+      phase: "pickup",
+    };
+  }
+
+  /** Release any in-flight wash claims and reset the waiter to
+   * returningHome. Used when the dirty mesh vanished between claim and
+   * arrival (e.g. save reload), or when the waiter was just fired. */
+  private abandonWashTrip(w: StaffActor): void {
+    if (w.washTrip) {
+      this.washCallbacks?.releaseDirtyPickup(w.washTrip.dirtyId);
+      this.busyWashUids.delete(w.washTrip.stationUid);
+      w.washTrip = null;
+    }
+    if (w.heldPlate) w.heldPlate.visible = false;
+    w.target = w.home.clone();
+    this.planPath(w);
+    w.state = "returningHome";
+    w.character.action = "walk";
+    w.clock = 0;
   }
 
   // === Shared movement ===

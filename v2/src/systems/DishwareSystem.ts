@@ -32,9 +32,9 @@ export class DishwareSystem {
   private plates: Map<number, { clean: number; dirty: number }> = new Map();
   private glasses: Map<number, { clean: number; dirty: number }> = new Map();
 
-  /** Wash interval accumulator (seconds). Drives the v1 timer-based
-   * wash; future phase replaces this with explicit waiter trips. */
-  private washClock = 0;
+  // washClock removed — Phase 3 replaced the abstract timer-driven
+  // wash with explicit waiter trips. Kept the field name in comments
+  // for save-file archaeology.
 
   /** Engine-provided callback that sums FurnitureDef.dishCapacity
    * across every placed non-fridge storage / counter. When absent
@@ -195,21 +195,15 @@ export class DishwareSystem {
     return Math.max(0.5, base - speedup);
   }
 
-  /** Tick the wash clock and process one dirty item per interval. Plates
-   * are prioritised when both are dirty (dining throughput hinges on
-   * them more than drink throughput). */
-  update(dt: number): void {
-    const totalDirty = this.getDirty("plate") + this.getDirty("glass");
-    if (totalDirty <= 0) { this.washClock = 0; return; }
-    const interval = this.getWashInterval();
-    if (!Number.isFinite(interval)) { this.washClock = 0; return; }
-    this.washClock += dt;
-    while (this.washClock >= interval) {
-      this.washClock -= interval;
-      if (this.getDirty("plate") > 0) this.washOne("plate");
-      else if (this.getDirty("glass") > 0) this.washOne("glass");
-      else { this.washClock = 0; break; }
-    }
+  /** Tick — kept around for save-migration parity (early phases ran an
+   * abstract wash timer here). Real washing is now driven by waiter
+   * trips in StaffRouter, which call washOne() directly. The
+   * `washClock` field is retained for the rare path that re-enables
+   * the fallback timer (no waiters hired, dishes still piling up). */
+  update(_dt: number): void {
+    // Intentional no-op. Wash work happens when a waiter completes a
+    // trip; see StaffRouter's wash state machine for the live cadence.
+    void _dt;
   }
 
   // === Save / load ===
