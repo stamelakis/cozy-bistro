@@ -1356,27 +1356,28 @@ export class WorldScene {
     this.applyWallKind("left",  leftKind);
     this.applyWallKind("right", rightKind);
     this.applyWallKind("front", frontKind);
-    // Upper-storey walls follow the SAME 2-walls-closest-to-camera ghost
-    // rule as the ground floor on every storey — the back pair stays
-    // solid as a backdrop on each floor. What actually gives the
-    // focused floor a "crystal clear" view is the slab + roof above it
-    // going to 1 % opacity, so the camera can see straight down through
-    // the higher storeys onto the focused floor without any obstruction
-    // from their floor planes.
+    // Visible upper-storey walls follow the same 2-camera-side-ghost /
+    // 2-back-solid rule as the ground floor. Storeys ABOVE the focused
+    // storey are already entirely hidden by applyStoreyVisibility, so
+    // there's no slab/roof ghost work to do here — only the visible
+    // storeys (focused + below) walk through this loop.
     const dirKinds: Record<WallDir, "solid" | "ghost"> = {
       back: backKind, left: leftKind, right: rightKind, front: frontKind,
     };
-    for (const [storeyIdx, storey] of this.upperStoreys) {
+    for (const [, storey] of this.upperStoreys) {
       if (!storey.group.visible) continue;
-      const aboveFocus = storeyIdx > this.focusedStorey;
-      storey.slab.material = aboveFocus ? this.slabMatGhost : this.slabMatSolid;
+      // Slab is solid (it's the floor of THIS storey, the ceiling of
+      // the one below). Always solid because we only render at-or-
+      // below focus.
+      storey.slab.material = this.slabMatSolid;
       for (const [dir, mesh] of storey.walls) {
         mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : this.wallMat;
       }
     }
+    // Roof similarly: only renders when focused on the top storey;
+    // always solid in that case.
     if (this.buildingRoof && this.buildingRoof.visible) {
-      const roofAbove = this.focusedStorey < WorldScene.NUM_STOREYS - 1;
-      this.buildingRoof.material = roofAbove ? this.roofMatGhost : this.roofMatSolid;
+      this.buildingRoof.material = this.roofMatSolid;
     }
   }
 
@@ -2213,11 +2214,38 @@ export class WorldScene {
       const visible = tierKey <= tier;
       for (const obj of items) obj.visible = visible;
     }
-    // Upper storeys. Storey index = tier - 1 (so T2 → storey 1, etc.).
+    this.applyStoreyVisibility();
+  }
+
+  /** Switch the camera-focus floor. Triggers a visibility re-pass so
+   * the storeys ABOVE the new focus disappear (guarantees zero
+   * obstruction of the focused floor) and at-or-below ones show. */
+  setFocusedStorey(idx: number): void {
+    const clamped = Math.max(0, Math.min(WorldScene.NUM_STOREYS - 1, idx));
+    if (clamped === this.focusedStorey) return;
+    this.focusedStorey = clamped;
+    this.applyStoreyVisibility();
+  }
+
+  /** Recompute which upper storeys + roof render based on the current
+   * tier (which ones are UNLOCKED) and the focused storey (anything
+   * above is HIDDEN so it can't obscure the focused floor). Called
+   * from setLuxuryTier and setFocusedStorey. */
+  private applyStoreyVisibility(): void {
+    const tier = this.currentTierVisible;
     for (const [storeyIdx, storey] of this.upperStoreys) {
-      storey.group.visible = tier >= storeyIdx + 1;
+      const unlocked = tier >= storeyIdx + 1;
+      const atOrBelow = storeyIdx <= this.focusedStorey;
+      storey.group.visible = unlocked && atOrBelow;
     }
-    if (this.buildingRoof) this.buildingRoof.visible = tier >= 2;
+    // Roof: only when focused on the TOP storey (and that storey is
+    // unlocked) — anywhere else it would sit above the focus and
+    // obscure the view.
+    if (this.buildingRoof) {
+      const topIdx = WorldScene.NUM_STOREYS - 1;
+      this.buildingRoof.visible =
+        this.focusedStorey === topIdx && tier >= topIdx + 1;
+    }
   }
 
   /** Current applied tier (used by the door animator). */
