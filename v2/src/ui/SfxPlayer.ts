@@ -539,21 +539,18 @@ export class SfxPlayer {
         return { nodes, gain, variant: id, ticker };
       }
       case "electric-stove": {
-        // Induction-style: NO flame whoosh body, just two slowly-beating
-        // sine tones (~440 + 444 Hz) that give the "magnetic field
-        // humming" character + a quiet electrical buzz. Distinctly
-        // different from the gas stove's noise-based sizzle so the
-        // player can tell which appliance is on by ear.
-        const o1 = ctx.createOscillator(); o1.type = "sine"; o1.frequency.value = 440;
-        const o2 = ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = 444;
-        const oG = ctx.createGain(); oG.gain.value = 0.4;
-        o1.connect(oG); o2.connect(oG); oG.connect(gain);
-        o1.start(); o2.start();
-        nodes.push(o1, o2, oG);
-        // Quiet 120 Hz buzz layered underneath for the electric feel.
+        // Single steady sine + electrical buzz — no beat-frequency
+        // amplitude modulation. The previous 440 + 444 Hz pair summed
+        // into a 4 Hz pulsing envelope that read as a wobbling
+        // "fluctuating" sound on top of the flat tone, per user
+        // feedback. One sine is enough for the induction-hum character.
+        const tone = ctx.createOscillator(); tone.type = "sine"; tone.frequency.value = 440;
+        const toneG = ctx.createGain(); toneG.gain.value = 0.5;
+        tone.connect(toneG); toneG.connect(gain); tone.start();
+        nodes.push(tone, toneG);
         const buzz = ctx.createOscillator();
         buzz.type = "square"; buzz.frequency.value = 120;
-        const buzzG = ctx.createGain(); buzzG.gain.value = 0.10;
+        const buzzG = ctx.createGain(); buzzG.gain.value = 0.12;
         buzz.connect(buzzG); buzzG.connect(gain); buzz.start();
         nodes.push(buzz, buzzG);
         peak(0.18);
@@ -561,23 +558,23 @@ export class SfxPlayer {
         return { nodes, gain, variant: id };
       }
       case "microwave": {
-        // Continuous electric whine — magnetron + transformer hum + a
-        // soft mains buzz. No fan noise, no beat-frequency wobble; just
-        // a steady, plainly-electric sound. User feedback was "electric
-        // but continuous", and the previous noise-bandpass layers gave
-        // it more of a "kitchen extractor" feel.
-        // Strong mid-frequency magnetron whine (~700 Hz).
-        const whine = ctx.createOscillator(); whine.type = "sine"; whine.frequency.value = 700;
-        const whineG = ctx.createGain(); whineG.gain.value = 0.55;
+        // Grounded electric whine: magnetron + heavy transformer hum +
+        // mains buzz. Previous version had the magnetron at 700 Hz with
+        // gain 0.55, which read as too sharp / piercing per user
+        // feedback. Dropped the whine to 500 Hz and halved its level,
+        // then boosted the 120 Hz transformer hum so the low-mid body
+        // dominates the upper whine.
+        const whine = ctx.createOscillator(); whine.type = "sine"; whine.frequency.value = 500;
+        const whineG = ctx.createGain(); whineG.gain.value = 0.25;
         whine.connect(whineG); whineG.connect(gain); whine.start();
-        // Transformer hum at 120 Hz (mains harmonic — what an electric
-        // appliance "feels like").
+        // Transformer hum at 120 Hz — bumped to 0.55 so it leads.
         const hum = ctx.createOscillator(); hum.type = "sine"; hum.frequency.value = 120;
-        const humG = ctx.createGain(); humG.gain.value = 0.30;
+        const humG = ctx.createGain(); humG.gain.value = 0.55;
         hum.connect(humG); humG.connect(gain); hum.start();
-        // Subtle 60 Hz mains buzz.
+        // 60 Hz mains buzz — bumped slightly for the same low-end
+        // weighting.
         const mains = ctx.createOscillator(); mains.type = "square"; mains.frequency.value = 60;
-        const mainsG = ctx.createGain(); mainsG.gain.value = 0.10;
+        const mainsG = ctx.createGain(); mainsG.gain.value = 0.15;
         mains.connect(mainsG); mainsG.connect(gain); mains.start();
         nodes.push(whine, whineG, hum, humG, mains, mainsG);
         peak(0.16);
@@ -585,22 +582,28 @@ export class SfxPlayer {
         return { nodes, gain, variant: id };
       }
       case "coffee": {
-        // Espresso machine: continuous steam jet + pump motor. No
-        // gurgle ticker — the random sine bursts from the previous
-        // version made it "sometimes loud, sometimes silent" and read
-        // as drips rather than coffee.
-        // Steam: bright high-frequency noise, wider band so it has
-        // body rather than a thin whistle.
+        // Espresso machine: continuous steam jet + pump motor + a
+        // low-mid water-flow band so the machine has more presence
+        // than just the upper steam whistle.
+        // Steam: bright high-frequency noise.
         const noise = ensureLoopSource(2);
         const hi = ctx.createBiquadFilter();
         hi.type = "bandpass"; hi.frequency.value = 3800; hi.Q.value = 0.6;
-        const steamG = ctx.createGain(); steamG.gain.value = 0.85;
+        const steamG = ctx.createGain(); steamG.gain.value = 0.75;
         noise.connect(hi); hi.connect(steamG); steamG.connect(gain);
         nodes.push(hi, steamG);
-        // Pump motor: low-mid square buzz so the machine "feels" like
-        // it's running, not just hissing.
-        const pump = ctx.createOscillator(); pump.type = "square"; pump.frequency.value = 220;
-        const pumpG = ctx.createGain(); pumpG.gain.value = 0.18;
+        // Water-flow band — same noise source through a separate
+        // mid-band filter for the "brewing" rumble.
+        const water = ensureLoopSource(2);
+        const waterBp = ctx.createBiquadFilter();
+        waterBp.type = "bandpass"; waterBp.frequency.value = 1000; waterBp.Q.value = 0.5;
+        const waterG = ctx.createGain(); waterG.gain.value = 0.45;
+        water.connect(waterBp); waterBp.connect(waterG); waterG.connect(gain);
+        nodes.push(waterBp, waterG);
+        // Pump motor: 220 Hz sine (was square — too buzzy) for a
+        // smoother pumping note.
+        const pump = ctx.createOscillator(); pump.type = "sine"; pump.frequency.value = 220;
+        const pumpG = ctx.createGain(); pumpG.gain.value = 0.22;
         pump.connect(pumpG); pumpG.connect(gain); pump.start();
         nodes.push(pump, pumpG);
         peak(0.18);
@@ -608,39 +611,49 @@ export class SfxPlayer {
         return { nodes, gain, variant: id };
       }
       case "blender": {
-        // Loud motor whine: layered sawtooth + harmonic + noise burst
-        // on top. Boosted significantly — the previous peak of 0.085
-        // was below audible threshold on most laptop speakers.
-        const motor = ctx.createOscillator(); motor.type = "sawtooth"; motor.frequency.value = 280;
-        const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2400;
-        const motorG = ctx.createGain(); motorG.gain.value = 0.7;
+        // Full redesign. Previous version (sawtooth 280 Hz + harmonic
+        // 840 Hz + bandpass noise + 6 Hz frequency LFO) was rated
+        // "sucks" — the LFO wobble in particular sounded more like a
+        // sci-fi alarm than a kitchen appliance. New chain mimics a
+        // real blender: high-pitched motor whine + broadband chopping
+        // noise + low body rumble, all steady (no modulation).
+        // Main motor: 600 Hz sawtooth through a lowpass — gives the
+        // characteristic mid-pitched whirring without harshness.
+        const motor = ctx.createOscillator(); motor.type = "sawtooth"; motor.frequency.value = 600;
+        const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 3000;
+        const motorG = ctx.createGain(); motorG.gain.value = 0.45;
         motor.connect(lp); lp.connect(motorG); motorG.connect(gain);
         motor.start();
         nodes.push(motor, lp, motorG);
-        // Higher-pitched whine harmonic.
-        const whine = ctx.createOscillator(); whine.type = "sawtooth"; whine.frequency.value = 840;
+        // Upper whine harmonic — 1500 Hz square for the "this thing
+        // is spinning fast" presence.
+        const whine = ctx.createOscillator(); whine.type = "sawtooth"; whine.frequency.value = 1500;
         const whineG = ctx.createGain(); whineG.gain.value = 0.18;
         whine.connect(whineG); whineG.connect(gain); whine.start();
         nodes.push(whine, whineG);
-        // Noise on top — frothy / chopping character.
+        // Body rumble — 100 Hz sine so the blender feels physically
+        // heavy on the counter.
+        const rumble = ctx.createOscillator(); rumble.type = "sine"; rumble.frequency.value = 100;
+        const rumbleG = ctx.createGain(); rumbleG.gain.value = 0.35;
+        rumble.connect(rumbleG); rumbleG.connect(gain); rumble.start();
+        nodes.push(rumble, rumbleG);
+        // Chopping noise — wider mid-band so it reads as blade-on-ice
+        // rather than a narrow tonal whistle.
         const noise = ensureLoopSource(2);
-        const noiseBp = ctx.createBiquadFilter(); noiseBp.type = "bandpass"; noiseBp.frequency.value = 1800; noiseBp.Q.value = 0.7;
-        const noiseG = ctx.createGain(); noiseG.gain.value = 0.35;
+        const noiseBp = ctx.createBiquadFilter(); noiseBp.type = "bandpass"; noiseBp.frequency.value = 1200; noiseBp.Q.value = 0.3;
+        const noiseG = ctx.createGain(); noiseG.gain.value = 0.55;
         noise.connect(noiseBp); noiseBp.connect(noiseG); noiseG.connect(gain);
         nodes.push(noiseBp, noiseG);
-        // LFO on motor frequency for "load changes" character.
-        const lfo = ctx.createOscillator(); lfo.type = "sine"; lfo.frequency.value = 6;
-        const lfoG = ctx.createGain(); lfoG.gain.value = 18;
-        lfo.connect(lfoG); lfoG.connect(motor.frequency); lfo.start();
-        nodes.push(lfo, lfoG);
         peak(0.20);
         gain.connect(bus);
         return { nodes, gain, variant: id };
       }
       case "toaster": {
         // Heating-coil hiss + electrical hum + occasional crackle as
-        // the bread browns. Boosted from peak 0.07 → 0.18 so it's
-        // clearly audible on laptop speakers.
+        // the bread browns. Added a second noise band around 800 Hz
+        // (mid-range coil-radiation character) on top of the 5 kHz
+        // upper hiss so it has a fuller spectrum instead of sounding
+        // like just hum + air noise.
         const hum = ctx.createOscillator(); hum.type = "sine"; hum.frequency.value = 60;
         const humG = ctx.createGain(); humG.gain.value = 0.45;
         hum.connect(humG); humG.connect(gain); hum.start();
@@ -648,8 +661,13 @@ export class SfxPlayer {
         const harmG = ctx.createGain(); harmG.gain.value = 0.30;
         harm.connect(harmG); harmG.connect(gain); harm.start();
         nodes.push(hum, harm, humG, harmG);
-        // Coil-hiss layer — high-band noise around 5 kHz where the
-        // ear is most sensitive.
+        // Mid-range coil-radiation noise.
+        const midNoise = ensureLoopSource(2);
+        const midBp = ctx.createBiquadFilter(); midBp.type = "bandpass"; midBp.frequency.value = 800; midBp.Q.value = 0.8;
+        const midG = ctx.createGain(); midG.gain.value = 0.35;
+        midNoise.connect(midBp); midBp.connect(midG); midG.connect(gain);
+        nodes.push(midBp, midG);
+        // Upper coil-hiss layer — high-band noise around 5 kHz.
         const noise = ensureLoopSource(2);
         const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 5000; bp.Q.value = 1.2;
         const noiseG = ctx.createGain(); noiseG.gain.value = 0.5;
