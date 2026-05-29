@@ -431,14 +431,19 @@ export class WorldScene {
   private buildHoodLightEffect() {
     const group = new THREE.Group();
     group.visible = false;
-    // alignEffectToModel anchors the group at the model's TOP. The
-    // bulb / spotlight source sit ~0.4 m below that, where the bottom
-    // edge of the hood roughly is.
-    const SRC_Y = -0.4;
-    // Half-angle of the cone — π/4 gives ~45°, wide enough that the
-    // light pool covers the whole 1×1 stove tile sitting underneath
-    // (with a 0.5 m drop the cone diameter is ~1 m at floor level).
-    const light = new THREE.SpotLight(0xfff0c8, 2.4, 1.8, Math.PI / 4, 0.45, 2);
+    // alignEffectToModel anchors the group at the model's TOP. We push
+    // the spotlight source CLEARLY below the hood mesh — a position
+    // overlapping the geometry is fine for a PointLight (it radiates
+    // out anyway) but for a SpotLight whose cone direction depends on
+    // the source-to-target vector it's safer to put the source in open
+    // air. ~0.65 m below the top puts it just under a typical hood,
+    // close to where a real range bulb hangs.
+    const SRC_Y = -0.65;
+    // Source-to-target distance of 1.5 m, cone half-angle ~70° so the
+    // light pool fans out wide enough to cover the whole stove tile +
+    // a bit of the chef in front of it. Penumbra softens the cone
+    // edge so the floor doesn't get a sharp circle.
+    const light = new THREE.SpotLight(0xfff0c8, 6.0, 3.0, Math.PI / 2.6, 0.55, 1.4);
     light.position.set(0, SRC_Y, 0);
     // SpotLight aims at light.target.position. Target lives directly
     // below the source so the cone points straight down; we add it to
@@ -452,11 +457,11 @@ export class WorldScene {
     // the same Y as the spotlight origin, but isn't itself a light —
     // just a self-lit sphere.
     const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.035, 12, 12),
+      new THREE.SphereGeometry(0.04, 12, 12),
       new THREE.MeshStandardMaterial({
         color: 0xfff8e0,
         emissive: 0xfff0c8,
-        emissiveIntensity: 1.5,
+        emissiveIntensity: 1.8,
       }),
     );
     bulb.position.set(0, SRC_Y, 0);
