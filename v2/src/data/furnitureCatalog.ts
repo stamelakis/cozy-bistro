@@ -721,9 +721,14 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",
     modelPath: "assets/kenney/bear.glb", scale: S_DECOR * 0.7, size: { width: 1, depth: 1 }, cost: 22, attractionBonus: 1, style: 2,
     tier: 1, placement: "wall" },
+  // Kenney's coatRack.glb has its hooks on the +Z face. Our wall-mount
+  // convention is "GLB front = -Z", so without an explicit flip the
+  // hooks end up jammed into the wall instead of facing the room.
+  // rotationOffset spins it 180° in the model's own frame, so external
+  // wall-rotation stacks on top correctly for any wall orientation.
   { id: "coat-rack-wall", name: "Wall Coat Rack",  category: "decoration",
     modelPath: "assets/kenney/coatRack.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 16, style: 1,
-    tier: 1, placement: "wall" },
+    tier: 1, placement: "wall", rotationOffset: Math.PI },
 
   // === Procedural fancy decor — inspired by polished restaurant sims. ===
   { id: "fountain",       name: "Indoor Fountain", category: "decoration",
