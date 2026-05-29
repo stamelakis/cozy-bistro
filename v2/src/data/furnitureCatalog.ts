@@ -277,11 +277,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // turnover at lower revenue.
   { id: "coffee-table",  name: "Coffee Table",  category: "table",
     modelPath: "assets/kenney/tableCoffee.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 28, style: 2,
-    tier: 1, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS,
+    tier: 1, surface: "drink", targetHeight: 0.42, seatSlots: COFFEE_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "coffee-glass",  name: "Glass Coffee Table", category: "table",
     modelPath: "assets/kenney/tableCoffeeGlass.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 70, style: 3, ratingBonus: 0.01,
-    tier: 2, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS,
+    tier: 2, surface: "drink", targetHeight: 0.42, seatSlots: COFFEE_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
 
   // Chairs
@@ -299,7 +299,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2 },
   { id: "bar-stool",      name: "Bar Stool",     category: "chair",
     modelPath: "assets/kenney/stoolBar.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 22, comfort: 1, style: 1,
-    tier: 1, surface: "drink" },
+    tier: 1, surface: "drink", targetHeight: 0.75 },
   { id: "lounge-chair",   name: "Lounge Chair",  category: "chair",
     modelPath: "assets/kenney/loungeChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 220, comfort: 4, style: 3, ratingBonus: 0.05,
     tier: 3 },
@@ -308,13 +308,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 3 },
   { id: "bench-cushion-low", name: "Low Cushion Bench", category: "chair",
     modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 130, comfort: 2, style: 2, ratingBonus: 0.03, seatingCapacity: 2,
-    tier: 2 },
+    tier: 2, targetHeight: 0.55 },
   { id: "bench-plain",    name: "Wooden Bench",  category: "chair",
     modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 1, style: 1, ratingBonus: 0.01, seatingCapacity: 2,
-    tier: 1 },
+    tier: 1, targetHeight: 0.55 },
   { id: "bar-stool-sq",   name: "Square Bar Stool", category: "chair",
     modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 60, comfort: 1, style: 2, ratingBonus: 0.01,
-    tier: 2, surface: "drink" },
+    tier: 2, surface: "drink", targetHeight: 0.75 },
   { id: "lounge-relax",   name: "Relax Lounge",  category: "chair",
     modelPath: "assets/kenney/loungeChairRelax.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 480, comfort: 5, style: 4, ratingBonus: 0.07,
     tier: 4 },
@@ -375,7 +375,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "surface", provides: "microwave" },
   { id: "fridge",         name: "Fridge",          category: "storage",
     modelPath: "assets/kenney/kitchenFridge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 400,
-    tier: 2, stockCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 2, stockCapacity: 4, targetHeight: 1.75, surfaceSlots: [{ dx: 0, dz: 0 }] },
   // Walk-in is a "room" — actually 2×2 tiles and stretched tall. Holds
   // multiple regular fridges' worth of stock. Top is broad enough for
   // two surface items.
@@ -433,10 +433,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 1, placement: "surface" },
   { id: "side-table",     name: "Side Table",      category: "decoration",
     modelPath: "assets/kenney/sideTable.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 35,
-    tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 2, targetHeight: 0.6, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "side-table-d",   name: "Side Table w/ Drawer", category: "decoration",
     modelPath: "assets/kenney/sideTableDrawers.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 45, ratingBonus: 0.01,
-    tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 2, targetHeight: 0.6, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "ceiling-fan",    name: "Ceiling Fan",     category: "decoration",
     modelPath: "assets/kenney/ceilingFan.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 80, ratingBonus: 0.01,
     tier: 2, placement: "ceiling" },
@@ -468,34 +468,38 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "proc:wine-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 550, style: 6, ratingBonus: 0.06, attractionBonus: 3,
     tier: 4 },
 
-  // Plants
+  // Plants — explicit targetHeight per variant so Small / Medium /
+  // Tall actually read as a height progression instead of all landing
+  // at the same category default.
   { id: "plant-small",    name: "Small Plant",     category: "plant",
     modelPath: "assets/kenney/plantSmall1.glb", scale: S_PLANT, size: { width: 1, depth: 1 }, cost: 12, attractionBonus: 1, style: 1,
-    tier: 1 },
+    tier: 1, targetHeight: 0.5 },
   { id: "plant-medium",   name: "Medium Plant",    category: "plant",
     modelPath: "assets/kenney/plantSmall2.glb", scale: S_PLANT, size: { width: 1, depth: 1 }, cost: 18, attractionBonus: 2, style: 1,
-    tier: 1 },
+    tier: 1, targetHeight: 0.8 },
   { id: "plant-tall",     name: "Tall Plant",      category: "plant",
     modelPath: "assets/kenney/plantSmall3.glb", scale: S_PLANT, size: { width: 1, depth: 1 }, cost: 25, attractionBonus: 2, style: 2,
-    tier: 1 },
+    tier: 1, targetHeight: 1.3 },
   { id: "potted-plant",   name: "Potted Plant",    category: "plant",
     modelPath: "assets/kenney/pottedPlant.glb", scale: S_PLANT, size: { width: 1, depth: 1 }, cost: 55, attractionBonus: 3, style: 2, ratingBonus: 0.01,
     tier: 2 },
   { id: "bookcase",       name: "Bookcase",        category: "decoration",
     modelPath: "assets/kenney/bookcaseClosedDoors.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 100, style: 4, attractionBonus: 2, ratingBonus: 0.02,
-    tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 2, targetHeight: 1.65, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "bookcase-open",  name: "Open Bookcase",   category: "decoration",
     modelPath: "assets/kenney/bookcaseOpen.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 2, ratingBonus: 0.01,
-    tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 2, targetHeight: 1.65, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "coat-rack",      name: "Coat Rack",       category: "decoration",
     modelPath: "assets/kenney/coatRackStanding.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 22, style: 1,
-    tier: 1 },
+    tier: 1, targetHeight: 1.7 },
+  // Rugs are flat — without an explicit override the decoration default
+  // (0.55m) puffs them into 55cm-tall blocks.
   { id: "rug-rectangle",  name: "Rectangular Rug", category: "decoration",
     modelPath: "assets/kenney/rugRectangle.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 40, style: 3, comfort: 1, ratingBonus: 0.01,
-    tier: 2 },
+    tier: 2, targetHeight: 0.04 },
   { id: "rug-round",      name: "Round Rug",       category: "decoration",
     modelPath: "assets/kenney/rugRound.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 30, style: 2, comfort: 1,
-    tier: 1 },
+    tier: 1, targetHeight: 0.04 },
 
   // Lighting
   { id: "floor-lamp",     name: "Round Floor Lamp",  category: "lamp",
@@ -509,10 +513,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 1, placement: "ceiling" },
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
     modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2,
-    tier: 1, placement: "surface" },
+    tier: 1, placement: "surface", targetHeight: 0.4 },
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
     modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 25, style: 2, attractionBonus: 1,
-    tier: 1, placement: "wall" },
+    tier: 1, placement: "wall", targetHeight: 0.3 },
 
   // Doors & windows. The "door" id is a procedural door with a separate
   // hinged panel so we can swing the panel without moving the frame.
@@ -579,13 +583,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "bathtub",        name: "Bathtub",         category: "bathroom",
     modelPath: "assets/kenney/bathtub.glb", scale: 0.95, size: { width: 2, depth: 1 }, cost: 750, style: 4, attractionBonus: 3, ratingBonus: 0.07,
-    tier: 4 },
+    tier: 4, targetHeight: 0.6 },
   { id: "shower",         name: "Shower",          category: "bathroom",
     modelPath: "assets/kenney/shower.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 450, style: 3, attractionBonus: 1, ratingBonus: 0.05,
-    tier: 3 },
+    tier: 3, targetHeight: 2.0 },
   { id: "shower-round",   name: "Round Shower",    category: "bathroom",
     modelPath: "assets/kenney/showerRound.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 900, style: 4, attractionBonus: 2, ratingBonus: 0.08,
-    tier: 4 },
+    tier: 4, targetHeight: 2.0 },
 
   // === Internal walls + doorways — edge-placed, don't claim tiles. ===
   // These snap to grid lines instead of tile centers so the player can
@@ -608,11 +612,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // Same drinks-only behaviour as the round coffee tables above.
   { id: "coffee-square",  name: "Square Coffee Table", category: "table",
     modelPath: "assets/kenney/tableCoffeeSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 32, style: 2, ratingBonus: 0.01,
-    tier: 1, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS,
+    tier: 1, surface: "drink", targetHeight: 0.42, seatSlots: COFFEE_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "coffee-glass-sq", name: "Glass Square Coffee", category: "table",
     modelPath: "assets/kenney/tableCoffeeGlassSquare.glb", scale: S_TABLE * 0.85, size: { width: 1, depth: 1 }, cost: 90, style: 3, ratingBonus: 0.02,
-    tier: 2, surface: "drink", seatSlots: COFFEE_TABLE_SEAT_SLOTS,
+    tier: 2, surface: "drink", targetHeight: 0.42, seatSlots: COFFEE_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
 
   // === More chairs / desks. ===
@@ -641,7 +645,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, stockCapacity: 4, dishCapacity: 12, placement: "wall-shelf" },
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
-    tier: 1, stockCapacity: 2, dishCapacity: 4, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf" },
   { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120, style: 1,
     tier: 2, stockCapacity: 2, dishCapacity: 8, placement: "wall-shelf" },
@@ -670,7 +674,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "surface" },
   { id: "speaker",        name: "Speaker",         category: "decoration",
     modelPath: "assets/kenney/speaker.glb", scale: S_DECOR * 0.6, size: { width: 1, depth: 1 }, cost: 70, style: 3, attractionBonus: 1, ratingBonus: 0.01,
-    tier: 2 },
+    tier: 2, targetHeight: 1.0 },
   { id: "speaker-small",  name: "Small Speaker",   category: "decoration",
     modelPath: "assets/kenney/speakerSmall.glb", scale: S_DECOR * 0.5, size: { width: 1, depth: 1 }, cost: 28, style: 1,
     tier: 1, placement: "surface" },
@@ -679,15 +683,16 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "surface" },
 
   // === More soft furnishings (rugs). ===
+  // Same flat-height override as the other rugs above.
   { id: "rug-doormat",    name: "Doormat",         category: "decoration",
     modelPath: "assets/kenney/rugDoormat.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 18, style: 1,
-    tier: 1 },
+    tier: 1, targetHeight: 0.04 },
   { id: "rug-rounded",    name: "Rounded Rug",     category: "decoration",
     modelPath: "assets/kenney/rugRounded.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 45, style: 3, comfort: 1, ratingBonus: 0.01,
-    tier: 2 },
+    tier: 2, targetHeight: 0.04 },
   { id: "rug-square",     name: "Square Rug",      category: "decoration",
     modelPath: "assets/kenney/rugSquare.glb", scale: S_DECOR, size: { width: 2, depth: 2 }, cost: 70, style: 3, comfort: 1, attractionBonus: 1, ratingBonus: 0.02,
-    tier: 2 },
+    tier: 2, targetHeight: 0.04 },
 
   // === Cute/quirky decor. ===
   { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",

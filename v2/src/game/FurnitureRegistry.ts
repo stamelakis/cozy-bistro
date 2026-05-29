@@ -465,6 +465,20 @@ export class FurnitureRegistry {
     return def.surface ?? "food";
   }
 
+  /** World-Y of the top surface of a placed table, derived from the
+   * model's actual bounding box. Used by GuestSpawner to land plates
+   * and dirty leftovers ON the table instead of at a hard-coded
+   * height — coffee tables (~0.42m) and dining tables (0.75m) now
+   * both look right. Returns null for an unknown uid. */
+  getTableTopY(tableUid: string): number | null {
+    const it = this.items.find((x) => x.uid === tableUid);
+    if (!it) return null;
+    it.model.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(it.model);
+    if (!Number.isFinite(box.max.y)) return null;
+    return box.max.y;
+  }
+
   /** All integer cells this placed item's footprint actually occupies.
    * Multi-tile items expand to all their cells; L-shaped items honour
    * their explicit footprint mask. Caller cares about the cells either

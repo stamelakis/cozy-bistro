@@ -230,8 +230,15 @@ const ENTRY_SPAWN = new THREE.Vector2(0, 8);
  * walkingOut → EXIT_POSITION → despawn. */
 const EXIT_POSITION = new THREE.Vector2(0, 10);
 
-/** Table-surface height (table.glb at S_TABLE=1.9 in the catalog). */
-const TABLE_HEIGHT_Y = 0.95;
+/** Fallback table-surface height. The live code path looks up the
+ * actual placed-table model's bounding-box top via
+ * registry.getTableTopY so dining tables (0.75m), coffee tables
+ * (0.42m), and bar counters (0.92m) all get their plates and dirty
+ * leftovers sitting ON the actual surface. This constant only kicks
+ * in when the registry isn't wired or the table can't be found —
+ * picked to match a standard 0.75m dining table plus a sliver of
+ * plate thickness. */
+const TABLE_HEIGHT_Y = 0.76;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -966,7 +973,7 @@ export class GuestSpawner {
       GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
     }
     const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
-    plate.position.set(g.platePos.x, TABLE_HEIGHT_Y, g.platePos.y);
+    plate.position.set(g.platePos.x, this.getTableTopForGuest(g), g.platePos.y);
     plate.castShadow = true;
     plate.receiveShadow = true;
     // Add a small food-color blob on top so it doesn't read as "empty plate".
@@ -999,6 +1006,7 @@ export class GuestSpawner {
    * mess instead of one z-fighting blob. */
   private spawnLeftoversForGuest(g: ActiveGuest): void {
     const baseSeed = hashStr(g.id);
+    const tableTop = this.getTableTopForGuest(g);
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
       const recipe = g.order[i];
       if (!recipe) continue;
@@ -1011,7 +1019,7 @@ export class GuestSpawner {
       const jz = Math.sin(angle) * r;
       const x = g.platePos.x + jx;
       const z = g.platePos.y + jz;
-      const mesh = this.makeLeftoverMesh(x, z, kind);
+      const mesh = this.makeLeftoverMesh(x, z, kind, tableTop);
       this.scene.add(mesh);
       this.dirtyTableMeshes.push({
         id: this.nextDirtyId, mesh, kind, claimedBy: null,
@@ -1076,7 +1084,7 @@ export class GuestSpawner {
    * with a slick of leftover liquid. Reuses the shared plate geom for
    * plates so we don't churn through allocations during a busy
    * service. */
-  private makeLeftoverMesh(x: number, z: number, kind: DishKind): THREE.Object3D {
+  private makeLeftoverMesh(x: number, z: number, kind: DishKind, tableTopY: number): THREE.Object3D {
     if (kind === "glass") {
       const group = new THREE.Group();
       const glass = new THREE.Mesh(
@@ -1095,7 +1103,7 @@ export class GuestSpawner {
       );
       dregs.position.y = 0.015;
       group.add(dregs);
-      group.position.set(x, TABLE_HEIGHT_Y, z);
+      group.position.set(x, tableTopY, z);
       glass.castShadow = true;
       return group;
     }
@@ -1105,7 +1113,7 @@ export class GuestSpawner {
       GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
     }
     const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
-    plate.position.set(x, TABLE_HEIGHT_Y, z);
+    plate.position.set(x, tableTopY, z);
     plate.castShadow = true;
     plate.receiveShadow = true;
     const crumbs = new THREE.Mesh(
@@ -1558,6 +1566,25 @@ export class GuestSpawner {
     if (hashIdx < 0) return "food";
     const tableUid = g.seatId.substring(0, hashIdx);
     return this.registry.getTableSurface(tableUid) ?? "food";
+  }
+
+  /** World-Y to land a plate / glass / leftover at on the guest's
+   * table. Looks up the actual placed table model so dining tables
+   * (0.75m), coffee tables (0.42m), bar counters (0.92m) all get
+   * their dishes resting on the actual top instead of at a single
+   * hard-coded height. Falls back to the legacy 0.76m if the table
+   * can't be found (rare — guest is either offscreen or the slot
+   * was deleted out from under them). */
+  private getTableTopForGuest(g: ActiveGuest): number {
+    if (this.registry && g.seatId) {
+      const hashIdx = g.seatId.indexOf("#");
+      if (hashIdx >= 0) {
+        const tableUid = g.seatId.substring(0, hashIdx);
+        const top = this.registry.getTableTopY(tableUid);
+        if (top !== null) return top;
+      }
+    }
+    return TABLE_HEIGHT_Y;
   }
 
   /** Kick off the (next) course: reserve a clean plate / glass,
