@@ -1189,14 +1189,18 @@ export class WorldScene {
     const STEP_DEPTH = 0.2;                                // Z span per step
     const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m
     const X_CENTER   = 4.5;                                // against the right interior wall
-    const Z_START    = -4.0;                               // low end, near back wall
+    // Bottom of the flight: front-right corner of the building. Z = doorPos.y
+    // is the south (front) wall at Z=+5; we tuck the bottom step a touch
+    // inside so the staircase doesn't clip into the wall.
+    const Z_BOTTOM   = 4.4;                                // low end, near front wall
+    const runLen     = STEP_COUNT * STEP_DEPTH;            // 2 m total run
     const lowerY     = baseY - WorldScene.STOREY_HEIGHT;
     const stepMat = new THREE.MeshStandardMaterial({
       color: 0xb0967a, roughness: 0.78, metalness: 0,
     });
-    // Each step: a slim box centred at (X_CENTER, lowerY + n·rise + rise/2,
-    // Z_START + n·depth + depth/2). The TOP of step n sits at
-    // lowerY + (n+1)·rise, so step n−1 ends exactly where step n begins.
+    // Steps rise as Z decreases (front → back), so step 0 sits at the
+    // front-right corner and step N-1 sits 2 m further north along the
+    // right wall — at the top of the flight where it meets the upper slab.
     for (let i = 0; i < STEP_COUNT; i += 1) {
       const step = new THREE.Mesh(
         new THREE.BoxGeometry(STEP_WIDTH, STEP_RISE, STEP_DEPTH),
@@ -1205,7 +1209,7 @@ export class WorldScene {
       step.position.set(
         X_CENTER,
         lowerY + STEP_RISE * (i + 0.5),
-        Z_START + STEP_DEPTH * (i + 0.5),
+        Z_BOTTOM - STEP_DEPTH * (i + 0.5),
       );
       step.castShadow = true;
       step.receiveShadow = true;
@@ -1219,10 +1223,10 @@ export class WorldScene {
       color: 0x8a6e54, roughness: 0.7,
     });
     const railX = X_CENTER - STEP_WIDTH / 2 + 0.04;        // just inside the left edge
-    const runLen = STEP_COUNT * STEP_DEPTH;                // 2 m
     const railLen = Math.sqrt(runLen * runLen + WorldScene.STOREY_HEIGHT * WorldScene.STOREY_HEIGHT);
     const railThickness = 0.04;
-    // Rail: a thin box rotated to match the step slope.
+    // Rail: a thin box rotated to match the step slope. Center sits at
+    // the midpoint of the run (1 m back from Z_BOTTOM).
     const rail = new THREE.Mesh(
       new THREE.BoxGeometry(railThickness, railThickness, railLen),
       banisterMat,
@@ -1230,12 +1234,15 @@ export class WorldScene {
     rail.position.set(
       railX,
       lowerY + WorldScene.STOREY_HEIGHT / 2 + 0.85,        // ~hand height above the steps
-      Z_START + runLen / 2,
+      Z_BOTTOM - runLen / 2,
     );
-    rail.rotation.x = Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
+    // Negative sign so the rail tilts with the staircase going up toward
+    // the back (−Z) instead of forward (+Z).
+    rail.rotation.x = -Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
     rail.castShadow = true;
     parent.add(rail);
-    // Two short posts to anchor the rail at top and bottom of the flight.
+    // Two short posts: one at the bottom (Z_BOTTOM, ground level) and
+    // one at the top (Z_BOTTOM − runLen, upper slab level).
     for (const t of [0, 1]) {
       const post = new THREE.Mesh(
         new THREE.BoxGeometry(railThickness, 0.95, railThickness),
@@ -1244,7 +1251,7 @@ export class WorldScene {
       post.position.set(
         railX,
         lowerY + t * WorldScene.STOREY_HEIGHT + 0.45,
-        Z_START + t * runLen,
+        Z_BOTTOM - t * runLen,
       );
       post.castShadow = true;
       parent.add(post);

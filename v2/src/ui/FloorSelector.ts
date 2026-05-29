@@ -2,8 +2,8 @@ import type { IsoCamera } from "../scene/IsoCamera";
 import type { WorldScene } from "../scene/WorldScene";
 
 /**
- * Vertical strip of floor buttons pinned to the right edge of the
- * viewport. One button per storey of the building (ground + up to
+ * Horizontal strip of large floor buttons pinned to the top-center of
+ * the viewport. One button per storey of the building (ground + up to
  * NUM_STOREYS-1 upper floors). Pressing a button:
  *  1. Calls `scene.setFocusedStorey(idx)` so storeys above the focus
  *     are hidden and the wall-ghosting rule re-evaluates.
@@ -11,7 +11,9 @@ import type { WorldScene } from "../scene/WorldScene";
  *     so the chosen floor sits in the middle of the view.
  *
  * Buttons for storeys that the current luxury tier has not yet unlocked
- * are rendered greyed-out and locked with a 🔒 icon.
+ * are rendered greyed-out and locked with a 🔒 icon. Layout: ground (G)
+ * on the LEFT, upper floors going right — matches the mental model that
+ * higher numbers = "further along the progression".
  */
 export class FloorSelector {
   private readonly root: HTMLElement;
@@ -26,39 +28,41 @@ export class FloorSelector {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
-      top: "50%",
-      right: "12px",
-      transform: "translateY(-50%)",
+      top: "12px",
+      left: "50%",
+      transform: "translateX(-50%)",
       display: "flex",
-      flexDirection: "column-reverse", // ground at the bottom, top floor up top
-      gap: "4px",
-      padding: "6px",
+      flexDirection: "row",
+      gap: "6px",
+      padding: "8px 10px",
       background: "rgba(20, 14, 10, 0.86)",
-      borderRadius: "10px",
+      borderRadius: "12px",
       boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
       color: "#fff5dc",
-      font: "12px/1.3 system-ui, sans-serif",
+      font: "14px/1.3 system-ui, sans-serif",
       pointerEvents: "auto",
       zIndex: "5",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
-    // One button per storey. Index 0 = ground, 1..N-1 = upper floors.
+    // One button per storey. Index 0 = ground (leftmost), 1..N-1 = upper.
     const n = (this.scene.constructor as typeof WorldScene).getNumStoreys();
     for (let idx = 0; idx < n; idx += 1) {
       const btn = document.createElement("button");
       Object.assign(btn.style, {
-        width: "44px",
-        padding: "6px 0",
+        minWidth: "56px",
+        height: "44px",
+        padding: "0 14px",
         background: "rgba(120, 180, 200, 0.18)",
         color: "#fff5dc",
         border: "1px solid rgba(255,245,220,0.22)",
-        borderRadius: "6px",
+        borderRadius: "8px",
         cursor: "pointer",
         font: "inherit",
-        fontSize: "12px",
+        fontSize: "18px",
         fontWeight: "700",
         textAlign: "center",
+        letterSpacing: "0.04em",
       } as Partial<CSSStyleDeclaration>);
       const label = idx === 0 ? "G" : String(idx);
       btn.textContent = label;
