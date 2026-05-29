@@ -999,15 +999,33 @@ export class WorldScene {
   // phases will layer those on top.
   private static readonly STOREY_HEIGHT = 3;
   private static readonly NUM_STOREYS = 5;
-  /** Per-storey geometry groups keyed by storey index (1..NUM_STOREYS-1).
-   * The ground floor (storey 0) keeps its existing scene-attached
-   * meshes; only the new upper storeys live here. setStoreyVisible
-   * toggles each group independently. */
-  private upperStoreys = new Map<number, THREE.Group>();
+  /** Per-storey geometry references keyed by storey index (1..NUM_STOREYS-1).
+   * Holds the group (for visibility toggle), the floor slab (toggled
+   * solid vs ghost so the player can see down through it), and the
+   * four perimeter walls keyed by direction (toggled by the same
+   * camera-relative ghost rule the ground floor uses). */
+  private upperStoreys = new Map<number, {
+    group: THREE.Group;
+    slab: THREE.Mesh;
+    walls: Map<WallDir, THREE.Mesh>;
+  }>();
   /** Roof cap at y = NUM_STOREYS * STOREY_HEIGHT. Visible whenever any
    * upper storey is — gives the building a finished top instead of an
-   * open box. */
+   * open box. Also ghost-able so the iso camera can see down through it
+   * when focused on a lower storey. */
   private buildingRoof?: THREE.Mesh;
+  /** Solid + ghost materials for upper-storey slabs (floor / ceiling
+   * planes) and walls. Each storey's mesh swaps between the two based
+   * on whether it's above or below the focused storey. */
+  private slabMatSolid!: THREE.MeshStandardMaterial;
+  private slabMatGhost!: THREE.MeshStandardMaterial;
+  private roofMatSolid!: THREE.MeshStandardMaterial;
+  private roofMatGhost!: THREE.MeshStandardMaterial;
+  /** Which storey the camera is currently focused on (0 = ground).
+   * Everything above this storey gets the ghost treatment so the player
+   * can see down into the focused floor. Phase 4 will let the player
+   * change this from the HUD; for now it stays at 0. */
+  private focusedStorey = 0;
 
   private addBuilding(): void {
     // === Exterior ground + props ===
@@ -1088,8 +1106,9 @@ export class WorldScene {
   }
 
   /** Build the empty white shell for each storey above the ground floor.
-   * Each storey gets a floor plane, four solid perimeter walls, and the
-   * top storey carries the building's roof. All hidden by default; the
+   * Each storey gets a floor plane, four solid perimeter walls (tracked
+   * by direction so the ghost pass can flip them), and the top of the
+   * stack carries a separate roof cap. All hidden by default; the
    * setLuxuryTier pass toggles the appropriate ones on per tier. */
   private addUpperStoreys(): void {
     const W = 10;                                          // footprint, same as ground floor
@@ -1098,32 +1117,45 @@ export class WorldScene {
     // Same x,z anchors as the ground-floor segmented walls so the upper
     // boxes sit directly on top of them. wallSegmentPosition is the
     // authoritative reference for these coordinates.
-    const wallSpecs: { xz: [number, number]; horizontal: boolean }[] = [
-      { xz: [0.5,  5.5], horizontal: true  }, // front
-      { xz: [0.5, -4.5], horizontal: true  }, // back
-      { xz: [-4.5, 0.5], horizontal: false }, // left
-      { xz: [ 5.5, 0.5], horizontal: false }, // right
+    const wallSpecs: { dir: WallDir; xz: [number, number]; horizontal: boolean }[] = [
+      { dir: "front", xz: [0.5,  5.5], horizontal: true  },
+      { dir: "back",  xz: [0.5, -4.5], horizontal: true  },
+      { dir: "left",  xz: [-4.5, 0.5], horizontal: false },
+      { dir: "right", xz: [ 5.5, 0.5], horizontal: false },
     ];
-    // Slightly off-white storey floor / ceiling material so the player
-    // can tell "blank canvas" upper floors apart from the ground floor's
-    // themed floor. Bumped to DoubleSide so the same plane reads as
-    // the floor (from above) AND the ceiling of the storey below (from
-    // below the iso camera, once we move it up there).
-    const slabMat = new THREE.MeshStandardMaterial({
+    // Slab materials — solid (blank-canvas off-white) and ghost (see-
+    // through pale). Stored on the instance so applyUpperStoreyVisibility
+    // can flip per-mesh references between them.
+    this.slabMatSolid = new THREE.MeshStandardMaterial({
       color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+    });
+    this.slabMatGhost = new THREE.MeshStandardMaterial({
+      color: 0xf6f4ef, roughness: 0.6,
+      transparent: true, opacity: 0.10, depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.roofMatSolid = new THREE.MeshStandardMaterial({
+      color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
+    });
+    this.roofMatGhost = new THREE.MeshStandardMaterial({
+      color: 0xe8d8b8, roughness: 0.6,
+      transparent: true, opacity: 0.10, depthWrite: false,
+      side: THREE.DoubleSide,
     });
     for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
       const group = new THREE.Group();
       group.visible = false;
       const baseY = idx * H;
       // Floor of this storey == ceiling of the storey below.
-      const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), slabMat);
-      floor.rotation.x = -Math.PI / 2;
-      floor.position.set(0.5, baseY, 0.5);
-      floor.receiveShadow = true;
-      group.add(floor);
-      // 4 perimeter walls — solid 3 m boxes, same materials as the
-      // ground floor walls. No doors / windows on upper storeys yet.
+      const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), this.slabMatSolid);
+      slab.rotation.x = -Math.PI / 2;
+      slab.position.set(0.5, baseY, 0.5);
+      slab.receiveShadow = true;
+      group.add(slab);
+      // 4 perimeter walls — solid 3 m boxes, mapped by direction so the
+      // ghost pass can match them up with the ground-floor walls'
+      // camera-relative ghost decisions.
+      const walls = new Map<WallDir, THREE.Mesh>();
       for (const spec of wallSpecs) {
         const geom = spec.horizontal
           ? new THREE.BoxGeometry(W, H, T)
@@ -1133,18 +1165,15 @@ export class WorldScene {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         group.add(mesh);
+        walls.set(spec.dir, mesh);
       }
-      this.upperStoreys.set(idx, group);
+      this.upperStoreys.set(idx, { group, slab, walls });
       this.threeScene.add(group);
     }
     // Roof at the top of the topmost storey. Lives outside the per-
-    // storey groups because it's the same cap regardless of which upper
-    // floor is "topmost visible" — setStoreyVisible drives its
-    // visibility from the highest unlocked storey.
-    const roof = new THREE.Mesh(
-      new THREE.PlaneGeometry(W, W),
-      new THREE.MeshStandardMaterial({ color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide }),
-    );
+    // storey groups because its visibility tracks "any upper storey
+    // visible" rather than a specific storey's group toggle.
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(W, W), this.roofMatSolid);
     roof.rotation.x = -Math.PI / 2;
     roof.position.set(0.5, WorldScene.NUM_STOREYS * H, 0.5);
     roof.receiveShadow = true;
@@ -1319,10 +1348,43 @@ export class WorldScene {
       const dot = normalX * cameraPos.x + normalZ * cameraPos.z;
       return dot > 0 ? "ghost" : "solid";
     };
-    this.applyWallKind("back",  kindFor(0, -1));
-    this.applyWallKind("left",  kindFor(-1, 0));
-    this.applyWallKind("right", kindFor(1, 0));
-    this.applyWallKind("front", kindFor(0, 1));
+    const backKind  = kindFor(0, -1);
+    const leftKind  = kindFor(-1, 0);
+    const rightKind = kindFor(1, 0);
+    const frontKind = kindFor(0, 1);
+    this.applyWallKind("back",  backKind);
+    this.applyWallKind("left",  leftKind);
+    this.applyWallKind("right", rightKind);
+    this.applyWallKind("front", frontKind);
+    // Upper-storey walls + slabs + roof — anything ABOVE the focused
+    // storey gets a ghost treatment so the player can see down through
+    // it to the storey they're actually focused on. The 2-walls-closest-
+    // to-camera ghost rule applies per storey same as the ground floor.
+    const dirKinds: Record<WallDir, "solid" | "ghost"> = {
+      back: backKind, left: leftKind, right: rightKind, front: frontKind,
+    };
+    for (const [storeyIdx, storey] of this.upperStoreys) {
+      if (!storey.group.visible) continue;
+      const aboveFocus = storeyIdx > this.focusedStorey;
+      // Slab (the floor of this storey == ceiling of the storey below).
+      // When above the focused storey, ghost it so we see down through.
+      storey.slab.material = aboveFocus ? this.slabMatGhost : this.slabMatSolid;
+      // Walls: the camera-side pair ghosts so we can see in; the back
+      // pair stays solid as a backdrop. When the storey is above the
+      // focused one, ghost ALL of them so they don't block the lower-
+      // storey view from any angle.
+      for (const [dir, mesh] of storey.walls) {
+        const kind: "solid" | "ghost" = aboveFocus ? "ghost" : dirKinds[dir];
+        mesh.material = kind === "ghost" ? this.wallGhostMat : this.wallMat;
+      }
+    }
+    if (this.buildingRoof && this.buildingRoof.visible) {
+      // Roof is always above the focused storey unless we're focused on
+      // the very top one — ghost it so it doesn't block the look-down
+      // view from the iso camera.
+      const roofAbove = this.focusedStorey < WorldScene.NUM_STOREYS - 1;
+      this.buildingRoof.material = roofAbove ? this.roofMatGhost : this.roofMatSolid;
+    }
   }
 
   /** Switch one wall's segments between solid (multi-mat) and ghost. */
@@ -2159,8 +2221,8 @@ export class WorldScene {
       for (const obj of items) obj.visible = visible;
     }
     // Upper storeys. Storey index = tier - 1 (so T2 → storey 1, etc.).
-    for (const [storeyIdx, group] of this.upperStoreys) {
-      group.visible = tier >= storeyIdx + 1;
+    for (const [storeyIdx, storey] of this.upperStoreys) {
+      storey.group.visible = tier >= storeyIdx + 1;
     }
     if (this.buildingRoof) this.buildingRoof.visible = tier >= 2;
   }
