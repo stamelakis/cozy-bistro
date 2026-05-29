@@ -1249,35 +1249,31 @@ export class WorldScene {
     this.threeScene.add(grass);
   }
 
-  /** Procedural grass texture — soft blob noise in a green palette so
-   * the lawn has natural-looking patches instead of pixel noise. */
+  /** Procedural grass texture — high-resolution layered noise in a
+   * green palette so the lawn has natural-looking patches with fine
+   * detail at the texture's tile size. */
   private static makeGrassTexture(): THREE.CanvasTexture {
-    const sz = 256;
+    const sz = 512;
     const canvas = document.createElement("canvas");
     canvas.width = sz;
     canvas.height = sz;
     const ctx = canvas.getContext("2d")!;
     // Base fill — mid green.
-    ctx.fillStyle = "#5a8540";
+    ctx.fillStyle = "#4f7836";
     ctx.fillRect(0, 0, sz, sz);
-    // 80 overlapping soft blobs in varying greens to break up the flat
-    // base. The blobs wrap (we draw a few near each edge offset by
-    // ±sz) so when the texture tiles there's no visible seam.
-    const palette = [
-      "rgba(90, 140, 70, 0.45)",   // lighter spring green
-      "rgba(60, 100, 50, 0.40)",   // mid forest green
-      "rgba(40, 80, 35, 0.35)",    // deep shadow green
-      "rgba(120, 150, 65, 0.30)",  // dry yellow-grass
-      "rgba(50, 95, 45, 0.30)",    // moss
+    // Layer 1: 60 large overlapping soft blobs (big colour patches).
+    const bigPalette = [
+      "rgba(95, 135, 70, 0.45)",    // lighter spring green
+      "rgba(55, 92, 42, 0.40)",     // mid forest green
+      "rgba(38, 72, 32, 0.40)",     // deep shadow green
+      "rgba(120, 145, 60, 0.30)",   // dry yellow-grass
+      "rgba(45, 88, 40, 0.30)",     // moss
     ];
-    const blobs = 80;
-    for (let i = 0; i < blobs; i += 1) {
+    for (let i = 0; i < 60; i += 1) {
       const cx = Math.random() * sz;
       const cy = Math.random() * sz;
-      const r = 20 + Math.random() * 60;
-      const colour = palette[Math.floor(Math.random() * palette.length)];
-      // Paint the same blob at three offsets so the tile edges blend
-      // when the texture wraps.
+      const r = 40 + Math.random() * 90;
+      const colour = bigPalette[Math.floor(Math.random() * bigPalette.length)];
       for (const dx of [-sz, 0, sz]) {
         for (const dy of [-sz, 0, sz]) {
           const grad = ctx.createRadialGradient(cx + dx, cy + dy, 0, cx + dx, cy + dy, r);
@@ -1288,80 +1284,147 @@ export class WorldScene {
         }
       }
     }
+    // Layer 2: ~600 tiny dark and light flecks for fine-scale texture —
+    // gives the lawn a "blades viewed from above" stippled feel instead
+    // of one uniform gradient. Each fleck is a 1-3px filled circle.
+    const fleckColours = [
+      "rgba(32, 64, 28, 0.55)",
+      "rgba(28, 56, 22, 0.55)",
+      "rgba(110, 140, 70, 0.45)",
+      "rgba(82, 115, 50, 0.45)",
+      "rgba(140, 160, 75, 0.35)",
+    ];
+    for (let i = 0; i < 600; i += 1) {
+      const cx = Math.random() * sz;
+      const cy = Math.random() * sz;
+      const r = 0.6 + Math.random() * 2.4;
+      ctx.fillStyle = fleckColours[Math.floor(Math.random() * fleckColours.length)];
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Layer 3: 40 fine short dashes that suggest individual blades
+    // viewed from above. Random orientation + length.
+    ctx.lineCap = "round";
+    for (let i = 0; i < 280; i += 1) {
+      const cx = Math.random() * sz;
+      const cy = Math.random() * sz;
+      const len = 4 + Math.random() * 8;
+      const angle = Math.random() * Math.PI * 2;
+      ctx.strokeStyle = Math.random() < 0.5 ? "rgba(35, 70, 30, 0.55)" : "rgba(100, 135, 60, 0.45)";
+      ctx.lineWidth = 0.8 + Math.random() * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+      ctx.stroke();
+    }
     const tex = new THREE.CanvasTexture(canvas);
     tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
     tex.generateMipmaps = true;
+    tex.anisotropy = 8;
     return tex;
   }
 
-  /** Instanced grass blade tufts — cross-pattern (two perpendicular
-   * planes) per instance so the blade reads from any camera angle. */
+  /** Instanced grass clumps — each instance carries a multi-blade
+   * billboard quad cluster so the lawn reads as dense bushy turf
+   * instead of lonely sticks. */
   private addGrassBlades(): void {
     const bladeTex = WorldScene.makeBladeTexture();
     const bladeMat = new THREE.MeshStandardMaterial({
-      map: bladeTex, transparent: true, alphaTest: 0.4,
+      map: bladeTex, transparent: true, alphaTest: 0.25,
       side: THREE.DoubleSide, roughness: 0.95, metalness: 0,
     });
-    // Cross-blade geometry: two 0.18×0.42 planes intersecting at 90°.
-    const planeA = new THREE.PlaneGeometry(0.18, 0.42);
-    const planeB = planeA.clone().rotateY(Math.PI / 2);
-    const geom = mergeBufferGeometries([planeA, planeB]);
-    // Plane is centred — push UP so its base sits at y=0 (otherwise
-    // half the blade buries into the ground).
-    geom.translate(0, 0.21, 0);
-    const count = 2500;
+    // Each instance is a CROSS of 3 perpendicular planes (0°, 60°,
+    // 120°) so the bush reads from any iso angle without obvious gaps.
+    // Width bumped to 0.34 m so each clump covers more ground; height
+    // 0.36 m keeps blades short enough that the camera path stays
+    // readable.
+    const w = 0.34, h = 0.36;
+    const planes: THREE.PlaneGeometry[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const p = new THREE.PlaneGeometry(w, h);
+      p.rotateY((i / 3) * Math.PI);
+      planes.push(p);
+    }
+    const geom = mergeBufferGeometries(planes);
+    geom.translate(0, h / 2, 0);
+    // Big density bump — 10000 instances spread across a ~60×60 m area
+    // gives roughly 3 clumps per m², dense enough to read as
+    // continuous turf at iso distance.
+    const count = 10000;
     const blades = new THREE.InstancedMesh(geom, bladeMat, count);
     const tmp = new THREE.Object3D();
     let placed = 0;
-    while (placed < count) {
+    let attempts = 0;
+    const maxAttempts = count * 4;
+    while (placed < count && attempts < maxAttempts) {
+      attempts += 1;
       const x = (Math.random() - 0.5) * 64;
       const z = (Math.random() - 0.5) * 64;
-      if (WorldScene.isExclusionZone(x, z, /* margin */ 0.6)) continue;
+      if (WorldScene.isExclusionZone(x, z, /* margin */ 0.4)) continue;
       tmp.position.set(x, 0, z);
       tmp.rotation.y = Math.random() * Math.PI * 2;
-      const scale = 0.7 + Math.random() * 0.9;
-      tmp.scale.set(scale, scale * (0.85 + Math.random() * 0.3), scale);
+      // Per-instance scale jitter — some short, some tall, some wider.
+      const sx = 0.75 + Math.random() * 0.55;
+      const sy = 0.7 + Math.random() * 0.7;
+      tmp.scale.set(sx, sy, sx);
       tmp.updateMatrix();
       blades.setMatrixAt(placed, tmp.matrix);
       placed += 1;
     }
+    blades.count = placed;
     blades.castShadow = false;
     blades.receiveShadow = true;
     this.threeScene.add(blades);
   }
 
-  /** Tiny vertical gradient: green at base, transparent at the tip.
-   * Painted as a soft tapered blade silhouette so the cross-quads
-   * read as natural grass instead of stiff cardboard rectangles. */
+  /** Multi-blade billboard texture. Draws ~9 tapered grass blades
+   * across the quad with varying heights and slight lean — each quad
+   * already looks like a small bushy clump, so a single instance reads
+   * as turf rather than one lonely stalk. */
   private static makeBladeTexture(): THREE.CanvasTexture {
-    const w = 64, h = 128;
+    const w = 256, h = 256;
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, w, h);
-    // Draw 3 tapered blade silhouettes per quad so each instance reads
-    // as a small clump rather than a single rectangle.
-    const blades = [{ x: 18, sw: 0.6 }, { x: 32, sw: 1.0 }, { x: 46, sw: 0.7 }];
-    for (const b of blades) {
-      const grad = ctx.createLinearGradient(0, h, 0, 0);
-      grad.addColorStop(0,    "rgba(48, 92, 38, 1.00)");
-      grad.addColorStop(0.55, "rgba(72, 124, 56, 1.00)");
-      grad.addColorStop(1.0,  "rgba(120, 160, 80, 0.00)");
+    // 11 blades distributed across the quad, each with its own height,
+    // lean angle, and shade. Together they fill most of the quad with
+    // visible grass silhouette.
+    const palette = [
+      ["rgba(36, 78, 30, 1.00)", "rgba(62, 112, 48, 1.00)", "rgba(110, 155, 70, 0.95)"],
+      ["rgba(42, 88, 36, 1.00)", "rgba(72, 124, 56, 1.00)", "rgba(120, 165, 75, 0.95)"],
+      ["rgba(30, 70, 28, 1.00)", "rgba(54, 100, 44, 1.00)", "rgba(95, 140, 60, 0.95)"],
+      ["rgba(48, 95, 38, 1.00)", "rgba(80, 130, 60, 1.00)", "rgba(135, 175, 85, 0.95)"],
+    ];
+    const blades = 11;
+    for (let i = 0; i < blades; i += 1) {
+      const baseX = w * (0.05 + 0.90 * (i / (blades - 1)) + (Math.random() - 0.5) * 0.06);
+      const top = h * (0.05 + Math.random() * 0.35);       // top of blade (lower = taller)
+      const base = h;
+      const baseHalf = 2 + Math.random() * 3;              // base width
+      const tipOffset = (Math.random() - 0.5) * w * 0.10;  // horizontal lean
+      const tipHalf = 0.5 + Math.random() * 1.0;
+      const colours = palette[Math.floor(Math.random() * palette.length)];
+      const grad = ctx.createLinearGradient(0, base, 0, top);
+      grad.addColorStop(0,    colours[0]);
+      grad.addColorStop(0.55, colours[1]);
+      grad.addColorStop(1.0,  colours[2].replace(/0\.\d+\)$/, "0)"));
       ctx.fillStyle = grad;
-      // Slim tapered shape: wider at base (y=h), narrowing toward top.
       ctx.beginPath();
-      ctx.moveTo(b.x - 5 * b.sw, h);
-      ctx.lineTo(b.x + 5 * b.sw, h);
-      ctx.lineTo(b.x + 1 * b.sw, 0);
-      ctx.lineTo(b.x - 1 * b.sw, 0);
+      ctx.moveTo(baseX - baseHalf, base);
+      ctx.lineTo(baseX + baseHalf, base);
+      ctx.lineTo(baseX + tipOffset + tipHalf, top);
+      ctx.lineTo(baseX + tipOffset - tipHalf, top);
       ctx.closePath();
       ctx.fill();
     }
     const tex = new THREE.CanvasTexture(canvas);
-    tex.minFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
     return tex;
   }
 
