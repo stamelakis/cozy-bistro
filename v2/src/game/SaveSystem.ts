@@ -232,6 +232,9 @@ export class SaveSystem {
       themeId: this.game.getCurrentTheme().id,
       restaurantName: this.game.getRestaurantName(),
       signStyle: this.game.getRestaurantSignStyle(),
+      // Snapshot in-flight plate reservations so a refresh doesn't
+      // silently lose every plate held by a mid-meal guest.
+      inFlightDishes: this.game.getInFlightDishesForSave(),
       // Per-tier dish/glass snapshot. Legacy dirtyDishCount is no
       // longer written — the new field has strictly more info, and
       // the loader handles either.

@@ -169,6 +169,16 @@ export class Game {
   /** Optional callback fired when the theme changes — Engine wires
    * this to WorldScene.setTheme so the world recolors. */
   onThemeChanged?: (theme: RestaurantTheme) => void;
+  /** Engine wires this to GuestSpawner so the SaveSystem can persist
+   * per-kind / per-tier in-flight plate reservations. Without it a
+   * refresh permanently loses any plate a mid-meal guest was holding
+   * (guests aren't saved, so their reservation evaporates). */
+  gatherInFlightDishes?: () => Array<{ kind: "plate" | "glass"; tier: number; count: number }>;
+  /** Snapshot helper used by SaveSystem. Returns empty when no
+   * spawner is wired (early-boot saves). */
+  getInFlightDishesForSave(): Array<{ kind: "plate" | "glass"; tier: number; count: number }> {
+    return this.gatherInFlightDishes?.() ?? [];
+  }
   /** Optional: when set, the dish-wash interval queries this for
    * counts of placed sinks / dishwashers. */
   countPlacedById?: (id: string) => number;
@@ -381,7 +391,7 @@ export class Game {
     // Per-tier dishware snapshot — preferred over the legacy
     // dirtyDishCount when both are present. Hydrate sets up the pool
     // (or seeds starter inventory when no save data is present).
-    this.dishware.hydrate(save.dishware);
+    this.dishware.hydrate(save.dishware, save.inFlightDishes);
     // Old-save fallback: dirtyDishCount existed pre-feature. We MOVE
     // pieces from clean → dirty rather than ADD to dirty, so total
     // ownership stays at the starter amount instead of inflating to

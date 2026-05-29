@@ -241,6 +241,13 @@ export interface SaveGameState {
   restaurantName?: string;
   /** Per-axis catalog ids for the plaque visual style. */
   signStyle?: { font?: string; textColor?: string; plaqueStyle?: string };
+  /** Plates / glasses currently RESERVED by mid-meal guests at save
+   * time. Guests aren't persisted so without this every in-flight
+   * reservation would vanish on the next load — the player would see
+   * the inventory permanently shrink each refresh. On hydrate we add
+   * each entry back to the clean pool: "the guest left at save time,
+   * the plate's back in the kitchen". */
+  inFlightDishes?: Array<{ kind: string; tier: number; count: number }>;
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

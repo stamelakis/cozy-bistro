@@ -471,6 +471,9 @@ export class Engine {
       );
       this.game.dishware.setLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       this.spawner.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
+      // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
+      // doesn't permanently lose plates a mid-meal guest was holding.
+      this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];
       if (this.router) {
         this.router.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       }

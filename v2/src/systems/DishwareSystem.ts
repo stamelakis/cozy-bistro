@@ -410,7 +410,10 @@ export class DishwareSystem {
    * in inventory — no mesh on the table for the waiter to claim, so
    * the wash loop can never drain them. Mental model: while you were
    * away, someone cleaned up. */
-  hydrate(save: { plates?: Array<[number, number, number]>; glasses?: Array<[number, number, number]> } | null | undefined): void {
+  hydrate(
+    save: { plates?: Array<[number, number, number]>; glasses?: Array<[number, number, number]> } | null | undefined,
+    inFlight?: Array<{ kind: string; tier: number; count: number }>,
+  ): void {
     this.plates = new Map();
     this.glasses = new Map();
     if (save?.plates) triplesToPool(save.plates, this.plates);
@@ -419,11 +422,33 @@ export class DishwareSystem {
     if (this.glasses.size === 0) this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
     autoWashPool(this.plates);
     autoWashPool(this.glasses);
+    // Restore in-flight reservations. Guests aren't persisted, so a
+    // plate they were holding at save time would otherwise vanish.
+    // Treat each entry as "guest left, plate's back in the kitchen" and
+    // add it to the clean pool. Tiers outside [1, 5] are dropped
+    // defensively.
+    if (inFlight && Array.isArray(inFlight)) {
+      let recovered = 0;
+      for (const e of inFlight) {
+        if (!e || typeof e.tier !== "number" || typeof e.count !== "number") continue;
+        if (e.tier < 1 || e.tier > 5) continue;
+        const c = Math.max(0, Math.floor(e.count));
+        if (c <= 0) continue;
+        const kind: DishKind = e.kind === "glass" ? "glass" : "plate";
+        const pool = this.poolFor(kind);
+        const entry = pool.get(e.tier) ?? { clean: 0, dirty: 0 };
+        entry.clean += c;
+        pool.set(e.tier, entry);
+        recovered += c;
+      }
+      if (recovered > 0) {
+        this.log(`hydrate restored ${recovered} in-flight piece(s) to clean`);
+      }
+    }
     // Re-baseline lifetimeAdded so the watcher's expected total matches
     // what the save actually held. Save files don't currently persist
-    // lifetimeAdded itself; we infer it from the current pools as the
-    // best floor (any pre-load leak is treated as "already happened,
-    // can't recover history").
+    // lifetimeAdded itself; we infer it from the current pools (now
+    // including the recovered in-flight reservations).
     this.lifetimeAdded = this.getOwned("plate") + this.getOwned("glass");
     this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime ${this.lifetimeAdded}`);
   }

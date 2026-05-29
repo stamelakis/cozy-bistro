@@ -734,6 +734,34 @@ export class GuestSpawner {
     return n;
   }
 
+  /** Per-kind per-tier breakdown of in-flight reservations — used by
+   * SaveSystem so a refresh / cloud-load doesn't permanently lose any
+   * plates that were "in a guest's hands" at save time. Guests are
+   * NOT persisted, so without this every mid-meal reservation would
+   * vanish on the next load. The hydrate path adds these back to the
+   * clean pool — equivalent to "the guest left at save time, leaving
+   * the plate behind". */
+  getInFlightByKindTier(): Array<{ kind: DishKind; tier: number; count: number }> {
+    const byKey = new Map<string, number>();
+    for (const g of this.guests) {
+      for (let i = 0; i < g.reservedDishTiers.length; i += 1) {
+        const recipe = g.order[i];
+        if (!recipe) continue;
+        const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+        const tier = g.reservedDishTiers[i];
+        const key = `${kind}-${tier}`;
+        byKey.set(key, (byKey.get(key) ?? 0) + 1);
+      }
+    }
+    const out: Array<{ kind: DishKind; tier: number; count: number }> = [];
+    for (const [key, count] of byKey) {
+      const [kindRaw, tierStr] = key.split("-");
+      const kind: DishKind = kindRaw === "glass" ? "glass" : "plate";
+      out.push({ kind, tier: parseInt(tierStr, 10), count });
+    }
+    return out;
+  }
+
   /** Engine wires a logger here so settleGuestDishes can push context-
    * rich entries into the leak watcher's ring buffer (guest id, state,
    * orderIndex, reservation count) alongside the raw DishwareSystem
