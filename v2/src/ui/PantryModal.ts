@@ -242,7 +242,7 @@ export class PantryModal {
   private buildDishwareRow(set: DishwareSetDef): HTMLElement {
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "grid", gridTemplateColumns: "26px 1fr 38px",
+      display: "grid", gridTemplateColumns: "26px 1fr 64px",
       alignItems: "center", gap: "4px",
       padding: "2px 2px",
       borderBottom: "1px solid rgba(255,245,220,0.05)",
@@ -260,12 +260,17 @@ export class PantryModal {
     // current ownership immediately.
     tierLine.textContent = set.name;
     const buyBtn = document.createElement("button");
-    buyBtn.textContent = `$${set.cost}`;
+    // Show BOTH the per-click set size and the price up-front — without
+    // it the button just says "$12" and the player has to hover the
+    // tooltip to learn each click buys 4. Two lines so a small set size
+    // ("+4") and a price ($420) both stay readable on narrow rows.
+    buyBtn.innerHTML = `<span style="font-size:9px;opacity:0.75;line-height:1">+${set.setSize}</span>` +
+      `<br><span style="line-height:1.1">$${set.cost}</span>`;
     Object.assign(buyBtn.style, {
       background: "rgba(255,245,220,0.10)", color: "#fff5dc",
       border: "1px solid rgba(255,245,220,0.28)", borderRadius: "3px",
       cursor: "pointer", font: "inherit", fontSize: "10px",
-      padding: "3px 4px",
+      padding: "3px 4px", lineHeight: "1",
     } as Partial<CSSStyleDeclaration>);
     buyBtn.title = `Buy a set of ${set.setSize} ${set.name.toLowerCase()} for $${set.cost}` +
       (set.satisfactionPerPiece > 0
@@ -356,7 +361,12 @@ export class PantryModal {
       entry.buyBtn.disabled = !enabled;
       entry.buyBtn.style.opacity = enabled ? "1" : "0.35";
       entry.buyBtn.style.cursor = enabled ? "pointer" : "not-allowed";
-      entry.buyBtn.textContent = locked ? "🔒" : `$${set.cost}`;
+      // Locked tiers collapse the two-line "+4 / $cost" label to just
+      // the padlock; the tooltip explains what unlocks it.
+      entry.buyBtn.innerHTML = locked
+        ? "🔒"
+        : `<span style="font-size:9px;opacity:0.75;line-height:1">+${set.setSize}</span>` +
+          `<br><span style="line-height:1.1">$${set.cost}</span>`;
       entry.buyBtn.title = locked
         ? `Tier ${set.tier} dishware unlocks when you expand to Luxury Tier ${set.tier}.`
         : !canFit
