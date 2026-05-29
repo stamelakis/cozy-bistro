@@ -194,6 +194,12 @@ export function fittedHeight(model: THREE.Object3D): number {
  * have their model TOP aligned with this. */
 export const CEILING_Y = 3;
 
+/** Sill height used by the perimeter-wall window cut. Windows sit ON
+ * the sill, so their mesh bottom anchors here instead of at the floor.
+ * Mirrors WorldScene.WINDOW_SILL_TOP — keep in sync if either side
+ * moves. */
+export const WINDOW_SILL_TOP = 0.9;
+
 /** Pick the world-space Y for a placed model based on its placement
  * kind. Shared by BuildMenu (place / preview), the undo handler, and
  * FurnitureRegistry.restore so a ceiling lamp lands at the same Y
@@ -202,6 +208,8 @@ export const CEILING_Y = 3;
  *   - "wall"    → 1.5 (chest height, set by the wall-mount logic)
  *   - "ceiling" → CEILING_Y minus the model's own height, so its TOP
  *                 touches the ceiling and the body hangs below
+ *   - windows   → WINDOW_SILL_TOP so the mesh sits inside the sill +
+ *                 lintel cut in the perimeter wall
  *   - otherwise → whatever fitFurniture left model.position.y at (≈ 0) */
 export function placementY(model: THREE.Object3D, def: FurnitureDef): number {
   if (def.placement === "wall") return 1.5;
@@ -214,6 +222,12 @@ export function placementY(model: THREE.Object3D, def: FurnitureDef): number {
   if (def.placement === "ceiling") {
     return Math.max(0, CEILING_Y - fittedHeight(model));
   }
+  // Windows slot into the sill+lintel cut in the perimeter wall, so
+  // their bottom lands on top of the sill instead of on the floor.
+  // Internal-wall windows ("int-window") have their own procedural
+  // builder that already authors the right Y, so this only affects
+  // the perimeter "window" / "window-slide" entries.
+  if (def.id.startsWith("window")) return WINDOW_SILL_TOP;
   return model.position.y;
 }
 

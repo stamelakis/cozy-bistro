@@ -258,9 +258,10 @@ export class Engine {
           const def = getFurnitureDef(it.defId);
           if (def?.category === "lamp") this.scene.registerLamp(it.model);
         }
-        // Doors restored from save → rebuild the front wall so the
-        // gaps reflect where they actually live now.
-        this.scene.rebuildFrontWall(this.frontWallDoorXs());
+        // Doors + windows restored from save → rebuild every
+        // perimeter wall so the gaps reflect where they actually
+        // live now.
+        this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
       });
     }
     this.saver.registry = this.registry;
@@ -279,9 +280,9 @@ export class Engine {
       // Apply tier visibility so locked sections show their marker.
       this.scene.setLuxuryTier(this.game.getLuxuryTier());
       // Now that the demo door is in the registry (or NOT, for a
-      // saved game where it was sold), rebuild the front wall so it
-      // has its gaps in the right places.
-      this.scene.rebuildFrontWall(this.frontWallDoorXs());
+      // saved game where it was sold), rebuild every perimeter wall
+      // so they have their gaps in the right places.
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
     });
     // Let the Game read counts of placed sinks/dishwashers when scaling
     // the dish-wash interval.
@@ -316,12 +317,19 @@ export class Engine {
     buildMenu.seatMarkers = this.seatMarkers;
     buildMenu.onDoorPlaced = (model) => {
       this.scene.attachDoorPanel(model);
-      // Door event invalidates the front-wall layout — rebuild from
-      // whatever's now in the registry.
-      this.scene.rebuildFrontWall(this.frontWallDoorXs());
+      // Door event invalidates the front-wall layout — rebuild every
+      // perimeter wall so the gap + lintel land in the right places
+      // and any window cuts on neighbouring walls stay correct.
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
     };
     buildMenu.onDoorRemoved = () => {
-      this.scene.rebuildFrontWall(this.frontWallDoorXs());
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+    };
+    buildMenu.onWindowPlaced = () => {
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+    };
+    buildMenu.onWindowRemoved = () => {
+      this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
     };
     // Per-stove flame pins are now driven by Engine.update via
     // scene.syncStoveFlames(registry.getCookingStoves()) — no place-
@@ -579,16 +587,47 @@ export class Engine {
    * visibly punches a 1-tile gap with a lintel above. Looks up by
    * CATEGORY so all door variants (the procedural one, Kenney
    * doorways, wall doorways, etc.) count, not just the "door" id. */
-  private frontWallDoorXs(): number[] {
-    const out: number[] = [];
+  // frontWallDoorXs removed — every door + window in the perimeter
+  // now flows through allPerimeterOpenings below.
+
+  /** Bucket every door (one wall) AND every window (any wall) by which
+   * perimeter wall they sit on. Walls are at z = ±(min/max) / x = ±
+   * for front / back / left / right respectively; an item within 0.1
+   * of one of those coords belongs to that wall. Windows can live on
+   * any perimeter wall; real doors stay confined to the front wall as
+   * before. */
+  private allPerimeterOpenings(): { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } } {
+    const out = {
+      front: { doors: [] as number[], windows: [] as number[] },
+      back:  { doors: [] as number[], windows: [] as number[] },
+      left:  { doors: [] as number[], windows: [] as number[] },
+      right: { doors: [] as number[], windows: [] as number[] },
+    };
     for (const it of this.registry.snapshotItems()) {
       const def = getFurnitureDef(it.defId);
-      // Windows share the "door" category in the build menu but don't
-      // cut the front wall — they sit IN the wall as a glazed panel.
-      // Skip them so the rebuilt wall doesn't punch a doorway under
-      // every window.
-      if (def?.category !== "door" || def.id.startsWith("window")) continue;
-      if (Math.abs(it.z - 5.5) < 0.1) out.push(it.x);
+      if (def?.category !== "door") continue;
+      const isWindow = def.id.startsWith("window");
+      // Front wall (z = 5.5).
+      if (Math.abs(it.z - 5.5) < 0.1) {
+        if (isWindow) out.front.windows.push(it.x);
+        else out.front.doors.push(it.x);
+        continue;
+      }
+      // Back wall (z = -4.5) — only windows live here today.
+      if (Math.abs(it.z + 4.5) < 0.1) {
+        if (isWindow) out.back.windows.push(it.x);
+        continue;
+      }
+      // Left wall (x = -4.5) — axis is Z.
+      if (Math.abs(it.x + 4.5) < 0.1) {
+        if (isWindow) out.left.windows.push(it.z);
+        continue;
+      }
+      // Right wall (x = 5.5).
+      if (Math.abs(it.x - 5.5) < 0.1) {
+        if (isWindow) out.right.windows.push(it.z);
+        continue;
+      }
     }
     return out;
   }

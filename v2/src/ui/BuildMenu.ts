@@ -126,6 +126,12 @@ export class BuildMenu {
   /** Fired when a door is sold or undone, so the front wall can be
    * resealed where the door used to be. */
   onDoorRemoved?: (model: THREE.Object3D) => void;
+  /** Fired when a window is placed / removed. Engine forwards to
+   * WorldScene's rebuildAllPerimeterWalls so the wall opens a sill +
+   * lintel cut for the new window and you can see through it from
+   * either side. */
+  onWindowPlaced?: (model: THREE.Object3D) => void;
+  onWindowRemoved?: (model: THREE.Object3D) => void;
   /** Optional callback fired when the player places a stove — Engine
    * pins the cooking flame to the new stove's measured top. */
   onStovePlaced?: (model: THREE.Object3D) => void;
@@ -1283,6 +1289,7 @@ export class BuildMenu {
       // don't trigger door-specific scene rebuilds (no hinged panel,
       // no front-wall cut).
       if (itemDef?.category === "door" && !itemDef.id.startsWith("window")) this.onDoorRemoved?.(itemModel);
+      if (itemDef?.id.startsWith("window")) this.onWindowRemoved?.(itemModel);
       this.game.economy.earnMoney(removed.refund, "payment");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
       this.flashRoot(`Sold for $${removed.refund}`, "success");
@@ -1379,9 +1386,12 @@ export class BuildMenu {
         : undefined;
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
-      // Same "door category but not a window" guard as the removal
-       // path. Windows are decorative panes — no swing, no wall cut.
+      // Real doors keep their existing hook (hinged panel + front-
+      // wall cut). Windows have their own callback that triggers
+      // a perimeter-wall rebuild so the sill + lintel gap shows
+      // through from either side.
       if (def.category === "door" && !def.id.startsWith("window")) this.onDoorPlaced?.(solid);
+      if (def.id.startsWith("window")) this.onWindowPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
       if (def.category === "lamp") this.onLampPlaced?.(solid);
     });

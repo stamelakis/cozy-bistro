@@ -566,12 +566,17 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // they were buried under "decoration" before, where players didn't
   // think to look. They're still edge-placed (same mechanism walls /
   // doors use) so the placement logic doesn't need to change.
+  // Windows: targetHeight sized to fit the sill+lintel opening cut into
+  // the perimeter wall. The wall rebuild punches a band between sill top
+  // (y=0.9) and lintel bottom (y=2.2) — 1.3m of vertical clearance — so
+  // the window mesh stretches Y to match instead of poking into the
+  // sill/lintel boxes above and below.
   { id: "window",       name: "Window",        category: "door",
     modelPath: "assets/kenney/wallWindow.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 90, ratingBonus: 0.01,
-    tier: 2, placement: "edge" },
+    tier: 2, placement: "edge", targetHeight: 1.3 },
   { id: "window-slide", name: "Sliding Window", category: "door",
     modelPath: "assets/kenney/wallWindowSlide.glb", scale: S_DOOR, size: { width: 1, depth: 1 }, cost: 130, ratingBonus: 0.02,
-    tier: 2, placement: "edge" },
+    tier: 2, placement: "edge", targetHeight: 1.3 },
 
   // === Bathroom — needed for the toilet-use customer loop. ===
   // Toilets sit in a small partitioned room; sinks for handwashing.

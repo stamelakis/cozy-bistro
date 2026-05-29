@@ -23,6 +23,25 @@ function mixColors(a: number, b: number, t: number): number {
  * Phase 3+ will replace the hard-coded placements with a proper
  * grid-driven building system that mirrors the 2D game.
  */
+/** Perimeter wall direction — picks which axis the wall runs along
+ * (front / back are X-axis at z=±5.5; left / right are Z-axis at
+ * x=±5.5 / -4.5) and which face of the box geometry is the outdoor
+ * face when building the multi-material array. */
+type WallDir = "front" | "back" | "left" | "right";
+
+/** Live state for one perimeter wall. Walls are rebuilt as a stack of
+ * segment + lintel + sill meshes around each door (full-height cut)
+ * and window (sill + lintel partial cut). currentMat tracks whether
+ * the wall is currently rendered solid (interior+exterior multi-mat)
+ * or as the ghost see-through, so the camera-driven swap doesn't
+ * thrash. */
+interface PerimeterWallState {
+  meshes: THREE.Mesh[];
+  currentMat: "solid" | "ghost";
+  doors: number[];
+  windows: number[];
+}
+
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
   readonly loader = new ModelLoader();
@@ -669,19 +688,23 @@ export class WorldScene {
    * the peach tint reads as a CSS-cutaway hint rather than an actual
    * wall colour. */
   private wallGhostMat!: THREE.MeshStandardMaterial;
-  /** Individual exterior wall meshes — kept as fields (not just local
-   * vars) so updateWallVisibility can swap each one's material between
-   * solid and ghost as the camera rotates. The front wall isn't here
-   * because it's a dynamic group of segments + lintels; see
-   * frontWallSegments / frontWallLintels below. */
-  private wallBack!: THREE.Mesh;
-  private wallLeft!: THREE.Mesh;
-  private wallRight!: THREE.Mesh;
-  /** Whichever of {wallMat, wallGhostMat} the front wall is currently
-   * rendered with. rebuildFrontWall uses this when it rebuilds segments
-   * so a new segment immediately matches the rest of the front wall
-   * even between frames. */
-  private currentFrontWallMat!: THREE.MeshStandardMaterial;
+  // wallBack / wallLeft / wallRight removed — every perimeter wall
+  // is now stored in the perimeterWalls map below.
+  /** Exterior-facing wall material. Each wall segment uses a 6-material
+   * array so the inside face is wallMat and the outside face is this.
+   * Lets a window cut through and show the interior cream on the room
+   * side and the building beige on the outside. */
+  private wallExteriorMat!: THREE.MeshStandardMaterial;
+  /** Per-direction state for the four perimeter walls — all dynamic
+   * now so windows + doors can cut them. Single-mesh back/left/right
+   * walls were replaced with a segmented system identical to the
+   * front wall. */
+  private readonly perimeterWalls: Map<WallDir, PerimeterWallState> = new Map([
+    ["front", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
+    ["back",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
+    ["left",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
+    ["right", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
+  ]);
 
   private addBuilding(): void {
     // === Exterior ground layers ===
@@ -798,40 +821,28 @@ export class WorldScene {
     this.threeScene.add(grid);
 
     // === Walls ===
-    // Both materials are created up-front and the appropriate one is
-    // assigned per wall based on which side of the room the camera is
-    // currently on (updateWallVisibility). Default azimuth = π/4 puts
-    // the camera looking from +X, +Z, so the front + right walls start
-    // ghosted and back + left start solid — matching the original
-    // hard-coded layout. The flip happens dynamically as the player
-    // rotates the camera.
+    // Three materials:
+    //   wallMat       — interior cream colour, room-facing face
+    //   wallExtMat    — exterior beige, outside-facing face
+    //   wallGhostMat  — see-through used when the camera is on this
+    //                   wall's outdoor side so it doesn't block the
+    //                   view of the dining room
+    // updateWallVisibility picks solid vs ghost per wall every frame.
     this.wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85 });
+    this.wallExteriorMat = new THREE.MeshStandardMaterial({ color: 0xc8a878, roughness: 0.78 });
     this.wallGhostMat = new THREE.MeshStandardMaterial({
       color: 0xe8a98a, roughness: 0.6,
       transparent: true, opacity: 0.15, depthWrite: false,
     });
-    // Same (+0.5, +0.5) shift as the floor so the building envelope
-    // coincides with the tiled area.
-    this.wallBack = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 0.2), this.wallMat);
-    this.wallBack.position.set(0.5, 1.5, -4.5);
-    this.wallBack.castShadow = true;
-    this.wallBack.receiveShadow = true;
-    this.threeScene.add(this.wallBack);
-
-    this.wallLeft = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallMat);
-    this.wallLeft.position.set(-4.5, 1.5, 0.5);
-    this.wallLeft.castShadow = true;
-    this.wallLeft.receiveShadow = true;
-    this.threeScene.add(this.wallLeft);
-
-    this.wallRight = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3, 10), this.wallGhostMat);
-    this.wallRight.position.set(5.5, 1.5, 0.5);
-    this.threeScene.add(this.wallRight);
-    // Front wall is rebuilt dynamically — every placed door punches a
-    // 1-tile gap in the wall (and adds a lintel above) so additional
-    // doorways become real entries the customers can use.
-    this.currentFrontWallMat = this.wallGhostMat;
-    this.rebuildFrontWall([]);
+    // All 4 perimeter walls are dynamic segmented meshes now —
+    // doors cut a full-height gap (+ lintel), windows cut a sill +
+    // lintel partial gap so the player can see in / out through them
+    // from either side. Default door list is empty; the engine
+    // refills both lists from the registry as the player builds.
+    this.rebuildPerimeterWall("front", [], []);
+    this.rebuildPerimeterWall("back",  [], []);
+    this.rebuildPerimeterWall("left",  [], []);
+    this.rebuildPerimeterWall("right", [], []);
     // Restaurant rating sign mounted on the lintel — a small marquee
     // that shows the current ★ rating, just like a real bistro
     // entrance. Hooked up by updateRatingSign() from Engine.
@@ -845,94 +856,185 @@ export class WorldScene {
     this.buildSupplyCounter();
   }
 
-  // === Dynamic front wall ====================================================
-  // The front wall is no longer a hard-coded pair of segments around a
-  // fixed doorway. Instead it's rebuilt every time a door is placed,
-  // moved or sold, so each door visibly opens a real gap in the wall
-  // (and a lintel goes above it). rebuildFrontWall takes the list of
-  // door X-coordinates currently on z=5.5 and lays the wall out around
-  // them.
-  private frontWallSegments: THREE.Mesh[] = [];
-  private frontWallLintels: THREE.Mesh[] = [];
-  /** Re-render the front wall as solid segments between gaps for each
-   * passed door X. Idempotent — call again whenever doors are
-   * added/removed and the geometry self-cleans. New segments adopt
-   * whatever material the front wall is currently rendered with
-   * (solid vs ghost), so a rebuild during a camera-far frame doesn't
-   * flash a transparent segment. */
-  rebuildFrontWall(doorXs: readonly number[]): void {
-    if (!this.currentFrontWallMat) return;
-    // Tear down existing meshes + free geometry.
-    for (const m of this.frontWallSegments) {
+  // === Dynamic perimeter walls ===============================================
+  // All four perimeter walls are segmented now. Doors cut a full-height
+  // gap with a lintel above; windows cut a sill + lintel partial gap so
+  // the player can see through them from either side. Each wall has a
+  // multi-material box geometry so the inside face wears the interior
+  // colour and the outside face wears the building's exterior colour —
+  // until the camera lands on the wall's outdoor side, at which point
+  // the whole wall (every segment) flips to the ghost see-through.
+
+  /** Outdoor-axis end coordinates for each wall (along the wall's main
+   * axis). Together these give the building a 10×10 interior. */
+  private static readonly WALL_AXIS_MIN = -4.5;
+  private static readonly WALL_AXIS_MAX = 5.5;
+  /** Half-tile gap each opening punches in the wall. */
+  private static readonly OPENING_HALF = 0.5;
+  /** Sill / lintel heights for a window opening. Sill = 0 → 0.9 m,
+   * window itself runs 0.9 → 2.2 m, lintel = 2.2 → 3.0 m. */
+  private static readonly WINDOW_SILL_TOP = 0.9;
+  private static readonly WINDOW_LINTEL_BOTTOM = 2.2;
+
+  /** Rebuild one perimeter wall from scratch around the supplied
+   * openings. Door positions are along the wall's main axis (X for
+   * front/back, Z for left/right) and produce a full-height gap with
+   * a 1 m lintel above. Window positions produce a sill + window
+   * opening + lintel, leaving the middle band see-through so the
+   * actual window mesh placed on top is what the player looks
+   * through. */
+  rebuildPerimeterWall(dir: WallDir, doorEdges: number[], windowEdges: number[]): void {
+    const state = this.perimeterWalls.get(dir);
+    if (!state) return;
+    state.doors = [...doorEdges];
+    state.windows = [...windowEdges];
+    // Tear down every existing mesh + free its geometry.
+    for (const m of state.meshes) {
       this.threeScene.remove(m);
       m.geometry.dispose();
     }
-    this.frontWallSegments.length = 0;
-    for (const m of this.frontWallLintels) {
-      this.threeScene.remove(m);
-      m.geometry.dispose();
-    }
-    this.frontWallLintels.length = 0;
-    const X_MIN = -4.5, X_MAX = 5.5;
-    const GAP_HALF = 0.5; // each door takes 1 tile of wall
-    const sorted = [...doorXs].filter((x) => x > X_MIN && x < X_MAX).sort((a, b) => a - b);
-    let segStart = X_MIN;
-    const addSegment = (from: number, to: number): void => {
-      const width = to - from;
-      if (width < 0.05) return; // skip degenerate slivers
-      const center = (from + to) / 2;
-      const seg = new THREE.Mesh(new THREE.BoxGeometry(width, 3, 0.2), this.currentFrontWallMat);
-      seg.position.set(center, 1.5, 5.5);
-      this.threeScene.add(seg);
-      this.frontWallSegments.push(seg);
+    state.meshes.length = 0;
+
+    const axisMin = WorldScene.WALL_AXIS_MIN;
+    const axisMax = WorldScene.WALL_AXIS_MAX;
+    const halfGap = WorldScene.OPENING_HALF;
+    const sillTop = WorldScene.WINDOW_SILL_TOP;
+    const lintelBottom = WorldScene.WINDOW_LINTEL_BOTTOM;
+
+    // Build a sorted list of openings (mixed door + window) so the
+    // segment loop walks them left-to-right exactly once.
+    const openings: { center: number; type: "door" | "window" }[] = [
+      ...doorEdges.filter((c) => c > axisMin && c < axisMax).map((c) => ({ center: c, type: "door" as const })),
+      ...windowEdges.filter((c) => c > axisMin && c < axisMax).map((c) => ({ center: c, type: "window" as const })),
+    ].sort((a, b) => a.center - b.center);
+
+    const mats = this.materialsFor(dir, state.currentMat);
+    const addBox = (
+      axisFrom: number, axisTo: number,
+      yCenter: number, yHeight: number,
+    ): void => {
+      const span = axisTo - axisFrom;
+      if (span < 0.04 || yHeight < 0.04) return;
+      const center = (axisFrom + axisTo) / 2;
+      const geom = this.wallBoxFor(dir, span, yHeight);
+      const mesh = new THREE.Mesh(geom, mats);
+      const pos = this.wallSegmentPosition(dir, center, yCenter);
+      mesh.position.copy(pos);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.threeScene.add(mesh);
+      state.meshes.push(mesh);
     };
-    const addLintel = (centerX: number): void => {
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 0.2), this.currentFrontWallMat);
-      lintel.position.set(centerX, 2.5, 5.5);
-      this.threeScene.add(lintel);
-      this.frontWallLintels.push(lintel);
-    };
-    for (const doorX of sorted) {
-      const gapStart = doorX - GAP_HALF;
-      const gapEnd = doorX + GAP_HALF;
-      addSegment(segStart, gapStart);
-      addLintel(doorX);
+
+    let segStart = axisMin;
+    for (const op of openings) {
+      const gapStart = op.center - halfGap;
+      const gapEnd = op.center + halfGap;
+      // Continuous wall segment up to this opening.
+      addBox(segStart, gapStart, 1.5, 3.0);
+      if (op.type === "door") {
+        // Full-height gap with a 1 m lintel sitting at the top.
+        addBox(gapStart, gapEnd, 2.5, 1.0);
+      } else {
+        // Window: 0..sillTop is the sill, lintelBottom..3 is the lintel,
+        // the middle band stays open so the placed window mesh shows.
+        addBox(gapStart, gapEnd, sillTop / 2, sillTop);
+        const lintelH = 3 - lintelBottom;
+        addBox(gapStart, gapEnd, lintelBottom + lintelH / 2, lintelH);
+      }
       segStart = gapEnd;
     }
-    addSegment(segStart, X_MAX);
+    addBox(segStart, axisMax, 1.5, 3.0);
+  }
+
+  /** Geometry for a single wall box. Direction picks which axis the
+   * width sits along — front/back stretch along X, left/right along
+   * Z — keeping the 0.2 m thickness on the perpendicular axis. */
+  private wallBoxFor(dir: WallDir, span: number, yHeight: number): THREE.BoxGeometry {
+    if (dir === "front" || dir === "back") {
+      return new THREE.BoxGeometry(span, yHeight, 0.2);
+    }
+    return new THREE.BoxGeometry(0.2, yHeight, span);
+  }
+
+  /** World position of a wall segment given its centre along the wall
+   * axis and its centre Y. Building interior is shifted by (0.5, 0.5)
+   * to match the tile grid, but the perimeter coords are absolute. */
+  private wallSegmentPosition(dir: WallDir, axisCentre: number, yCentre: number): THREE.Vector3 {
+    switch (dir) {
+      case "front": return new THREE.Vector3(axisCentre, yCentre,  5.5);
+      case "back":  return new THREE.Vector3(axisCentre, yCentre, -4.5);
+      case "left":  return new THREE.Vector3(-4.5, yCentre, axisCentre);
+      case "right": return new THREE.Vector3( 5.5, yCentre, axisCentre);
+    }
+  }
+
+  /** Per-face material array for a wall box. Inside face uses
+   * wallMat, outside face uses wallExteriorMat, top / bottom / end-
+   * caps fall back to wallMat. Returns six copies of wallGhostMat
+   * when the wall is currently ghost-faded (camera on its outside). */
+  private materialsFor(dir: WallDir, kind: "solid" | "ghost"): THREE.Material[] {
+    if (kind === "ghost") {
+      return [
+        this.wallGhostMat, this.wallGhostMat, this.wallGhostMat,
+        this.wallGhostMat, this.wallGhostMat, this.wallGhostMat,
+      ];
+    }
+    const int = this.wallMat;
+    const ext = this.wallExteriorMat;
+    // BoxGeometry face order: [+X, -X, +Y, -Y, +Z, -Z].
+    switch (dir) {
+      case "front": return [int, int, int, int, ext, int];
+      case "back":  return [int, int, int, int, int, ext];
+      case "left":  return [int, ext, int, int, int, int];
+      case "right": return [ext, int, int, int, int, int];
+    }
+  }
+
+  /** Legacy entry-point — Engine still calls this when only doors
+   * changed. Forwards into the new system with the wall's current
+   * window list preserved. */
+  rebuildFrontWall(doorXs: readonly number[]): void {
+    const state = this.perimeterWalls.get("front");
+    if (!state) return;
+    this.rebuildPerimeterWall("front", [...doorXs], state.windows);
+  }
+
+  /** Re-render every perimeter wall from the supplied openings.
+   * Engine calls this after a door OR window changes anywhere on the
+   * building — cheap because each wall ignores updates to its own
+   * inputs when nothing changed. */
+  rebuildAllPerimeterWalls(openings: Record<WallDir, { doors: number[]; windows: number[] }>): void {
+    this.rebuildPerimeterWall("front", openings.front.doors, openings.front.windows);
+    this.rebuildPerimeterWall("back",  openings.back.doors,  openings.back.windows);
+    this.rebuildPerimeterWall("left",  openings.left.doors,  openings.left.windows);
+    this.rebuildPerimeterWall("right", openings.right.doors, openings.right.windows);
   }
 
   /** Swap wall materials so the two walls closest to the camera become
    * the transparent ghost and the two far walls stay solid. Driven by
    * the dot product of each wall's outward normal with the camera's
    * world position relative to the building centre — positive means the
-   * camera is on the wall's outer face, so the wall is between the
-   * camera and the room interior and should be cut away.
-   *
-   * The front wall is the multi-mesh dynamic one — every segment +
-   * lintel adopts the same material. The back/left/right walls each
-   * have a single mesh.
-   *
-   * Cheap to call every frame; this is just 4 dot products + (potentially)
-   * a handful of material reassignments. */
+   * camera is on the wall's outer face. */
   updateWallVisibility(cameraPos: THREE.Vector3): void {
     if (!this.wallMat || !this.wallGhostMat) return;
-    // Building's interior is centred near (0.5, 0.5); the dot product
-    // sign is what matters, not the magnitude, so we can ignore the
-    // 0.5 offset.
-    const matFor = (normalX: number, normalZ: number): THREE.MeshStandardMaterial => {
+    const kindFor = (normalX: number, normalZ: number): "solid" | "ghost" => {
       const dot = normalX * cameraPos.x + normalZ * cameraPos.z;
-      return dot > 0 ? this.wallGhostMat : this.wallMat;
+      return dot > 0 ? "ghost" : "solid";
     };
-    this.wallBack.material = matFor(0, -1);   // outward normal -Z
-    this.wallLeft.material = matFor(-1, 0);   // outward normal -X
-    this.wallRight.material = matFor(1, 0);   // outward normal +X
-    const frontMat = matFor(0, 1);            // outward normal +Z
-    if (frontMat !== this.currentFrontWallMat) {
-      this.currentFrontWallMat = frontMat;
-      for (const m of this.frontWallSegments) m.material = frontMat;
-      for (const m of this.frontWallLintels) m.material = frontMat;
-    }
+    this.applyWallKind("back",  kindFor(0, -1));
+    this.applyWallKind("left",  kindFor(-1, 0));
+    this.applyWallKind("right", kindFor(1, 0));
+    this.applyWallKind("front", kindFor(0, 1));
+  }
+
+  /** Switch one wall's segments between solid (multi-mat) and ghost. */
+  private applyWallKind(dir: WallDir, kind: "solid" | "ghost"): void {
+    const state = this.perimeterWalls.get(dir);
+    if (!state || state.currentMat === kind) return;
+    state.currentMat = kind;
+    const mats = this.materialsFor(dir, kind);
+    for (const m of state.meshes) m.material = mats;
   }
 
   /** Wood-and-metal "back of house" counter where the errand helper
