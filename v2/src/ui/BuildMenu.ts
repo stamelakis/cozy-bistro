@@ -349,6 +349,12 @@ export class BuildMenu {
     this.collapsed = !this.collapsed;
     if (this.bodyEl) this.bodyEl.style.display = this.collapsed ? "none" : "block";
     this.refreshTitle();
+    // Re-render the tier content whenever we OPEN the panel so every
+    // category dropdown resets to its default (collapsed) state. The
+    // per-category open/closed flag lives inside renderTierContent's
+    // closure, so a fresh render is the cleanest "forget what was
+    // expanded" path — same effect as toggling tiers.
+    if (!this.collapsed) this.renderTierContent();
   }
 
   /** Sync the title text with the collapse state. */
