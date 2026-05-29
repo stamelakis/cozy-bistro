@@ -14,6 +14,12 @@
 
 const STORAGE_KEY_SFX = "cozy-bistro-3d-sfx-muted";
 const STORAGE_KEY_MUSIC = "cozy-bistro-3d-music-muted";
+const STORAGE_KEY_SFX_VOLUME = "cozy-bistro-3d-sfx-volume";
+
+/** Bus gain at sfxVolume = 1. Below 1 scales linearly toward silence.
+ * Default sfxVolume is 0.55, which puts the bus at ~0.22 — the value
+ * the player was hardcoded at before the volume slider was added. */
+const SFX_BUS_MAX_GAIN = 0.4;
 
 /** Per-appliance loop synth profile. Each variant gets a specialised
  * synthesis chain rather than the old single bandpass-on-noise that
@@ -56,6 +62,11 @@ export class SfxPlayer {
   private musicBus: GainNode | null = null;
   private sfxMuted = false;
   private musicMuted = false;
+  /** SFX bus level, 0..1 (user-friendly). Multiplied by SFX_BUS_MAX_GAIN
+   * to get the actual AudioContext gain value. Persisted across
+   * sessions; defaults to 0.55 to match the previous hardcoded level
+   * the player shipped with. */
+  private sfxVolume = 0.55;
   /** Active named loops keyed by LoopId. setLoopActive flips them on
    * and off independently — multiple appliances can run at once. */
   private loops = new Map<LoopId, LoopHandle>();
@@ -80,6 +91,11 @@ export class SfxPlayer {
     try {
       this.sfxMuted = localStorage.getItem(STORAGE_KEY_SFX) === "1";
       this.musicMuted = localStorage.getItem(STORAGE_KEY_MUSIC) === "1";
+      const raw = localStorage.getItem(STORAGE_KEY_SFX_VOLUME);
+      const parsed = raw === null ? NaN : Number(raw);
+      if (Number.isFinite(parsed)) {
+        this.sfxVolume = Math.max(0, Math.min(1, parsed));
+      }
     } catch {
       this.sfxMuted = false;
       this.musicMuted = false;
@@ -116,10 +132,25 @@ export class SfxPlayer {
     if (m) this.stopAllLoops();
     // Hot-swap the SFX bus gain so already-running loops fall silent
     // immediately without a tear-down race.
-    if (this.sfxBus && this.ctx) {
-      this.sfxBus.gain.cancelScheduledValues(this.ctx.currentTime);
-      this.sfxBus.gain.setValueAtTime(m ? 0 : 0.22, this.ctx.currentTime);
-    }
+    this.applyBusGain();
+  }
+
+  /** Volume slider value, 0..1. Drives the SFX bus gain when not muted.
+   * Persisted across sessions. */
+  getVolume(): number { return this.sfxVolume; }
+  setVolume(v: number): void {
+    this.sfxVolume = Math.max(0, Math.min(1, v));
+    try { localStorage.setItem(STORAGE_KEY_SFX_VOLUME, this.sfxVolume.toFixed(3)); } catch { /* ignore */ }
+    this.applyBusGain();
+  }
+
+  /** Sync the AudioContext SFX bus gain to the current mute + volume
+   * state. Cheap; called from any setter that affects either. */
+  private applyBusGain(): void {
+    if (!this.sfxBus || !this.ctx) return;
+    const target = this.sfxMuted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
+    this.sfxBus.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.sfxBus.gain.setValueAtTime(target, this.ctx.currentTime);
   }
   isMusicMuted(): boolean { return this.musicMuted; }
   setMusicMuted(m: boolean): void {
@@ -357,7 +388,7 @@ export class SfxPlayer {
       if (!AC) return null;
       this.ctx = new AC();
       this.sfxBus = this.ctx.createGain();
-      this.sfxBus.gain.value = this.sfxMuted ? 0 : 0.22;
+      this.sfxBus.gain.value = this.sfxMuted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
       this.sfxBus.connect(this.ctx.destination);
       this.musicBus = this.ctx.createGain();
       this.musicBus.gain.value = 0.4;  // music is mixed at its own level

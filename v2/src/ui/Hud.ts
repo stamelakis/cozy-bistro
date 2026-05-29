@@ -36,6 +36,9 @@ export interface HudActions {
   toggleMute: () => boolean;
   isMusicMuted: () => boolean;
   toggleMusic: () => boolean;
+  /** SFX bus level, 0..1. Drives the volume slider in the HUD. */
+  getSfxVolume: () => number;
+  setSfxVolume: (v: number) => void;
   /** Functional seat counts surfaced in the HUD's SEATS card.
    * Optional because the spawner may not exist for the first few
    * frames; HUD shows "—" when this returns undefined. */
@@ -60,6 +63,7 @@ export class Hud {
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
   private muteBtn?: HTMLButtonElement;
   private musicBtn?: HTMLButtonElement;
+  private volumeSlider?: HTMLInputElement;
   private openCloseBtn?: HTMLButtonElement;
   private devOpen = false;
   private devSection?: HTMLDivElement;
@@ -259,25 +263,43 @@ export class Hud {
   }
 
   private buildSpeedRow(): void {
+    // Speed / pause buttons have moved into the Dev tools dropdown
+    // (see buildDevSection). This row now hosts the audio controls:
+    // a master SFX volume slider plus the existing mute and music
+    // toggles. Speed control isn't something a casual player needs at
+    // their fingertips most of the time — the volume slider is.
     const row = document.createElement("div");
     Object.assign(row.style, {
-      display: "flex", gap: "3px", marginTop: "5px",
+      display: "flex", gap: "3px", marginTop: "5px", alignItems: "center",
     } as Partial<CSSStyleDeclaration>);
-    const choices: { label: string; action: () => void; key: string }[] = [
-      { label: "‖", action: () => this.time.setPaused(true), key: "pause" },
-      { label: "1×", action: () => { this.time.setPaused(false); this.time.setTimeScale(1); }, key: "1" },
-      { label: "2×", action: () => { this.time.setPaused(false); this.time.setTimeScale(2); }, key: "2" },
-      { label: "4×", action: () => { this.time.setPaused(false); this.time.setTimeScale(4); }, key: "4" },
-    ];
-    for (const c of choices) {
-      const btn = document.createElement("button");
-      btn.textContent = c.label;
-      Object.assign(btn.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
-      btn.style.flex = "1";
-      btn.onclick = () => { c.action(); this.update(); };
-      row.appendChild(btn);
-      this.speedBtns[c.key] = btn;
-    }
+    // Speaker icon on the left as a visual cue that the slider drives
+    // sound effects.
+    const speakerIcon = document.createElement("span");
+    speakerIcon.textContent = "🔊";
+    Object.assign(speakerIcon.style, {
+      fontSize: "12px", flex: "0 0 18px", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    row.appendChild(speakerIcon);
+    // The slider itself — 0..100 (integer, easy to think about) maps
+    // directly onto the SfxPlayer's 0..1 volume.
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "100";
+    slider.step = "1";
+    slider.value = String(Math.round(this.actions.getSfxVolume() * 100));
+    Object.assign(slider.style, {
+      flex: "1", minWidth: "0",
+      cursor: "pointer",
+      accentColor: "#7bc97b",
+    } as Partial<CSSStyleDeclaration>);
+    slider.title = "Sound effects volume";
+    slider.oninput = () => {
+      const v = Number(slider.value);
+      this.actions.setSfxVolume(v / 100);
+    };
+    row.appendChild(slider);
+    this.volumeSlider = slider;
     const mute = document.createElement("button");
     Object.assign(mute.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
     mute.style.flex = "0 0 28px";
@@ -412,6 +434,36 @@ export class Hud {
     section.style.borderTop = "1px solid rgba(255,245,220,0.15)";
     section.style.paddingTop = "6px";
     this.devSection = section;
+    // Speed / pause controls — moved here so the always-visible HUD row
+    // can host the more frequently-touched volume slider instead.
+    const speedHeader = document.createElement("div");
+    speedHeader.textContent = "Game speed";
+    Object.assign(speedHeader.style, {
+      fontSize: "9px", opacity: "0.65",
+      letterSpacing: "0.06em", textTransform: "uppercase",
+      marginBottom: "3px",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(speedHeader);
+    const speedRow = document.createElement("div");
+    Object.assign(speedRow.style, {
+      display: "flex", gap: "3px", marginBottom: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    const choices: { label: string; action: () => void; key: string }[] = [
+      { label: "‖",  action: () => this.time.setPaused(true),                                                  key: "pause" },
+      { label: "1×", action: () => { this.time.setPaused(false); this.time.setTimeScale(1); },                 key: "1" },
+      { label: "2×", action: () => { this.time.setPaused(false); this.time.setTimeScale(2); },                 key: "2" },
+      { label: "4×", action: () => { this.time.setPaused(false); this.time.setTimeScale(4); },                 key: "4" },
+    ];
+    for (const c of choices) {
+      const btn = document.createElement("button");
+      btn.textContent = c.label;
+      Object.assign(btn.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
+      btn.style.flex = "1";
+      btn.onclick = () => { c.action(); this.update(); };
+      speedRow.appendChild(btn);
+      this.speedBtns[c.key] = btn;
+    }
+    section.appendChild(speedRow);
     const mkRow = (label: string, action: () => void, tint: string) => {
       const b = document.createElement("button");
       b.textContent = label;
@@ -528,6 +580,15 @@ export class Hud {
         ? "rgba(120, 200, 120, 0.35)"
         : "rgba(255,245,220,0.08)";
       btn.style.fontWeight = key === activeKey ? "700" : "400";
+    }
+    if (this.volumeSlider) {
+      // Keep the slider in sync if anything else (admin tools etc.)
+      // changes the volume; skip the assignment if the user is mid-drag
+      // so we don't fight their input.
+      const target = String(Math.round(this.actions.getSfxVolume() * 100));
+      if (document.activeElement !== this.volumeSlider && this.volumeSlider.value !== target) {
+        this.volumeSlider.value = target;
+      }
     }
     if (this.muteBtn) {
       const muted = this.actions.isMuted();

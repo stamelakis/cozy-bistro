@@ -185,6 +185,8 @@ export class Engine {
         if (!next) this.sfx.startMusic();
         return next;
       },
+      getSfxVolume: () => this.sfx.getVolume(),
+      setSfxVolume: (v) => this.sfx.setVolume(v),
       // Pull live seat-availability off the spawner for the HUD's
       // SEATS card. Optional because the spawner is built after the
       // staff GLBs finish loading — getSpawnerStats may not exist for
