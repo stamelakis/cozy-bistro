@@ -4,24 +4,42 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 
 /**
  * Compact at-a-glance ingredient status panel that sits above the
- * StaffPanel. Always-visible sections:
- *   - Top summary line (OUT / LOW / below-target / all-good)
- *   - 📋 In Need: every ingredient below the stock target with detail
- *   - 🛒 Auto-shop status + in-transit count
- *   - 🍳 Kitchen ticket pipeline
+ * StaffPanel.
  *
- * The summary line reflects the worst severity present so the player
- * never sees "✓ All ingredients stocked" while the In Need section
- * underneath lists shortfalls — that contradiction was a real bug.
+ * Layout (collapsed):
+ *   📦 STOCK
+ *   📋 6 below target · 16 used today  ▾   ← hover reveals item list
+ *   🛒 Auto-shop ON · 7 in transit
+ *   ❄️ Storage 14/18 per item  ▾           ← hover reveals breakdown
+ *   🍳 5 queued · 0 cooking · 0 delivering
+ *
+ * The summary line reflects the worst severity (OUT / LOW / below
+ * target / all good) so its color is meaningful at a glance. Detail
+ * lists only appear on hover, so the widget stays small when nothing
+ * needs attention. Hover state is preserved across update() ticks
+ * because the DOM is built once in the constructor — update() only
+ * rewrites text content, never destroys and rebuilds nodes.
  */
 export class StockStatusWidget {
   private readonly game: Game;
   private readonly root: HTMLElement;
-  private readonly body: HTMLElement;
+
+  // Stable DOM — created once in constructor. Update() mutates text
+  // content only so hover-revealed details don't snap shut on each
+  // tick.
+  private readonly needRow: HTMLElement;
+  private readonly needBadge: HTMLElement;
+  private readonly needCaret: HTMLElement;
+  private readonly needDetails: HTMLElement;
+  private readonly autoShop: HTMLElement;
+  private readonly storageRow: HTMLElement;
+  private readonly storageBadge: HTMLElement;
+  private readonly storageCaret: HTMLElement;
+  private readonly storageDetails: HTMLElement;
+  private readonly pipeline: HTMLElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
-    // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       font: "11px/1.3 system-ui, sans-serif",
@@ -37,13 +55,46 @@ export class StockStatusWidget {
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(title);
 
-    this.body = document.createElement("div");
-    this.root.appendChild(this.body);
+    // === Need badge + expandable detail list ===
+    this.needRow = makeHoverRow();
+    this.needBadge = document.createElement("span");
+    this.needCaret = makeCaret();
+    this.needRow.appendChild(this.needBadge);
+    this.needRow.appendChild(this.needCaret);
+    this.root.appendChild(this.needRow);
+    this.needDetails = makeDetailsPanel();
+    this.root.appendChild(this.needDetails);
+    attachHover(this.needRow, this.needDetails, this.needCaret);
+
+    // === Auto-shop status ===
+    this.autoShop = document.createElement("div");
+    Object.assign(this.autoShop.style, {
+      fontSize: "10px", marginTop: "3px", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.autoShop);
+
+    // === Storage badge + expandable breakdown ===
+    this.storageRow = makeHoverRow();
+    this.storageBadge = document.createElement("span");
+    this.storageCaret = makeCaret();
+    this.storageRow.appendChild(this.storageBadge);
+    this.storageRow.appendChild(this.storageCaret);
+    this.root.appendChild(this.storageRow);
+    this.storageDetails = makeDetailsPanel();
+    this.root.appendChild(this.storageDetails);
+    attachHover(this.storageRow, this.storageDetails, this.storageCaret);
+
+    // === Kitchen pipeline ===
+    this.pipeline = document.createElement("div");
+    Object.assign(this.pipeline.style, {
+      marginTop: "4px", fontSize: "10px", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.pipeline);
+
     this.update();
   }
 
   update(): void {
-    this.body.innerHTML = "";
     const pantry = this.game.cooking.getPantry();
     const target = this.game.getStockTarget();
 
@@ -54,14 +105,10 @@ export class StockStatusWidget {
       .sort((a, b) => a.quantity - b.quantity);
     const usedToday = this.game.cooking.getTotalConsumedToday();
 
-    // Below-target rows — used by both the top summary and the In Need
-    // list so they always agree. Inclusion rule is "qty < target" — NOT
-    // "qty + pending < target" as it used to be. That older rule caused
-    // a real contradiction: an item could be OUT (qty=0) while pending
-    // covered the deficit on paper, so the top line correctly screamed
-    // "OUT: bread" while In Need said "All at target." The item is
-    // still empty on the shelf right now even if a helper is bringing
-    // more, so it belongs in the list.
+    // Below-target detail rows for the hover-revealed list. Inclusion
+    // is qty<target (not qty+pending<target) so a currently-empty
+    // shelf is listed even when a helper's already running to refill
+    // it — the player needs to see it's empty NOW.
     const needRows: string[] = [];
     for (const s of pantry) {
       if (s.quantity >= target) continue;
@@ -71,138 +118,188 @@ export class StockStatusWidget {
       needRows.push(`<div>${s.name}: need ${need} <span style="opacity:0.7">(have ${s.quantity}${wayStr})</span></div>`);
     }
 
-    // === Top summary line (single source of truth) ===
-    // Reflects worst severity in the pantry. We used to show "✓ All
-    // ingredients stocked" whenever nothing was at qty=0 or qty<=2, but
-    // that ignored "below target with errand in flight" cases — leading
-    // to a contradiction where the In Need section listed shortfalls
-    // while the summary line claimed everything was fine.
+    // === Need badge (always visible) ===
     const usedTodaySpan = usedToday > 0
-      ? ` <span style="opacity:0.7">· ${usedToday} used today</span>`
+      ? ` <span style="opacity:0.65">· ${usedToday} used today</span>`
       : "";
-    const top = document.createElement("div");
     if (out.length > 0) {
-      top.innerHTML = `<span style="color:#ff9a9a;font-weight:700">OUT:</span> ${out.slice(0, 6).map((s) => s.name).join(", ")}${out.length > 6 ? ` (+${out.length - 6})` : ""}`;
-      Object.assign(top.style, { marginBottom: "3px" } as Partial<CSSStyleDeclaration>);
+      // Spell out OUT count + LOW count alongside it, since both are
+      // urgent. Hover reveals which specific items.
+      const lowSuffix = low.length > 0
+        ? ` · <span style="color:#ffd47a">LOW: ${low.length}</span>`
+        : "";
+      this.needBadge.innerHTML =
+        `<span style="color:#ff9a9a;font-weight:700">⚠ OUT:</span>` +
+        ` <span style="color:#ff9a9a;font-weight:700">${out.length}</span>` +
+        lowSuffix + usedTodaySpan;
     } else if (low.length > 0) {
-      top.innerHTML = `<span style="color:#ffd47a;font-weight:700">LOW:</span> ${low.slice(0, 6).map((s) => `${s.name}(${s.quantity})`).join(", ")}${low.length > 6 ? ` (+${low.length - 6})` : ""}`;
+      const belowExtra = needRows.length - low.length;
+      const belowSuffix = belowExtra > 0
+        ? ` <span style="opacity:0.7">· ${belowExtra} below target</span>`
+        : "";
+      this.needBadge.innerHTML =
+        `<span style="color:#ffd47a;font-weight:700">LOW:</span>` +
+        ` <span style="color:#ffd47a;font-weight:700">${low.length}</span>` +
+        belowSuffix + usedTodaySpan;
     } else if (needRows.length > 0) {
-      // Nothing critical, but some items below target. Subtle amber so
-      // the player knows there's still work for the errand helper.
-      top.innerHTML = `<span style="color:#ffd47a">📋 ${needRows.length} item${needRows.length === 1 ? "" : "s"} below target</span>${usedTodaySpan}`;
-      Object.assign(top.style, { textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
+      this.needBadge.innerHTML =
+        `<span style="color:#ffd47a">📋 ${needRows.length} below target</span>` +
+        usedTodaySpan;
     } else {
-      top.innerHTML = `✓ All at target${usedTodaySpan}`;
-      Object.assign(top.style, { color: "#a8e2a8", textAlign: "center", padding: "2px 0" } as Partial<CSSStyleDeclaration>);
-    }
-    this.body.appendChild(top);
-
-    // === In Need section (always shown) ===
-    this.appendSectionHeader("📋 In Need");
-    {
-      const list = document.createElement("div");
-      Object.assign(list.style, {
-        maxHeight: "84px", overflowY: "auto", fontSize: "10px",
-      } as Partial<CSSStyleDeclaration>);
-      if (needRows.length === 0) {
-        list.innerHTML = `<div style="opacity:0.6">All at target.</div>`;
-      } else {
-        list.innerHTML = needRows.slice(0, 12).join("");
-        if (needRows.length > 12) {
-          list.innerHTML += `<div style="opacity:0.6">+${needRows.length - 12} more…</div>`;
-        }
-      }
-      this.body.appendChild(list);
+      this.needBadge.innerHTML = `<span style="color:#a8e2a8">✓ All stocked</span>${usedTodaySpan}`;
     }
 
-    // === Auto-shop + in-transit summary ===
-    const auto = document.createElement("div");
-    Object.assign(auto.style, {
-      fontSize: "10px", marginTop: "5px", textAlign: "center",
-    } as Partial<CSSStyleDeclaration>);
+    // === Need details (hover-revealed) ===
+    if (needRows.length === 0) {
+      // Nothing useful to expand — hide the caret hint and put a quiet
+      // confirmation in the panel for the rare hovering player.
+      this.needDetails.innerHTML = `<div style="opacity:0.6">All ingredients at target.</div>`;
+      this.needCaret.style.visibility = "hidden";
+      this.needRow.style.cursor = "default";
+    } else {
+      this.needDetails.innerHTML = needRows.join("");
+      this.needCaret.style.visibility = "visible";
+      this.needRow.style.cursor = "help";
+    }
+
+    // === Auto-shop status ===
     if (this.game.autoShopEnabled) {
       let totalPending = 0;
       const pending = this.game.cooking.getPendingOrdersSnapshot();
       for (const id of Object.keys(pending)) totalPending += pending[id];
-      auto.style.opacity = "0.85";
-      auto.innerHTML = totalPending > 0
+      this.autoShop.style.opacity = "0.85";
+      this.autoShop.style.color = "";
+      this.autoShop.innerHTML = totalPending > 0
         ? `🛒 Auto-shop ON · <span style="color:#a8c8e8">${totalPending} in transit</span>`
         : "🛒 Auto-shop ON";
     } else {
-      auto.style.color = "#ffd47a";
-      auto.textContent = "🛒 Auto-shop OFF — restock manually";
+      this.autoShop.style.opacity = "1";
+      this.autoShop.style.color = "#ffd47a";
+      this.autoShop.textContent = "🛒 Auto-shop OFF — restock manually";
     }
-    this.body.appendChild(auto);
 
-    // === Storage capacity breakdown ===
-    // Show what's setting the stock ceiling: the base 5 every player
-    // starts with, plus every fridge / pantry shelf they've placed
-    // grouped by type. Helps the player decide whether buying another
-    // fridge is worth it before they head to the build menu.
-    this.appendSectionHeader("❄️ Storage Cap");
-    {
-      const base = this.game.getMinStockTarget();
-      const lines: string[] = [];
-      lines.push(`<div style="opacity:0.75">Base (no fridges): +${base}</div>`);
-      const registry = this.game.registry;
-      if (registry) {
-        // Group placed items by defId, sum stockCapacity bonuses.
-        const counts = new Map<string, number>();
-        for (const it of registry.snapshotItems()) {
-          const def = getFurnitureDef(it.defId);
-          if (def?.stockCapacity) {
-            counts.set(it.defId, (counts.get(it.defId) ?? 0) + 1);
-          }
-        }
-        // Sort by total bonus contribution, descending.
-        const entries = Array.from(counts.entries())
-          .map(([id, count]) => {
-            const def = getFurnitureDef(id);
-            const each = def?.stockCapacity ?? 0;
-            return { id, name: def?.name ?? id, count, each, total: count * each };
-          })
-          .sort((a, b) => b.total - a.total);
-        for (const e of entries) {
-          const countTag = e.count > 1 ? ` <span style="opacity:0.6">×${e.count}</span>` : "";
-          lines.push(`<div>${e.name}${countTag}: <span style="color:#a8c8e8">+${e.total}</span> <span style="opacity:0.5">(@${e.each})</span></div>`);
+    // === Storage badge (always visible) ===
+    const cap = this.game.getMaxStockTarget();
+    const current = this.game.getStockTarget();
+    const pct = cap > 0 ? current / cap : 0;
+    // Number color tracks how close we are to maxed out. Green when
+    // there's plenty of room, amber when 85%+, red when capped — same
+    // ladder as the stock severity above so the eye reads them together.
+    const capColor = pct >= 1 ? "#ff9a9a" : pct >= 0.85 ? "#ffd47a" : "#a8e2a8";
+    this.storageBadge.innerHTML =
+      `❄️ Storage ` +
+      `<span style="color:${capColor};font-weight:700">${current}</span>` +
+      `<span style="opacity:0.6">/${cap}</span>` +
+      ` <span style="opacity:0.6">per item</span>`;
+
+    // === Storage details (hover-revealed) ===
+    const base = this.game.getMinStockTarget();
+    const lines: string[] = [];
+    lines.push(`<div style="opacity:0.75">Base (no fridges): +${base}</div>`);
+    const registry = this.game.registry;
+    if (registry) {
+      const counts = new Map<string, number>();
+      for (const it of registry.snapshotItems()) {
+        const def = getFurnitureDef(it.defId);
+        if (def?.stockCapacity) {
+          counts.set(it.defId, (counts.get(it.defId) ?? 0) + 1);
         }
       }
-      const cap = this.game.getMaxStockTarget();
-      const current = this.game.getStockTarget();
-      lines.push(`<div style="margin-top:2px;border-top:1px solid rgba(255,245,220,0.12);padding-top:2px;color:#a8e2a8">Cap: <b>${cap}</b> · using <b>${current}</b></div>`);
-      const list = document.createElement("div");
-      Object.assign(list.style, {
-        maxHeight: "84px", overflowY: "auto", fontSize: "10px",
-      } as Partial<CSSStyleDeclaration>);
-      list.innerHTML = lines.join("");
-      this.body.appendChild(list);
+      const entries = Array.from(counts.entries())
+        .map(([id, count]) => {
+          const def = getFurnitureDef(id);
+          const each = def?.stockCapacity ?? 0;
+          return { id, name: def?.name ?? id, count, each, total: count * each };
+        })
+        .sort((a, b) => b.total - a.total);
+      for (const e of entries) {
+        const countTag = e.count > 1 ? ` <span style="opacity:0.6">×${e.count}</span>` : "";
+        lines.push(`<div>${e.name}${countTag}: <span style="color:#a8c8e8">+${e.total}</span> <span style="opacity:0.5">(@${e.each})</span></div>`);
+      }
     }
+    lines.push(
+      `<div style="margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12);color:#a8e2a8">` +
+        `Cap: <b>${cap}</b> · using <b>${current}</b>` +
+      `</div>`
+    );
+    this.storageDetails.innerHTML = lines.join("");
 
-    // === Kitchen ticket pipeline (always shown) ===
+    // === Pipeline ===
     const ts = this.game.getTicketStats?.();
     if (ts) {
       const totalTickets = ts.queued + ts.cooking + ts.ready + ts.delivering;
-      const pipeline = document.createElement("div");
-      Object.assign(pipeline.style, {
-        marginTop: "4px", fontSize: "10px", textAlign: "center",
-        opacity: totalTickets > 0 ? "1" : "0.6",
-        color: totalTickets > 0 ? "#a8e2a8" : "#fff5dc",
-      } as Partial<CSSStyleDeclaration>);
-      pipeline.textContent = totalTickets > 0
+      this.pipeline.style.opacity = totalTickets > 0 ? "1" : "0.6";
+      this.pipeline.style.color = totalTickets > 0 ? "#a8e2a8" : "#fff5dc";
+      this.pipeline.textContent = totalTickets > 0
         ? `🍳 ${ts.queued} queued · ${ts.cooking} cooking · ${ts.ready + ts.delivering} delivering`
-        : "🍳 Kitchen idle — no tickets";
-      this.body.appendChild(pipeline);
+        : "🍳 Kitchen idle";
+    } else {
+      this.pipeline.textContent = "";
     }
   }
+}
 
-  /** Small bold dimmed header used at the top of every sub-section. */
-  private appendSectionHeader(label: string): void {
-    const header = document.createElement("div");
-    header.textContent = label;
-    Object.assign(header.style, {
-      marginTop: "6px", fontWeight: "700", fontSize: "10px",
-      opacity: "0.75", letterSpacing: "0.04em",
-    } as Partial<CSSStyleDeclaration>);
-    this.body.appendChild(header);
-  }
+/** A summary row that brightens slightly on hover so it reads as
+ * "click here for more". Hover handlers for the actual expand /
+ * collapse are attached separately via attachHover(). */
+function makeHoverRow(): HTMLElement {
+  const row = document.createElement("div");
+  Object.assign(row.style, {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    gap: "4px", padding: "2px 4px", marginTop: "3px",
+    borderRadius: "3px", textAlign: "center", cursor: "help",
+    transition: "background 80ms ease",
+  } as Partial<CSSStyleDeclaration>);
+  return row;
+}
+
+/** Down-caret shown beside an expandable summary; flips to up-caret
+ * when the details panel is open. */
+function makeCaret(): HTMLElement {
+  const caret = document.createElement("span");
+  caret.textContent = "▾";
+  Object.assign(caret.style, {
+    opacity: "0.6", fontSize: "9px", flexShrink: "0",
+  } as Partial<CSSStyleDeclaration>);
+  return caret;
+}
+
+/** Hidden-by-default detail panel that pops out under a hover row. */
+function makeDetailsPanel(): HTMLElement {
+  const details = document.createElement("div");
+  Object.assign(details.style, {
+    display: "none", fontSize: "10px",
+    maxHeight: "140px", overflowY: "auto",
+    background: "rgba(0,0,0,0.22)", borderRadius: "3px",
+    padding: "4px 6px", marginTop: "2px",
+  } as Partial<CSSStyleDeclaration>);
+  return details;
+}
+
+/** Wire mouseenter/leave on the row AND the details panel so the
+ * cursor can travel from row into the popped-out details without it
+ * collapsing. The small leave-delay covers the cursor crossing the
+ * 1-2px gap between row and panel. */
+function attachHover(row: HTMLElement, details: HTMLElement, caret: HTMLElement): void {
+  let hovering = false;
+  const open = () => {
+    hovering = true;
+    details.style.display = "block";
+    caret.textContent = "▴";
+    row.style.background = "rgba(255,245,220,0.08)";
+  };
+  const close = () => {
+    hovering = false;
+    setTimeout(() => {
+      if (!hovering) {
+        details.style.display = "none";
+        caret.textContent = "▾";
+        row.style.background = "";
+      }
+    }, 80);
+  };
+  row.addEventListener("mouseenter", open);
+  row.addEventListener("mouseleave", close);
+  details.addEventListener("mouseenter", open);
+  details.addEventListener("mouseleave", close);
 }
