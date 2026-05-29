@@ -128,6 +128,24 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
     child.position.z += localShiftZ;
   }
 
+  // Bake the def's rotationOffset into the model's internal frame so
+  // callers can still treat `model.rotation.y` as the LOGICAL rotation
+  // (the same value saved to disk and computed by the placement code).
+  // This is the escape hatch for assets whose authored forward axis
+  // disagrees with our "GLB front = -Z" convention — e.g. Kenney's
+  // bathroomMirror, whose reflective face sits on +Z. Without this
+  // bake, the wall-mount logic puts the back of the mirror facing the
+  // room. We move the existing children into a wrapper group rotated
+  // by the offset; external rotation stacks on top of that.
+  if (def.rotationOffset) {
+    const wrapper = new THREE.Group();
+    wrapper.rotation.y = def.rotationOffset;
+    // Snapshot first — wrapper.add() mutates model.children.
+    const original = [...model.children];
+    for (const child of original) wrapper.add(child);
+    model.add(wrapper);
+  }
+
   // Return the X-axis fit factor — callers (e.g. anchored props)
   // historically used this as a uniform reference. They'll match
   // along the width direction, which is the relevant one for

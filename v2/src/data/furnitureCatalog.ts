@@ -455,7 +455,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/bathroomSinkSquare.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 140, style: 3 },
   { id: "bathroom-mirror", name: "Bathroom Mirror", category: "bathroom",
     modelPath: "assets/kenney/bathroomMirror.glb", scale: 0.7, size: { width: 1, depth: 1 }, cost: 60, style: 2, attractionBonus: 1,
-    placement: "wall" },
+    // Kenney's bathroomMirror.glb has its reflective face on +Z, but
+    // our wall-mount logic assumes the standard "GLB front = -Z". Flip
+    // 180° so the mirror's glass faces the room instead of the wall.
+    placement: "wall", rotationOffset: Math.PI },
   { id: "bathroom-cabinet", name: "Bath Cabinet",  category: "bathroom",
     modelPath: "assets/kenney/bathroomCabinet.glb", scale: 0.85, size: { width: 1, depth: 1 }, cost: 110, style: 2 },
   { id: "bathroom-cabinet-d", name: "Bath Cabinet (Drawer)", category: "bathroom",
