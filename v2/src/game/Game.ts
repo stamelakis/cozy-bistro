@@ -407,7 +407,14 @@ export class Game {
       }
     }
     if (typeof save.stockTarget === "number") {
-      this.setStockTarget(save.stockTarget);
+      // Skip setStockTarget's max-cap clamp here — the registry's
+      // fridges haven't restored yet, so getMaxStockTarget() is just
+      // DEFAULT_STOCK_TARGET (5) and any saved value above 5 would
+      // get crushed back to 5 every refresh. Storing the raw value
+      // works because getStockTarget() re-clamps at read time,
+      // AFTER the registry has loaded and the cap reflects placed
+      // fridges. Floors at MIN to defend against a corrupted save.
+      this.stockTarget = Math.max(MIN_STOCK_TARGET, Math.round(save.stockTarget));
     }
     if (typeof save.autoShopEnabled === "boolean") {
       this.autoShopEnabled = save.autoShopEnabled;
