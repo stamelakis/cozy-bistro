@@ -1155,6 +1155,10 @@ export class WorldScene {
         group.add(mesh);
         walls.set(spec.dir, mesh);
       }
+      // Staircase flight that LEADS UP TO this storey from the one
+      // below. Lives inside the same group so visibility (tier +
+      // focus) toggles atomically with the storey it serves.
+      this.addStaircaseSegment(group, baseY);
       this.upperStoreys.set(idx, { group, slab, walls });
       this.threeScene.add(group);
     }
@@ -1168,6 +1172,83 @@ export class WorldScene {
     roof.visible = false;
     this.threeScene.add(roof);
     this.buildingRoof = roof;
+  }
+
+  /** Build a single flight of stairs running from one storey UP TO the
+   * next. Procedural box steps with a thin banister on the open
+   * (interior-facing) side. Fixed position in the back-right corner
+   * of the building so the flights stack cleanly on the same column
+   * floor after floor.
+   *
+   * Phase 2 — visual only, no walking logic. Phase 6 will mark the
+   * footprint cells as a traversable transit corridor for the
+   * pathfinder. */
+  private addStaircaseSegment(parent: THREE.Group, baseY: number): void {
+    const STEP_COUNT = 10;
+    const STEP_WIDTH = 1.0;                                // X span
+    const STEP_DEPTH = 0.2;                                // Z span per step
+    const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m
+    const X_CENTER   = 4.5;                                // against the right interior wall
+    const Z_START    = -4.0;                               // low end, near back wall
+    const lowerY     = baseY - WorldScene.STOREY_HEIGHT;
+    const stepMat = new THREE.MeshStandardMaterial({
+      color: 0xb0967a, roughness: 0.78, metalness: 0,
+    });
+    // Each step: a slim box centred at (X_CENTER, lowerY + n·rise + rise/2,
+    // Z_START + n·depth + depth/2). The TOP of step n sits at
+    // lowerY + (n+1)·rise, so step n−1 ends exactly where step n begins.
+    for (let i = 0; i < STEP_COUNT; i += 1) {
+      const step = new THREE.Mesh(
+        new THREE.BoxGeometry(STEP_WIDTH, STEP_RISE, STEP_DEPTH),
+        stepMat,
+      );
+      step.position.set(
+        X_CENTER,
+        lowerY + STEP_RISE * (i + 0.5),
+        Z_START + STEP_DEPTH * (i + 0.5),
+      );
+      step.castShadow = true;
+      step.receiveShadow = true;
+      parent.add(step);
+    }
+    // Slim banister along the interior-facing edge so the stairs read
+    // as a staircase from the iso angle, not just a stack of slabs.
+    // A short vertical post at the bottom + top, plus a rail running
+    // along the slope.
+    const banisterMat = new THREE.MeshStandardMaterial({
+      color: 0x8a6e54, roughness: 0.7,
+    });
+    const railX = X_CENTER - STEP_WIDTH / 2 + 0.04;        // just inside the left edge
+    const runLen = STEP_COUNT * STEP_DEPTH;                // 2 m
+    const railLen = Math.sqrt(runLen * runLen + WorldScene.STOREY_HEIGHT * WorldScene.STOREY_HEIGHT);
+    const railThickness = 0.04;
+    // Rail: a thin box rotated to match the step slope.
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(railThickness, railThickness, railLen),
+      banisterMat,
+    );
+    rail.position.set(
+      railX,
+      lowerY + WorldScene.STOREY_HEIGHT / 2 + 0.85,        // ~hand height above the steps
+      Z_START + runLen / 2,
+    );
+    rail.rotation.x = Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
+    rail.castShadow = true;
+    parent.add(rail);
+    // Two short posts to anchor the rail at top and bottom of the flight.
+    for (const t of [0, 1]) {
+      const post = new THREE.Mesh(
+        new THREE.BoxGeometry(railThickness, 0.95, railThickness),
+        banisterMat,
+      );
+      post.position.set(
+        railX,
+        lowerY + t * WorldScene.STOREY_HEIGHT + 0.45,
+        Z_START + t * runLen,
+      );
+      post.castShadow = true;
+      parent.add(post);
+    }
   }
 
   // === Dynamic perimeter walls ===============================================
