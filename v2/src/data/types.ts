@@ -52,6 +52,11 @@ export interface PlacedFurniture {
   furnitureId: string;
   position: GridPosition;
   rotation?: number;
+  /** Which storey the item sits on. 0 = ground floor (default for any
+   * save predating multi-storey). 1..NUM_STOREYS-1 = upper floors. The
+   * item's world Y is offset by floor × STOREY_HEIGHT at mount time so
+   * a placement at (x, z, floor=2) renders on Floor 2's slab. */
+  floor?: number;
   disabledSeatIndexes?: number[];
   /** Surface-placed items only — uid of the host they sit on (a
    * counter, table, etc.). Persisted so save/load can re-snap the

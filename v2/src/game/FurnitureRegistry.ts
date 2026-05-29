@@ -22,6 +22,11 @@ export interface PlacedFurnitureItem {
   x: number;
   z: number;
   rotY: number;
+  /** Storey index the item lives on. 0 = ground floor (always visible
+   * in the main scene). 1..NUM_STOREYS-1 = upper floors (parented to
+   * that storey's group so focus + tier visibility apply). Default 0
+   * for any item placed before multi-storey shipped. */
+  floor: number;
   /** The live Object3D in the scene. Not persisted — rebuilt on load. */
   model: THREE.Object3D;
   /** For surface-placed items: the host's uid. The item rides along when
@@ -45,6 +50,9 @@ export interface PersistedPlacement {
   x: number;
   z: number;
   rotY: number;
+  /** Storey index — see PlacedFurnitureItem.floor. Absent in saves
+   * predating multi-storey; loader treats missing as floor 0. */
+  floor?: number;
   /** Optional host link for surface-placed items. On restore, the surface
    * item is re-snapped to the host's current top after the host loads. */
   parentUid?: string;
@@ -92,15 +100,46 @@ export class FurnitureRegistry {
   private readonly items: PlacedFurnitureItem[] = [];
   private readonly scene: THREE.Scene;
   private readonly loader: ModelLoader;
+  /** Lookup for the THREE.Object3D each storey's items should be parented
+   * to. Falls back to the main scene when the engine wasn't wired up
+   * with one (e.g. older tests that constructed the registry directly). */
+  private readonly storeyMount?: (floor: number) => THREE.Object3D;
+  /** Vertical gap between adjacent floor slabs. Added to model.position.y
+   * at register / restore time so an item placed at (x, z, floor=2)
+   * renders at world Y = placementY + 2 × storeyHeight. */
+  private readonly storeyHeight: number;
 
-  constructor(scene: THREE.Scene, loader: ModelLoader) {
+  constructor(
+    scene: THREE.Scene,
+    loader: ModelLoader,
+    storeyMount?: (floor: number) => THREE.Object3D,
+    storeyHeight = 3,
+  ) {
     this.scene = scene;
     this.loader = loader;
+    this.storeyMount = storeyMount;
+    this.storeyHeight = storeyHeight;
+  }
+
+  /** Return the parent the model for `floor` should sit inside. Ground
+   * floor (0) returns the main scene. Upper floors return the storey's
+   * group so visibility (focus + tier) follows automatically. */
+  private mountFor(floor: number): THREE.Object3D {
+    return this.storeyMount?.(floor) ?? this.scene;
+  }
+
+  /** Y offset added to a placement's base Y to lift it onto its storey
+   * slab. Floor 0 = 0, Floor 1 = storeyHeight, etc. */
+  floorYOffset(floor: number): number {
+    return Math.max(0, floor) * this.storeyHeight;
   }
 
   /** Append a record for an already-placed model. Returns the new uid.
    * Surface items pass parentUid + slotIndex so the registry can track
-   * the host link for move/sell cascades and slot reservation. */
+   * the host link for move/sell cascades and slot reservation. The
+   * `floor` argument records which storey the item lives on (defaults
+   * to 0 = ground). Surface items inherit the host's floor automatically
+   * when a parent link is provided. */
   register(
     defId: string,
     x: number,
@@ -108,9 +147,10 @@ export class FurnitureRegistry {
     rotY: number,
     model: THREE.Object3D,
     parent?: { parentUid: string; slotIndex: number },
+    floor = 0,
   ): string {
     const uid = makeUid();
-    const item: PlacedFurnitureItem = { uid, defId, x, z, rotY, model };
+    const item: PlacedFurnitureItem = { uid, defId, x, z, rotY, floor, model };
     if (parent) {
       item.parentUid = parent.parentUid;
       item.slotIndex = parent.slotIndex;
@@ -122,6 +162,10 @@ export class FurnitureRegistry {
       const host = this.items.find((it) => it.uid === parent.parentUid);
       if (host) {
         item.localRotY = normaliseAngle(rotY - host.rotY);
+        // Surface items sit on the host's top; if the caller didn't
+        // override, inherit the host's floor so a toaster placed on a
+        // Floor 2 counter records floor=2.
+        if (floor === 0) item.floor = host.floor;
       }
     }
     this.items.push(item);
@@ -176,11 +220,13 @@ export class FurnitureRegistry {
   }
 
   /** Bulk-register many existing models (e.g. the demo placements that
-   * WorldScene puts in directly). Skips cells already occupied. */
-  registerExisting(items: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D }[]): void {
+   * WorldScene puts in directly). Skips cells already occupied. Demo
+   * placements are always on the ground floor — pass `floor` on each
+   * item only if a future tier-2+ demo wants to seed an upper floor. */
+  registerExisting(items: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D; floor?: number }[]): void {
     for (const it of items) {
       if (this.isOccupied(it.x, it.z)) continue;
-      this.register(it.defId, it.x, it.z, it.rotY, it.model);
+      this.register(it.defId, it.x, it.z, it.rotY, it.model, undefined, it.floor ?? 0);
     }
   }
 
@@ -278,7 +324,10 @@ export class FurnitureRegistry {
     const idx = this.findIndexNear(x, z, undefined, "any");
     if (idx < 0) return null;
     const item = this.items[idx];
-    this.scene.remove(item.model);
+    // Remove from whichever parent the model lives in (main scene for
+    // floor 0, a storey group for upper floors). model.removeFromParent
+    // is a no-op if it's already detached.
+    item.model.removeFromParent();
     this.items.splice(idx, 1);
     this.surfaceExtentCache.delete(item.uid);
     const def = getFurnitureDef(item.defId);
@@ -292,6 +341,32 @@ export class FurnitureRegistry {
       + (def.attractionBonus ?? 0) * 2
     );
     return { defId: item.defId, refund };
+  }
+
+  /** Move an item to a different storey: re-parent the model to the
+   * new floor's mount and shift its Y by the storey-height delta. Used
+   * by MOVE mode when the player picks an item up on Floor 0 and drops
+   * it on Floor 2 (or vice versa). Cascade-applies to any surface
+   * children so a counter taken upstairs takes its toaster along.
+   * Returns true if anything changed. */
+  setItemFloor(uid: string, newFloor: number): boolean {
+    const item = this.items.find((it) => it.uid === uid);
+    if (!item) return false;
+    const oldFloor = item.floor;
+    if (oldFloor === newFloor) return false;
+    const dy = this.floorYOffset(newFloor) - this.floorYOffset(oldFloor);
+    item.floor = newFloor;
+    item.model.position.y += dy;
+    const newParent = this.mountFor(newFloor);
+    if (item.model.parent !== newParent) newParent.add(item.model);
+    // Cascade to surface children — keep them riding along.
+    for (const child of this.items) {
+      if (child.parentUid !== uid) continue;
+      child.floor = newFloor;
+      child.model.position.y += dy;
+      if (child.model.parent !== newParent) newParent.add(child.model);
+    }
+    return true;
   }
 
   /** Direct setter for pose (used by undo / auto-arrange). Skips the
@@ -388,7 +463,9 @@ export class FurnitureRegistry {
   }
 
   /** Snapshot for save. Strips the model ref. parentUid / slotIndex
-   * are persisted so surface items re-snap to their hosts on load. */
+   * are persisted so surface items re-snap to their hosts on load.
+   * floor is only emitted when non-zero — keeps ground-floor saves
+   * byte-compatible with the pre-multi-storey format. */
   snapshot(): PersistedPlacement[] {
     return this.items.map((it) => {
       const p: PersistedPlacement = { uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY };
@@ -398,6 +475,7 @@ export class FurnitureRegistry {
       // round-trip doesn't reset a rotated toaster back to the
       // counter's facing.
       if (typeof it.localRotY === "number") p.localRotY = it.localRotY;
+      if (it.floor > 0) p.floor = it.floor;
       return p;
     });
   }
@@ -899,15 +977,18 @@ export class FurnitureRegistry {
         // height, and floor items on the ground — matches the
         // BuildMenu place handler exactly. Surface items get a
         // placeholder Y and are corrected below once every host model
-        // exists.
-        model.position.set(p.x, placementY(model, def), p.z);
+        // exists. Y is also lifted by floor*storeyHeight so an item
+        // saved on Floor 2 lands on Floor 2's slab instead of the
+        // ground.
+        const floor = Math.max(0, p.floor ?? 0);
+        model.position.set(p.x, placementY(model, def) + this.floorYOffset(floor), p.z);
         model.rotation.y = p.rotY;
         // Same wall-hug pass the BuildMenu place handler runs, so a
         // save round-trip keeps the kitchen line flush against the
         // wall instead of drifting back into "uneven gap" territory.
         snapToAdjacentWall(model, def);
-        this.scene.add(model);
-        const item: PlacedFurnitureItem = { uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model };
+        this.mountFor(floor).add(model);
+        const item: PlacedFurnitureItem = { uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, floor, model };
         if (p.parentUid) item.parentUid = p.parentUid;
         if (typeof p.slotIndex === "number") item.slotIndex = p.slotIndex;
         if (typeof p.localRotY === "number") item.localRotY = p.localRotY;

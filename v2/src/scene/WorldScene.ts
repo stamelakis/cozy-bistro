@@ -2426,6 +2426,16 @@ export class WorldScene {
     return WorldScene.NUM_STOREYS;
   }
 
+  /** Return the THREE container a furniture item placed on `floor`
+   * should be parented to. Ground floor (0) lives in the main scene
+   * and is always visible; upper floors live in their storey group so
+   * focus + tier visibility apply automatically. Used by the registry
+   * + BuildMenu to mount per-floor placements into the right subtree. */
+  getStoreyMount(floor: number): THREE.Object3D {
+    if (floor <= 0) return this.threeScene;
+    return this.upperStoreys.get(floor)?.group ?? this.threeScene;
+  }
+
   /** Spawn an extra staff character at runtime (when player hires another).
    * Slots them in just to the right of the existing crew so they don't
    * overlap. Returns the AnimatedCharacter, or null if the GLB failed

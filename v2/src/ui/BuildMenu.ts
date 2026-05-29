@@ -148,6 +148,17 @@ export class BuildMenu {
   /** Fired whenever a lamp is sold or undone, so the same registration
    * can be torn down. */
   onLampRemoved?: (model: THREE.Object3D) => void;
+  /** Returns the storey index the camera is currently focused on. New
+   * placements + the raycast plane both use this. Defaults to ground
+   * floor when the callback isn't wired up. */
+  getFocusedStorey?: () => number;
+  /** Returns the THREE container new placements on `floor` should be
+   * parented into. Engine wires this to WorldScene.getStoreyMount so
+   * upper-floor items inherit the storey group's visibility. */
+  getStoreyMount?: (floor: number) => THREE.Object3D;
+  /** Meters between adjacent floor slabs — used for the raycast plane Y
+   * and the placement Y offset. Defaults to 3 m to match WorldScene. */
+  getStoreyHeight?: () => number;
 
   /** Foldable state — when collapsed only the title bar shows. */
   private collapsed = false;
@@ -859,6 +870,39 @@ export class BuildMenu {
     setTimeout(() => { toast.remove(); }, 1500);
   }
 
+  /** Engine calls this after FloorSelector switches the focused storey
+   * so the active preview / move ghost teleports up/down to the new
+   * floor without the player having to wiggle the cursor. X+Z stay
+   * fixed (the cursor cell didn't move) — only Y changes. */
+  refreshFocusedFloor(): void {
+    if (!this.preview || !this.placingDef) return;
+    // Surface items take Y from the host's measured top — no floor
+    // adjustment needed (and the host's own Y already lives at the
+    // right slab). For floor / wall / ceiling items, re-derive Y
+    // from placementY + the new floor's slab offset.
+    if (this.placingDef.placement === "surface") return;
+    this.preview.position.y = placementY(this.preview, this.placingDef) + this.currentFloorY();
+  }
+
+  /** Storey index the camera is currently focused on. Defaults to 0 if
+   * the engine hasn't wired the getter up. */
+  private currentFloor(): number {
+    return this.getFocusedStorey?.() ?? 0;
+  }
+
+  /** World Y of the focused storey's slab — the plane new placements
+   * sit on. Multiplies the focused floor by the storey height. */
+  private currentFloorY(): number {
+    return this.currentFloor() * (this.getStoreyHeight?.() ?? 3);
+  }
+
+  /** Parent container that new placements on the current floor should
+   * be added to. Ground floor is the main scene; upper floors are the
+   * storey group so visibility (focus + tier) applies. */
+  private currentMount(): THREE.Object3D {
+    return this.getStoreyMount?.(this.currentFloor()) ?? this.scene;
+  }
+
   private onPointerMove = (e: PointerEvent): void => {
     // Run the raycaster in placing / sell / move modes so we always
     // know which cell a click would hit.
@@ -867,8 +911,13 @@ export class BuildMenu {
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
-    // Intersect with the y=0 ground plane (used for placement + drop).
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    // Intersect with the focused storey's slab plane (floor 0 → y=0,
+    // floor 1 → y=3, etc.). For a plane y=h the equation is
+    // n·p + d = 0 with n=(0,1,0), so d = -h. Without this shift, every
+    // raycast on an upper floor lands on the ground slab and items
+    // would spawn at y=0 — visibly below the floor the user is on.
+    const slabY = this.currentFloorY();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -slabY);
     const point = new THREE.Vector3();
     this.hoverValid = this.raycaster.ray.intersectPlane(groundPlane, point) !== null;
     if (!this.hoverValid) return;
@@ -924,9 +973,11 @@ export class BuildMenu {
     // their top touches the ceiling.
     // Surface items get their Y from the host's measured top so the
     // ghost previews on top of the table/counter instead of on the floor.
+    // Non-surface items add the current floor's slab Y so the preview
+    // hovers over the focused floor instead of the ground.
     const previewY = this.placingDef.placement === "surface" && plan.hostTopY !== undefined
       ? plan.hostTopY
-      : placementY(this.preview, this.placingDef);
+      : placementY(this.preview, this.placingDef) + this.currentFloorY();
     this.preview.position.set(plan.x, previewY, plan.z);
     this.preview.rotation.y = plan.rotY;
     this.tintPreview(plan.quality);
@@ -1479,6 +1530,10 @@ export class BuildMenu {
         const movedItem = this.registry.snapshotItems().find((it) => it.uid === this.holdingUid);
         const movedDef = movedItem ? furnitureCatalog.find((d) => d.id === movedItem.defId) : undefined;
         this.registry.setPose(this.holdingUid, plan.x, plan.z, plan.rotY);
+        // Cross-floor drop: if the player switched focus while holding
+        // the item, re-parent it (and any surface children) into the
+        // new floor's storey mount and shift its Y by the slab delta.
+        this.registry.setItemFloor(this.holdingUid, this.currentFloor());
         if (this.movingOriginalModel) {
           this.movingOriginalModel.visible = true;
           this.movingOriginalModel = null;
@@ -1520,26 +1575,43 @@ export class BuildMenu {
     const planHostUid = plan.hostUid;
     const planSlotIndex = plan.slotIndex;
     const planHostTopY = plan.hostTopY;
+    // Snapshot the floor here so an async model-load doesn't get
+    // its placement re-routed if the player switches focus while the
+    // GLB is fetching.
+    const placeFloor = this.currentFloor();
+    const floorY = this.currentFloorY();
+    const mount = this.currentMount();
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
       // placementY picks the right Y per placement kind: 0 for floor
       // items, 1.5 for wall sconces, CEILING_Y minus the model height
       // for ceiling items so the model TOP touches the ceiling and the
       // body hangs below. Surface items override with the host's
-      // measured top Y so they sit on the table/counter top exactly.
+      // measured top Y so they sit on the table/counter top exactly
+      // (the host's Y already accounts for its floor). For floor /
+      // wall / ceiling items we add `floorY` so an upper-floor place
+      // lands on the right slab.
       const yOverride = def.placement === "surface" ? planHostTopY : undefined;
-      solid.position.set(placeX, yOverride ?? placementY(solid, def), placeZ);
+      const baseY = yOverride ?? (placementY(solid, def) + floorY);
+      solid.position.set(placeX, baseY, placeZ);
       solid.rotation.y = rotY;
       // Visual-only: slide narrow tile items so their back face hugs
       // any wall their cell touches. Keeps the kitchen line + dining
       // tables against the wall flush instead of leaving an uneven
       // per-item gap.
       snapToAdjacentWall(solid, def);
-      this.scene.add(solid);
+      // Surface items inherit their host's floor (set by register
+      // automatically). Everyone else is mounted under the focused
+      // storey's group so storey visibility applies.
+      if (def.placement === "surface") {
+        this.scene.add(solid);
+      } else {
+        mount.add(solid);
+      }
       const parent = (def.placement === "surface" && planHostUid && typeof planSlotIndex === "number")
         ? { parentUid: planHostUid, slotIndex: planSlotIndex }
         : undefined;
-      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent);
+      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent, placeFloor);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
       // Real doors keep their existing hook (hinged panel + front-
       // wall cut). Windows have their own callback that triggers

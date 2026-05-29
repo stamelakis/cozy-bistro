@@ -229,8 +229,9 @@ export class Engine {
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
     // Floor-focus selector. Lives on the page container as a fixed
-    // vertical strip on the right edge. Constructed AFTER the scene
-    // exists so it can read NUM_STOREYS / STOREY_HEIGHT statics.
+    // horizontal strip at the top. Constructed AFTER the scene exists
+    // so it can read NUM_STOREYS / STOREY_HEIGHT statics. The
+    // onFocusChanged callback is wired AFTER BuildMenu exists below.
     this.floorSelector = new FloorSelector(container, this.scene, this.camera);
     // Update world visibility whenever the tier changes (player bought an expansion).
     this.game.onLuxuryTierChanged = (tier) => {
@@ -290,7 +291,17 @@ export class Engine {
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
-    this.registry = new FurnitureRegistry(this.scene.threeScene, this.scene.loader);
+    // Pass a getStoreyMount callback so the registry can park each
+    // placed item under the right parent — main scene for ground
+    // floor, or the matching storey group for Floor 1+. That makes
+    // visibility (focus + tier) automatic instead of needing a manual
+    // toggle pass for every furniture model.
+    this.registry = new FurnitureRegistry(
+      this.scene.threeScene,
+      this.scene.loader,
+      (floor) => this.scene.getStoreyMount(floor),
+      WorldScene.getStoreyHeight(),
+    );
     // Pathfinder reads the live registry each query — we don't have to
     // rebuild a grid when furniture is placed/moved/sold. PlacedFurnitureItem
     // has defId/x/z plus extras, so it satisfies the PathfinderItem shape
@@ -398,6 +409,16 @@ export class Engine {
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     buildMenu.seatMarkers = this.seatMarkers;
+    // Multi-storey hooks: BuildMenu uses these to raycast against the
+    // focused floor's slab, mount new placements under the right storey
+    // group, and tie the storey-Y math to a single source of truth.
+    buildMenu.getFocusedStorey = () => this.scene.getFocusedStorey();
+    buildMenu.getStoreyMount = (floor) => this.scene.getStoreyMount(floor);
+    buildMenu.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    // When the FloorSelector switches storeys mid-build, teleport the
+    // active placement preview to the new floor so the player doesn't
+    // have to wiggle the mouse to refresh the ghost's Y.
+    this.floorSelector.onFocusChanged = () => buildMenu.refreshFocusedFloor();
     buildMenu.onDoorPlaced = (model) => {
       this.scene.attachDoorPanel(model);
       // Door event invalidates the front-wall layout — rebuild every

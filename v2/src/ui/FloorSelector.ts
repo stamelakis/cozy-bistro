@@ -20,6 +20,9 @@ export class FloorSelector {
   private readonly scene: WorldScene;
   private readonly camera: IsoCamera;
   private readonly buttons: HTMLButtonElement[] = [];
+  /** Optional notifier fired after a focus change (BuildMenu uses this
+   * to teleport its active placement preview to the new floor). */
+  onFocusChanged?: () => void;
 
   constructor(parent: HTMLElement, scene: WorldScene, camera: IsoCamera) {
     this.scene = scene;
@@ -89,6 +92,7 @@ export class FloorSelector {
     // floor sit comfortably below the screen middle.
     this.camera.tweenTargetY(idx * H, 0.5);
 
+    this.onFocusChanged?.();
     this.update();
   }
 
