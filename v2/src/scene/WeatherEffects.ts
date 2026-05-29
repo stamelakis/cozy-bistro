@@ -147,10 +147,13 @@ export class WeatherEffects {
   // === Builders ====================================================
 
   private buildRain(): void {
+    // Particle sizes are in WORLD units (sizeAttenuation defaults to
+    // true). Each droplet is now ~0.55 m across, so a few rows of
+    // rain visibly fill the iso frame instead of reading as dust.
     this.rain = this.makePoints(
       WeatherEffects.RAIN_COUNT,
       0xb8d4ec,
-      0.18,
+      0.55,
       0.85,
     );
     this.rainVelocities = this.makeVelocities(WeatherEffects.RAIN_COUNT, 14, 8);
@@ -158,10 +161,12 @@ export class WeatherEffects {
   }
 
   private buildHeavyRain(): void {
+    // Heavy droplets noticeably fatter than light rain to sell the
+    // intensity difference at a glance.
     this.heavyRain = this.makePoints(
       WeatherEffects.HEAVY_RAIN_COUNT,
       0x9cb8d4,
-      0.22,
+      0.75,
       0.95,
     );
     this.heavyRainVelocities = this.makeVelocities(WeatherEffects.HEAVY_RAIN_COUNT, 22, 10);
@@ -172,7 +177,7 @@ export class WeatherEffects {
     this.snow = this.makePoints(
       WeatherEffects.SNOW_COUNT,
       0xfaf7f1,
-      0.18,
+      0.60,
       0.85,
     );
     this.snowPhases = this.makePhases(WeatherEffects.SNOW_COUNT);
@@ -183,7 +188,7 @@ export class WeatherEffects {
     this.heavySnow = this.makePoints(
       WeatherEffects.HEAVY_SNOW_COUNT,
       0xffffff,
-      0.24,
+      0.80,
       0.95,
     );
     this.heavySnowPhases = this.makePhases(WeatherEffects.HEAVY_SNOW_COUNT);
@@ -214,7 +219,7 @@ export class WeatherEffects {
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     const mat = new THREE.PointsMaterial({
-      size: 0.20, transparent: true, opacity: 0.92,
+      size: 0.55, transparent: true, opacity: 0.92,
       vertexColors: true, depthWrite: false,
     });
     this.confetti = new THREE.Points(geom, mat);
