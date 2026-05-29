@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries as mergeBufferGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
@@ -917,55 +918,8 @@ export class WorldScene {
   ]);
 
   private addBuilding(): void {
-    // === Exterior ground layers ===
-    // Grass surrounds everything — uses per-vertex color noise so it
-    // doesn't look like a flat green sheet. ~3600 verts at 60×60 res.
-    const grassGeo = new THREE.PlaneGeometry(60, 60, 60, 60);
-    const colors = new Float32Array(grassGeo.attributes.position.count * 3);
-    for (let i = 0; i < grassGeo.attributes.position.count; i += 1) {
-      // Mix three greens with a per-vertex random.
-      const r = Math.random();
-      let c: { r: number; g: number; b: number };
-      if (r < 0.55) c = { r: 0.32, g: 0.50, b: 0.22 };   // mid green
-      else if (r < 0.85) c = { r: 0.40, g: 0.58, b: 0.28 }; // light green
-      else c = { r: 0.24, g: 0.40, b: 0.18 };               // dark green
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    grassGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    const grass = new THREE.Mesh(
-      grassGeo,
-      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1.0, metalness: 0 }),
-    );
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.y = -0.01;
-    grass.receiveShadow = true;
-    this.threeScene.add(grass);
-    // Scatter ~400 small grass tufts using instanced cones — adds 3D
-    // detail without thousands of draw calls.
-    const tuftGeo = new THREE.ConeGeometry(0.06, 0.22, 5);
-    const tuftMat = new THREE.MeshStandardMaterial({ color: 0x4a6b30, roughness: 0.95 });
-    const tufts = new THREE.InstancedMesh(tuftGeo, tuftMat, 400);
-    const tmp = new THREE.Object3D();
-    let placed = 0;
-    while (placed < 400) {
-      const tx = (Math.random() - 0.5) * 58;
-      const tz = (Math.random() - 0.5) * 58;
-      // Skip indoors (-5..5 x and z) and the road/pavement strip in front.
-      const insideBuilding = tx > -5.5 && tx < 5.5 && tz > -5.5 && tz < 5.5;
-      const onSidewalkOrRoad = tz > 4.5 && tz < 16.5 && tx > -15 && tx < 15;
-      if (insideBuilding || onSidewalkOrRoad) continue;
-      tmp.position.set(tx, 0.11, tz);
-      tmp.rotation.y = Math.random() * Math.PI * 2;
-      tmp.scale.setScalar(0.7 + Math.random() * 0.6);
-      tmp.updateMatrix();
-      tufts.setMatrixAt(placed, tmp.matrix);
-      placed += 1;
-    }
-    tufts.castShadow = false;
-    tufts.receiveShadow = true;
-    this.threeScene.add(tufts);
+    // === Exterior ground + props ===
+    this.addGrassyExterior();
     // Pavement strip in front of the door (z=5 to z=10).
     const pavement = new THREE.Mesh(
       new THREE.PlaneGeometry(30, 5),
@@ -1245,6 +1199,310 @@ export class WorldScene {
     state.currentMat = kind;
     const mats = this.materialsFor(dir, kind);
     for (const m of state.meshes) m.material = mats;
+  }
+
+  // === Exterior — grass, wildflowers, trees, rocks ============================
+  //
+  // Replaces the old "noisy vertex-coloured plane + 400 dark cones"
+  // exterior with a richer system:
+  //
+  //   1. Ground plane uses a procedurally-painted canvas texture
+  //      (multiple soft Perlin-style blobs across cool green tones)
+  //      so the lawn reads as organic patches of varying density
+  //      instead of pixelated noise.
+  //   2. ~2500 instanced grass-blade "tufts" built from two
+  //      perpendicular planes (so the blade is visible from any
+  //      angle), each plane painted with a gradient blade.
+  //   3. ~150 wildflowers — tiny brightly-coloured discs scattered
+  //      sparsely to add pops of colour.
+  //   4. ~22 low-poly trees (cone canopy + cylinder trunk) for
+  //      vertical interest.
+  //   5. ~30 small grey rocks for ground texture.
+  //
+  // Every prop skips the building interior + the sidewalk / road
+  // strip in front so the player's view of the door stays clean.
+
+  private addGrassyExterior(): void {
+    this.addGroundPlane();
+    this.addGrassBlades();
+    this.addWildflowers();
+    this.addLawnTrees();
+    this.addRocks();
+    this.addPavementAndRoad();
+  }
+
+  /** Big ground plane painted with a canvas texture of soft green
+   * patches. The texture repeats so the lawn fills the whole 70×70 m
+   * area without revealing the seam. */
+  private addGroundPlane(): void {
+    const tex = WorldScene.makeGrassTexture();
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(4, 4);
+    const grass = new THREE.Mesh(
+      new THREE.PlaneGeometry(70, 70),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
+    );
+    grass.rotation.x = -Math.PI / 2;
+    grass.position.y = -0.01;
+    grass.receiveShadow = true;
+    this.threeScene.add(grass);
+  }
+
+  /** Procedural grass texture — soft blob noise in a green palette so
+   * the lawn has natural-looking patches instead of pixel noise. */
+  private static makeGrassTexture(): THREE.CanvasTexture {
+    const sz = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = sz;
+    canvas.height = sz;
+    const ctx = canvas.getContext("2d")!;
+    // Base fill — mid green.
+    ctx.fillStyle = "#5a8540";
+    ctx.fillRect(0, 0, sz, sz);
+    // 80 overlapping soft blobs in varying greens to break up the flat
+    // base. The blobs wrap (we draw a few near each edge offset by
+    // ±sz) so when the texture tiles there's no visible seam.
+    const palette = [
+      "rgba(90, 140, 70, 0.45)",   // lighter spring green
+      "rgba(60, 100, 50, 0.40)",   // mid forest green
+      "rgba(40, 80, 35, 0.35)",    // deep shadow green
+      "rgba(120, 150, 65, 0.30)",  // dry yellow-grass
+      "rgba(50, 95, 45, 0.30)",    // moss
+    ];
+    const blobs = 80;
+    for (let i = 0; i < blobs; i += 1) {
+      const cx = Math.random() * sz;
+      const cy = Math.random() * sz;
+      const r = 20 + Math.random() * 60;
+      const colour = palette[Math.floor(Math.random() * palette.length)];
+      // Paint the same blob at three offsets so the tile edges blend
+      // when the texture wraps.
+      for (const dx of [-sz, 0, sz]) {
+        for (const dy of [-sz, 0, sz]) {
+          const grad = ctx.createRadialGradient(cx + dx, cy + dy, 0, cx + dx, cy + dy, r);
+          grad.addColorStop(0, colour);
+          grad.addColorStop(1, colour.replace(/0\.\d+\)$/, "0)"));
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, sz, sz);
+        }
+      }
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    return tex;
+  }
+
+  /** Instanced grass blade tufts — cross-pattern (two perpendicular
+   * planes) per instance so the blade reads from any camera angle. */
+  private addGrassBlades(): void {
+    const bladeTex = WorldScene.makeBladeTexture();
+    const bladeMat = new THREE.MeshStandardMaterial({
+      map: bladeTex, transparent: true, alphaTest: 0.4,
+      side: THREE.DoubleSide, roughness: 0.95, metalness: 0,
+    });
+    // Cross-blade geometry: two 0.18×0.42 planes intersecting at 90°.
+    const planeA = new THREE.PlaneGeometry(0.18, 0.42);
+    const planeB = planeA.clone().rotateY(Math.PI / 2);
+    const geom = mergeBufferGeometries([planeA, planeB]);
+    // Plane is centred — push UP so its base sits at y=0 (otherwise
+    // half the blade buries into the ground).
+    geom.translate(0, 0.21, 0);
+    const count = 2500;
+    const blades = new THREE.InstancedMesh(geom, bladeMat, count);
+    const tmp = new THREE.Object3D();
+    let placed = 0;
+    while (placed < count) {
+      const x = (Math.random() - 0.5) * 64;
+      const z = (Math.random() - 0.5) * 64;
+      if (WorldScene.isExclusionZone(x, z, /* margin */ 0.6)) continue;
+      tmp.position.set(x, 0, z);
+      tmp.rotation.y = Math.random() * Math.PI * 2;
+      const scale = 0.7 + Math.random() * 0.9;
+      tmp.scale.set(scale, scale * (0.85 + Math.random() * 0.3), scale);
+      tmp.updateMatrix();
+      blades.setMatrixAt(placed, tmp.matrix);
+      placed += 1;
+    }
+    blades.castShadow = false;
+    blades.receiveShadow = true;
+    this.threeScene.add(blades);
+  }
+
+  /** Tiny vertical gradient: green at base, transparent at the tip.
+   * Painted as a soft tapered blade silhouette so the cross-quads
+   * read as natural grass instead of stiff cardboard rectangles. */
+  private static makeBladeTexture(): THREE.CanvasTexture {
+    const w = 64, h = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, w, h);
+    // Draw 3 tapered blade silhouettes per quad so each instance reads
+    // as a small clump rather than a single rectangle.
+    const blades = [{ x: 18, sw: 0.6 }, { x: 32, sw: 1.0 }, { x: 46, sw: 0.7 }];
+    for (const b of blades) {
+      const grad = ctx.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0,    "rgba(48, 92, 38, 1.00)");
+      grad.addColorStop(0.55, "rgba(72, 124, 56, 1.00)");
+      grad.addColorStop(1.0,  "rgba(120, 160, 80, 0.00)");
+      ctx.fillStyle = grad;
+      // Slim tapered shape: wider at base (y=h), narrowing toward top.
+      ctx.beginPath();
+      ctx.moveTo(b.x - 5 * b.sw, h);
+      ctx.lineTo(b.x + 5 * b.sw, h);
+      ctx.lineTo(b.x + 1 * b.sw, 0);
+      ctx.lineTo(b.x - 1 * b.sw, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    return tex;
+  }
+
+  /** Sparse wildflowers — tiny coloured discs lying flat on the lawn.
+   * Just a pop of colour, not a full bloom system. */
+  private addWildflowers(): void {
+    const palette = [0xffe066, 0xff8aa6, 0xffffff, 0xf0b0e8, 0xffc46e];
+    const flowers = new THREE.Group();
+    for (let i = 0; i < 160; i += 1) {
+      const x = (Math.random() - 0.5) * 60;
+      const z = (Math.random() - 0.5) * 60;
+      if (WorldScene.isExclusionZone(x, z, 0.6)) { i -= 1; continue; }
+      const color = palette[Math.floor(Math.random() * palette.length)];
+      const flower = new THREE.Mesh(
+        new THREE.CircleGeometry(0.08 + Math.random() * 0.04, 8),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.6 }),
+      );
+      flower.rotation.x = -Math.PI / 2;
+      flower.position.set(x, 0.02, z);
+      flowers.add(flower);
+    }
+    this.threeScene.add(flowers);
+  }
+
+  /** Low-poly trees scattered across the lawn — cone canopy on a
+   * cylinder trunk. Keep counts modest so the camera path stays
+   * unobstructed. */
+  private addLawnTrees(): void {
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.9 });
+    const canopyMats = [
+      new THREE.MeshStandardMaterial({ color: 0x3a7a3a, roughness: 0.85 }),
+      new THREE.MeshStandardMaterial({ color: 0x4a8a4a, roughness: 0.85 }),
+      new THREE.MeshStandardMaterial({ color: 0x2e6a2e, roughness: 0.85 }),
+    ];
+    const trees = new THREE.Group();
+    let placed = 0;
+    let attempts = 0;
+    while (placed < 22 && attempts < 400) {
+      attempts += 1;
+      const x = (Math.random() - 0.5) * 60;
+      const z = (Math.random() - 0.5) * 60;
+      if (WorldScene.isExclusionZone(x, z, 1.8)) continue;
+      // Avoid spawning right in front of the door view either.
+      if (Math.abs(x) < 6 && z > 5.5 && z < 12) continue;
+      const tree = new THREE.Group();
+      const trunkH = 0.8 + Math.random() * 0.5;
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.14, trunkH, 8), trunkMat);
+      trunk.position.y = trunkH / 2;
+      trunk.castShadow = true;
+      tree.add(trunk);
+      const canopyH = 1.6 + Math.random() * 1.0;
+      const canopyR = 0.65 + Math.random() * 0.4;
+      const canopy = new THREE.Mesh(
+        new THREE.ConeGeometry(canopyR, canopyH, 8),
+        canopyMats[Math.floor(Math.random() * canopyMats.length)],
+      );
+      canopy.position.y = trunkH + canopyH / 2 - 0.15;
+      canopy.castShadow = true;
+      tree.add(canopy);
+      tree.position.set(x, 0, z);
+      tree.rotation.y = Math.random() * Math.PI * 2;
+      trees.add(tree);
+      placed += 1;
+    }
+    this.threeScene.add(trees);
+  }
+
+  /** Small instanced grey rocks scattered around to break up the
+   * uniform green. */
+  private addRocks(): void {
+    const rockGeo = new THREE.IcosahedronGeometry(0.18, 0);
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x7e7672, roughness: 0.95 });
+    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, 36);
+    const tmp = new THREE.Object3D();
+    let placed = 0;
+    let attempts = 0;
+    while (placed < 36 && attempts < 400) {
+      attempts += 1;
+      const x = (Math.random() - 0.5) * 62;
+      const z = (Math.random() - 0.5) * 62;
+      if (WorldScene.isExclusionZone(x, z, 0.4)) continue;
+      tmp.position.set(x, 0.06, z);
+      tmp.rotation.set(Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.4);
+      const sc = 0.6 + Math.random() * 0.9;
+      tmp.scale.set(sc, sc * (0.5 + Math.random() * 0.4), sc);
+      tmp.updateMatrix();
+      rocks.setMatrixAt(placed, tmp.matrix);
+      placed += 1;
+    }
+    rocks.count = placed;
+    rocks.castShadow = true;
+    rocks.receiveShadow = true;
+    this.threeScene.add(rocks);
+  }
+
+  private addPavementAndRoad(): void {
+    const pavement = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 5),
+      new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
+    );
+    pavement.rotation.x = -Math.PI / 2;
+    pavement.position.set(0, 0, 7.5);
+    pavement.receiveShadow = true;
+    this.threeScene.add(pavement);
+    const road = new THREE.Mesh(
+      new THREE.PlaneGeometry(30, 6),
+      new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
+    );
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0, 13);
+    road.receiveShadow = true;
+    this.threeScene.add(road);
+    const laneMat = new THREE.MeshStandardMaterial({
+      color: 0xe6e0c4, roughness: 0.85,
+      emissive: 0xe6e0c4, emissiveIntensity: 0.05,
+    });
+    for (let x = -14; x <= 14; x += 4) {
+      const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
+      dash.rotation.x = -Math.PI / 2;
+      dash.position.set(x, 0.005, 13);
+      this.threeScene.add(dash);
+    }
+    const curb = new THREE.Mesh(
+      new THREE.BoxGeometry(30, 0.12, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
+    );
+    curb.position.set(0, 0.06, 10);
+    curb.castShadow = true;
+    curb.receiveShadow = true;
+    this.threeScene.add(curb);
+  }
+
+  /** True when (x, z) is too close to the building interior, the door
+   * approach, or the pavement / road strip — keeps grass props out of
+   * the player's view of the front entrance. */
+  private static isExclusionZone(x: number, z: number, margin: number): boolean {
+    // Building footprint (-5..5 ± margin)
+    if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
+    // Pavement + road strip in front
+    if (z > 4.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
+    return false;
   }
 
   /** Wood-and-metal "back of house" counter where the errand helper
