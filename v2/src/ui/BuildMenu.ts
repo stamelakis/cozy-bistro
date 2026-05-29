@@ -930,11 +930,21 @@ export class BuildMenu {
       if (!host) {
         return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
       }
-      // Round the wall's mount-offset point (already pushed 0.07
-      // toward the cursor side) to find the anchor cell — i.e. the
-      // floor cell directly in front of the wall on the player's side.
-      const anchorX = Math.round(host.x);
-      const anchorZ = Math.round(host.z);
+      // Snap the anchor with the same parity rule tile placement uses:
+      // odd-sized axes land on a tile centre, even-sized axes land on
+      // a tile boundary line. Without this a 2-wide upper cabinet
+      // (e.g. kitchen-upper-d) anchored at integer X visibly straddled
+      // three tiles instead of cleanly covering two.
+      //
+      // Rotation matters: at rotY=0 the cabinet's width-axis is X; at
+      // rotY=π/2 the rotation swaps width and depth onto X/Z. Pull
+      // size from def the same way footprintCells does, then run
+      // snapAxis per-axis.
+      const swapped = Math.abs(Math.sin(host.rotY)) > 0.5;
+      const xSize = swapped ? def.size.depth : def.size.width;
+      const zSize = swapped ? def.size.width : def.size.depth;
+      const anchorX = this.snapAxis(host.x, xSize);
+      const anchorZ = this.snapAxis(host.z, zSize);
       // Enumerate every cell the cabinet would cover (1×1, 2×1, etc.)
       // and verify each one is clear or hosts a short-enough item.
       const cells = footprintCells({ x: anchorX, z: anchorZ, rotY: host.rotY }, def);
