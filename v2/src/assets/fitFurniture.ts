@@ -137,13 +137,37 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   // bake, the wall-mount logic puts the back of the mirror facing the
   // room. We move the existing children into a wrapper group rotated
   // by the offset; external rotation stacks on top of that.
+  let wrapper: THREE.Group | undefined;
   if (def.rotationOffset) {
-    const wrapper = new THREE.Group();
+    wrapper = new THREE.Group();
     wrapper.rotation.y = def.rotationOffset;
     // Snapshot first — wrapper.add() mutates model.children.
     const original = [...model.children];
     for (const child of original) wrapper.add(child);
     model.add(wrapper);
+  }
+
+  // Wall-mounted items: shift the model so its BACK face sits at z=0
+  // in model-local space. The wall-mount code in BuildMenu positions
+  // the model centre 0.07 units along the mount normal, which is fine
+  // for a flat sconce but pushes the back of a thicker piece (mirror,
+  // wall art) into the wall — sometimes all the way through. With this
+  // shift, the back face anchors at the mount-offset plane and the
+  // body extends INTO the room rather than across the wall.
+  if (def.placement === "wall") {
+    model.updateMatrixWorld(true);
+    const box3 = new THREE.Box3().setFromObject(model);
+    // External rotation aligns model -Z with the wall's outward normal,
+    // so the model's +Z face (max.z) ends up against the wall. Shift
+    // so that face lives at z=0.
+    const shiftZ = -box3.max.z;
+    if (shiftZ !== 0) {
+      if (wrapper) {
+        wrapper.position.z += shiftZ;
+      } else {
+        for (const child of model.children) child.position.z += shiftZ;
+      }
+    }
   }
 
   // Return the X-axis fit factor — callers (e.g. anchored props)
