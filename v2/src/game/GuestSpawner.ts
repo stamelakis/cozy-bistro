@@ -119,6 +119,13 @@ interface ActiveGuest {
   totalPaid: number;
   // Cumulative satisfaction across courses; final rating averages this.
   totalSatisfaction: number;
+  /** Dishware tier reserved for each course already served / in flight.
+   * Parallel to g.order — index N is the tier of the plate (or glass,
+   * for drinks) reserved for the Nth course. Used by finalizeVisit to
+   * mark the right tier dirty and to add the per-tier satisfaction
+   * bump for each plate served. Empty when no course has been reserved
+   * yet. */
+  reservedDishTiers: number[];
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
@@ -824,6 +831,7 @@ export class GuestSpawner {
         replanAccum: 0,
         willUseToilet: Math.random() < archetype.wcUseChance,
         usedToilet: false,
+        reservedDishTiers: [],
       };
       if (DEBUG_GUEST_LOGS) {
         console.log(`[Guest ${id}] spawned · archetype=${archetype.id} · willUseToilet=${guest.willUseToilet} (wcChance=${archetype.wcUseChance.toFixed(2)})`);
@@ -1018,16 +1026,25 @@ export class GuestSpawner {
         }
         // Brief moment to "look at menu" — then build a multi-course
         // order (1-3 dishes typically) and start the first course.
-        if (g.stateClock >= TIME_TO_ORDER && g.order.length === 0) {
-          // Look up the table's surface so drink-only coffee tables
-          // get a drinks-only short order. Falls back to "food" if the
-          // seat is somehow detached from a known table.
-          const surface = this.tableSurfaceForGuest(g);
-          g.order = this.buildOrder(g.archetype, surface);
+        if (g.stateClock >= TIME_TO_ORDER) {
           if (g.order.length === 0) {
-            this.markLostAndExit(g);
-            break;
+            // First tick past the order timer — build the order. Look
+            // up the table's surface so drink-only coffee tables get a
+            // drinks-only short order. Falls back to "food" if the
+            // seat is somehow detached from a known table.
+            const surface = this.tableSurfaceForGuest(g);
+            g.order = this.buildOrder(g.archetype, surface);
+            if (g.order.length === 0) {
+              this.markLostAndExit(g);
+              break;
+            }
           }
+          // Try to start the first course. beginNextCourse returns
+          // false when the kitchen is out of clean plates / glasses;
+          // we stay in "seated" and retry on the next tick while the
+          // guest's patience runs down — that's the "delayed order"
+          // UX the player picked. Success transitions to
+          // waitingForFood.
           this.beginNextCourse(g);
         }
         break;
@@ -1334,8 +1351,16 @@ export class GuestSpawner {
     return this.registry.getTableSurface(tableUid) ?? "food";
   }
 
-  /** Kick off the (next) course: consume ingredients + queue a ticket. */
-  private beginNextCourse(g: ActiveGuest): void {
+  /** Kick off the (next) course: reserve a clean plate / glass,
+   * consume ingredients, queue a ticket.
+   *
+   * Returns true when the course was successfully started, false when
+   * something blocked it (pantry empty OR no clean dishware). On a
+   * `false` return the guest's state is left as-is so the seated /
+   * eating handler can retry on the next tick while the patience timer
+   * keeps ticking — that's the "delayed order" UX the player picked
+   * for the out-of-plates case. */
+  private beginNextCourse(g: ActiveGuest): boolean {
     const recipe = g.order[g.orderIndex];
     if (!this.game.cooking.canFulfillRecipe(recipe)) {
       // Pantry ran out mid-meal — just shorten the order so the guest
@@ -1351,8 +1376,20 @@ export class GuestSpawner {
         g.state = "walkingToDoor";
         g.stateClock = 0;
       }
-      return;
+      return false;
     }
+    // Reserve a clean plate (or glass, for drink courses) before we
+    // burn ingredients on a meal we can't actually serve. If nothing
+    // clean is on the shelf, the order has to wait until the waiter
+    // washes one — the guest stays in seated / eating with patience
+    // ticking and we'll retry on the next tick. The recipe's category
+    // picks plate vs glass; "drink" is the only glass case in v1.
+    const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
+    const reservedTier = this.game.dishware.reserveOne(kind);
+    if (reservedTier === null) {
+      return false;
+    }
+    g.reservedDishTiers.push(reservedTier);
     this.game.cooking.consumeIngredients(recipe);
     // Enqueue with the BASE cook-seconds. The actual chef applies
     // their own training multiplier on pickup (StaffRouter does
@@ -1370,6 +1407,7 @@ export class GuestSpawner {
     );
     g.state = "waitingForFood";
     g.stateClock = 0;
+    return true;
   }
 
 
@@ -1411,7 +1449,20 @@ export class GuestSpawner {
    */
   private finalizeVisit(g: ActiveGuest): void {
     this.game.customers.recordServed(1);
-    const avgSat = g.order.length > 0 ? g.totalSatisfaction / g.order.length : 4;
+    // Plate / glass quality lifts the per-course satisfaction average:
+    // each tier of dishware actually served adds its catalog
+    // satisfactionPerPiece on top of the recipe's own value. T1 adds
+    // nothing; T5 plates add ~+2 satisfaction per course.
+    let dishSatBonus = 0;
+    for (let i = 0; i < g.reservedDishTiers.length; i += 1) {
+      const tier = g.reservedDishTiers[i];
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
+      dishSatBonus += this.game.dishware.satisfactionFor(kind, tier);
+    }
+    const adjustedSatisfaction = g.totalSatisfaction + dishSatBonus;
+    const avgSat = g.order.length > 0 ? adjustedSatisfaction / g.order.length : 4;
     let base = clamp(2 + avgSat / 2, 1, 5);
     // Penalty for a visibly dirty restaurant — drops the base rating by
     // 1 star so even an otherwise-good meal can drift to 3 stars.
@@ -1480,8 +1531,16 @@ export class GuestSpawner {
     }
     const jitter = (Math.random() - 0.5) * 0.8;
     const rating = clamp(Math.round(base + jitter), 1, 5);
-    // Each course they ate becomes a dirty dish in the wash queue.
-    this.game.addDirtyDish(g.orderIndex);
+    // Every plate / glass actually served becomes dirty in its own tier.
+    // orderIndex points at the next-to-be-served course (or one past
+    // the last if everything was eaten); g.reservedDishTiers up to that
+    // index represents the plates that landed on the table.
+    for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      const recipe = g.order[i];
+      if (!recipe) continue;
+      const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
+      this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
+    }
     // Food critics swing the rating average harder. Record their rating
     // three times — same direction, triple weight on overall reputation.
     const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;

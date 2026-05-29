@@ -187,7 +187,16 @@ export interface SaveGameState {
   ingredients?: IngredientStock[];
   preparedServings?: Record<string, number>;
   dirtySeatUids?: string[];
+  /** @deprecated Use `dishware` instead. Retained as a save-compat
+   * field so old saves still load; ignored on write. */
   dirtyDishCount?: number;
+  /** Per-tier plate + glass pools. Each entry is [tier, clean, dirty].
+   * Absent / empty on a save predating the dishware feature; the
+   * DishwareSystem hydrate seeds the starter inventory in that case. */
+  dishware?: {
+    plates?: Array<[number, number, number]>;
+    glasses?: Array<[number, number, number]>;
+  };
   staff?: HiredStaff;
   /** Per-role training upgrade levels (legacy / fallback for saves
    * predating per-member training). Used only if staffMembers is

@@ -150,6 +150,12 @@ export interface FurnitureDef {
    * shelves/cabinets a smaller amount. Game sums this across all placed
    * items and uses it to scale the auto-shop's stock target. */
   stockCapacity?: number;
+  /** How many plates / glasses this piece can hold. Non-fridge storage
+   * (cabinets, drawers, bar counters) contributes; fridges deliberately
+   * don't, since cold dish storage is silly. DishwareSystem sums this
+   * across placed items + a base of BASE_DISH_CAPACITY for the global
+   * dish cap. */
+  dishCapacity?: number;
 }
 
 /** Seat slots for a 1×1 coffee table — chairs go on all four sides and
@@ -379,7 +385,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90,
-    tier: 1, surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
+    tier: 1, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
   { id: "coffee-machine", name: "Coffee Machine",  category: "appliance",
     modelPath: "assets/kenney/kitchenCoffeeMachine.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250,
     tier: 3, placement: "surface", provides: "coffee" },
@@ -401,10 +407,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, placement: "wall-shelf", provides: "hood" },
   { id: "bar-counter",    name: "Bar Counter",     category: "counter",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
-    tier: 3, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+    tier: 3, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
-    tier: 3, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    tier: 3, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "fridge-built-in", name: "Built-in Fridge", category: "storage",
     modelPath: "assets/kenney/kitchenFridgeBuiltIn.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 700,
     tier: 3, stockCapacity: 7 },
@@ -413,7 +419,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 1, stockCapacity: 2 },
   { id: "counter-drawer", name: "Drawer Counter",  category: "counter",
     modelPath: "assets/kenney/kitchenCabinetDrawer.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120,
-    tier: 2, surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
+    tier: 2, dishCapacity: 6, surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
 
   // Decor
   { id: "cardboard-box",  name: "Supply Crate",    category: "decoration",
@@ -629,19 +635,19 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // placement that mounts above shorter counters.
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80, style: 1,
-    tier: 1, stockCapacity: 2, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, dishCapacity: 6, placement: "wall-shelf" },
   { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 130, style: 1,
-    tier: 2, stockCapacity: 4, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 4, dishCapacity: 12, placement: "wall-shelf" },
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
-    tier: 1, stockCapacity: 2, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, dishCapacity: 4, placement: "wall-shelf" },
   { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120, style: 1,
-    tier: 2, stockCapacity: 2, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 2, dishCapacity: 8, placement: "wall-shelf" },
   { id: "kitchen-corner-r", name: "Round Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerRound.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 150, style: 2,
-    tier: 2, stockCapacity: 2, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 2, dishCapacity: 8, placement: "wall-shelf" },
 
   // === Entertainment / TV / electronics. ===
   { id: "tv-modern",      name: "Modern TV",       category: "decoration",

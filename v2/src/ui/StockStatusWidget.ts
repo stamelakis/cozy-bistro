@@ -1,6 +1,7 @@
 import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import type { DishKind } from "../data/dishwareCatalog";
 
 /**
  * Compact at-a-glance ingredient status panel that sits above the
@@ -35,6 +36,10 @@ export class StockStatusWidget {
   private readonly needCaret: HTMLElement;
   private readonly needTooltip: HTMLElement;
   private readonly autoShop: HTMLElement;
+  private readonly dishRow: HTMLElement;
+  private readonly dishBadge: HTMLElement;
+  private readonly dishCaret: HTMLElement;
+  private readonly dishTooltip: HTMLElement;
   private readonly storageRow: HTMLElement;
   private readonly storageBadge: HTMLElement;
   private readonly storageCaret: HTMLElement;
@@ -75,6 +80,17 @@ export class StockStatusWidget {
       fontSize: "10px", marginTop: "3px", textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.autoShop);
+
+    // === Dishware badge — tooltip lives on document.body ===
+    this.dishRow = makeHoverRow();
+    this.dishBadge = document.createElement("span");
+    this.dishCaret = makeCaret();
+    this.dishRow.appendChild(this.dishBadge);
+    this.dishRow.appendChild(this.dishCaret);
+    this.root.appendChild(this.dishRow);
+    this.dishTooltip = makeFloatingTooltip();
+    document.body.appendChild(this.dishTooltip);
+    attachHoverTooltip(this.dishRow, this.dishTooltip, this.dishCaret);
 
     // === Storage badge — tooltip lives on document.body ===
     this.storageRow = makeHoverRow();
@@ -185,6 +201,50 @@ export class StockStatusWidget {
       this.autoShop.textContent = "🛒 Auto-shop OFF — restock manually";
     }
 
+    // === Dishware badge — total clean + dirty across plates & glasses ===
+    const dish = this.game.dishware;
+    const plateClean = dish.getClean("plate");
+    const plateDirty = dish.getDirty("plate");
+    const glassClean = dish.getClean("glass");
+    const glassDirty = dish.getDirty("glass");
+    const totalDirty = plateDirty + glassDirty;
+    // Severity colour: red when literally no clean dishes at all (orders
+    // start backing up), amber when one type is empty, otherwise green.
+    const plateColor = plateClean === 0 ? "#ff9a9a" : plateClean <= 4 ? "#ffd47a" : "#a8e2a8";
+    const glassColor = glassClean === 0 ? "#ff9a9a" : glassClean <= 4 ? "#ffd47a" : "#a8e2a8";
+    const dirtySpan = totalDirty > 0
+      ? ` <span style="opacity:0.7">· ${totalDirty} dirty</span>`
+      : "";
+    this.dishBadge.innerHTML =
+      `🍽️ ` +
+      `<span style="color:${plateColor};font-weight:700">${plateClean}</span>` +
+      ` plates · ` +
+      `<span style="color:${glassColor};font-weight:700">${glassClean}</span>` +
+      ` glasses` + dirtySpan;
+
+    // === Dishware tooltip body ===
+    const dishScroll = this.dishTooltip.scrollTop;
+    const dishLines: string[] = [];
+    dishLines.push(`<div style="font-weight:700;margin-bottom:3px">🍽️ Dishware</div>`);
+    dishLines.push(renderDishSection("Plates", "plate", dish));
+    dishLines.push(`<div style="height:4px"></div>`);
+    dishLines.push(renderDishSection("Glasses", "glass", dish));
+    const totalOwned = dish.getTotalOwned();
+    const dishCap = dish.getCapacity();
+    dishLines.push(
+      `<div style="margin-top:4px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12);color:#a8c8e8">` +
+        `Stored: <b>${totalOwned}</b> / ${dishCap} slots` +
+      `</div>`,
+    );
+    const washInterval = dish.getWashInterval();
+    if (Number.isFinite(washInterval)) {
+      dishLines.push(`<div style="opacity:0.7;margin-top:2px">Wash: 1 / ${washInterval.toFixed(1)}s</div>`);
+    } else if (totalDirty > 0) {
+      dishLines.push(`<div style="color:#ff9a9a;margin-top:2px">No sink or dishwasher — wash paused.</div>`);
+    }
+    this.dishTooltip.innerHTML = dishLines.join("");
+    this.dishTooltip.scrollTop = dishScroll;
+
     // === Storage badge ===
     const cap = this.game.getMaxStockTarget();
     const current = this.game.getStockTarget();
@@ -292,6 +352,27 @@ function makeFloatingTooltip(): HTMLElement {
     pointerEvents: "auto",
   } as Partial<CSSStyleDeclaration>);
   return tip;
+}
+
+/** Renders the per-tier breakdown for plates or glasses inside the
+ * dishware tooltip. Sorts tiers descending so the prestige rows lead. */
+function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"]): string {
+  const lines: string[] = [];
+  lines.push(`<div style="font-weight:700;opacity:0.85">${label}</div>`);
+  const rows = dish.getTierBreakdown(kind);
+  if (rows.length === 0) {
+    lines.push(`<div style="opacity:0.55;padding-left:4px">None owned.</div>`);
+  } else {
+    for (const r of rows) {
+      const tierBadge = `<span style="opacity:0.7">T${r.tier}</span>`;
+      const cleanSpan = `<span style="color:#a8e2a8">${r.clean} clean</span>`;
+      const dirtySpan = r.dirty > 0
+        ? ` · <span style="color:#ffd47a">${r.dirty} dirty</span>`
+        : "";
+      lines.push(`<div style="padding-left:4px">${tierBadge} · ${cleanSpan}${dirtySpan}</div>`);
+    }
+  }
+  return lines.join("");
 }
 
 /** Hook a summary row to its floating tooltip. The tooltip appears

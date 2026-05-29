@@ -3,6 +3,7 @@ import { ReputationSystem } from "../systems/ReputationSystem";
 import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
 import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
+import { DishwareSystem } from "../systems/DishwareSystem";
 import { StaffSystem, STAFF_UPGRADE_MAX, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
@@ -126,6 +127,7 @@ export class Game {
   readonly weather: WeatherSystem;
   readonly history: DayHistory;
   readonly achievements: AchievementSystem;
+  readonly dishware: DishwareSystem;
 
   /** Auto-shop accumulator (seconds since last attempt). */
   private autoShopClock = 0;
@@ -146,11 +148,9 @@ export class Game {
   private boostRemaining = 0;
   /** Currently applied interior theme id. */
   private themeId: string = RESTAURANT_THEMES[0].id;
-  /** Pile of dirty plates waiting to be washed. Each guest that finishes
-   * a meal leaves one. Auto-decremented at DISH_WASH_INTERVAL. */
-  private dirtyDishCount = 0;
-  /** Accumulator for the auto-wash tick. */
-  private dishWashClock = 0;
+  // dirtyDishCount + dishWashClock removed — superseded by
+  // DishwareSystem which tracks per-tier plate/glass dirty pools and
+  // runs its own wash clock.
   /** Runtime-mutable tuning knobs (AdminPanel). */
   readonly admin: AdminSettings = { ...DEFAULT_ADMIN_SETTINGS };
   /** Optional callback fired when the theme changes — Engine wires
@@ -205,6 +205,25 @@ export class Game {
     this.weather = new WeatherSystem();
     this.history = new DayHistory();
     this.achievements = new AchievementSystem();
+    this.dishware = new DishwareSystem();
+    // Wire DishwareSystem's storage + wash-station lookups so the cap
+    // grows with placed cabinets and the auto-wash interval shortens
+    // with placed sinks / dishwashers. Registry is set later by Engine,
+    // hence the lazy callbacks.
+    this.dishware.getStorageBonus = () => {
+      if (!this.registry) return 0;
+      let sum = 0;
+      for (const it of this.registry.snapshotItems()) {
+        const def = getFurnitureDef(it.defId);
+        if (def?.dishCapacity) sum += def.dishCapacity;
+      }
+      return sum;
+    };
+    this.dishware.countWashStations = () => ({
+      sinks: this.countPlacedById?.("sink") ?? 0,
+      dishwashers: this.countPlacedById?.("dishwasher") ?? 0,
+      dishwasherPro: this.countPlacedById?.("dishwasher-pro") ?? 0,
+    });
     if (save) this.hydrate(save);
     // Seed the cooking menu with one default recipe so guests have
     // something to order. (CookingSystem hydrate would handle this on
@@ -301,17 +320,10 @@ export class Game {
     if (this.boostRemaining > 0) {
       this.boostRemaining = Math.max(0, this.boostRemaining - dt);
     }
-    // Wash dirty dishes one at a time. Interval is reduced (faster wash)
-    // for each placed sink + dishwasher.
-    if (this.dirtyDishCount > 0) {
-      this.dishWashClock += dt;
-      if (this.dishWashClock >= this.getEffectiveDishWashInterval()) {
-        this.dishWashClock = 0;
-        this.dirtyDishCount -= 1;
-      }
-    } else {
-      this.dishWashClock = 0;
-    }
+    // Wash dirty plates + glasses through the dishware system. Per-tier
+    // pools track which dishes go back to which prestige level when
+    // washed — see DishwareSystem.update for the rate logic.
+    this.dishware.update(dt);
     // Achievement predicates only check once per second internally.
     this.achievements.update(dt, this);
   }
@@ -341,8 +353,16 @@ export class Game {
     if (typeof save.themeId === "string") {
       this.themeId = save.themeId;
     }
-    if (typeof save.dirtyDishCount === "number") {
-      this.dirtyDishCount = Math.max(0, save.dirtyDishCount);
+    // Per-tier dishware snapshot — preferred over the legacy
+    // dirtyDishCount when both are present. Hydrate sets up the pool
+    // (or seeds starter inventory when no save data is present).
+    this.dishware.hydrate(save.dishware);
+    // Old-save fallback: dirtyDishCount existed pre-feature. Roll it
+    // into the T1 plate dirty pool ONLY when the new field is absent,
+    // so a fresh save round-trips cleanly.
+    if (!save.dishware && typeof save.dirtyDishCount === "number") {
+      const n = Math.max(0, Math.floor(save.dirtyDishCount));
+      for (let i = 0; i < n; i += 1) this.dishware.markDirty("plate", 1);
     }
     if (typeof save.stockTarget === "number") {
       this.setStockTarget(save.stockTarget);
@@ -765,24 +785,36 @@ export class Game {
   }
 
   // === Dirty-dish pile ===
+  //
+  // These thin shims now read through DishwareSystem so the HUD + the
+  // GuestSpawner penalty keep working without each caller having to
+  // know about the per-tier pool structure.
 
-  getDirtyDishCount(): number { return this.dirtyDishCount; }
+  /** Total dirty plates + glasses queued for washing. */
+  getDirtyDishCount(): number {
+    return this.dishware.getDirty("plate") + this.dishware.getDirty("glass");
+  }
 
-  /** Called by GuestSpawner when a guest finishes their meal and leaves —
-   * each plate they ate gets queued for washing. */
+  /** Legacy shim: route an untyped "a dish became dirty" call into the
+   * T1 plate pool. New code (GuestSpawner) should call
+   * dishware.markDirty with the actual tier of the served piece. */
   addDirtyDish(count = 1): void {
-    this.dirtyDishCount += count;
+    for (let i = 0; i < count; i += 1) this.dishware.markDirty("plate", 1);
   }
 
   /** True when the pile is large enough that newly-rolled guest ratings
    * should be penalized for a noticeably dirty restaurant. */
   isDishPileOverwhelming(): boolean {
-    return this.dirtyDishCount > DIRTY_PILE_PENALTY_THRESHOLD;
+    return this.getDirtyDishCount() > DIRTY_PILE_PENALTY_THRESHOLD;
   }
 
   /** Seconds between wash ticks, reduced by sinks (-0.5s each) and
    * dishwashers (-1.0s for compact, -1.5s for pro), then scaled by
-   * admin.dishWashMultiplier. Floored at 0.4s. */
+   * admin.dishWashMultiplier. Floored at 0.4s.
+   *
+   * @deprecated DishwareSystem owns the wash cadence now. Kept as a
+   * helper for any callers (UI tooltips, admin panel) that want to
+   * surface it. */
   getEffectiveDishWashInterval(): number {
     let interval = DISH_WASH_INTERVAL;
     if (this.countPlacedById) {

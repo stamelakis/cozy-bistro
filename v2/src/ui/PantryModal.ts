@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
+import { GLASS_SETS, PLATE_SETS, type DishwareSetDef } from "../data/dishwareCatalog";
 
 /**
  * Pantry browser — full list of stocked ingredients with Ingredient /
@@ -175,6 +176,185 @@ export class PantryModal {
       transition: "background-color 0.4s ease",
     } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.restockLine);
+
+    // === Dishware section — plates + glasses bought in sets of 4 ===
+    this.buildDishwareSection(body);
+  }
+
+  // === Dishware shop UI ===
+  // Lives inside the Pantry modal so the player has one consumables
+  // hub. Each tier of plates / glasses gets a row with the cost, the
+  // per-piece satisfaction bonus, and a Buy button that adds 4
+  // pieces to the clean pool (subject to the dish-storage cap).
+
+  private dishStatLine?: HTMLElement;
+  private dishRowEls: Map<string, { tierLine: HTMLElement; buyBtn: HTMLButtonElement }> = new Map();
+
+  private buildDishwareSection(parent: HTMLElement): void {
+    const heading = document.createElement("div");
+    heading.textContent = "🍽️ DISHWARE";
+    Object.assign(heading.style, {
+      marginTop: "14px", fontSize: "12px", fontWeight: "700",
+      letterSpacing: "0.04em", textAlign: "center", opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(heading);
+
+    this.dishStatLine = document.createElement("div");
+    Object.assign(this.dishStatLine.style, {
+      marginTop: "2px", fontSize: "10px", textAlign: "center", opacity: "0.75",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(this.dishStatLine);
+
+    // Side-by-side plate + glass columns.
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px",
+      marginTop: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(grid);
+
+    grid.appendChild(this.buildDishwareColumn("Plates", PLATE_SETS));
+    grid.appendChild(this.buildDishwareColumn("Glasses", GLASS_SETS));
+  }
+
+  private buildDishwareColumn(label: string, sets: readonly DishwareSetDef[]): HTMLElement {
+    const col = document.createElement("div");
+    Object.assign(col.style, {
+      display: "flex", flexDirection: "column", gap: "3px",
+      padding: "6px 8px",
+      background: "rgba(255,245,220,0.04)",
+      border: "1px solid rgba(255,245,220,0.14)",
+      borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const header = document.createElement("div");
+    header.textContent = label;
+    Object.assign(header.style, {
+      fontSize: "10px", fontWeight: "700", opacity: "0.85",
+      letterSpacing: "0.04em",
+    } as Partial<CSSStyleDeclaration>);
+    col.appendChild(header);
+    for (const set of sets) {
+      col.appendChild(this.buildDishwareRow(set));
+    }
+    return col;
+  }
+
+  private buildDishwareRow(set: DishwareSetDef): HTMLElement {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "26px 1fr 38px",
+      alignItems: "center", gap: "4px",
+      padding: "2px 2px",
+      borderBottom: "1px solid rgba(255,245,220,0.05)",
+    } as Partial<CSSStyleDeclaration>);
+    const tierBadge = document.createElement("span");
+    tierBadge.textContent = `T${set.tier}`;
+    Object.assign(tierBadge.style, {
+      fontSize: "10px", fontWeight: "700", opacity: "0.7", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    const tierLine = document.createElement("span");
+    Object.assign(tierLine.style, {
+      fontSize: "10px", lineHeight: "1.2",
+    } as Partial<CSSStyleDeclaration>);
+    // Initial text gets populated by refreshDishware so it reflects
+    // current ownership immediately.
+    tierLine.textContent = set.name;
+    const buyBtn = document.createElement("button");
+    buyBtn.textContent = `$${set.cost}`;
+    Object.assign(buyBtn.style, {
+      background: "rgba(255,245,220,0.10)", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.28)", borderRadius: "3px",
+      cursor: "pointer", font: "inherit", fontSize: "10px",
+      padding: "3px 4px",
+    } as Partial<CSSStyleDeclaration>);
+    buyBtn.title = `Buy a set of ${set.setSize} ${set.name.toLowerCase()} for $${set.cost}` +
+      (set.satisfactionPerPiece > 0
+        ? ` · +${set.satisfactionPerPiece.toFixed(1)} satisfaction per piece served`
+        : "");
+    buyBtn.onclick = () => this.handleBuyDishSet(set);
+    row.appendChild(tierBadge);
+    row.appendChild(tierLine);
+    row.appendChild(buyBtn);
+    this.dishRowEls.set(set.id, { tierLine, buyBtn });
+    return row;
+  }
+
+  private handleBuyDishSet(set: DishwareSetDef): void {
+    const free = this.game.dishware.getFreeCapacity();
+    if (free < set.setSize) {
+      this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
+      return;
+    }
+    if (!this.game.economy.spendMoney(set.cost, "ingredients")) {
+      this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
+      return;
+    }
+    const added = this.game.dishware.buySet(set);
+    if (added === 0) {
+      // Capacity changed between the check and the call — refund.
+      this.game.economy.earnMoney(set.cost, "payment");
+      this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
+      return;
+    }
+    this.flashRow(set.id, "rgba(120, 220, 120, 0.45)");
+    this.refreshDishware();
+  }
+
+  /** Flash a single dishware row's tier line so the click feels reactive. */
+  private flashRow(setId: string, color: string): void {
+    const entry = this.dishRowEls.get(setId);
+    if (!entry) return;
+    entry.tierLine.style.transition = "background-color 0.2s ease";
+    entry.tierLine.style.background = color;
+    window.setTimeout(() => { entry.tierLine.style.background = "transparent"; }, 500);
+  }
+
+  /** Rewrites the per-row name + ownership tag (× count) and updates
+   * the summary header. Cheap — called every tick the modal is open. */
+  private refreshDishware(): void {
+    const dish = this.game.dishware;
+    const plateClean = dish.getClean("plate");
+    const plateDirty = dish.getDirty("plate");
+    const glassClean = dish.getClean("glass");
+    const glassDirty = dish.getDirty("glass");
+    const stored = dish.getTotalOwned();
+    const cap = dish.getCapacity();
+    if (this.dishStatLine) {
+      const dirty = plateDirty + glassDirty;
+      const dirtyStr = dirty > 0 ? ` · ${dirty} dirty` : "";
+      this.dishStatLine.textContent =
+        `${plateClean} plates clean · ${glassClean} glasses clean · ${stored}/${cap} stored${dirtyStr}`;
+    }
+    for (const set of [...PLATE_SETS, ...GLASS_SETS]) {
+      const entry = this.dishRowEls.get(set.id);
+      if (!entry) continue;
+      const pool = dish.getTierBreakdown(set.kind).find((t) => t.tier === set.tier);
+      const owned = pool ? pool.clean + pool.dirty : 0;
+      const ownedTag = owned > 0
+        ? ` <span style="opacity:0.7">×${owned}</span>`
+        : "";
+      const bonusTag = set.satisfactionPerPiece > 0
+        ? ` <span style="opacity:0.55">+${set.satisfactionPerPiece.toFixed(1)}</span>`
+        : "";
+      entry.tierLine.innerHTML = `${set.name}${ownedTag}${bonusTag}`;
+      // Disable + dim Buy when there's no capacity left or the player
+      // can't afford the set. Tooltip explains why.
+      const free = dish.getFreeCapacity();
+      const canFit = free >= set.setSize;
+      const canAfford = this.game.economy.getMoney() >= set.cost;
+      const enabled = canFit && canAfford;
+      entry.buyBtn.disabled = !enabled;
+      entry.buyBtn.style.opacity = enabled ? "1" : "0.35";
+      entry.buyBtn.style.cursor = enabled ? "pointer" : "not-allowed";
+      entry.buyBtn.title = !canFit
+        ? `No room for ${set.setSize} more — buy more cabinets first.`
+        : !canAfford
+        ? `Need $${set.cost} (have $${this.game.economy.getMoney()}).`
+        : `Buy a set of ${set.setSize} ${set.name.toLowerCase()} for $${set.cost}` +
+          (set.satisfactionPerPiece > 0
+            ? ` · +${set.satisfactionPerPiece.toFixed(1)} satisfaction per piece served`
+            : "");
+    }
   }
 
   show(): void {
@@ -240,6 +420,7 @@ export class PantryModal {
         : `Inventory value: $${totalValue}`;
     }
     this.updateRestockSummary();
+    this.refreshDishware();
   }
 
   /** Briefly flash an element's background to draw the eye to a change.
@@ -349,5 +530,6 @@ export class PantryModal {
       this.targetPlusBtn.style.opacity = atMax ? "0.35" : "1";
     }
     if (this.totalLine) this.totalLine.textContent = `Inventory value: $${totalValue}`;
+    this.refreshDishware();
   }
 }
