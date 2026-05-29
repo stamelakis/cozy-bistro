@@ -16,6 +16,7 @@ import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
 import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
+import { FloorSelector } from "../ui/FloorSelector";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
@@ -77,6 +78,7 @@ export class Engine {
   readonly upgradeModal: UpgradeModal;
   readonly expandModal: ExpandModal;
   readonly expandWidget: ExpandWidget;
+  readonly floorSelector: FloorSelector;
   readonly stockWidget: StockStatusWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
@@ -226,8 +228,15 @@ export class Engine {
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
+    // Floor-focus selector. Lives on the page container as a fixed
+    // vertical strip on the right edge. Constructed AFTER the scene
+    // exists so it can read NUM_STOREYS / STOREY_HEIGHT statics.
+    this.floorSelector = new FloorSelector(container, this.scene, this.camera);
     // Update world visibility whenever the tier changes (player bought an expansion).
-    this.game.onLuxuryTierChanged = (tier) => this.scene.setLuxuryTier(tier);
+    this.game.onLuxuryTierChanged = (tier) => {
+      this.scene.setLuxuryTier(tier);
+      this.floorSelector.update();
+    };
     this.decorModal = new DecorModal(container, this.game);
     // Wire theme changes to the live scene + restore the saved theme.
     this.game.onThemeChanged = (theme) => this.scene.setTheme(theme);
@@ -352,6 +361,7 @@ export class Engine {
       }
       // Apply tier visibility so locked sections show their marker.
       this.scene.setLuxuryTier(this.game.getLuxuryTier());
+      this.floorSelector.update();
       // Now that the demo door is in the registry (or NOT, for a
       // saved game where it was sold), rebuild every perimeter wall
       // so they have their gaps in the right places.

@@ -2322,6 +2322,25 @@ export class WorldScene {
     return this.currentTierVisible;
   }
 
+  /** Currently-focused storey (0 = ground). Used by FloorSelector to
+   * know which button is "active". */
+  getFocusedStorey(): number {
+    return this.focusedStorey;
+  }
+
+  /** Constant — meters between adjacent floor slabs. The floor selector
+   * uses this to compute the camera look-at lift per storey. */
+  static getStoreyHeight(): number {
+    return WorldScene.STOREY_HEIGHT;
+  }
+
+  /** Constant — how many storeys the building can grow to (ground + 4
+   * upper). FloorSelector renders one button per storey index in
+   * [0, NUM_STOREYS). */
+  static getNumStoreys(): number {
+    return WorldScene.NUM_STOREYS;
+  }
+
   /** Spawn an extra staff character at runtime (when player hires another).
    * Slots them in just to the right of the existing crew so they don't
    * overlap. Returns the AnimatedCharacter, or null if the GLB failed

@@ -17,6 +17,15 @@ export class IsoCamera {
   private dragLastX = 0;
   private dragLastY = 0;
 
+  // Floor-focus tween: when the player presses a floor button on the
+  // FloorSelector the camera glides its look-at target up/down to the
+  // matching storey instead of snapping. We blend `target.y` from the
+  // current value toward `tweenEndY` over `tweenDur` real seconds.
+  private tweenStartY = 0;
+  private tweenEndY = 0;
+  private tweenElapsed = 0;
+  private tweenDur = 0;
+
   constructor(viewW: number, viewH: number) {
     const aspect = viewW / viewH;
     this.threeCamera = new THREE.OrthographicCamera(
@@ -46,9 +55,48 @@ export class IsoCamera {
     this.threeCamera.updateProjectionMatrix();
   }
 
-  update(_dt: number): void {
-    // Camera pose currently only changes from input events; reserved for
-    // future smoothing/interpolation.
+  update(dt: number): void {
+    // Drive the floor-focus tween if one is running. Calling
+    // `tweenTargetY` while a tween is mid-flight extends it from the
+    // current eased position (we sample target.y at the new "start").
+    if (this.tweenDur > 0) {
+      this.tweenElapsed = Math.min(this.tweenElapsed + dt, this.tweenDur);
+      const t = this.tweenElapsed / this.tweenDur;
+      // Smoothstep ease for a gentle in/out — no overshoot so the camera
+      // doesn't punch through the storey above/below the destination.
+      const eased = t * t * (3 - 2 * t);
+      this.target.y = this.tweenStartY + (this.tweenEndY - this.tweenStartY) * eased;
+      this.updatePose();
+      if (this.tweenElapsed >= this.tweenDur) {
+        this.target.y = this.tweenEndY;
+        this.tweenDur = 0;
+        this.tweenElapsed = 0;
+      }
+    }
+  }
+
+  /** Smoothly glide the camera look-at target's Y to the requested
+   * height over `durationSec` seconds. Pass 0 for an instant snap.
+   * Called by FloorSelector when a new floor is picked — the X/Z
+   * components of the target are left untouched so the player's pan
+   * is preserved. */
+  tweenTargetY(y: number, durationSec = 0.45): void {
+    if (durationSec <= 0) {
+      this.target.y = y;
+      this.tweenDur = 0;
+      this.updatePose();
+      return;
+    }
+    this.tweenStartY = this.target.y;
+    this.tweenEndY = y;
+    this.tweenElapsed = 0;
+    this.tweenDur = durationSec;
+  }
+
+  /** Read the look-at target's Y — used by FloorSelector to know
+   * whether the camera is already at the requested floor. */
+  getTargetY(): number {
+    return this.target.y;
   }
 
   private onWheel = (e: WheelEvent): void => {
