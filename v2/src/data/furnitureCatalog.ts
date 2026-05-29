@@ -71,8 +71,21 @@ export interface FurnitureDef {
    *     integer tile centers like "tile" placement, but the ceiling
    *     and floor are independent layers — a ceiling lamp at (3, 2)
    *     does NOT block a chair from going on the floor tile below it.
-   *     Ceiling-lamp, ceiling-fan, hanging-plant. */
-  placement?: "tile" | "edge" | "wall" | "ceiling";
+   *     Ceiling-lamp, ceiling-fan, hanging-plant.
+   *   - "surface": sits ON TOP of another placed item that exposes
+   *     surfaceSlots (a counter, table, etc.). Snaps to the nearest
+   *     free slot on the hovered host; doesn't claim a floor tile.
+   *     When the host moves, surface items follow; when the host is
+   *     sold, surface items are sold too. Used for table lamps,
+   *     toasters, radios, coffee machines, etc. */
+  placement?: "tile" | "edge" | "wall" | "ceiling" | "surface";
+  /** Host items declare an array of local-frame offsets where
+   * surface-placed items can sit. dx/dz are in the host's NATURAL
+   * orientation (rotY=0); the host's rotation is applied to derive
+   * world coords. A table with 4 placeable spots on its corners would
+   * set surfaceSlots: [{dx: -0.4, dz: -0.4}, {dx: 0.4, dz: -0.4}, ...].
+   * The Y position is computed from the host model's measured top. */
+  surfaceSlots?: readonly { dx: number; dz: number }[];
   /** Optional realistic world-space height (in units ≈ metres). When set,
    * fitFurniture independently stretches Y so the placed item lands at
    * this height regardless of the raw mesh's proportions. Without it
@@ -219,7 +232,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "dining-table",  name: "Dining Table",  category: "table",
     modelPath: "assets/kenney/tableCross.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 110, style: 3, ratingBonus: 0.03,
     tier: 2,
-    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS },
+    targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS,
+    // MVP surface slot for Phase B: one centre spot so a Table Lamp or
+    // similar can sit on the table. Real per-host slot layouts (corners,
+    // centerpiece, etc.) come in the catalog audit pass.
+    surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "fancy-table",   name: "Linen Table",   category: "table",
     modelPath: "assets/kenney/tableCrossCloth.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 850, style: 5, ratingBonus: 0.08,
     tier: 4,
@@ -434,7 +451,8 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/lampSquareCeiling.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 22, style: 1, attractionBonus: 1,
     placement: "ceiling" },
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
-    modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 18, style: 2 },
+    modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 18, style: 2,
+    placement: "surface" },
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
     modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2, attractionBonus: 1,
     placement: "wall" },

@@ -24,6 +24,13 @@ export interface PlacedFurnitureItem {
   rotY: number;
   /** The live Object3D in the scene. Not persisted — rebuilt on load. */
   model: THREE.Object3D;
+  /** For surface-placed items: the host's uid. The item rides along when
+   * the host moves and is cascade-removed when the host is sold. */
+  parentUid?: string;
+  /** For surface-placed items: which entry in the host def's surfaceSlots
+   * array this item occupies. Reserves the slot against further placements
+   * on the same host. */
+  slotIndex?: number;
 }
 
 export interface PersistedPlacement {
@@ -32,6 +39,10 @@ export interface PersistedPlacement {
   x: number;
   z: number;
   rotY: number;
+  /** Optional host link for surface-placed items. On restore, the surface
+   * item is re-snapped to the host's current top after the host loads. */
+  parentUid?: string;
+  slotIndex?: number;
 }
 
 /** A resolved seat-slot from a placed table — world coords for chair and plate. */
@@ -67,11 +78,68 @@ export class FurnitureRegistry {
     this.loader = loader;
   }
 
-  /** Append a record for an already-placed model. Returns the new uid. */
-  register(defId: string, x: number, z: number, rotY: number, model: THREE.Object3D): string {
+  /** Append a record for an already-placed model. Returns the new uid.
+   * Surface items pass parentUid + slotIndex so the registry can track
+   * the host link for move/sell cascades and slot reservation. */
+  register(
+    defId: string,
+    x: number,
+    z: number,
+    rotY: number,
+    model: THREE.Object3D,
+    parent?: { parentUid: string; slotIndex: number },
+  ): string {
     const uid = makeUid();
-    this.items.push({ uid, defId, x, z, rotY, model });
+    const item: PlacedFurnitureItem = { uid, defId, x, z, rotY, model };
+    if (parent) {
+      item.parentUid = parent.parentUid;
+      item.slotIndex = parent.slotIndex;
+    }
+    this.items.push(item);
     return uid;
+  }
+
+  /** Indices into a host's surfaceSlots that are currently occupied by
+   * a surface-placed child. BuildMenu uses this to find the nearest
+   * FREE slot when previewing a surface-item placement. */
+  getOccupiedSurfaceSlots(hostUid: string, excludeUid?: string): Set<number> {
+    const out = new Set<number>();
+    for (const it of this.items) {
+      if (it.uid === excludeUid) continue;
+      if (it.parentUid === hostUid && typeof it.slotIndex === "number") {
+        out.add(it.slotIndex);
+      }
+    }
+    return out;
+  }
+
+  /** Walk a host's surface children and reposition / rotate each to
+   * track the host's new pose. The local (dx, dz) offsets from the
+   * host def's surfaceSlots array are rotated into world by the host's
+   * rotY. Y stays the same — surface items sit on the host's top, which
+   * doesn't change when the host moves horizontally. */
+  private reseatSurfaceChildren(hostUid: string): void {
+    const host = this.items.find((it) => it.uid === hostUid);
+    if (!host) return;
+    const hostDef = getFurnitureDef(host.defId);
+    const slots = hostDef?.surfaceSlots;
+    if (!slots || slots.length === 0) return;
+    const cos = Math.cos(host.rotY), sin = Math.sin(host.rotY);
+    for (const child of this.items) {
+      if (child.parentUid !== hostUid) continue;
+      if (typeof child.slotIndex !== "number") continue;
+      const slot = slots[child.slotIndex];
+      if (!slot) continue;
+      // Rotate the host-local (dx, dz) offset into world, then add the
+      // host's centre. Standard R_y(rotY) * (dx, 0, dz).
+      const wx = host.x + slot.dx * cos + slot.dz * sin;
+      const wz = host.z - slot.dx * sin + slot.dz * cos;
+      child.x = wx;
+      child.z = wz;
+      child.rotY = host.rotY;
+      child.model.position.set(wx, child.model.position.y, wz);
+      child.model.rotation.y = host.rotY;
+    }
   }
 
   /** Bulk-register many existing models (e.g. the demo placements that
@@ -197,19 +265,42 @@ export class FurnitureRegistry {
     item.x = x; item.z = z; item.rotY = rotY;
     item.model.position.set(x, item.model.position.y, z);
     item.model.rotation.y = rotY;
+    // If this item is a host (has children with parentUid === uid),
+    // ride its surface-placed items along to the new pose.
+    this.reseatSurfaceChildren(uid);
     return true;
   }
 
   /** Remove a specific placed item by uid. Returns the def + refund value
-   * (mirrors removeAt) or null. Used by undo of a `place`. */
+   * (mirrors removeAt) or null. Used by undo of a `place`. If the removed
+   * item is a host of any surface items, those are removed too and their
+   * refunds folded into the returned value — the caller (BuildMenu sell)
+   * pays out the whole stack in one go. */
   removeAtByUid(uid: string): { defId: string; refund: number } | null {
     const idx = this.items.findIndex((it) => it.uid === uid);
     if (idx < 0) return null;
     const item = this.items[idx];
-    this.scene.remove(item.model);
-    this.items.splice(idx, 1);
+    // Cascade: drop any surface-placed children first so their slots and
+    // refunds are released alongside the host. Walk a copy since the
+    // splice below mutates this.items.
+    const children = this.items.filter((c) => c.parentUid === uid);
+    let totalChildRefund = 0;
+    for (const child of children) {
+      const cIdx = this.items.findIndex((it) => it.uid === child.uid);
+      if (cIdx < 0) continue;
+      this.scene.remove(child.model);
+      this.items.splice(cIdx, 1);
+      const cDef = getFurnitureDef(child.defId);
+      totalChildRefund += cDef?.cost ?? 0;
+    }
+    // Re-find the host's index since the splices above shifted entries.
+    const finalIdx = this.items.findIndex((it) => it.uid === uid);
+    if (finalIdx >= 0) {
+      this.scene.remove(this.items[finalIdx].model);
+      this.items.splice(finalIdx, 1);
+    }
     const def = getFurnitureDef(item.defId);
-    return { defId: item.defId, refund: def?.cost ?? 0 };
+    return { defId: item.defId, refund: (def?.cost ?? 0) + totalChildRefund };
   }
 
   /** Read-only snapshot of every placed item (used by BuildMenu auto-arrange
@@ -239,14 +330,20 @@ export class FurnitureRegistry {
     // Preserve the model's Y — relocating a ceiling lamp keeps it on
     // the ceiling, a floor table keeps its floor Y.
     item.model.position.set(x, item.model.position.y, z);
+    // Cascade surface children to the new host pose.
+    this.reseatSurfaceChildren(uid);
     return true;
   }
 
-  /** Snapshot for save. Strips the model ref. */
+  /** Snapshot for save. Strips the model ref. parentUid / slotIndex
+   * are persisted so surface items re-snap to their hosts on load. */
   snapshot(): PersistedPlacement[] {
-    return this.items.map((it) => ({
-      uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY,
-    }));
+    return this.items.map((it) => {
+      const p: PersistedPlacement = { uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY };
+      if (it.parentUid) p.parentUid = it.parentUid;
+      if (typeof it.slotIndex === "number") p.slotIndex = it.slotIndex;
+      return p;
+    });
   }
 
   /** Aggregated stat bonuses across all placed furniture. Used by the
@@ -588,8 +685,14 @@ export class FurnitureRegistry {
   }
 
   /** Re-instantiate placements from a save. Resolves once every model
-   * is loaded (or skipped if unknown id / load error). */
+   * is loaded (or skipped if unknown id / load error). Surface-placed
+   * items override their Y from the host's measured top after the host
+   * loads, since placementY's "floor" default would otherwise drop them
+   * to y=0. */
   async restore(saved: PersistedPlacement[]): Promise<void> {
+    // Load every item first — order doesn't matter for tile/wall/edge/
+    // ceiling items, and the surface re-snap happens AFTER everything
+    // is in place so each surface child can look up its host.
     await Promise.all(saved.map(async (p) => {
       const def = getFurnitureDef(p.defId);
       if (!def) {
@@ -602,15 +705,43 @@ export class FurnitureRegistry {
         // Use the shared placementY helper so a save round-trip puts
         // ceiling lamps back on the ceiling, wall sconces at chest
         // height, and floor items on the ground — matches the
-        // BuildMenu place handler exactly.
+        // BuildMenu place handler exactly. Surface items get a
+        // placeholder Y and are corrected below once every host model
+        // exists.
         model.position.set(p.x, placementY(model, def), p.z);
         model.rotation.y = p.rotY;
         this.scene.add(model);
-        this.items.push({ uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model });
+        const item: PlacedFurnitureItem = { uid: p.uid, defId: p.defId, x: p.x, z: p.z, rotY: p.rotY, model };
+        if (p.parentUid) item.parentUid = p.parentUid;
+        if (typeof p.slotIndex === "number") item.slotIndex = p.slotIndex;
+        this.items.push(item);
       } catch (err) {
         console.warn(`Failed to restore placed furniture ${def.id}`, err);
       }
     }));
+    // Second pass: surface items get their Y from the host's measured
+    // top and a fresh pose computed from the host's current (x, z, rotY).
+    // This survives the host having been moved / rotated between save
+    // and load — the slot offset is in the host's local frame.
+    for (const child of this.items) {
+      if (!child.parentUid || typeof child.slotIndex !== "number") continue;
+      const host = this.items.find((it) => it.uid === child.parentUid);
+      if (!host) continue;
+      const hostDef = getFurnitureDef(host.defId);
+      const slot = hostDef?.surfaceSlots?.[child.slotIndex];
+      if (!slot) continue;
+      host.model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(host.model);
+      const topY = box.max.y;
+      const cos = Math.cos(host.rotY), sin = Math.sin(host.rotY);
+      const wx = host.x + slot.dx * cos + slot.dz * sin;
+      const wz = host.z - slot.dx * sin + slot.dz * cos;
+      child.x = wx;
+      child.z = wz;
+      child.rotY = host.rotY;
+      child.model.position.set(wx, topY, wz);
+      child.model.rotation.y = host.rotY;
+    }
   }
 }
 

@@ -30,6 +30,13 @@ interface PlacementPlan {
   z: number;
   /** Final rotation (radians). */
   rotY: number;
+  /** Surface placement: the host item the surface item will sit on. */
+  hostUid?: string;
+  /** Surface placement: which slot on the host. */
+  slotIndex?: number;
+  /** Surface placement: Y of the host's top so the preview/place can
+   * land at the right height. */
+  hostTopY?: number;
 }
 
 /** The fixed segments of the restaurant's exterior shell, taken from
@@ -855,7 +862,11 @@ export class BuildMenu {
     // placementY picks the right Y for each placement kind: floor at 0,
     // wall items at chest height, ceiling items hanging from y=3 so
     // their top touches the ceiling.
-    const previewY = placementY(this.preview, this.placingDef);
+    // Surface items get their Y from the host's measured top so the
+    // ghost previews on top of the table/counter instead of on the floor.
+    const previewY = this.placingDef.placement === "surface" && plan.hostTopY !== undefined
+      ? plan.hostTopY
+      : placementY(this.preview, this.placingDef);
     this.preview.position.set(plan.x, previewY, plan.z);
     this.preview.rotation.y = plan.rotY;
     this.tintPreview(plan.quality);
@@ -905,6 +916,22 @@ export class BuildMenu {
       const host = this.findNearestWall(rawPoint.x, rawPoint.z, 1.8);
       if (host) {
         return { quality: "snap-perfect", x: host.x, z: host.z, rotY: host.rotY };
+      }
+      return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
+    }
+    // Surface-placed items (table lamps, toasters, coffee machines)
+    // need an existing placed host item that exposes surfaceSlots.
+    // Find the nearest one with a free slot to the cursor and snap to it.
+    if (def.placement === "surface") {
+      const snap = this.findNearestSurfaceSlot(rawPoint.x, rawPoint.z);
+      if (snap) {
+        return {
+          quality: "snap-perfect",
+          x: snap.x, z: snap.z, rotY: snap.rotY,
+          hostUid: snap.hostUid,
+          slotIndex: snap.slotIndex,
+          hostTopY: snap.hostTopY,
+        };
       }
       return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
     }
@@ -1021,6 +1048,55 @@ export class BuildMenu {
       // which assumed a +X-front GLB and produced items perpendicular
       // to the wall.
       rotY: Math.atan2(-mountNX, -mountNZ),
+    };
+  }
+
+  /** Find the nearest free surface slot on a placed host item to the
+   * cursor. Walks every placed item, considers ones that declare
+   * surfaceSlots, computes each slot's world position (rotating the
+   * host-local dx/dz by the host's rotY), and returns the closest one
+   * that isn't already reserved by another surface-placed child. The
+   * Y comes from a measured bounding box on the host model so the
+   * preview / placement lands on the actual top surface regardless of
+   * which asset it is. Returns null when nothing within ~2 units has a
+   * free slot. */
+  private findNearestSurfaceSlot(rawX: number, rawZ: number): {
+    x: number; z: number; rotY: number; hostUid: string; slotIndex: number; hostTopY: number;
+  } | null {
+    const items = this.registry.snapshotItems();
+    const excludeUid = this.holdingUid ?? undefined;
+    let best: {
+      x: number; z: number; rotY: number; hostUid: string; slotIndex: number; hostTopY: number; dist: number;
+    } | null = null;
+    const MAX_DIST = 2.0;
+    for (const host of items) {
+      const hostDef = furnitureCatalog.find((d) => d.id === host.defId);
+      const slots = hostDef?.surfaceSlots;
+      if (!slots || slots.length === 0) continue;
+      const reserved = this.registry.getOccupiedSurfaceSlots(host.uid, excludeUid);
+      // Measure the host's world-space top once; all of its slots share
+      // the same Y.
+      host.model.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(host.model);
+      const topY = box.max.y;
+      const cos = Math.cos(host.rotY), sin = Math.sin(host.rotY);
+      for (let i = 0; i < slots.length; i += 1) {
+        if (reserved.has(i)) continue;
+        const slot = slots[i];
+        // R_y(rotY) * (dx, 0, dz) — matches the registry's reseat math.
+        const sx = host.x + slot.dx * cos + slot.dz * sin;
+        const sz = host.z - slot.dx * sin + slot.dz * cos;
+        const d = Math.hypot(sx - rawX, sz - rawZ);
+        if (d > MAX_DIST) continue;
+        if (!best || d < best.dist) {
+          best = { x: sx, z: sz, rotY: host.rotY, hostUid: host.uid, slotIndex: i, hostTopY: topY, dist: d };
+        }
+      }
+    }
+    if (!best) return null;
+    return {
+      x: best.x, z: best.z, rotY: best.rotY,
+      hostUid: best.hostUid, slotIndex: best.slotIndex, hostTopY: best.hostTopY,
     };
   }
 
@@ -1202,17 +1278,27 @@ export class BuildMenu {
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
     const cost = def.cost;
+    // Capture the surface-host info before the async load — if the
+    // plan is for a surface item, we need parentUid + slotIndex when
+    // registering and hostTopY for the Y position.
+    const planHostUid = plan.hostUid;
+    const planSlotIndex = plan.slotIndex;
+    const planHostTopY = plan.hostTopY;
     void this.loader.load(def.modelPath).then((solid) => {
       fitFurniture(solid, def);
       // placementY picks the right Y per placement kind: 0 for floor
       // items, 1.5 for wall sconces, CEILING_Y minus the model height
       // for ceiling items so the model TOP touches the ceiling and the
-      // body hangs below. Was hardcoded to wall-only before — ceiling
-      // lamps landed at y=0 (on the floor) instead of overhead.
-      solid.position.set(placeX, placementY(solid, def), placeZ);
+      // body hangs below. Surface items override with the host's
+      // measured top Y so they sit on the table/counter top exactly.
+      const yOverride = def.placement === "surface" ? planHostTopY : undefined;
+      solid.position.set(placeX, yOverride ?? placementY(solid, def), placeZ);
       solid.rotation.y = rotY;
       this.scene.add(solid);
-      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid);
+      const parent = (def.placement === "surface" && planHostUid && typeof planSlotIndex === "number")
+        ? { parentUid: planHostUid, slotIndex: planSlotIndex }
+        : undefined;
+      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
       if (def.category === "door") this.onDoorPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);

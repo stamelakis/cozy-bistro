@@ -243,7 +243,7 @@ function reconstruct(came: Map<string, string>, startKey: string, goalKey: strin
  * rugs, wall-mounted decor, edge-placed walls/windows, and ceiling-
  * mounted items don't claim floor tiles. */
 function isBlockingCategory(category: string, placement: string | undefined): boolean {
-  if (placement === "edge" || placement === "wall" || placement === "ceiling") return false;
+  if (placement === "edge" || placement === "wall" || placement === "ceiling" || placement === "surface") return false;
   switch (category) {
     case "table":
     case "chair":
