@@ -12,8 +12,8 @@ import { attachTooltip } from "./tooltip";
  * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
 type UndoEntry =
   | { kind: "place"; uid: string; defId: string; refundCost: number }
-  | { kind: "sell"; defId: string; x: number; z: number; rotY: number; refundPaid: number }
-  | { kind: "move"; uid: string; fromX: number; fromZ: number; fromRotY: number }
+  | { kind: "sell"; defId: string; x: number; z: number; rotY: number; refundPaid: number; floor: number }
+  | { kind: "move"; uid: string; fromX: number; fromZ: number; fromRotY: number; fromFloor: number }
   | { kind: "auto-arrange"; moves: Array<{ uid: string; fromX: number; fromZ: number; fromRotY: number }> };
 
 /** Result of evaluating the current hover position for a placement preview.
@@ -125,7 +125,7 @@ export class BuildMenu {
    * of keeping a hole at the old position. */
   get heldUid(): string | null { return this.holdingUid; }
   /** Original pose of the item being moved, for undo + cancel-restore. */
-  private holdingFrom: { x: number; z: number; rotY: number } | null = null;
+  private holdingFrom: { x: number; z: number; rotY: number; floor: number } | null = null;
   /** The actual placed model that's being carried — we hide it while the
    * preview ghost follows the cursor, and reveal it again on drop/cancel. */
   private movingOriginalModel: THREE.Object3D | null = null;
@@ -570,6 +570,9 @@ export class BuildMenu {
   private restoreMoveOriginal(): void {
     if (this.holdingUid && this.holdingFrom) {
       this.registry.setPose(this.holdingUid, this.holdingFrom.x, this.holdingFrom.z, this.holdingFrom.rotY);
+      // Restore the original storey so a Floor-1 → ground cancel
+      // doesn't leave the item floating at Y=0 on the upper-floor slab.
+      this.registry.setItemFloor(this.holdingUid, this.holdingFrom.floor);
     }
     if (this.movingOriginalModel) {
       this.movingOriginalModel.visible = true;
@@ -802,16 +805,24 @@ export class BuildMenu {
       this.game.economy.charge(entry.refundPaid);
       void this.loader.load(def.modelPath).then((solid) => {
         fitFurniture(solid, def);
-        solid.position.set(entry.x, placementY(solid, def), entry.z);
+        // Restore the item at its original floor — without the slab Y
+        // offset here, an undo of a Floor-1 sell would respawn the
+        // item on the ground. getStoreyHeight is wired from Engine.
+        const h = this.getStoreyHeight?.() ?? 3;
+        solid.position.set(entry.x, placementY(solid, def) + entry.floor * h, entry.z);
         solid.rotation.y = entry.rotY;
-        this.scene.add(solid);
-        this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid);
+        const mount = this.getStoreyMount?.(entry.floor) ?? this.scene;
+        mount.add(solid);
+        this.registry.register(def.id, entry.x, entry.z, entry.rotY, solid, undefined, entry.floor);
       });
       this.flashRoot(`Undid sell — paid back $${entry.refundPaid}`, "info");
       return;
     }
     if (entry.kind === "move") {
       this.registry.setPose(entry.uid, entry.fromX, entry.fromZ, entry.fromRotY);
+      // Cross-floor move undo: put the item back on its original
+      // storey so a Floor 1 → ground move can actually be undone.
+      this.registry.setItemFloor(entry.uid, entry.fromFloor);
       this.flashRoot("Undid move", "info");
       return;
     }
@@ -971,7 +982,15 @@ export class BuildMenu {
       // thing. Items on different floors are out of scope for the
       // current interaction.
       const focusedFloor = this.currentFloor();
-      const items = this.registry.snapshotItems().filter((it) => it.floor === focusedFloor);
+      const allItems = this.registry.snapshotItems();
+      const items = allItems.filter((it) => it.floor === focusedFloor);
+      if (items.length === 0 && allItems.length > 0) {
+        // Diagnostic for the "nothing to sell on Floor N" report. Dumps
+        // what floors the registry thinks every item is on, so we can
+        // spot a mismatch between visual Y and stored floor.
+        console.warn(`[sell/move-pickup] No items on focused floor ${focusedFloor}. Floor distribution:`,
+          allItems.reduce((acc, it) => { acc[`f${it.floor}`] = (acc[`f${it.floor}`] ?? 0) + 1; return acc; }, {} as Record<string, number>));
+      }
       if (items.length > 0) {
         const roots = items.map((it) => it.model);
         const hits = this.raycaster.intersectObjects(roots, true);
@@ -1503,7 +1522,7 @@ export class BuildMenu {
         this.flashRoot("Nothing to sell there", "error");
         return;
       }
-      const snapshot = { defId: item.defId, x: item.x, z: item.z, rotY: item.rotY };
+      const snapshot = { defId: item.defId, x: item.x, z: item.z, rotY: item.rotY, floor: item.floor };
       // Capture the model BEFORE removeAtByUid drops it from the scene
       // so we can tear down its lamp registration if applicable.
       const itemModel = item.model;
@@ -1520,7 +1539,7 @@ export class BuildMenu {
       if (itemDef?.category === "door" && !itemDef.id.startsWith("window")) this.onDoorRemoved?.(itemModel);
       if (itemDef?.id.startsWith("window")) this.onWindowRemoved?.(itemModel);
       this.game.economy.earnMoney(removed.refund, "payment");
-      this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund });
+      this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund, floor: snapshot.floor });
       this.flashRoot(`Sold for $${removed.refund}`, "success");
       return;
     }
@@ -1533,7 +1552,7 @@ export class BuildMenu {
           : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z), undefined, this.currentFloor());
         if (!item) { this.flashRoot("Nothing to move there", "error"); return; }
         this.holdingUid = item.uid;
-        this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY };
+        this.holdingFrom = { x: item.x, z: item.z, rotY: item.rotY, floor: item.floor };
         this.movingOriginalModel = item.model;
         const def = furnitureCatalog.find((d) => d.id === item.defId);
         if (def) {
@@ -1592,7 +1611,7 @@ export class BuildMenu {
           this.movingOriginalModel = null;
         }
         this.cancelPreview();
-        this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY });
+        this.pushUndo({ kind: "move", uid: this.holdingUid, fromX: fromPose.x, fromZ: fromPose.z, fromRotY: fromPose.rotY, fromFloor: fromPose.floor });
         this.holdingUid = null;
         this.holdingFrom = null;
         // Fire the placed-callback so the wall re-cuts a hole at the
