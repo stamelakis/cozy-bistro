@@ -17,9 +17,16 @@ const STORAGE_KEY_MUSIC = "cozy-bistro-3d-music-muted";
 const STORAGE_KEY_SFX_VOLUME = "cozy-bistro-3d-sfx-volume";
 
 /** Bus gain at sfxVolume = 1. Below 1 scales linearly toward silence.
- * Default sfxVolume is 0.55, which puts the bus at ~0.22 — the value
- * the player was hardcoded at before the volume slider was added. */
-const SFX_BUS_MAX_GAIN = 0.4;
+ * The volume slider is now a MASTER level — it scales SFX bus + the
+ * HTMLAudio music volume together — so the upper end has to be high
+ * enough to make a clear difference between "almost silent" and "the
+ * speakers are working hard". 0.7 felt right after testing. Default
+ * sfxVolume of 0.4 lands the bus at ~0.28, slightly above the old
+ * hardcoded 0.22 so the game feels louder out of the box. */
+const SFX_BUS_MAX_GAIN = 0.7;
+/** Same idea for music. HTMLAudio volume is 0..1; clamp it to keep
+ * the music a touch quieter than full so it doesn't dominate the SFX. */
+const MUSIC_MAX_VOLUME = 0.8;
 
 /** Per-appliance loop synth profile. Each variant gets a specialised
  * synthesis chain rather than the old single bandpass-on-noise that
@@ -54,7 +61,6 @@ export type DayPhase = "day" | "dusk" | "night" | "dawn";
 const DAWN_END = 0.083;
 const DAY_END  = 0.583;
 const DUSK_END = 0.667;
-const MUSIC_BASE_VOLUME = 0.55;
 
 export class SfxPlayer {
   private ctx: AudioContext | null = null;
@@ -62,11 +68,10 @@ export class SfxPlayer {
   private musicBus: GainNode | null = null;
   private sfxMuted = false;
   private musicMuted = false;
-  /** SFX bus level, 0..1 (user-friendly). Multiplied by SFX_BUS_MAX_GAIN
-   * to get the actual AudioContext gain value. Persisted across
-   * sessions; defaults to 0.55 to match the previous hardcoded level
-   * the player shipped with. */
-  private sfxVolume = 0.55;
+  /** Master volume slider value, 0..1. Drives both the SFX bus gain
+   * (×SFX_BUS_MAX_GAIN) and the music audio element volume
+   * (×MUSIC_MAX_VOLUME). Persisted across sessions. */
+  private sfxVolume = 0.4;
   /** Active named loops keyed by LoopId. setLoopActive flips them on
    * and off independently — multiple appliances can run at once. */
   private loops = new Map<LoopId, LoopHandle>();
@@ -116,7 +121,7 @@ export class SfxPlayer {
       const mk = (file: string, onReady: () => void): HTMLAudioElement => {
         const a = new Audio(`${base}audio/${file}`);
         a.loop = true;
-        a.volume = 0.55;
+        a.volume = this.currentMusicVolume(1);
         a.preload = "auto";
         a.addEventListener("canplaythrough", onReady, { once: true });
         return a;
@@ -150,13 +155,34 @@ export class SfxPlayer {
     this.applyBusGain();
   }
 
-  /** Sync the AudioContext SFX bus gain to the current mute + volume
-   * state. Cheap; called from any setter that affects either. */
+  /** Sync the AudioContext SFX bus gain AND the HTMLAudio music
+   * elements to the current mute + volume state. Cheap; called from
+   * any setter that affects either. Uses direct `.value =` assignment
+   * (equivalent to cancelScheduledValues + setValueAtTime but more
+   * obviously immediate). */
   private applyBusGain(): void {
-    if (!this.sfxBus || !this.ctx) return;
-    const target = this.sfxMuted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
-    this.sfxBus.gain.cancelScheduledValues(this.ctx.currentTime);
-    this.sfxBus.gain.setValueAtTime(target, this.ctx.currentTime);
+    // SFX bus — only exists after the AudioContext is created on the
+    // first user gesture.
+    if (this.sfxBus) {
+      this.sfxBus.gain.value = this.sfxMuted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
+    }
+    // Music — applyBusGain is for "user toggled mute or moved the
+    // master slider" type events; we don't know the live dusk/dawn
+    // fade ratio here, so just apply the steady-state volume. If we
+    // happen to be mid-fade, the next setDayProgress tick (called
+    // every Engine frame) overwrites with the correctly-interpolated
+    // value within ~16ms.
+    const target = this.currentMusicVolume(1);
+    if (this.dayAudio)   this.dayAudio.volume   = target;
+    if (this.nightAudio) this.nightAudio.volume = target;
+  }
+
+  /** Combine master slider + music mute + fade factor into the actual
+   * HTMLAudio volume to apply. Range 0..1. */
+  private currentMusicVolume(fade: number): number {
+    if (this.musicMuted) return 0;
+    const f = Math.max(0, Math.min(1, fade));
+    return Math.max(0, Math.min(1, this.sfxVolume * MUSIC_MAX_VOLUME * f));
   }
   isMusicMuted(): boolean { return this.musicMuted; }
   setMusicMuted(m: boolean): void {
@@ -323,10 +349,10 @@ export class SfxPlayer {
     if (this.musicMuted) return;
     if (phase === "dusk" && this.dayAudio && !this.dayAudio.paused) {
       const t = (progress - DAY_END) / (DUSK_END - DAY_END);
-      this.dayAudio.volume = MUSIC_BASE_VOLUME * Math.max(0, Math.min(1, 1 - t));
+      this.dayAudio.volume = this.currentMusicVolume(1 - t);
     } else if (phase === "dawn" && this.nightAudio && !this.nightAudio.paused) {
       const t = progress / DAWN_END;
-      this.nightAudio.volume = MUSIC_BASE_VOLUME * Math.max(0, Math.min(1, 1 - t));
+      this.nightAudio.volume = this.currentMusicVolume(1 - t);
     }
   }
 
@@ -343,7 +369,7 @@ export class SfxPlayer {
         if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
         if (this.dayAudio && this.dayAudioReady) {
           this.dayAudio.loop = true;
-          this.dayAudio.volume = MUSIC_BASE_VOLUME;
+          this.dayAudio.volume = this.currentMusicVolume(1);
           this.dayAudio.currentTime = 0;
           this.dayAudio.play().catch(() => { /* autoplay-policy; will retry on next user gesture */ });
         }
@@ -353,7 +379,7 @@ export class SfxPlayer {
         if (this.dayAudio) try { this.dayAudio.pause(); } catch { /* */ }
         if (this.nightAudio && this.nightAudioReady) {
           this.nightAudio.loop = true;
-          this.nightAudio.volume = MUSIC_BASE_VOLUME;
+          this.nightAudio.volume = this.currentMusicVolume(1);
           this.nightAudio.currentTime = 0;
           this.nightAudio.play().catch(() => { /* */ });
         }
