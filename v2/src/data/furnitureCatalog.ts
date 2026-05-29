@@ -389,12 +389,16 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "toaster",        name: "Toaster",         category: "appliance",
     modelPath: "assets/kenney/toaster.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 40,
     tier: 1, placement: "surface", provides: "toaster" },
+  // Hoods mount at upper-cabinet height (wall-shelf) so they hang above
+  // a stove or counter rather than taking a floor tile of their own.
+  // Same clearance rule as upper cabinets: cell below must be ≤1.2m, so
+  // a stove (0.92m) qualifies and a fridge (≥2m) doesn't.
   { id: "kitchen-hood",   name: "Range Hood",      category: "appliance",
     modelPath: "assets/kenney/hoodModern.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60,
-    tier: 1, provides: "hood" },
+    tier: 1, placement: "wall-shelf", provides: "hood" },
   { id: "kitchen-hood-l", name: "Large Range Hood", category: "appliance",
     modelPath: "assets/kenney/hoodLarge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140, ratingBonus: 0.01,
-    tier: 2, provides: "hood" },
+    tier: 2, placement: "wall-shelf", provides: "hood" },
   { id: "bar-counter",    name: "Bar Counter",     category: "counter",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
     tier: 3, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
@@ -625,13 +629,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // placement that mounts above shorter counters.
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80, style: 1,
-    tier: 1, stockCapacity: 1, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, placement: "wall-shelf" },
   { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 130, style: 1,
-    tier: 2, stockCapacity: 3, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 4, placement: "wall-shelf" },
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
-    tier: 1, stockCapacity: 1, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, placement: "wall-shelf" },
   { id: "kitchen-corner-i", name: "Inner Corner Cabinet", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetCornerInner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 120, style: 1,
     tier: 2, stockCapacity: 2, placement: "wall-shelf" },
