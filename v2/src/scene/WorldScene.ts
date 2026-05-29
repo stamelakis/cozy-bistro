@@ -1009,6 +1009,14 @@ export class WorldScene {
     slab: THREE.Mesh;
     walls: Map<WallDir, THREE.Mesh>;
   }>();
+  /** Staircase flights keyed by the storey index they LEAD UP TO
+   * (1..NUM_STOREYS-1). Each flight is parented to the LOWER storey it
+   * leaves from so it visually belongs to that floor — focusing on the
+   * lower floor reveals the stair going up. For idx === 1 the parent is
+   * the main scene (the ground floor has no group). Visibility is
+   * gated independently by tier (only show a flight if its destination
+   * storey is unlocked). */
+  private stairFlights = new Map<number, THREE.Group>();
   /** Roof cap at y = NUM_STOREYS * STOREY_HEIGHT. Visible whenever any
    * upper storey is — gives the building a finished top instead of an
    * open box. Also ghost-able so the iso camera can see down through it
@@ -1103,11 +1111,46 @@ export class WorldScene {
     this.addUpperStoreys();
   }
 
+  /** Build the 10×10 slab geometry with a rectangular stairwell hole
+   * cut at the back-left corner — the spot where the staircase coming
+   * up from the storey below emerges. The hole matches the stair
+   * footprint (X∈[−4.4,−3.4], Z∈[−4.4,−1.4], a 1 × 3 m opening) and is
+   * expressed in the slab's *local* coordinates (slab is then rotated
+   * −π/2 around X and translated to (0.5, baseY, 0.5), exactly like
+   * the original PlaneGeometry slab). */
+  private makeSlabWithStairHole(W: number): THREE.ShapeGeometry {
+    const half = W / 2;
+    const shape = new THREE.Shape();
+    shape.moveTo(-half, -half);
+    shape.lineTo( half, -half);
+    shape.lineTo( half,  half);
+    shape.lineTo(-half,  half);
+    shape.lineTo(-half, -half);
+    // Hole in local coords. Slab origin sits at (0.5, baseY, 0.5) in
+    // world; after the −π/2 rotation around X, shape-Y maps to world
+    // −Z. So a world hole at X∈[−4.4,−3.4], Z∈[−4.4,−1.4] becomes:
+    //   local X = world X − 0.5  → [−4.9, −3.9]
+    //   local Y = 0.5 − world Z  → [4.9, 1.9]
+    const hole = new THREE.Path();
+    hole.moveTo(-4.9, 1.9);
+    hole.lineTo(-4.9, 4.9);
+    hole.lineTo(-3.9, 4.9);
+    hole.lineTo(-3.9, 1.9);
+    hole.lineTo(-4.9, 1.9);
+    shape.holes.push(hole);
+    return new THREE.ShapeGeometry(shape);
+  }
+
   /** Build the empty white shell for each storey above the ground floor.
-   * Each storey gets a floor plane, four solid perimeter walls (tracked
-   * by direction so the ghost pass can flip them), and the top of the
-   * stack carries a separate roof cap. All hidden by default; the
-   * setLuxuryTier pass toggles the appropriate ones on per tier. */
+   * Each storey gets a floor plane (with a stairwell cut at the back-
+   * left corner), four solid perimeter walls (tracked by direction so
+   * the ghost pass can flip them), and the top of the stack carries a
+   * separate roof cap. All hidden by default; the setLuxuryTier pass
+   * toggles the appropriate ones on per tier. Staircases live in a
+   * SECOND pass (further down) and are parented to the storey they
+   * LEAVE FROM, so the player sees a flight going up when focused on
+   * the floor below — matching how stairs read visually in real
+   * architecture. */
   private addUpperStoreys(): void {
     const W = 10;                                          // footprint, same as ground floor
     const T = 0.2;                                         // wall thickness, matches wallBoxFor
@@ -1130,12 +1173,17 @@ export class WorldScene {
     this.roofMatSolid = new THREE.MeshStandardMaterial({
       color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
     });
+    // First pass: build every storey's slab + walls. Slabs use
+    // ShapeGeometry so we can cut a stairwell opening at the back-left
+    // corner where the flight below emerges.
     for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
       const group = new THREE.Group();
       group.visible = false;
       const baseY = idx * H;
-      // Floor of this storey == ceiling of the storey below.
-      const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), this.slabMatSolid);
+      // Floor of this storey == ceiling of the storey below, with a
+      // 1 × 2 m rectangular opening at the back-left corner so the
+      // staircase rising from below can emerge through it.
+      const slab = new THREE.Mesh(this.makeSlabWithStairHole(W), this.slabMatSolid);
       slab.rotation.x = -Math.PI / 2;
       slab.position.set(0.5, baseY, 0.5);
       slab.receiveShadow = true;
@@ -1155,12 +1203,28 @@ export class WorldScene {
         group.add(mesh);
         walls.set(spec.dir, mesh);
       }
-      // Staircase flight that LEADS UP TO this storey from the one
-      // below. Lives inside the same group so visibility (tier +
-      // focus) toggles atomically with the storey it serves.
-      this.addStaircaseSegment(group, baseY);
       this.upperStoreys.set(idx, { group, slab, walls });
       this.threeScene.add(group);
+    }
+    // Second pass: each flight is parented to the storey it LEAVES
+    // FROM (idx-1), so revealing the lower floor reveals the stair
+    // going up. For idx === 1 the parent is the main scene because
+    // the ground floor lives directly in the scene, not in a group.
+    for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
+      const baseY = idx * H;
+      const stairGroup = new THREE.Group();
+      this.addStaircaseSegment(stairGroup, baseY);
+      this.stairFlights.set(idx, stairGroup);
+      if (idx === 1) {
+        // Ground → Floor 1: parent is the main scene. Always visible
+        // when Floor 1 is unlocked, regardless of focus.
+        stairGroup.visible = false;
+        this.threeScene.add(stairGroup);
+      } else {
+        // Floor N → Floor N+1: parent is the lower storey's group.
+        const lowerGroup = this.upperStoreys.get(idx - 1)!.group;
+        lowerGroup.add(stairGroup);
+      }
     }
     // Roof at the top of the topmost storey. Lives outside the per-
     // storey groups because its visibility tracks "any upper storey
@@ -1186,22 +1250,21 @@ export class WorldScene {
   private addStaircaseSegment(parent: THREE.Group, baseY: number): void {
     const STEP_COUNT = 10;
     const STEP_WIDTH = 1.0;                                // X span
-    const STEP_DEPTH = 0.2;                                // Z span per step
-    const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m
+    const STEP_DEPTH = 0.3;                                // Z span per step → 3 m total run, 45° slope
+    const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m (matches depth for a 1:1 ratio)
     const X_CENTER   = -3.9;                               // flush against the left interior wall (X=-4.4)
     // The TOP of the flight sits at the back-left corner so the player
-    // walks INTO the corner as they climb (rather than starting at the
-    // corner, which was the previous orientation). With STEP_DEPTH=0.2
-    // and 10 steps, the top step's centre lands at Z=-4.3 — right
-    // against the back wall (interior face at Z=-4.4). The bottom of
-    // the flight extends 2 m south into the open floor.
-    const Z_BOTTOM   = -2.4;                               // low end, ~middle of building's north half
-    const runLen     = STEP_COUNT * STEP_DEPTH;            // 2 m total run
+    // walks INTO the corner as they climb. With STEP_DEPTH=0.3 and 10
+    // steps, the top step's centre lands at Z=-4.3 — right against the
+    // back wall (interior face at Z=-4.4). The bottom of the flight
+    // extends 3 m south into the open floor (down to Z≈-1.5).
+    const Z_BOTTOM   = -1.45;                              // low end, ~3 m south of back wall
+    const runLen     = STEP_COUNT * STEP_DEPTH;            // 3 m total run
     const lowerY     = baseY - WorldScene.STOREY_HEIGHT;
     const stepMat = new THREE.MeshStandardMaterial({
       color: 0xb0967a, roughness: 0.78, metalness: 0,
     });
-    // Steps rise as Z decreases (south → north), so step 0 sits 2 m
+    // Steps rise as Z decreases (south → north), so step 0 sits 3 m
     // out from the back wall and step N-1 sits tucked into the back-
     // left corner where the flight meets the upper slab.
     for (let i = 0; i < STEP_COUNT; i += 1) {
@@ -2319,6 +2382,15 @@ export class WorldScene {
       const unlocked = tier >= storeyIdx + 1;
       const atOrBelow = storeyIdx <= this.focusedStorey;
       storey.group.visible = unlocked && atOrBelow;
+    }
+    // Staircases: each flight is parented to the storey it LEAVES
+    // FROM, so the lower storey's group visibility already gates focus
+    // for flights 2..N. We just need to gate by tier here — a flight
+    // only makes sense if its destination storey exists. For flight 1
+    // (ground → Floor 1) the parent is the main scene, so this is the
+    // only visibility control it gets.
+    for (const [stairIdx, stairGroup] of this.stairFlights) {
+      stairGroup.visible = tier >= stairIdx + 1;
     }
     // Roof: only when focused on the TOP storey (and that storey is
     // unlocked) — anywhere else it would sit above the focus and
