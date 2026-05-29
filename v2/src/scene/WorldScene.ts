@@ -1521,12 +1521,18 @@ export class WorldScene {
   }
 
   private addPavementAndRoad(): void {
+    // Everything shifted +0.5 z to line up with the building. The
+    // perimeter wall + floor were moved by (0.5, 0.5) for the tile-
+    // centered grid, so the building's south face now sits at z=5.5;
+    // anchoring the pavement strip to start at the wall plane keeps
+    // the door's threshold flush with the sidewalk instead of half a
+    // tile inside the building.
     const pavement = new THREE.Mesh(
       new THREE.PlaneGeometry(30, 5),
       new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
     );
     pavement.rotation.x = -Math.PI / 2;
-    pavement.position.set(0, 0, 7.5);
+    pavement.position.set(0, 0, 8);  // spans z = 5.5 .. 10.5
     pavement.receiveShadow = true;
     this.threeScene.add(pavement);
     const road = new THREE.Mesh(
@@ -1534,7 +1540,7 @@ export class WorldScene {
       new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
     );
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, 13);
+    road.position.set(0, 0, 13.5);  // spans z = 10.5 .. 16.5
     road.receiveShadow = true;
     this.threeScene.add(road);
     const laneMat = new THREE.MeshStandardMaterial({
@@ -1544,14 +1550,14 @@ export class WorldScene {
     for (let x = -14; x <= 14; x += 4) {
       const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
       dash.rotation.x = -Math.PI / 2;
-      dash.position.set(x, 0.005, 13);
+      dash.position.set(x, 0.005, 13.5);
       this.threeScene.add(dash);
     }
     const curb = new THREE.Mesh(
       new THREE.BoxGeometry(30, 0.12, 0.18),
       new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
     );
-    curb.position.set(0, 0.06, 10);
+    curb.position.set(0, 0.06, 10.5);  // on the pavement/road border
     curb.castShadow = true;
     curb.receiveShadow = true;
     this.threeScene.add(curb);
@@ -1559,12 +1565,12 @@ export class WorldScene {
 
   /** True when (x, z) is too close to the building interior, the door
    * approach, or the pavement / road strip — keeps grass props out of
-   * the player's view of the front entrance. */
+   * the player's view of the front entrance. Bounds match the
+   * perimeter walls (-4.5..5.5) and the pavement/road strip
+   * (z=5.5..16.5) after the +0.5 shift. */
   private static isExclusionZone(x: number, z: number, margin: number): boolean {
-    // Building footprint (-5..5 ± margin)
     if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
-    // Pavement + road strip in front
-    if (z > 4.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
+    if (z > 5.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
     return false;
   }
 
