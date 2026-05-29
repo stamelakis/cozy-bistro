@@ -85,6 +85,13 @@ export class BuildMenu {
   private undoBtn?: HTMLButtonElement;
   private placingDef: FurnitureDef | null = null;
   private preview: THREE.Object3D | null = null;
+  /** Floor-relative Y the preview should sit at, captured once when the
+   * ghost is constructed (and again on a move-mode pickup). Without
+   * this, calling placementY(preview, def) each pointer-move would
+   * read the model's current position.y as the "default" and the
+   * Floor N offset would compound — Y growing by storeyHeight every
+   * frame and shoving the ghost out of view. */
+  private previewBaseY = 0;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointerNdc = new THREE.Vector2();
   /** Snapped world position the preview is hovering over. */
@@ -652,6 +659,10 @@ export class BuildMenu {
       return;
     }
     this.scene.add(this.preview);
+    // Cache the floor-relative placement Y NOW — the model.position.y
+    // is still at fitFurniture's baseline. Reading it later (after we
+    // start shifting the model around) would feed back into itself.
+    this.previewBaseY = placementY(this.preview, def);
     // Seed the preview with the focused floor's Y so the ghost shows
     // up immediately on upper floors — otherwise it starts at world
     // Y=0 (ground) and the camera (looking at Floor N's slab) just
@@ -659,7 +670,7 @@ export class BuildMenu {
     // onPointerMove. Surface items keep Y from the host so we leave
     // them alone.
     if (def.placement !== "surface") {
-      this.preview.position.y = placementY(this.preview, def) + this.currentFloorY();
+      this.preview.position.y = this.previewBaseY + this.currentFloorY();
     }
     // Surface seat-slot markers as a placement aid.
     this.seatMarkers?.setEnabled(true);
@@ -887,10 +898,12 @@ export class BuildMenu {
     if (!this.preview || !this.placingDef) return;
     // Surface items take Y from the host's measured top — no floor
     // adjustment needed (and the host's own Y already lives at the
-    // right slab). For floor / wall / ceiling items, re-derive Y
-    // from placementY + the new floor's slab offset.
+    // right slab). For floor / wall / ceiling items, recompute Y from
+    // the CACHED previewBaseY + the new floor's slab offset. Reading
+    // placementY here would compound with model.position.y the same
+    // way onPointerMove used to.
     if (this.placingDef.placement === "surface") return;
-    this.preview.position.y = placementY(this.preview, this.placingDef) + this.currentFloorY();
+    this.preview.position.y = this.previewBaseY + this.currentFloorY();
   }
 
   /** Storey index the camera is currently focused on. Defaults to 0 if
@@ -983,10 +996,13 @@ export class BuildMenu {
     // Surface items get their Y from the host's measured top so the
     // ghost previews on top of the table/counter instead of on the floor.
     // Non-surface items add the current floor's slab Y so the preview
-    // hovers over the focused floor instead of the ground.
+    // hovers over the focused floor instead of the ground. Uses the
+    // cached previewBaseY captured at ghost-creation time — re-reading
+    // placementY here would feed off model.position.y, which was just
+    // set by the previous tick, and the Y would compound every frame.
     const previewY = this.placingDef.placement === "surface" && plan.hostTopY !== undefined
       ? plan.hostTopY
-      : placementY(this.preview, this.placingDef) + this.currentFloorY();
+      : this.previewBaseY + this.currentFloorY();
     this.preview.position.set(plan.x, previewY, plan.z);
     this.preview.rotation.y = plan.rotY;
     this.tintPreview(plan.quality);
@@ -1528,6 +1544,13 @@ export class BuildMenu {
           this.preview = ghost;
           this.preview.position.set(item.x, this.preview.position.y, item.z);
           this.preview.rotation.y = item.rotY;
+          // Recover the floor-relative base Y from the clone's world Y
+          // by subtracting the item's home-floor slab offset. Stored
+          // for the same reason placement preview caches it — onPointerMove
+          // and refreshFocusedFloor add currentFloorY() back on each
+          // tick; without the cache the Y would compound by storeyHeight
+          // every frame.
+          this.previewBaseY = this.preview.position.y - item.floor * (this.getStoreyHeight?.() ?? 3);
           this.scene.add(this.preview);
           this.tintPreview("snap-perfect"); // at start, sits at its current valid pose
         }
