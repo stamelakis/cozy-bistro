@@ -954,7 +954,31 @@ export class Engine {
     // flicker animation runs this frame. The cooking-loop SFX tracks
     // the aggregate flag (any flame visible = sizzling).
     this.scene.syncStationEffects(this.registry.getCookStations());
-    this.scene.setActiveStations(this.router?.getCookingStoveUids() ?? new Set());
+    // Compute the augmented active set: every stove the router is
+    // currently cooking on PLUS any range hood that's positioned
+    // directly above one of those stoves (same X column within 0.7,
+    // Z within 1.5). The hood activation tracks the chef — when they
+    // walk away the hood goes dark + silent too. Cheap because the
+    // registry snapshot is already in hand for syncStationEffects.
+    const cookingStoves = this.router?.getCookingStoveUids() ?? new Set<string>();
+    const activeUids = new Set(cookingStoves);
+    if (cookingStoves.size > 0) {
+      const stations = this.registry.getCookStations();
+      const stovePositions: { x: number; z: number }[] = [];
+      for (const s of stations) {
+        if (cookingStoves.has(s.uid)) stovePositions.push({ x: s.x, z: s.z });
+      }
+      for (const s of stations) {
+        if (s.defId !== "kitchen-hood" && s.defId !== "kitchen-hood-l") continue;
+        for (const p of stovePositions) {
+          if (Math.abs(s.x - p.x) < 0.7 && Math.abs(s.z - p.z) < 1.5) {
+            activeUids.add(s.uid);
+            break;
+          }
+        }
+      }
+    }
+    this.scene.setActiveStations(activeUids);
     // Per-variant cooking-loop SFX — feed the live "which appliance
     // visuals are active right now" set straight into the SfxPlayer.
     // setLoopActive is idempotent, so it's safe to call for every
@@ -967,6 +991,7 @@ export class Engine {
     this.sfx.setLoopActive("coffee",         activeStations.has("coffee"));
     this.sfx.setLoopActive("blender",        activeStations.has("blender"));
     this.sfx.setLoopActive("microwave",      activeStations.has("microwave"));
+    this.sfx.setLoopActive("hood",           activeStations.has("hood"));
     // Dishwasher: any plates / glasses mid-cycle = humming away.
     const dwInflight = this.game.dishware.getDishwasherInFlight("plate")
                      + this.game.dishware.getDishwasherInFlight("glass");

@@ -116,7 +116,7 @@ export class WorldScene {
    *                  no recipe gates on microwave yet) */
   private stationEffects = new Map<string, {
     group: THREE.Group;
-    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave";
+    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave" | "hood";
     flameMesh?: THREE.Mesh;
     flameLight?: THREE.PointLight;
     // Steam puffs for coffee: each has a phase offset so they rise in
@@ -385,8 +385,8 @@ export class WorldScene {
    * the per-variant SFX loops (gas vs electric stove vs coffee vs
    * blender etc.) so the player hears whichever appliances are in
    * use, not a single generic "cooking" hiss. */
-  getActiveStationVariants(): Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave"> {
-    const out = new Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave">();
+  getActiveStationVariants(): Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave" | "hood"> {
+    const out = new Set<"gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave" | "hood">();
     for (const f of this.stationEffects.values()) {
       if (f.group.visible) out.add(f.variant);
     }
@@ -398,7 +398,7 @@ export class WorldScene {
    * — the chef just stands there chopping, no glow needed). */
   private buildStationEffect(defId: string): {
     group: THREE.Group;
-    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave";
+    variant: "gas" | "electric" | "toaster" | "coffee" | "blender" | "microwave" | "hood";
     flameMesh?: THREE.Mesh;
     flameLight?: THREE.PointLight;
     steamPuffs?: { mesh: THREE.Mesh; phase: number }[];
@@ -411,8 +411,39 @@ export class WorldScene {
       case "coffee-machine": return this.buildCoffeeSteamEffect();
       case "blender": return this.buildBlenderWobbleEffect();
       case "microwave": return this.buildMicrowaveGlowEffect();
+      case "kitchen-hood":
+      case "kitchen-hood-l":
+        return this.buildHoodLightEffect();
       default: return undefined;
     }
+  }
+
+  /** Range hood — a static warm-white downlight that switches on while
+   * a chef cooks below. No flicker (user explicitly asked for "a static
+   * one"). Engine.update walks the registry each frame, finds active
+   * stoves, then turns on any hood that's positioned directly above an
+   * active one (same X column, close Z). */
+  private buildHoodLightEffect() {
+    const group = new THREE.Group();
+    group.visible = false;
+    // The light hangs under the hood — alignEffectToModel anchors the
+    // group at the model's top; offset y negative drops it to roughly
+    // the hood's bottom edge, where a real range-hood bulb would sit.
+    const light = new THREE.PointLight(0xfff0c8, 1.8, 1.8, 2);
+    light.position.set(0, -0.4, 0);
+    group.add(light);
+    // Small visible bulb so the player can see the source.
+    const bulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.035, 12, 12),
+      new THREE.MeshStandardMaterial({
+        color: 0xfff8e0,
+        emissive: 0xfff0c8,
+        emissiveIntensity: 1.5,
+      }),
+    );
+    bulb.position.set(0, -0.4, 0);
+    group.add(bulb);
+    return { group, variant: "hood" as const, flameLight: light };
   }
 
   /** Gas / electric stove flame — sphere + point light. Gas reads
