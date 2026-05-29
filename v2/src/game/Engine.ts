@@ -849,12 +849,21 @@ export class Engine {
     // Animate interior doorways — any placed int-doorway opens when a
     // guest or staff member is close enough to walk through.
     this.updateInteriorDoorways(dt);
-    // Day/night lighting follows the in-game day timer.
+    // Push the current weather id BEFORE applyDayNight so the lighting
+    // tint matches today's roll. setWeather is a no-op when nothing
+    // changed, so cheap to call every frame.
+    this.scene.setWeather(this.game.weather.getCurrent().id);
+    // Day/night lighting follows the in-game day timer; applyDayNight
+    // layers any weather tints on top of the base dayness ramp.
     const day = this.scene.applyDayNight(this.game.day.getDayProgress());
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
     }
+    // Tick weather particles — uses rawDt so rain still falls at a
+    // believable rate when the simulation is paused or fast-forwarded.
+    // Camera position lets the particle volume follow the player.
+    this.scene.updateWeather(rawDt, this.camera.threeCamera.position);
     this.scene.update(dt);
     // Swap which two exterior walls render as transparent glass based
     // on which side the camera is currently on. Cheap enough to run

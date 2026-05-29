@@ -50,4 +50,13 @@ export class WeatherSystem {
     }
     this.current = WEATHER_TYPES[0];
   }
+
+  /** Admin / dev tool: force a specific weather for the current day,
+   * skipping the next roll. Used by the AdminModal weather buttons to
+   * preview rain / snow / festival visuals without waiting for the
+   * day-end roll. Silently no-ops if the id isn't in WEATHER_TYPES. */
+  setById(id: string): void {
+    const next = WEATHER_TYPES.find((w) => w.id === id);
+    if (next) this.current = next;
+  }
 }

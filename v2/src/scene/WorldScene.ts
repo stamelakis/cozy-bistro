@@ -4,6 +4,7 @@ import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
 import { fitFurniture } from "../assets/fitFurniture";
+import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 
 /** Linearly interpolate between two RGB integers by t in [0,1]. */
 function mixColors(a: number, b: number, t: number): number {
@@ -135,6 +136,7 @@ export class WorldScene {
 
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
     this.addLighting();
+    this.weatherEffects = new WeatherEffects(this.threeScene);
     this.addBuilding();
     // Per-station effects (flames, toaster glow, coffee steam, etc.)
     // are created lazily by syncStationEffects() once each station
@@ -512,6 +514,14 @@ export class WorldScene {
    * registered lamp picks up the current darkness immediately, not on
    * the next applyDayNight tick. */
   private currentNightAmount = 0;
+  /** Procedural rain / snow / confetti overlay + per-weather lighting
+   * modifiers. Engine pushes the current weather id via setWeather and
+   * ticks update() every frame so particles follow the camera. */
+  private weatherEffects?: WeatherEffects;
+  /** Most recent weather id passed from Engine. Default sunny so day 1
+   * always renders the warm path even before Engine has wired the
+   * weather callback. */
+  private currentWeather: WeatherKind = "sunny";
 
   /** Attach a warm point light + small emissive bulb to a placed lamp
    * model so it actually illuminates the area at night. Returns silently
@@ -672,11 +682,95 @@ export class WorldScene {
       skyColor = 0x12162a; // darker than the old 0x1f2a48
     }
 
+    // Weather tints — layered on top of the day/night base. Rainy and
+    // cold tint everything cooler regardless of time of day (they're
+    // "all-time" weathers per the user spec). Cloudy and sunny only
+    // bite during the day window — at night they're invisible anyway
+    // because dayness == 0 collapses their effect to nothing.
+    skyColor = this.applyWeatherTints(skyColor, dayness);
+
     // Lamp intensity tracks `1 - dayness` so bulbs warm up over the
     // dusk window, stay lit through deep night, then dim out across
-    // the dawn window.
-    this.updateLamps(1 - dayness);
+    // the dawn window. Rainy / cold weather bumps the lamp glow a
+    // little so the interior reads as the cozy refuge from the storm.
+    let lampBoost = 0;
+    if (this.currentWeather === "rainy") lampBoost = 0.15;
+    else if (this.currentWeather === "cold") lampBoost = 0.1;
+    this.updateLamps(Math.min(1, (1 - dayness) + lampBoost));
     return { skyColor };
+  }
+
+  /** Layer weather-specific tints on top of the day/night ambient.
+   * Rainy + cold cool the sun + ambient and shift the sky grey/blue.
+   * Cloudy dulls the sun and tints the sky greyer (daytime only).
+   * Festival warms ambient slightly + brightens lamps for a party
+   * mood. Sunny passes through untouched — it IS the default.
+   *
+   * Returns the (possibly modified) sky colour so the renderer's
+   * background also picks up the storm-grey / overcast / festive tint. */
+  private applyWeatherTints(skyColor: number, dayness: number): number {
+    switch (this.currentWeather) {
+      case "rainy": {
+        // Cool grey-blue overcast. Strong all the time — rainy nights
+        // also feel storm-darkened. Sun dimmed to ~30%, ambient gets a
+        // chilly tint.
+        skyColor = mixColors(skyColor, 0x4a5868, 0.55);
+        this.sunLight.intensity *= 0.40;
+        this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0x8aa0c0, 0.55));
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0x7a8aa0, 0.5));
+        this.ambientLight.intensity *= 0.80;
+        break;
+      }
+      case "cold": {
+        // Pale cool-white snowstorm tint. Snow reflects so it's not as
+        // dark as rain — sun keeps ~60% intensity but its colour goes
+        // toward white-blue and the sky pales.
+        skyColor = mixColors(skyColor, 0xc8d4e0, 0.45);
+        this.sunLight.intensity *= 0.70;
+        this.sunLight.color.setHex(mixColors(this.sunLight.color.getHex(), 0xe0e8f4, 0.5));
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xcdd5e2, 0.4));
+        break;
+      }
+      case "cloudy": {
+        // Overcast — only meaningful during the day. The mix amount
+        // tracks dayness so dusk + night stay night-blue, not a
+        // washed-out grey.
+        const t = dayness * 0.5;
+        skyColor = mixColors(skyColor, 0x9aa2ad, t);
+        this.sunLight.intensity *= (1 - dayness * 0.45);
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xa8aebc, t));
+        break;
+      }
+      case "festival": {
+        // Warmer ambient + a pop of pink in the sky. Subtle — confetti
+        // particles carry most of the visual signature.
+        skyColor = mixColors(skyColor, 0xf4b8c8, 0.20);
+        this.ambientLight.color.setHex(mixColors(this.ambientLight.color.getHex(), 0xffd0b8, 0.30));
+        this.ambientLight.intensity *= 1.1;
+        break;
+      }
+      case "sunny":
+      default:
+        // Default warm path — already handled by the dayness ramp.
+        break;
+    }
+    return skyColor;
+  }
+
+  /** Engine pushes the active weather id each tick (cheap; idempotent).
+   * Triggers a particle-system swap inside WeatherEffects and updates
+   * the cached weather so the next applyDayNight call uses the new
+   * tint. */
+  setWeather(id: string): void {
+    if (this.currentWeather === id) return;
+    this.currentWeather = id;
+    this.weatherEffects?.setWeather(id);
+  }
+
+  /** Tick weather particles. cameraPos is consumed so the volume
+   * tracks the player's view across long sessions. */
+  updateWeather(dt: number, cameraPos: THREE.Vector3): void {
+    this.weatherEffects?.update(dt, cameraPos);
   }
 
   /** Exposed so the DecorPanel can swap colors when the player picks a

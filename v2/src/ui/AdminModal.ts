@@ -136,6 +136,10 @@ export class AdminModal {
     // === Reputation section ===
     body.appendChild(this.buildReputationSection());
 
+    // === Weather section — preview rain / snow / festival visuals
+    // without waiting for the day-end roll. ===
+    body.appendChild(this.buildWeatherSection());
+
     // === Quick actions ===
     body.appendChild(this.buildQuickActionsSection());
 
@@ -254,6 +258,32 @@ export class AdminModal {
       this.game.adminResetReputation();
       this.refreshStats();
     }));
+    section.appendChild(row);
+    return section;
+  }
+
+  private buildWeatherSection(): HTMLElement {
+    const section = this.sectionShell("🌦 WEATHER");
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    // One button per weather type — clicking forces it on the current
+    // day so the player can preview the visual without waiting for the
+    // day-end roll. Sunny is "neutral", rainy / cold are "neutral" too;
+    // festival uses "good" to read as a celebratory option.
+    const weathers: { id: string; emoji: string; label: string; kind: "good" | "neutral" }[] = [
+      { id: "sunny",    emoji: "☀️",  label: "Sunny",    kind: "neutral" },
+      { id: "cloudy",   emoji: "⛅",  label: "Cloudy",   kind: "neutral" },
+      { id: "rainy",    emoji: "🌧️",  label: "Rainy",    kind: "neutral" },
+      { id: "cold",     emoji: "🥶",  label: "Cold",     kind: "neutral" },
+      { id: "festival", emoji: "🎉",  label: "Festival", kind: "good"    },
+    ];
+    for (const w of weathers) {
+      row.appendChild(this.actionButton(`${w.emoji} ${w.label}`, w.kind, () => {
+        this.game.weather.setById(w.id);
+      }));
+    }
     section.appendChild(row);
     return section;
   }
