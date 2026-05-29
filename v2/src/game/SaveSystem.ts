@@ -230,6 +230,8 @@ export class SaveSystem {
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
       themeId: this.game.getCurrentTheme().id,
+      restaurantName: this.game.getRestaurantName(),
+      signStyle: this.game.getRestaurantSignStyle(),
       // Per-tier dish/glass snapshot. Legacy dirtyDishCount is no
       // longer written — the new field has strictly more info, and
       // the loader handles either.

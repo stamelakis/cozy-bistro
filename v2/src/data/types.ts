@@ -237,6 +237,10 @@ export interface SaveGameState {
   achievements?: string[];
   /** Selected interior theme id. v2-specific. */
   themeId?: string;
+  /** Player-customised restaurant name for the door plaque. */
+  restaurantName?: string;
+  /** Per-axis catalog ids for the plaque visual style. */
+  signStyle?: { font?: string; textColor?: string; plaqueStyle?: string };
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

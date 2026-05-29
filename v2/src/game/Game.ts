@@ -148,6 +148,19 @@ export class Game {
   private boostRemaining = 0;
   /** Currently applied interior theme id. */
   private themeId: string = RESTAURANT_THEMES[0].id;
+  /** Player-customised restaurant name shown on the door plaque. Edited
+   * via the click-to-edit modal that pops when the plaque is clicked.
+   * Empty string means "use the default" so the plaque never renders
+   * blank — the modal validates non-empty input before persisting. */
+  private restaurantName: string = "Cozy Bistro";
+  /** Visual styling for the door plaque. Persisted alongside the name
+   * and applied to the canvas-texture render of the sign. Defaults
+   * picked to read as a warm cosy bistro. */
+  private signStyle: { font: string; textColor: string; plaqueStyle: string } = {
+    font: "serif",       // catalog id: serif / sans / script / display
+    textColor: "cream",  // catalog id: cream / gold / white / red / mint / lavender
+    plaqueStyle: "dark", // catalog id: dark / wood / slate / brass
+  };
   // dirtyDishCount + dishWashClock removed — superseded by
   // DishwareSystem which tracks per-tier plate/glass dirty pools and
   // runs its own wash clock.
@@ -352,6 +365,18 @@ export class Game {
     }
     if (typeof save.themeId === "string") {
       this.themeId = save.themeId;
+    }
+    // Restaurant name + plaque style.
+    if (typeof save.restaurantName === "string" && save.restaurantName.trim().length > 0) {
+      this.restaurantName = save.restaurantName.slice(0, 28);
+    }
+    if (save.signStyle && typeof save.signStyle === "object") {
+      const s = save.signStyle as { font?: string; textColor?: string; plaqueStyle?: string };
+      this.signStyle = {
+        font: s.font ?? this.signStyle.font,
+        textColor: s.textColor ?? this.signStyle.textColor,
+        plaqueStyle: s.plaqueStyle ?? this.signStyle.plaqueStyle,
+      };
     }
     // Per-tier dishware snapshot — preferred over the legacy
     // dirtyDishCount when both are present. Hydrate sets up the pool
@@ -849,6 +874,29 @@ export class Game {
     this.themeId = theme.id;
     this.onThemeChanged?.(theme);
     return true;
+  }
+
+  // === Door plaque (restaurant name + sign styling) ===
+
+  /** Engine wires this so the WorldScene re-renders the plaque canvas
+   * whenever the player edits the name or picks a different style.
+   * Persisted via SaveSystem so a reload keeps the player's branding. */
+  onRestaurantSignChanged?: (name: string, style: { font: string; textColor: string; plaqueStyle: string }) => void;
+
+  getRestaurantName(): string {
+    return this.restaurantName;
+  }
+  getRestaurantSignStyle(): { font: string; textColor: string; plaqueStyle: string } {
+    return { ...this.signStyle };
+  }
+  /** Update the plaque's name + style. Empty / blank names fall back
+   * to "Cozy Bistro" so the plaque never reads empty. Fires the
+   * scene-update callback so the world plaque re-renders instantly. */
+  setRestaurantSign(name: string, style: { font: string; textColor: string; plaqueStyle: string }): void {
+    const trimmed = name.trim();
+    this.restaurantName = trimmed.length > 0 ? trimmed.slice(0, 28) : "Cozy Bistro";
+    this.signStyle = { ...style };
+    this.onRestaurantSignChanged?.(this.restaurantName, this.signStyle);
   }
 
   // === Marketing boost (paid spawn-rate increase) ===

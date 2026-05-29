@@ -25,6 +25,7 @@ import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
 import { SlotsModal } from "../ui/SlotsModal";
 import { AdminModal } from "../ui/AdminModal";
+import { RestaurantSignModal } from "../ui/RestaurantSignModal";
 import { CloudModal } from "../ui/CloudModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
@@ -85,6 +86,7 @@ export class Engine {
   readonly achievementsModal: AchievementsModal;
   readonly slotsModal: SlotsModal;
   readonly adminModal: AdminModal;
+  readonly signModal: RestaurantSignModal;
   readonly cloudModal: CloudModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
@@ -213,6 +215,31 @@ export class Engine {
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
     this.adminModal = new AdminModal(container, this.game);
     this.cloudModal = new CloudModal(container, this.cloud);
+    // Door-plaque editor: click the plaque on the door lintel to edit
+    // the restaurant name + sign style. Wire the scene-update callback
+    // so a saved edit instantly repaints the in-world plaque, and seed
+    // the scene with the current persisted name on startup.
+    this.signModal = new RestaurantSignModal(container, this.game);
+    this.game.onRestaurantSignChanged = (name, style) => {
+      this.scene.setRestaurantSign(name, style);
+    };
+    this.scene.setRestaurantSign(this.game.getRestaurantName(), this.game.getRestaurantSignStyle());
+    // Click listener — raycast against the plaque mesh; pop the modal
+    // when hit. Doesn't interfere with build / sell / move modes since
+    // those have their own pointer handling and we only trigger when
+    // the click hits the plaque specifically.
+    this.renderer.domElement.addEventListener("click", (e) => {
+      if (!this.scene.signPlaqueMesh) return;
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, this.camera.threeCamera);
+      const hit = ray.intersectObject(this.scene.signPlaqueMesh, false);
+      if (hit.length > 0) this.signModal.show();
+    });
     // Pop a toast above the door whenever an achievement unlocks.
     this.game.achievements.onUnlock = (a) => {
       // Floating text and sound; player can open the AchievementsModal for details.

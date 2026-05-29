@@ -6,6 +6,52 @@ import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from 
 import { fitFurniture } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 
+/** Plaque visual catalogs — each id is a small string the modal exposes
+ * as a radio button. Picked to read as warm cosy bistro defaults but
+ * give the player enough variety for a personal vibe. Exported for the
+ * RestaurantSignModal so it can render matching swatches. */
+export const FONT_FAMILIES: Record<string, string> = {
+  serif:   `'Georgia', 'Times New Roman', serif`,
+  sans:    `'Helvetica Neue', 'Arial', sans-serif`,
+  script:  `'Brush Script MT', 'Lucida Handwriting', cursive`,
+  display: `'Impact', 'Arial Black', sans-serif`,
+};
+export const FONT_LABELS: Record<string, string> = {
+  serif:   "Classic Serif",
+  sans:    "Modern Sans",
+  script:  "Handwritten",
+  display: "Bold Display",
+};
+/** Hex strings for canvas2d. */
+export const TEXT_COLORS: Record<string, string> = {
+  cream:    "#fff5dc",
+  gold:     "#f5c14a",
+  white:    "#ffffff",
+  red:      "#e85a5a",
+  mint:     "#a8e2c0",
+  lavender: "#d2c5ec",
+};
+export const PLAQUE_BG: Record<string, string> = {
+  dark:  "#1d1813",
+  wood:  "#5a3a22",
+  slate: "#384047",
+  brass: "#3a2e1a",
+};
+/** Frame mesh colour as a 0xRRGGBB integer — pairs visually with the
+ * matching plaque-background id. */
+export const PLAQUE_FRAME: Record<string, number> = {
+  dark:  0x2a1f17,
+  wood:  0x3a2410,
+  slate: 0x232a32,
+  brass: 0xc8a050,
+};
+export const PLAQUE_LABELS: Record<string, string> = {
+  dark:  "Dark Wood",
+  wood:  "Walnut",
+  slate: "Slate Blue",
+  brass: "Brass Trim",
+};
+
 /** Linearly interpolate between two RGB integers by t in [0,1]. */
 function mixColors(a: number, b: number, t: number): number {
   const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
@@ -1240,24 +1286,60 @@ export class WorldScene {
     this.threeScene.add(counter);
   }
 
-  // === Rating sign on the door lintel ===
+  // === Door plaque (restaurant name + rating stars below) ===
 
+  /** The plaque face mesh — clickable target for the edit modal.
+   * Engine raycasts against this to open the editor. */
+  signPlaqueMesh?: THREE.Mesh;
+  /** Canvas + texture used for the painted-on name. Re-drawn whenever
+   * the player saves a new name or style. */
+  private signCanvas?: HTMLCanvasElement;
+  private signTexture?: THREE.CanvasTexture;
+  private signFaceMat?: THREE.MeshStandardMaterial;
+  /** Border frame mesh — recoloured per plaque-style choice. */
+  private signFrameMesh?: THREE.Mesh;
   /** The 5 mounted star mini-meshes — each is "lit" (gold + emissive) or
    * "off" (slate). updateRatingSign sets which are lit based on the
    * current average rating. */
   private ratingStars: { mesh: THREE.Mesh; litMat: THREE.MeshStandardMaterial; offMat: THREE.MeshStandardMaterial }[] = [];
 
+  /** Cached state passed in by Engine via setRestaurantSign; used so the
+   * first applyDayNight tick has data even before the player edits. */
+  private currentSignName = "Cozy Bistro";
+  private currentSignStyle = { font: "serif", textColor: "cream", plaqueStyle: "dark" };
+
   private buildRatingSign(): void {
-    // Backboard — a small dark plaque on the lintel, slightly proud of
-    // the wall so it casts a shadow and reads as physical.
-    const boardMat = new THREE.MeshStandardMaterial({ color: 0x1d1813, roughness: 0.75 });
-    const board = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.45, 0.04), boardMat);
-    board.position.set(0, 2.5, 5.63);
-    board.castShadow = true;
-    this.threeScene.add(board);
-    // 5 star slots evenly spaced. Each star is a thin disc with a gold
-    // material when lit, slate when off, so updateRatingSign can flip
-    // them as the rating changes.
+    // Frame: a slightly larger dark backplate that reads as the plaque
+    // border. Coloured per the player's plaqueStyle in
+    // applyRestaurantSign. Mounted just behind the face so it shows as
+    // a thin trim around the painted name.
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a1f17, roughness: 0.7 });
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.70, 0.04), frameMat);
+    frame.position.set(0, 2.55, 5.625);
+    frame.castShadow = true;
+    this.threeScene.add(frame);
+    this.signFrameMesh = frame;
+    // Face: the canvas texture lives here. Slightly proud of the frame
+    // so the painted name appears to sit on top of the plaque.
+    this.signCanvas = document.createElement("canvas");
+    this.signCanvas.width = 768;
+    this.signCanvas.height = 320;
+    this.signTexture = new THREE.CanvasTexture(this.signCanvas);
+    this.signTexture.minFilter = THREE.LinearFilter;
+    this.signTexture.magFilter = THREE.LinearFilter;
+    this.signFaceMat = new THREE.MeshStandardMaterial({
+      map: this.signTexture,
+      roughness: 0.65,
+    });
+    const face = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 0.60), this.signFaceMat);
+    face.position.set(0, 2.55, 5.65);
+    face.castShadow = false;
+    this.threeScene.add(face);
+    this.signPlaqueMesh = face;
+    // Initial paint with defaults so the plaque renders something even
+    // before the player saves a new name.
+    this.repaintSignCanvas();
+    // 5 small rating stars BELOW the plaque on the lintel.
     const litMatTemplate = new THREE.MeshStandardMaterial({
       color: 0xf5c14a, roughness: 0.4, metalness: 0.4,
       emissive: 0xf5c14a, emissiveIntensity: 0.5,
@@ -1268,9 +1350,8 @@ export class WorldScene {
     for (let i = 0; i < 5; i += 1) {
       const litMat = litMatTemplate.clone();
       const offMat = offMatTemplate.clone();
-      const star = new THREE.Mesh(new THREE.CircleGeometry(0.06, 16), offMat);
-      // Star x positions evenly across the board's 0.8 usable width.
-      star.position.set(-0.32 + i * 0.16, 2.5, 5.66);
+      const star = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), offMat);
+      star.position.set(-0.24 + i * 0.12, 2.16, 5.66);
       this.threeScene.add(star);
       this.ratingStars.push({ mesh: star, litMat, offMat });
     }
@@ -1289,6 +1370,57 @@ export class WorldScene {
       const want = wantLit ? s.litMat : s.offMat;
       if (cur !== want) s.mesh.material = want;
     }
+  }
+
+  /** Engine calls this when the player saves a new name / style. Caches
+   * the state + re-renders the canvas texture + recolours the frame. */
+  setRestaurantSign(name: string, style: { font: string; textColor: string; plaqueStyle: string }): void {
+    this.currentSignName = name;
+    this.currentSignStyle = { ...style };
+    this.repaintSignCanvas();
+    this.applyPlaqueFrameStyle();
+  }
+
+  /** Re-draw the plaque's canvas with the current name + style and
+   * push it to the texture. Cheap — runs only on save, not per frame. */
+  private repaintSignCanvas(): void {
+    if (!this.signCanvas || !this.signTexture) return;
+    const ctx = this.signCanvas.getContext("2d");
+    if (!ctx) return;
+    const w = this.signCanvas.width;
+    const h = this.signCanvas.height;
+    // Background painted to match the plaque-style id so the texture
+    // tint reads consistently with the frame around it.
+    const bg = PLAQUE_BG[this.currentSignStyle.plaqueStyle] ?? PLAQUE_BG.dark;
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, w, h);
+    // Thin inner border for a "framed plate" feel — same colour as the
+    // text accent so the trim reads as gold-on-dark / etc.
+    const accent = TEXT_COLORS[this.currentSignStyle.textColor] ?? TEXT_COLORS.cream;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 6;
+    ctx.strokeRect(20, 20, w - 40, h - 40);
+    // Restaurant name. Auto-fit font size so a long name still reads.
+    ctx.fillStyle = accent;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const fontFamily = FONT_FAMILIES[this.currentSignStyle.font] ?? FONT_FAMILIES.serif;
+    const fontWeight = this.currentSignStyle.font === "display" ? "900" : "700";
+    let size = 140;
+    do {
+      ctx.font = `${fontWeight} ${size}px ${fontFamily}`;
+      if (ctx.measureText(this.currentSignName).width < w - 100) break;
+      size -= 6;
+    } while (size > 40);
+    ctx.fillText(this.currentSignName, w / 2, h / 2 + 8);
+    this.signTexture.needsUpdate = true;
+  }
+
+  private applyPlaqueFrameStyle(): void {
+    if (!this.signFrameMesh) return;
+    const mat = this.signFrameMesh.material as THREE.MeshStandardMaterial;
+    const frame = PLAQUE_FRAME[this.currentSignStyle.plaqueStyle] ?? PLAQUE_FRAME.dark;
+    mat.color.setHex(frame);
   }
 
   /** Apply a theme color set to the existing wall + floor materials.
