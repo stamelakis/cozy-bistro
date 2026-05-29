@@ -31,9 +31,24 @@ interface LoopHandle {
   ticker?: number;
 }
 
-/** Phase of the music day-night cycle — flipped by Engine.update from
- * the current DayCycleSystem progress. */
-export type MusicPhase = "day" | "night";
+/** 4-phase day cycle (matches WorldScene.applyDayNight boundaries).
+ *   day  — full sun.        Daytime track loops at full volume.
+ *   dusk — sun setting.     Daytime track no longer loops, linearly
+ *                           fades to 0 over the dusk window. If the
+ *                           track ends naturally before dusk does,
+ *                           silence for the remainder.
+ *   night — dark.           Nighttime track loops at full volume.
+ *   dawn — sun rising.      Nighttime track no longer loops, linearly
+ *                           fades to 0 over the dawn window. Same
+ *                           "natural end = silence" rule as dusk. */
+export type DayPhase = "day" | "dusk" | "night" | "dawn";
+
+// Phase boundaries copied from WorldScene.applyDayNight. Kept in sync
+// by code review — both files reference the same 4-phase 24h split.
+const DAWN_END = 0.083;
+const DAY_END  = 0.583;
+const DUSK_END = 0.667;
+const MUSIC_BASE_VOLUME = 0.55;
 
 export class SfxPlayer {
   private ctx: AudioContext | null = null;
@@ -51,7 +66,10 @@ export class SfxPlayer {
    * quiet if neither resolves). */
   private dayAudio?: HTMLAudioElement;
   private nightAudio?: HTMLAudioElement;
-  private musicPhase: MusicPhase = "day";
+  /** Last-known phase. `undefined` until setDayProgress is first
+   * called — the first call always triggers a phase-enter transition
+   * even when the answer is "day". */
+  private musicPhase?: DayPhase;
   private musicStarted = false;
   /** Cached file-availability flags — set in the constructor's load
    * probe so startMusic doesn't try to play a 404. */
@@ -113,8 +131,10 @@ export class SfxPlayer {
       // gesture flow.
       if (this.dayAudio)   try { this.dayAudio.pause();   } catch { /* */ }
       if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
-    } else if (this.musicStarted) {
-      this.playActiveTrack();
+    } else if (this.musicStarted && this.musicPhase) {
+      // Resume whatever the current phase wants. enterPhase is the
+      // single source of truth for "what should be playing right now".
+      this.enterPhase(this.musicPhase);
     }
   }
 
@@ -202,15 +222,24 @@ export class SfxPlayer {
 
   // === Background music ================================================
   //
-  // Music is two pre-rendered MP3s — one for daytime, one for night —
-  // streamed via HTMLAudioElement. Engine flips the phase from the
-  // DayCycleSystem progress; we crossfade by pausing one track and
-  // starting the other from its last position (looped).
+  // Two pre-rendered MP3s in public/audio/, played via HTMLAudioElement.
+  // Engine.update calls setDayProgress(progress) every frame. Internally
+  // we maintain a 4-phase state machine:
+  //
+  //   day   → loop daytime.mp3 at full volume.
+  //   dusk  → daytime.mp3 keeps playing but loop=false, volume linearly
+  //           fades to 0 across the dusk window. If the track's natural
+  //           end comes first, silence for the remainder of dusk.
+  //   night → loop nighttime.mp3 at full volume.
+  //   dawn  → nighttime.mp3 keeps playing but loop=false, volume linearly
+  //           fades to 0 across the dawn window. Same natural-end rule.
 
   startMusic(): void {
     if (this.musicMuted) return;
     this.musicStarted = true;
-    this.playActiveTrack();
+    if (this.musicPhase) this.enterPhase(this.musicPhase);
+    // If setDayProgress hasn't been called yet, the next call will
+    // trigger enterPhase as soon as we know which phase we're in.
   }
 
   stopMusic(): void {
@@ -219,40 +248,90 @@ export class SfxPlayer {
     if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
   }
 
-  /** Tell the player whether it's daytime or nighttime in-game. The
-   * Engine calls this from update() based on the DayCycleSystem
-   * progress; when the phase flips and music is playing we swap to
-   * the other track. No-op when the requested phase is already
-   * active. */
-  setMusicPhase(phase: MusicPhase): void {
-    if (this.musicPhase === phase) return;
-    this.musicPhase = phase;
-    if (this.musicStarted) this.playActiveTrack();
-  }
-
-  /** Play whichever track matches the current phase, pause the other.
-   * Tracks resume from wherever they were last paused so a phase
-   * flip mid-day doesn't always restart from the intro. */
-  private playActiveTrack(): void {
+  /** Engine.update feeds the live day-cycle progress here. We pick the
+   * matching phase, run enterPhase on transitions, and update the
+   * dusk/dawn fade volume every frame. Idempotent within a phase. */
+  setDayProgress(progress: number): void {
+    const phase = SfxPlayer.phaseFor(progress);
+    if (phase !== this.musicPhase) {
+      this.musicPhase = phase;
+      if (this.musicStarted) this.enterPhase(phase);
+    }
+    // Drive the linear fade ramp through the transition windows.
+    // Only touches the track if it's currently playing — if the track
+    // ended naturally we leave it paused (silence for the rest of the
+    // window).
     if (this.musicMuted) return;
-    const active = this.musicPhase === "day" ? this.dayAudio : this.nightAudio;
-    const inactive = this.musicPhase === "day" ? this.nightAudio : this.dayAudio;
-    const activeReady = this.musicPhase === "day" ? this.dayAudioReady : this.nightAudioReady;
-    if (inactive) try { inactive.pause(); } catch { /* */ }
-    if (active && activeReady) {
-      // play() may reject due to autoplay policy on the very first
-      // call — silently swallow; kickAudio's user-interaction handler
-      // is the standard retry path.
-      active.play().catch(() => { /* autoplay blocked, will retry on user gesture */ });
+    if (phase === "dusk" && this.dayAudio && !this.dayAudio.paused) {
+      const t = (progress - DAY_END) / (DUSK_END - DAY_END);
+      this.dayAudio.volume = MUSIC_BASE_VOLUME * Math.max(0, Math.min(1, 1 - t));
+    } else if (phase === "dawn" && this.nightAudio && !this.nightAudio.paused) {
+      const t = progress / DAWN_END;
+      this.nightAudio.volume = MUSIC_BASE_VOLUME * Math.max(0, Math.min(1, 1 - t));
     }
   }
 
+  /** Apply the steady-state behavior for a phase: start the active
+   * track from scratch if we're entering a loop phase, switch loop=false
+   * on the active track if we're entering a fade phase. */
+  private enterPhase(phase: DayPhase): void {
+    if (!this.musicStarted || this.musicMuted) return;
+    switch (phase) {
+      case "day": {
+        // Pause the night track (it may still be running from a
+        // mid-dawn skip if the user fast-forwarded). Start the day
+        // track from the top at full volume.
+        if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
+        if (this.dayAudio && this.dayAudioReady) {
+          this.dayAudio.loop = true;
+          this.dayAudio.volume = MUSIC_BASE_VOLUME;
+          this.dayAudio.currentTime = 0;
+          this.dayAudio.play().catch(() => { /* autoplay-policy; will retry on next user gesture */ });
+        }
+        break;
+      }
+      case "night": {
+        if (this.dayAudio) try { this.dayAudio.pause(); } catch { /* */ }
+        if (this.nightAudio && this.nightAudioReady) {
+          this.nightAudio.loop = true;
+          this.nightAudio.volume = MUSIC_BASE_VOLUME;
+          this.nightAudio.currentTime = 0;
+          this.nightAudio.play().catch(() => { /* */ });
+        }
+        break;
+      }
+      case "dusk": {
+        // Stop looping. The track keeps playing this iteration; the
+        // fade volume comes from setDayProgress, and when the audio
+        // ends (or its fade hits 0), it just stops. We do NOT pause it
+        // here — that would cut the music off the second dusk begins
+        // instead of letting it gracefully tail out.
+        if (this.dayAudio) this.dayAudio.loop = false;
+        if (this.nightAudio) try { this.nightAudio.pause(); } catch { /* */ }
+        break;
+      }
+      case "dawn": {
+        if (this.nightAudio) this.nightAudio.loop = false;
+        if (this.dayAudio) try { this.dayAudio.pause(); } catch { /* */ }
+        break;
+      }
+    }
+  }
+
+  /** Map a progress value (0..1) onto the 4-phase day cycle. */
+  private static phaseFor(progress: number): DayPhase {
+    if (progress < DAWN_END) return "dawn";
+    if (progress < DAY_END)  return "day";
+    if (progress < DUSK_END) return "dusk";
+    return "night";
+  }
+
   /** Called from the canplaythrough handler when one of the MP3s
-   * finishes loading. If the player has already asked for music to
-   * start but we couldn't play because the file wasn't ready yet,
-   * kick it now. */
+   * finishes loading. If music is already running and we're in the
+   * matching phase but the file wasn't ready earlier, retry now. */
   private maybeRestartMusic(): void {
-    if (this.musicStarted && !this.musicMuted) this.playActiveTrack();
+    if (!this.musicStarted || this.musicMuted || !this.musicPhase) return;
+    this.enterPhase(this.musicPhase);
   }
 
   // === Internals =======================================================

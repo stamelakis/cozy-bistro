@@ -951,13 +951,10 @@ export class Engine {
     // Day/night lighting follows the in-game day timer; applyDayNight
     // layers any weather tints on top of the base dayness ramp.
     const dayProgress = this.game.day.getDayProgress();
-    // Swap the background-music track between the daytime and
-    // nighttime MP3s based on the actual day/night schedule from
-    // applyDayNight in WorldScene: full sun lives in [0.083, 0.583),
-    // everything outside that (dawn, dusk, deep night) plays the
-    // nighttime track. setMusicPhase is idempotent so calling every
-    // frame is free.
-    this.sfx.setMusicPhase((dayProgress >= 0.583 || dayProgress < 0.083) ? "night" : "day");
+    // Feed the live day-cycle progress to the music system. SfxPlayer
+    // owns the 4-phase state machine (day loop → dusk fade → night
+    // loop → dawn fade), so the engine just keeps it informed.
+    this.sfx.setDayProgress(dayProgress);
     const day = this.scene.applyDayNight(dayProgress);
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
