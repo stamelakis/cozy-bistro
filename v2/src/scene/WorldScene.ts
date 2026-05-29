@@ -1131,7 +1131,7 @@ export class WorldScene {
     });
     this.slabMatGhost = new THREE.MeshStandardMaterial({
       color: 0xf6f4ef, roughness: 0.6,
-      transparent: true, opacity: 0.10, depthWrite: false,
+      transparent: true, opacity: 0.01, depthWrite: false,
       side: THREE.DoubleSide,
     });
     this.roofMatSolid = new THREE.MeshStandardMaterial({
@@ -1139,7 +1139,7 @@ export class WorldScene {
     });
     this.roofMatGhost = new THREE.MeshStandardMaterial({
       color: 0xe8d8b8, roughness: 0.6,
-      transparent: true, opacity: 0.10, depthWrite: false,
+      transparent: true, opacity: 0.01, depthWrite: false,
       side: THREE.DoubleSide,
     });
     for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
@@ -1356,32 +1356,24 @@ export class WorldScene {
     this.applyWallKind("left",  leftKind);
     this.applyWallKind("right", rightKind);
     this.applyWallKind("front", frontKind);
-    // Upper-storey walls + slabs + roof — anything ABOVE the focused
-    // storey gets a ghost treatment so the player can see down through
-    // it to the storey they're actually focused on. The 2-walls-closest-
-    // to-camera ghost rule applies per storey same as the ground floor.
+    // Upper-storey walls + slabs + roof. Walls follow the SAME 2-walls-
+    // closest-to-camera ghost rule as the ground floor on every storey
+    // — the back pair stays solid as a backdrop on each floor. Slabs
+    // (the floor of one storey == ceiling of the one below) go almost
+    // fully transparent (1% opacity) when above the focused storey so
+    // the player can see straight down through them.
     const dirKinds: Record<WallDir, "solid" | "ghost"> = {
       back: backKind, left: leftKind, right: rightKind, front: frontKind,
     };
     for (const [storeyIdx, storey] of this.upperStoreys) {
       if (!storey.group.visible) continue;
       const aboveFocus = storeyIdx > this.focusedStorey;
-      // Slab (the floor of this storey == ceiling of the storey below).
-      // When above the focused storey, ghost it so we see down through.
       storey.slab.material = aboveFocus ? this.slabMatGhost : this.slabMatSolid;
-      // Walls: the camera-side pair ghosts so we can see in; the back
-      // pair stays solid as a backdrop. When the storey is above the
-      // focused one, ghost ALL of them so they don't block the lower-
-      // storey view from any angle.
       for (const [dir, mesh] of storey.walls) {
-        const kind: "solid" | "ghost" = aboveFocus ? "ghost" : dirKinds[dir];
-        mesh.material = kind === "ghost" ? this.wallGhostMat : this.wallMat;
+        mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : this.wallMat;
       }
     }
     if (this.buildingRoof && this.buildingRoof.visible) {
-      // Roof is always above the focused storey unless we're focused on
-      // the very top one — ghost it so it doesn't block the look-down
-      // view from the iso camera.
       const roofAbove = this.focusedStorey < WorldScene.NUM_STOREYS - 1;
       this.buildingRoof.material = roofAbove ? this.roofMatGhost : this.roofMatSolid;
     }
