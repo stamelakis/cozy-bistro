@@ -965,7 +965,13 @@ export class BuildMenu {
     this.hoveredItemUid = null;
     const wantsItem = this.sellMode || (this.moveMode && !this.holdingUid);
     if (wantsItem) {
-      const items = this.registry.snapshotItems();
+      // Restrict the raycast to items on the focused storey. Without
+      // this, an iso ray on Floor 1 passes through the slab below and
+      // grabs a ground-floor item — selling/moving deletes the wrong
+      // thing. Items on different floors are out of scope for the
+      // current interaction.
+      const focusedFloor = this.currentFloor();
+      const items = this.registry.snapshotItems().filter((it) => it.floor === focusedFloor);
       if (items.length > 0) {
         const roots = items.map((it) => it.model);
         const hits = this.raycaster.intersectObjects(roots, true);
