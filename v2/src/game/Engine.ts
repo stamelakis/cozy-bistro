@@ -145,6 +145,23 @@ export class Engine {
     this.cloud = new SpacetimeClient(this.game, this.saver);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
+    // SfxPlayer is constructed early — before the HUD — because the
+    // HUD's volume slider reads its initial value from
+    // `actions.getSfxVolume()` SYNCHRONOUSLY during construction.
+    // (Other audio lambdas are lazy / button-driven and don't care
+    // about init order, but the slider does.) Browser autoplay rules
+    // still block actual playback until the first user gesture; the
+    // kickAudio listeners below resume the AudioContext + start music.
+    this.sfx = new SfxPlayer();
+    const kickAudio = (): void => {
+      // Wake the Web Audio context too — without this, the FIRST few
+      // sounds (kitchen sizzle, ding, etc.) play into a suspended
+      // context and the player gets random silence on early actions.
+      this.sfx.resumeContext();
+      if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
+    };
+    window.addEventListener("pointerdown", kickAudio, { once: true });
+    window.addEventListener("keydown",     kickAudio, { once: true });
     // Single shared left panel that holds the HUD + tier/boost widget +
     // stock status + staff panel as stacked sections.
     this.sidebar = new Sidebar(container);
@@ -203,26 +220,8 @@ export class Engine {
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
-    // SfxPlayer is constructed BEFORE the modals so any modal that
-    // wants to fire SFX (e.g. AdminModal's audio test panel) can take
-    // a reference. The actual sounds stay silent until the first user
-    // interaction (browser autoplay rules + see kickAudio below).
-    this.sfx = new SfxPlayer();
-    // Browser autoplay rules block AudioContext sounds until the user
-    // first interacts with the page. Listen for ANY pointer / key
-    // input and kick the background music on (unless the player has
-    // it muted from a previous session). The listeners are { once:
-    // true } so they self-clean after firing.
-    const kickAudio = (): void => {
-      // Wake the Web Audio context too — without this, the FIRST few
-      // sounds (kitchen sizzle, ding, etc.) play into a suspended
-      // context and the player gets random silence on early actions.
-      this.sfx.resumeContext();
-      if (!this.sfx.isMusicMuted()) this.sfx.startMusic();
-    };
-    window.addEventListener("pointerdown", kickAudio, { once: true });
-    window.addEventListener("keydown",     kickAudio, { once: true });
     // Modals still live on the page-level container so they overlay the world.
+    // (SfxPlayer + kickAudio listeners constructed earlier — see above.)
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     this.upgradeModal = new UpgradeModal(container, this.game);
