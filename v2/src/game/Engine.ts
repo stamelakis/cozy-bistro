@@ -952,11 +952,12 @@ export class Engine {
     // layers any weather tints on top of the base dayness ramp.
     const dayProgress = this.game.day.getDayProgress();
     // Swap the background-music track between the daytime and
-    // nighttime MP3s based on where we are in the day. Anything past
-    // 80% of the cycle (early evening onwards) counts as night; the
-    // first 5% (pre-dawn) too. setMusicPhase is idempotent so we can
-    // call every frame without churn.
-    this.sfx.setMusicPhase((dayProgress >= 0.80 || dayProgress < 0.05) ? "night" : "day");
+    // nighttime MP3s based on the actual day/night schedule from
+    // applyDayNight in WorldScene: full sun lives in [0.083, 0.583),
+    // everything outside that (dawn, dusk, deep night) plays the
+    // nighttime track. setMusicPhase is idempotent so calling every
+    // frame is free.
+    this.sfx.setMusicPhase((dayProgress >= 0.583 || dayProgress < 0.083) ? "night" : "day");
     const day = this.scene.applyDayNight(dayProgress);
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
