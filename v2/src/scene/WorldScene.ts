@@ -1352,25 +1352,32 @@ export class WorldScene {
     const leftKind  = kindFor(-1, 0);
     const rightKind = kindFor(1, 0);
     const frontKind = kindFor(0, 1);
-    this.applyWallKind("back",  backKind);
-    this.applyWallKind("left",  leftKind);
-    this.applyWallKind("right", rightKind);
-    this.applyWallKind("front", frontKind);
-    // Upper-storey walls + slabs + roof. Walls follow the SAME 2-walls-
-    // closest-to-camera ghost rule as the ground floor on every storey
-    // — the back pair stays solid as a backdrop on each floor. Slabs
-    // (the floor of one storey == ceiling of the one below) go almost
-    // fully transparent (1% opacity) when above the focused storey so
-    // the player can see straight down through them.
+    // Ground floor IS focused → all four walls ghost so the player sees
+    // the whole floor unobstructed from any angle. Otherwise just the
+    // two camera-side walls go transparent (back pair stays solid for
+    // a visual anchor).
+    const groundFocused = this.focusedStorey === 0;
+    this.applyWallKind("back",  groundFocused ? "ghost" : backKind);
+    this.applyWallKind("left",  groundFocused ? "ghost" : leftKind);
+    this.applyWallKind("right", groundFocused ? "ghost" : rightKind);
+    this.applyWallKind("front", groundFocused ? "ghost" : frontKind);
+    // Upper storeys. Same rule: if THIS storey is the focused one, all
+    // four of its walls ghost. Otherwise only the two camera-side
+    // walls go transparent. Slabs (the floor of one storey == ceiling
+    // of the one below) go nearly fully transparent (1% opacity) when
+    // above the focused storey so the player can see straight down
+    // through them.
     const dirKinds: Record<WallDir, "solid" | "ghost"> = {
       back: backKind, left: leftKind, right: rightKind, front: frontKind,
     };
     for (const [storeyIdx, storey] of this.upperStoreys) {
       if (!storey.group.visible) continue;
       const aboveFocus = storeyIdx > this.focusedStorey;
+      const isFocused = storeyIdx === this.focusedStorey;
       storey.slab.material = aboveFocus ? this.slabMatGhost : this.slabMatSolid;
       for (const [dir, mesh] of storey.walls) {
-        mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : this.wallMat;
+        const kind: "solid" | "ghost" = isFocused ? "ghost" : dirKinds[dir];
+        mesh.material = kind === "ghost" ? this.wallGhostMat : this.wallMat;
       }
     }
     if (this.buildingRoof && this.buildingRoof.visible) {
