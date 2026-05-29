@@ -1521,18 +1521,22 @@ export class WorldScene {
   }
 
   private addPavementAndRoad(): void {
-    // Everything shifted +0.5 z to line up with the building. The
-    // perimeter wall + floor were moved by (0.5, 0.5) for the tile-
-    // centered grid, so the building's south face now sits at z=5.5;
-    // anchoring the pavement strip to start at the wall plane keeps
-    // the door's threshold flush with the sidewalk instead of half a
-    // tile inside the building.
+    // Pavement strip is shifted +1.0 z relative to the legacy
+    // pre-grid-shift layout — half a tile to clear the (0.5, 0.5)
+    // building shift, plus another half tile so a 0.5 m strip of
+    // grass sits between the south wall and the pavement edge. The
+    // explicit grass margin matters because the perimeter wall's
+    // exterior face sits at z = 5.6 (centre 5.5 + thickness 0.1),
+    // so anchoring the pavement at z = 5.5 left a 0.1 m sliver of
+    // sidewalk under the wall — readable as overlap from the iso
+    // camera. With the +1.0 shift the pavement begins at z = 6.0,
+    // visibly past the wall.
     const pavement = new THREE.Mesh(
       new THREE.PlaneGeometry(30, 5),
       new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
     );
     pavement.rotation.x = -Math.PI / 2;
-    pavement.position.set(0, 0, 8);  // spans z = 5.5 .. 10.5
+    pavement.position.set(0, 0, 8.5);  // spans z = 6.0 .. 11.0
     pavement.receiveShadow = true;
     this.threeScene.add(pavement);
     const road = new THREE.Mesh(
@@ -1540,7 +1544,7 @@ export class WorldScene {
       new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
     );
     road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, 13.5);  // spans z = 10.5 .. 16.5
+    road.position.set(0, 0, 14);  // spans z = 11.0 .. 17.0
     road.receiveShadow = true;
     this.threeScene.add(road);
     const laneMat = new THREE.MeshStandardMaterial({
@@ -1550,14 +1554,14 @@ export class WorldScene {
     for (let x = -14; x <= 14; x += 4) {
       const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
       dash.rotation.x = -Math.PI / 2;
-      dash.position.set(x, 0.005, 13.5);
+      dash.position.set(x, 0.005, 14);
       this.threeScene.add(dash);
     }
     const curb = new THREE.Mesh(
       new THREE.BoxGeometry(30, 0.12, 0.18),
       new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
     );
-    curb.position.set(0, 0.06, 10.5);  // on the pavement/road border
+    curb.position.set(0, 0.06, 11);  // on the pavement/road border
     curb.castShadow = true;
     curb.receiveShadow = true;
     this.threeScene.add(curb);
@@ -1565,12 +1569,13 @@ export class WorldScene {
 
   /** True when (x, z) is too close to the building interior, the door
    * approach, or the pavement / road strip — keeps grass props out of
-   * the player's view of the front entrance. Bounds match the
-   * perimeter walls (-4.5..5.5) and the pavement/road strip
-   * (z=5.5..16.5) after the +0.5 shift. */
+   * the player's view of the front entrance. Pavement/road strip now
+   * runs z=6..17 after the +1.0 shift. Grass strip between wall
+   * (z=5.5) and pavement (z=6.0) is intentionally left open for
+   * tufts. */
   private static isExclusionZone(x: number, z: number, margin: number): boolean {
     if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
-    if (z > 5.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
+    if (z > 6.0 - margin && z < 17.0 + margin && x > -15.5 && x < 15.5) return true;
     return false;
   }
 
