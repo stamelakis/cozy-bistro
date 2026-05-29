@@ -1581,6 +1581,7 @@ export class BuildMenu {
         const fromPose = this.holdingFrom!;
         const movedItem = this.registry.snapshotItems().find((it) => it.uid === this.holdingUid);
         const movedDef = movedItem ? furnitureCatalog.find((d) => d.id === movedItem.defId) : undefined;
+        console.log(`[MoveDrop] uid=${this.holdingUid} from(${fromPose.x},${fromPose.z}) to(${plan.x},${plan.z}) focusedFloor=${this.currentFloor()} oldItemFloor=${movedItem?.floor}`);
         this.registry.setPose(this.holdingUid, plan.x, plan.z, plan.rotY);
         // Cross-floor drop: if the player switched focus while holding
         // the item, re-parent it (and any surface children) into the

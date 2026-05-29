@@ -370,14 +370,21 @@ export class FurnitureRegistry {
    * Returns true if anything changed. */
   setItemFloor(uid: string, newFloor: number): boolean {
     const item = this.items.find((it) => it.uid === uid);
-    if (!item) return false;
+    if (!item) {
+      console.warn(`[setItemFloor] no item with uid=${uid}`);
+      return false;
+    }
     const oldFloor = item.floor;
-    if (oldFloor === newFloor) return false;
+    if (oldFloor === newFloor) {
+      console.log(`[setItemFloor] ${item.defId} already on floor ${newFloor}, no-op`);
+      return false;
+    }
     const dy = this.floorYOffset(newFloor) - this.floorYOffset(oldFloor);
     item.floor = newFloor;
     item.model.position.y += dy;
     const newParent = this.mountFor(newFloor);
     if (item.model.parent !== newParent) newParent.add(item.model);
+    console.log(`[setItemFloor] ${item.defId} ${oldFloor} → ${newFloor}, dy=${dy}, new Y=${item.model.position.y}, parent=${newParent === this.scene ? "scene" : "storeyGroup"}`);
     // Cascade to surface children — keep them riding along.
     for (const child of this.items) {
       if (child.parentUid !== uid) continue;
@@ -511,7 +518,7 @@ export class FurnitureRegistry {
    * floor is only emitted when non-zero — keeps ground-floor saves
    * byte-compatible with the pre-multi-storey format. */
   snapshot(): PersistedPlacement[] {
-    return this.items.map((it) => {
+    const out = this.items.map((it) => {
       const p: PersistedPlacement = { uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY };
       if (it.parentUid) p.parentUid = it.parentUid;
       if (typeof it.slotIndex === "number") p.slotIndex = it.slotIndex;
@@ -522,6 +529,12 @@ export class FurnitureRegistry {
       if (it.floor > 0) p.floor = it.floor;
       return p;
     });
+    const upperFloorCount = out.filter((p) => (p.floor ?? 0) > 0).length;
+    if (upperFloorCount > 0) {
+      console.log(`[snapshot] ${out.length} items total, ${upperFloorCount} on upper floors`,
+        out.filter((p) => (p.floor ?? 0) > 0).map((p) => `${p.defId}@floor${p.floor}`).join(", "));
+    }
+    return out;
   }
 
   /** Aggregated stat bonuses across all placed furniture. Used by the
@@ -1006,6 +1019,9 @@ export class FurnitureRegistry {
    * loads, since placementY's "floor" default would otherwise drop them
    * to y=0. */
   async restore(saved: PersistedPlacement[]): Promise<void> {
+    const upperCount = saved.filter((p) => (p.floor ?? 0) > 0).length;
+    console.log(`[restore] ${saved.length} items, ${upperCount} on upper floors`,
+      saved.filter((p) => (p.floor ?? 0) > 0).map((p) => `${p.defId}@floor${p.floor}`).join(", "));
     // Load every item first — order doesn't matter for tile/wall/edge/
     // ceiling items, and the surface re-snap happens AFTER everything
     // is in place so each surface child can look up its host.
