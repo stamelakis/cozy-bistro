@@ -174,11 +174,12 @@ export class Hud {
         tooltip: "Dirty plates + glasses piling up on tables. Waiters can't serve " +
                  "fresh food when the clean stock runs out. Build sinks / dishwashers " +
                  "to wash faster; turns red when the pile is overwhelming the kitchen." },
-      { key: "storage", icon: "📦", label: "MAX STORAGE",
+      { key: "storage", icon: "📦", label: "PANTRY STOCK",
         tint: "rgba(200, 180, 130, 0.14)", accent: "#e0c898",
-        tooltip: "Plates + glasses you currently own / your storage cap. Cap grows " +
-                 "from base 48 + the dishCapacity bonus on every cabinet / counter / " +
-                 "bar you place. Buy more dishware in the Pantry → Dishware section." },
+        tooltip: "Per-ingredient stock target / max allowed. The auto-shop refills " +
+                 "every ingredient toward your chosen target each day. The MAX grows " +
+                 "with placed fridges + storage furniture (each fridge's stockCapacity " +
+                 "raises the ceiling); raise the slider in the Pantry modal to use it." },
       // Daily expenses — rent + wages paired so the player can read
       // their fixed-cost burden side by side.
       { key: "rent", icon: "🏠", label: "RENT/DAY",
@@ -470,14 +471,17 @@ export class Hud {
     this.fields.dishes.textContent = `${dishes}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#e8b878";
     this.fields.rent.textContent = `$${rent}`;
-    // New: dish storage cap (owned / max). Owned is current count of
-    // plates + glasses across all tiers; max is the storage cap.
-    const owned = this.game.dishware.getTotalOwned();
-    const cap = this.game.dishware.getCapacity();
-    this.fields.storage.textContent = `${owned} / ${cap}`;
-    // Tint amber when storage is nearly full so the player notices
-    // before a buy hits the cap.
-    this.fields.storage.style.color = (cap > 0 && owned / cap >= 0.9) ? "#e8c89a" : "#e0c898";
+    // Pantry stock target / max allowed. The target is what the
+    // auto-shop refills toward; the max is capped by fridges +
+    // storage furniture. Shows e.g. "10 / 22" — the player's chosen
+    // level vs the highest they can currently set it.
+    const stockTarget = this.game.getStockTarget();
+    const stockMax = this.game.getMaxStockTarget();
+    this.fields.storage.textContent = `${stockTarget} / ${stockMax}`;
+    // Amber when the player is already at the ceiling (more fridges
+    // would raise it), neutral otherwise.
+    this.fields.storage.style.color = (stockMax > 0 && stockTarget >= stockMax)
+      ? "#e8c89a" : "#e0c898";
     // Total payroll per in-game minute = headcount × per-staff rate.
     const headcount = this.game.staff.getTotalStaff();
     const perStaff = this.game.admin.payrollPerStaffPerMinute;
