@@ -360,6 +360,10 @@ export class Engine {
           // bought mid-shift takes effect immediately.
           (memberId) => this.game.getWaiterSpeedMultiplier(memberId),
           (memberId) => this.game.staff.getChefCookMultiplier(memberId),
+          // Phase C.2: broader cook-station pool — the chef picks the
+          // station whose `provides` matches the recipe's appliance
+          // requirement instead of always claiming a stove.
+          () => this.registry.getCookStations(),
         );
         console.log("[Engine] real StaffRouter created with chef + waiter members", chefId, waiterId);
       }

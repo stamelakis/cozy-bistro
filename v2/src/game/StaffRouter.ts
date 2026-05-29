@@ -39,6 +39,11 @@ export interface Ticket {
   clock: number;
   /** Seconds the chef needs to "cook" before READY (from recipe). */
   cookSeconds: number;
+  /** Which appliance the chef must claim to cook this recipe — the
+   * recipe's first appliances entry, or "stove" / "counter" derived
+   * from stationNeeded. claimFreeStation walks the cook-station list
+   * looking for a match. */
+  appliance: string;
 }
 
 interface StaffActor {
@@ -88,6 +93,17 @@ interface StaffActor {
 /** Snapshot of a placed stove the router can assign a chef to. */
 export interface StoveInfo {
   uid: string;
+  x: number;
+  z: number;
+  rotY: number;
+}
+
+/** Snapshot of any cook station — stove, counter, toaster, etc.
+ * `provides` tags it with the appliance type so the chef can pick the
+ * right one for the recipe at hand. */
+export interface StationInfo {
+  uid: string;
+  provides: string;
   x: number;
   z: number;
   rotY: number;
@@ -151,6 +167,12 @@ export class StaffRouter {
    * the callback returns an empty list (no stove placed anywhere) we
    * fall back to the legacy shared {@link stovePos}. */
   private readonly getStoves?: () => readonly StoveInfo[];
+  /** Live snapshot of every cook station — anything with a `provides`
+   * value (stoves, counters, toaster, coffee machine, blender, etc.).
+   * Phase C.2: the chef picks a station whose `provides` matches the
+   * recipe's required appliance. Falls back to the legacy stove pool
+   * when no station provides the appliance the recipe asks for. */
+  private readonly getCookStations?: () => readonly StationInfo[];
 
   /** Per-MEMBER walking speed multiplier (was per-role before the
    * per-staff refactor). Applied each tick in moveActor so a waiter
@@ -179,6 +201,7 @@ export class StaffRouter {
     getStoves?: () => readonly StoveInfo[],
     getSpeedMultiplier?: (memberId: string) => number,
     getChefCookMultiplier?: (memberId: string) => number,
+    getCookStations?: () => readonly StationInfo[],
   ) {
     this.stovePos = stovePos.clone();
     this.pickupPos = pickupPos.clone();
@@ -186,6 +209,7 @@ export class StaffRouter {
     this.getStoves = getStoves;
     this.getSpeedMultiplier = getSpeedMultiplier;
     this.getChefCookMultiplier = getChefCookMultiplier;
+    this.getCookStations = getCookStations;
     this.addChef(chefChar, chefMemberId);
     this.addWaiter(waiterChar, waiterMemberId);
   }
@@ -216,6 +240,31 @@ export class StaffRouter {
     return null;
   }
 
+  /** Phase C.2: reserve the first cook station whose `provides` matches
+   * the recipe's required appliance and isn't already busy. Returns
+   * null when no matching station exists or every one of them is busy
+   * (the chef stays idle and the ticket waits). Falls back to the
+   * legacy stove pool when the requested appliance is "stove" but the
+   * cook-stations callback hasn't been wired — keeps the old save-
+   * compat path alive. */
+  private claimFreeStation(appliance: string): StationInfo | null {
+    if (this.getCookStations) {
+      for (const s of this.getCookStations()) {
+        if (s.provides !== appliance) continue;
+        if (this.busyStoveUids.has(s.uid)) continue;
+        this.busyStoveUids.add(s.uid);
+        return s;
+      }
+    }
+    // Last-ditch fallback for "stove" specifically — keeps the chef
+    // working when an old save only wired the stove callback.
+    if (appliance === "stove") {
+      const s = this.claimFreeStove();
+      if (s) return { ...s, provides: "stove" };
+    }
+    return null;
+  }
+
   /** A loiter spot for a chef who isn't cooking right now. If the chef
    * has a remembered last stove (and it's still placed), drift a small
    * random offset around that stove's stand position. Otherwise fall
@@ -223,15 +272,22 @@ export class StaffRouter {
    * pickIdleSpot — keeps chefs near the appliance they're "assigned"
    * to in the player's eyes. */
   private pickChefIdleSpot(c: StaffActor): THREE.Vector2 {
-    if (c.lastStoveUid && this.getStoves) {
-      const stove = this.getStoves().find((s) => s.uid === c.lastStoveUid);
-      if (stove) {
-        const base = this.chefStandPosFor(stove);
+    if (c.lastStoveUid) {
+      // Phase C.2: the "last station" might be any cook station, not
+      // just a stove. Search the broader cook-stations pool first, fall
+      // back to the legacy stove pool so old save state stays valid.
+      const fromStations = this.getCookStations?.().find((s) => s.uid === c.lastStoveUid);
+      const fromStoves = !fromStations
+        ? this.getStoves?.().find((s) => s.uid === c.lastStoveUid)
+        : undefined;
+      const station = fromStations ?? fromStoves;
+      if (station) {
+        const base = this.chefStandPosFor(station);
         base.x += (Math.random() - 0.5) * 1.2;
         base.y += (Math.random() - 0.5) * 0.8;
         return base;
       }
-      // The stove was sold/moved — forget it so we don't keep
+      // The station was sold/moved — forget it so we don't keep
       // searching for a ghost next tick.
       c.lastStoveUid = null;
     }
@@ -366,13 +422,16 @@ export class StaffRouter {
   }
 
   /** Called by GuestSpawner when a guest places an order. */
-  enqueueOrder(guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number): string {
+  enqueueOrder(
+    guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number,
+    appliance: string = "stove",
+  ): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     this.tickets.push({
       id, guestId, recipeId, state: "queued",
-      seatPos: seatPos.clone(), clock: 0, cookSeconds,
+      seatPos: seatPos.clone(), clock: 0, cookSeconds, appliance,
     });
-    console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
+    console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
     return id;
   }
 
@@ -442,25 +501,30 @@ export class StaffRouter {
       case "idle": {
         const ticket = this.tickets.find((t) => t.state === "queued");
         if (!ticket) break;
-        // Reserve a free stove before taking the ticket. If every
-        // placed stove is busy, defer — another idle chef can't sneak
-        // ahead because each tickChef runs serially and the busy set
-        // is updated before the next chef looks.
-        const stove = this.claimFreeStove();
+        // Pick a station that provides the recipe's required appliance.
+        // The chef defers (stays idle) when no matching station is free,
+        // so a recipe that needs the toaster can't get cooked at the
+        // stove just because the stove happens to be open. Pre-Phase-C
+        // tickets without an appliance default to "stove" — keeps old
+        // saves alive while we migrate.
+        const needed = ticket.appliance || "stove";
+        const station = this.claimFreeStation(needed);
         let target: THREE.Vector2;
-        const stoveCount = this.getStoves ? this.getStoves().length : 0;
-        if (stove) {
-          c.assignedStoveUid = stove.uid;
-          target = this.chefStandPosFor(stove);
-        } else if (stoveCount === 0) {
-          // No stoves placed anywhere — fall back to the legacy
-          // shared cooking spot so the kitchen still functions in a
-          // degenerate "no appliance" save. No reservation possible
-          // here; multiple chefs may pile on this fallback.
+        if (station) {
+          c.assignedStoveUid = station.uid;
+          target = this.chefStandPosFor(station);
+        } else if (needed === "stove" && this.getStoves && this.getStoves().length === 0) {
+          // No stoves placed AND the recipe needs stove — fall back to
+          // the legacy shared cooking spot so the kitchen still
+          // functions in a degenerate "no appliance" save. No
+          // reservation possible here; multiple chefs may pile on.
           c.assignedStoveUid = null;
           target = this.stovePos.clone();
         } else {
-          // Stoves exist but they're all taken — wait it out.
+          // Matching station exists but all are busy, OR the player
+          // hasn't built the appliance this recipe needs (e.g. a
+          // counter recipe with no counter placed). Wait it out — the
+          // ticket stays queued and the chef stays idle.
           break;
         }
         ticket.state = "cooking";
@@ -476,7 +540,7 @@ export class StaffRouter {
         c.state = "movingToWork";
         c.clock = 0;
         c.character.action = "walk";
-        console.log(`[Router] chef picked up ${ticket.id} → walking to ${stove ? `stove ${stove.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
+        console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
         break;
       }
       case "movingToWork": {

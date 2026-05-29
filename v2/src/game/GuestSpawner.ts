@@ -1357,9 +1357,16 @@ export class GuestSpawner {
     // Enqueue with the BASE cook-seconds. The actual chef applies
     // their own training multiplier on pickup (StaffRouter does
     // that), so the timer reflects which specific chef takes the
-    // ticket.
+    // ticket. The recipe's first required appliance steers the
+    // chef to the right cook station (toaster vs stove vs coffee
+    // machine etc.). Phase C lets multi-appliance recipes exist
+    // but for now we only consume the head of the list — that's
+    // enough since no current recipe declares more than one.
+    const apps = this.game.cooking.getRecipeAppliances(recipe);
+    const primaryAppliance = apps[0] ?? recipe.stationNeeded ?? "stove";
     g.ticketId = this.router.enqueueOrder(
       g.id, recipe.id, g.seatPos, this.game.getBaseCookSeconds(recipe),
+      primaryAppliance,
     );
     g.state = "waitingForFood";
     g.stateClock = 0;

@@ -697,6 +697,23 @@ export class FurnitureRegistry {
     return out;
   }
 
+  /** Every placed item that can serve as a cook station — anything
+   * with a `provides` value in its def. StaffRouter uses this to match
+   * a recipe's required appliance to a specific place in the kitchen
+   * so chefs walk to the toaster for toast, the coffee machine for a
+   * latte, etc. Position fields mirror getStoves(); the `provides`
+   * value is the appliance type the station serves. */
+  getCookStations(): { uid: string; provides: string; x: number; z: number; rotY: number }[] {
+    const out: { uid: string; provides: string; x: number; z: number; rotY: number }[] = [];
+    for (const it of this.items) {
+      const def = getFurnitureDef(it.defId);
+      if (!def?.provides) continue;
+      if (!this.isVisibleInScene(it.model)) continue;
+      out.push({ uid: it.uid, provides: def.provides, x: it.x, z: it.z, rotY: it.rotY });
+    }
+    return out;
+  }
+
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). Surface-placed
    * items override their Y from the host's measured top after the host
