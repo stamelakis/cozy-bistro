@@ -1188,19 +1188,22 @@ export class WorldScene {
     const STEP_WIDTH = 1.0;                                // X span
     const STEP_DEPTH = 0.2;                                // Z span per step
     const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m
-    const X_CENTER   = 4.5;                                // against the right interior wall
-    // Bottom of the flight: front-right corner of the building. Z = doorPos.y
-    // is the south (front) wall at Z=+5; we tuck the bottom step a touch
-    // inside so the staircase doesn't clip into the wall.
-    const Z_BOTTOM   = 4.4;                                // low end, near front wall
+    const X_CENTER   = -3.5;                               // against the left interior wall
+    // The TOP of the flight sits at the back-left corner so the player
+    // walks INTO the corner as they climb (rather than starting at the
+    // corner, which was the previous orientation). With STEP_DEPTH=0.2
+    // and 10 steps, the top step's centre lands at Z=-4.3 — right
+    // against the back wall (interior face at Z=-4.4). The bottom of
+    // the flight extends 2 m south into the open floor.
+    const Z_BOTTOM   = -2.4;                               // low end, ~middle of building's north half
     const runLen     = STEP_COUNT * STEP_DEPTH;            // 2 m total run
     const lowerY     = baseY - WorldScene.STOREY_HEIGHT;
     const stepMat = new THREE.MeshStandardMaterial({
       color: 0xb0967a, roughness: 0.78, metalness: 0,
     });
-    // Steps rise as Z decreases (front → back), so step 0 sits at the
-    // front-right corner and step N-1 sits 2 m further north along the
-    // right wall — at the top of the flight where it meets the upper slab.
+    // Steps rise as Z decreases (south → north), so step 0 sits 2 m
+    // out from the back wall and step N-1 sits tucked into the back-
+    // left corner where the flight meets the upper slab.
     for (let i = 0; i < STEP_COUNT; i += 1) {
       const step = new THREE.Mesh(
         new THREE.BoxGeometry(STEP_WIDTH, STEP_RISE, STEP_DEPTH),
@@ -1217,16 +1220,16 @@ export class WorldScene {
     }
     // Slim banister along the interior-facing edge so the stairs read
     // as a staircase from the iso angle, not just a stack of slabs.
-    // A short vertical post at the bottom + top, plus a rail running
-    // along the slope.
+    // The staircase hugs the LEFT wall, so the open side faces EAST —
+    // banister sits just inside the staircase's east edge.
     const banisterMat = new THREE.MeshStandardMaterial({
       color: 0x8a6e54, roughness: 0.7,
     });
-    const railX = X_CENTER - STEP_WIDTH / 2 + 0.04;        // just inside the left edge
+    const railX = X_CENTER + STEP_WIDTH / 2 - 0.04;        // just inside the right edge
     const railLen = Math.sqrt(runLen * runLen + WorldScene.STOREY_HEIGHT * WorldScene.STOREY_HEIGHT);
     const railThickness = 0.04;
     // Rail: a thin box rotated to match the step slope. Center sits at
-    // the midpoint of the run (1 m back from Z_BOTTOM).
+    // the midpoint of the run (1 m north of Z_BOTTOM).
     const rail = new THREE.Mesh(
       new THREE.BoxGeometry(railThickness, railThickness, railLen),
       banisterMat,
@@ -1236,13 +1239,13 @@ export class WorldScene {
       lowerY + WorldScene.STOREY_HEIGHT / 2 + 0.85,        // ~hand height above the steps
       Z_BOTTOM - runLen / 2,
     );
-    // Negative sign so the rail tilts with the staircase going up toward
-    // the back (−Z) instead of forward (+Z).
+    // Negative sign so the rail tilts up toward the back (−Z) end
+    // — the +Z end of the local mesh is the bottom of the flight.
     rail.rotation.x = -Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
     rail.castShadow = true;
     parent.add(rail);
     // Two short posts: one at the bottom (Z_BOTTOM, ground level) and
-    // one at the top (Z_BOTTOM − runLen, upper slab level).
+    // one at the top (Z_BOTTOM − runLen, upper slab level / corner).
     for (const t of [0, 1]) {
       const post = new THREE.Mesh(
         new THREE.BoxGeometry(railThickness, 0.95, railThickness),
