@@ -63,6 +63,12 @@ export interface PlacedFurniture {
   /** Surface-placed items only — index into the host def's
    * surfaceSlots array (which dx/dz on the host the item sits at). */
   slotIndex?: number;
+  /** Surface-placed items only — the player's chosen rotation OFFSET
+   * relative to the host (radians, normalised to (-π, π]). Without
+   * this, the registry's surface-snap pass on restore force-resets
+   * the child to host.rotY and any R-key rotation the player applied
+   * (e.g. spinning a microwave 90° on a counter) is lost on reload. */
+  localRotY?: number;
 }
 
 /** Kitchen appliance types a recipe can require. Each id is provided

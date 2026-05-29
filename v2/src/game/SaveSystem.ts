@@ -207,6 +207,11 @@ export class SaveSystem {
             // instead of dropping to y=0.
             if (p.parentUid) out.parentUid = p.parentUid;
             if (typeof p.slotIndex === "number") out.slotIndex = p.slotIndex;
+            // Persist the player's surface-rotation offset so a
+            // toaster turned 90° via R survives reload. Without this
+            // the registry's restore second pass forces the child
+            // back to host.rotY.
+            if (typeof p.localRotY === "number") out.localRotY = p.localRotY;
             return out;
           }))
         : [],

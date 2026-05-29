@@ -961,9 +961,14 @@ export class FurnitureRegistry {
       const wz = host.z - slot.dx * sin + slot.dz * cos;
       child.x = wx;
       child.z = wz;
-      child.rotY = host.rotY;
+      // Honour the player's per-child rotation offset (localRotY) so
+      // a microwave turned 90° via R survives a save+load round-trip.
+      // Falls back to 0 (matches the host) for legacy saves written
+      // before localRotY was persisted, and for items never rotated.
+      const finalRotY = host.rotY + (child.localRotY ?? 0);
+      child.rotY = finalRotY;
       child.model.position.set(wx, topY, wz);
-      child.model.rotation.y = host.rotY;
+      child.model.rotation.y = finalRotY;
     }
   }
 }

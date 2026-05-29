@@ -305,6 +305,10 @@ export class Engine {
         // time the player reopened the save.
         parentUid: p.parentUid,
         slotIndex: p.slotIndex,
+        // And forward the player's per-child rotation offset so an
+        // R-rotated microwave / coffee machine / blender survives
+        // reload.
+        localRotY: p.localRotY,
       }));
       // After restore, the demo's door (with its hinge panel captured)
       // gets removed and the save's restored door comes in fresh —
