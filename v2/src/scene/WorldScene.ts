@@ -422,17 +422,35 @@ export class WorldScene {
    * a chef cooks below. No flicker (user explicitly asked for "a static
    * one"). Engine.update walks the registry each frame, finds active
    * stoves, then turns on any hood that's positioned directly above an
-   * active one (same X column, close Z). */
+   * active one (same X column, close Z).
+   *
+   * Uses a SpotLight (not PointLight) so the illumination is contained
+   * BELOW the hood's bottom surface — a real range-hood bulb shines
+   * down onto the burners, not up into the kitchen ceiling. The cone
+   * is angled wide enough to cover the full stove tile underneath. */
   private buildHoodLightEffect() {
     const group = new THREE.Group();
     group.visible = false;
-    // The light hangs under the hood — alignEffectToModel anchors the
-    // group at the model's top; offset y negative drops it to roughly
-    // the hood's bottom edge, where a real range-hood bulb would sit.
-    const light = new THREE.PointLight(0xfff0c8, 1.8, 1.8, 2);
-    light.position.set(0, -0.4, 0);
+    // alignEffectToModel anchors the group at the model's TOP. The
+    // bulb / spotlight source sit ~0.4 m below that, where the bottom
+    // edge of the hood roughly is.
+    const SRC_Y = -0.4;
+    // Half-angle of the cone — π/4 gives ~45°, wide enough that the
+    // light pool covers the whole 1×1 stove tile sitting underneath
+    // (with a 0.5 m drop the cone diameter is ~1 m at floor level).
+    const light = new THREE.SpotLight(0xfff0c8, 2.4, 1.8, Math.PI / 4, 0.45, 2);
+    light.position.set(0, SRC_Y, 0);
+    // SpotLight aims at light.target.position. Target lives directly
+    // below the source so the cone points straight down; we add it to
+    // the group so Three.js considers it part of the scene graph
+    // (a SpotLight whose target isn't in the scene aims at the origin
+    // and behaves erratically when the group itself moves).
+    light.target.position.set(0, SRC_Y - 1.5, 0);
     group.add(light);
-    // Small visible bulb so the player can see the source.
+    group.add(light.target);
+    // Small visible bulb so the player can see the source. Sits at
+    // the same Y as the spotlight origin, but isn't itself a light —
+    // just a self-lit sphere.
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.035, 12, 12),
       new THREE.MeshStandardMaterial({
@@ -441,9 +459,12 @@ export class WorldScene {
         emissiveIntensity: 1.5,
       }),
     );
-    bulb.position.set(0, -0.4, 0);
+    bulb.position.set(0, SRC_Y, 0);
     group.add(bulb);
-    return { group, variant: "hood" as const, flameLight: light };
+    // No flameLight reference — hood doesn't flicker, and the stored
+    // type is THREE.PointLight (used by stove / toaster animation).
+    // The group's visible flag is enough to switch the light on/off.
+    return { group, variant: "hood" as const };
   }
 
   /** Gas / electric stove flame — sphere + point light. Gas reads
