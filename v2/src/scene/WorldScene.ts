@@ -1354,15 +1354,16 @@ export class WorldScene {
   }
 
   /** Big ground plane painted with a canvas texture of soft green
-   * patches. The texture repeats so the lawn fills the whole 70×70 m
-   * area without revealing the seam. */
+   * patches. The texture repeats so the lawn fills the whole 90×90 m
+   * area without revealing the seam. (Bumped from 70 to 90 so the
+   * full-map-width road + pavements don't poke past the lawn edge.) */
   private addGroundPlane(): void {
     const tex = WorldScene.makeGrassTexture();
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(4, 4);
+    tex.repeat.set(5, 5);
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(70, 70),
+      new THREE.PlaneGeometry(90, 90),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
@@ -1482,8 +1483,8 @@ export class WorldScene {
     const maxAttempts = count * 4;
     while (placed < count && attempts < maxAttempts) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 64;
-      const z = (Math.random() - 0.5) * 64;
+      const x = (Math.random() - 0.5) * 84;
+      const z = (Math.random() - 0.5) * 84;
       if (WorldScene.isExclusionZone(x, z, /* margin */ 0.4)) continue;
       tmp.position.set(x, 0, z);
       tmp.rotation.y = Math.random() * Math.PI * 2;
@@ -1556,8 +1557,8 @@ export class WorldScene {
     const palette = [0xffe066, 0xff8aa6, 0xffffff, 0xf0b0e8, 0xffc46e];
     const flowers = new THREE.Group();
     for (let i = 0; i < 160; i += 1) {
-      const x = (Math.random() - 0.5) * 60;
-      const z = (Math.random() - 0.5) * 60;
+      const x = (Math.random() - 0.5) * 80;
+      const z = (Math.random() - 0.5) * 80;
       if (WorldScene.isExclusionZone(x, z, 0.6)) { i -= 1; continue; }
       const color = palette[Math.floor(Math.random() * palette.length)];
       const flower = new THREE.Mesh(
@@ -1586,8 +1587,8 @@ export class WorldScene {
     let attempts = 0;
     while (placed < 22 && attempts < 400) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 60;
-      const z = (Math.random() - 0.5) * 60;
+      const x = (Math.random() - 0.5) * 80;
+      const z = (Math.random() - 0.5) * 80;
       if (WorldScene.isExclusionZone(x, z, 1.8)) continue;
       // Avoid spawning right in front of the door view either.
       if (Math.abs(x) < 6 && z > 5.5 && z < 12) continue;
@@ -1625,8 +1626,8 @@ export class WorldScene {
     let attempts = 0;
     while (placed < 36 && attempts < 400) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 62;
-      const z = (Math.random() - 0.5) * 62;
+      const x = (Math.random() - 0.5) * 82;
+      const z = (Math.random() - 0.5) * 82;
       if (WorldScene.isExclusionZone(x, z, 0.4)) continue;
       tmp.position.set(x, 0.06, z);
       tmp.rotation.set(Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.4);
@@ -1643,56 +1644,63 @@ export class WorldScene {
   }
 
   private addPavementAndRoad(): void {
-    // Pavement strip shifted +0.5 z relative to the legacy pre-grid-
-    // shift layout so its north edge lines up with the building's
-    // front wall at z=5.5. (An earlier +1.0 shift was applied while
-    // a duplicate pavement was masking the change — once the
-    // duplicate was deleted the +1.0 left a huge grass gap; +0.5 is
-    // the right number.)
-    const pavement = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 5),
-      new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 }),
-    );
-    pavement.rotation.x = -Math.PI / 2;
-    pavement.position.set(0, 0, 8);  // spans z = 5.5 .. 10.5
-    pavement.receiveShadow = true;
-    this.threeScene.add(pavement);
-    const road = new THREE.Mesh(
-      new THREE.PlaneGeometry(30, 6),
-      new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 }),
-    );
-    road.rotation.x = -Math.PI / 2;
-    road.position.set(0, 0, 13.5);  // spans z = 10.5 .. 16.5
-    road.receiveShadow = true;
-    this.threeScene.add(road);
+    // The strip spans the full map width (lawn plane is 70×70 m, so
+    // 80 m of strip overshoots into the grass margin and disappears
+    // into the fog horizon without visible end caps). Z layout (north
+    // to south):
+    //   z = 5.5..10.5   near pavement (against the building's south wall)
+    //   z = 10.5         near curb
+    //   z = 10.5..16.5   road
+    //   z = 16.5         far curb
+    //   z = 16.5..21.5   far pavement (across the road)
+    const STRIP_WIDTH = 80;
+    const pavementMat = new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 });
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 });
+    const curbMat = new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 });
     const laneMat = new THREE.MeshStandardMaterial({
       color: 0xe6e0c4, roughness: 0.85,
       emissive: 0xe6e0c4, emissiveIntensity: 0.05,
     });
-    for (let x = -14; x <= 14; x += 4) {
+
+    const makePavement = (z: number): void => {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(STRIP_WIDTH, 5), pavementMat);
+      p.rotation.x = -Math.PI / 2;
+      p.position.set(0, 0, z);
+      p.receiveShadow = true;
+      this.threeScene.add(p);
+    };
+    const makeCurb = (z: number): void => {
+      const c = new THREE.Mesh(new THREE.BoxGeometry(STRIP_WIDTH, 0.12, 0.18), curbMat);
+      c.position.set(0, 0.06, z);
+      c.castShadow = true;
+      c.receiveShadow = true;
+      this.threeScene.add(c);
+    };
+    makePavement(8);              // near pavement centre, spans 5.5..10.5
+    makeCurb(10.5);                // near curb
+    const road = new THREE.Mesh(new THREE.PlaneGeometry(STRIP_WIDTH, 6), roadMat);
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0, 13.5);  // spans 10.5..16.5
+    road.receiveShadow = true;
+    this.threeScene.add(road);
+    makeCurb(16.5);                // far curb
+    makePavement(19);              // far pavement, spans 16.5..21.5
+    // Lane dashes down the middle of the road, spaced every 4 m
+    // across the full road width.
+    for (let x = -STRIP_WIDTH / 2 + 2; x <= STRIP_WIDTH / 2 - 2; x += 4) {
       const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.18), laneMat);
       dash.rotation.x = -Math.PI / 2;
       dash.position.set(x, 0.005, 13.5);
       this.threeScene.add(dash);
     }
-    const curb = new THREE.Mesh(
-      new THREE.BoxGeometry(30, 0.12, 0.18),
-      new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 }),
-    );
-    curb.position.set(0, 0.06, 10.5);  // on the pavement/road border
-    curb.castShadow = true;
-    curb.receiveShadow = true;
-    this.threeScene.add(curb);
   }
 
-  /** True when (x, z) is too close to the building interior, the door
-   * approach, the pavement / road strip, or the future garden area.
-   * Bounds match the perimeter walls (-4.5..5.5), the pavement/road
-   * strip (z=5.5..16.5), and the fenced garden plot east of the
-   * building (GARDEN_BOUNDS). */
+  /** True when (x, z) is too close to the building interior, the
+   * pavement / road / far-pavement strip (full map width now), or
+   * the future garden area. Strip runs z=5.5..21.5 across x=-40..40. */
   private static isExclusionZone(x: number, z: number, margin: number): boolean {
     if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
-    if (z > 5.5 - margin && z < 16.5 + margin && x > -15.5 && x < 15.5) return true;
+    if (z > 5.5 - margin && z < 21.5 + margin && x > -40 && x < 40) return true;
     const g = WorldScene.GARDEN_BOUNDS;
     if (x > g.minX - margin && x < g.maxX + margin && z > g.minZ - margin && z < g.maxZ + margin) return true;
     return false;
