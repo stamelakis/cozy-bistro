@@ -182,8 +182,10 @@ export class BuildMenu {
       top: "12px",
       right: "12px",
       width: "260px",
-      // Leave room for the PantryPanel at bottom-right (~35vh).
-      maxHeight: "calc(60vh)",
+      // Fill the full right edge of the viewport when expanded — the
+      // PantryPanel at bottom-right is short enough that the player
+      // can scroll past it inside the build menu's own scroll area.
+      maxHeight: "calc(100vh - 24px)",
       overflowY: "auto",
       padding: "12px",
       background: "rgba(20, 14, 10, 0.78)",
@@ -398,19 +400,16 @@ export class BuildMenu {
       wall: "Walls & Partitions", door: "Doors & Windows",
       bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };
-    // Track whether we've already auto-opened a section. The first
-    // non-empty category in this tier expands by default so the player
-    // immediately sees something they can buy; everything else (and
-    // every empty section) stays collapsed.
-    let firstPopulatedOpened = false;
+    // Every category starts collapsed — the panel now fills the full
+    // right edge of the viewport, so the player skim-reads the headers
+    // and expands what they care about instead of having one section
+    // pre-opened to set the scroll position.
     for (const cat of categoryOrder) {
       const items = furnitureCatalog.filter(
         (d) => d.category === cat && inferQualityTier(d) === this.selectedTier,
       );
       const empty = items.length === 0;
-      const shouldAutoOpen = !empty && !firstPopulatedOpened;
-      if (shouldAutoOpen) firstPopulatedOpened = true;
-      let open = shouldAutoOpen;
+      let open = false;
       const header = document.createElement("div");
       Object.assign(header.style, {
         marginTop: "8px",
