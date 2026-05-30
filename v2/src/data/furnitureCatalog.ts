@@ -199,6 +199,24 @@ const COFFEE_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   { dx: -1, dz:  0, facingY: -Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
 ];
 
+/** Seat layout for a 2-tile-wide bar counter: two stools on the +Z
+ * (customer-facing) long side, both facing -Z toward the bar. The
+ * stools land at integer tile centers (dx=±0.5, dz=+1) for a 2×1 bar
+ * anchored at a half-integer X cross-section, so they line up with
+ * the surface slots on the bar top. The platePos is the drink
+ * position on the bar top in front of each customer — rotateSlotOffset
+ * clamps it to the bar's edge so the drink reads as being just inside
+ * the front lip rather than at the very edge.
+ *
+ * For default rot=0:
+ *   left stool   at world (bar.x - 0.5, bar.z + 1) facing north
+ *   right stool  at world (bar.x + 0.5, bar.z + 1) facing north
+ * Rotate the bar 180° to put the stool side on the opposite face. */
+const BAR_COUNTER_SEAT_SLOTS: readonly SeatSlot[] = [
+  { dx: -0.5, dz:  1, facingY: 0, platePos: { dx: -0.5, dz: 0.4 } },
+  { dx:  0.5, dz:  1, facingY: 0, platePos: { dx:  0.5, dz: 0.4 } },
+];
+
 /** Bench-style seat layout for a 2×2 dining table that seats 4: TWO
  * chairs on each LONG side (north and south of the table at default
  * rotation), zero chairs on the short sides. Pairs the seats up like
@@ -470,9 +488,18 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // which is where the bar counter abuts when the player places them
   // adjacent. Rotating the bar end 180° flips it to the right-hand
   // end cap (flat side at −X, rounded outward to +X).
+  // Bar counter doubles as drink-serving seating: 2 bar stools tuck up
+  // to the +Z long side, customers face north toward the bar top, and
+  // drinks land on the front edge in front of each stool. surface:
+  // "drink" gates the order pool to the bar menu (no apps / mains /
+  // desserts), same way coffee tables do. Despite the "counter"
+  // category, GuestSpawner treats anything with seatSlots as a serving
+  // surface — see getTableSurface in FurnitureRegistry.
   { id: "bar-counter",    name: "Bar Counter",     category: "counter",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
-    tier: 3, fillTile: true, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+    tier: 3, fillTile: true, dishCapacity: 8, surface: "drink",
+    seatSlots: BAR_COUNTER_SEAT_SLOTS,
+    surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
     // Surface slot shifted to dx=0.25 so anything placed on the bar end

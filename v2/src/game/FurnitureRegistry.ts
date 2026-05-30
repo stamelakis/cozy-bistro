@@ -639,14 +639,20 @@ export class FurnitureRegistry {
     return null;
   }
 
-  /** Which kind of orders a placed TABLE accepts. Returns null for
-   * non-tables or unknown ids. Used by GuestSpawner.buildOrder to
-   * restrict drink-only coffee tables to the drink menu. */
+  /** Which kind of orders a placed serving surface accepts. Returns
+   * null for items that aren't a serving surface or unknown uids. Used
+   * by GuestSpawner.buildOrder to restrict drink-only coffee tables
+   * (and bar counters) to the drink menu.
+   *
+   * "Serving surface" = any def with seatSlots. The bar counter is a
+   * "counter" category but it ALSO seats customers, so we can't gate
+   * on category === "table" anymore. seatSlots is the right invariant
+   * — if customers can sit at it, the def declares what gets served. */
   getTableSurface(tableUid: string): "food" | "drink" | null {
     const it = this.items.find((x) => x.uid === tableUid);
     if (!it) return null;
     const def = getFurnitureDef(it.defId);
-    if (def?.category !== "table") return null;
+    if (!def?.seatSlots) return null;
     return def.surface ?? "food";
   }
 
