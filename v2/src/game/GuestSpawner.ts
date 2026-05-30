@@ -606,6 +606,14 @@ export class GuestSpawner {
     if (g.path.length === 0) {
       g.path = [{ x: g.target.x, z: g.target.y, floor: targetFloor }];
     }
+    // Diagnostic: log every cross-floor guest plan so we can see if the
+    // stair waypoint is being emitted on ascent (door→upper-floor seat)
+    // or descent (toilet/return paths). One line per plan, only when
+    // currentFloor != targetFloor so normal same-floor walks stay quiet.
+    if (g.currentFloor !== targetFloor) {
+      const hop = g.path.find((s) => s.fromStair);
+      console.log(`[Guest] ${g.id} plan F${g.currentFloor}→F${targetFloor} state=${g.state} from (${g.character.groundPos.x.toFixed(1)},${g.character.groundPos.y.toFixed(1)}) to (${g.target.x.toFixed(1)},${g.target.y.toFixed(1)}): ${g.path.length} waypoints, stair=${hop ? `(${hop.x},${hop.z},F${hop.floor})` : "MISSING"}`);
+    }
   }
 
   /** Decide which storey the guest's `target` lives on. walkingIn
