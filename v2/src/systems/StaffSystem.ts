@@ -352,8 +352,11 @@ export class StaffSystem {
    * needed). */
   ensureBaseHeadcount(counts: Record<StaffRole, number>): HiredStaffMember[] {
     const added: HiredStaffMember[] = [];
-    for (const role of ["chef", "waiter", "errand"] as StaffRole[]) {
-      while (this.getStaffCount(role) < counts[role]) {
+    // Iterate ALL declared roles in the counts record (instead of a
+    // hardcoded chef/waiter/errand list) so future role additions
+    // automatically participate without having to patch this method.
+    for (const role of Object.keys(counts) as StaffRole[]) {
+      while (this.getStaffCount(role) < (counts[role] ?? 0)) {
         added.push(this.addStaff(role));
       }
     }
@@ -444,7 +447,7 @@ export class StaffSystem {
     if (save?.staffMembers && Array.isArray(save.staffMembers)) {
       // Modern save — rebuild the roster exactly.
       for (const m of save.staffMembers) {
-        if (m && typeof m.id === "string" && (m.role === "chef" || m.role === "waiter" || m.role === "errand")) {
+        if (m && typeof m.id === "string" && (m.role === "chef" || m.role === "waiter" || m.role === "errand" || m.role === "barman")) {
           const restored: HiredStaffMember = {
             id: m.id,
             role: m.role,
