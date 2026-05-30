@@ -243,14 +243,9 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // Tables. Dining tables are 2×2 tiles so they have a real seat for
   // each of the 4 chairs that pack around them. Coffee tables stay 1×1
   // since they're not dining seating.
-  // 2×2 table with stretchFootprint so the Kenney raw mesh actually
-  // fills both axes of its 2-tile claim instead of shrinking to one
-  // tile and clinging to the cross-section line (same fix the long
-  // sofa needed — uniform-min auto-fit was using the narrow axis as
-  // the scale ceiling).
   { id: "small-table",   name: "Small Table",   category: "table",
     modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 22, style: 1,
-    tier: 1, stretchFootprint: true,
+    tier: 1,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "round-table",   name: "Round Table",   category: "table",
@@ -320,13 +315,9 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bench-cushion-low", name: "Low Cushion Bench", category: "chair",
     modelPath: "assets/kenney/benchCushionLow.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 130, comfort: 2, style: 2, ratingBonus: 0.03, seatingCapacity: 2,
     tier: 2, targetHeight: 0.55 },
-  // Wooden bench: nearly-square raw mesh, so the uniform-min auto-fit
-  // shrank it to one tile and stuck it to the cross-section line of
-  // its 2-tile footprint. stretchFootprint scales X and Z
-  // independently so the bench spans both claimed tiles cleanly.
   { id: "bench-plain",    name: "Wooden Bench",  category: "chair",
     modelPath: "assets/kenney/bench.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 48, comfort: 1, style: 1, ratingBonus: 0.01, seatingCapacity: 2,
-    tier: 1, stretchFootprint: true, targetHeight: 0.55 },
+    tier: 1, targetHeight: 0.55 },
   { id: "bar-stool-sq",   name: "Square Bar Stool", category: "chair",
     modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 60, comfort: 1, style: 2, ratingBonus: 0.01,
     tier: 2, surface: "drink", targetHeight: 0.75 },
@@ -439,14 +430,9 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "kitchen-hood-l", name: "Large Range Hood", category: "appliance",
     modelPath: "assets/kenney/hoodLarge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140, ratingBonus: 0.01,
     tier: 2, placement: "wall-shelf", provides: "hood" },
-  // Bar counter: 2-tile wide kitchen piece whose raw Kenney mesh
-  // doesn't naturally span 2 tiles, so without stretchFootprint it
-  // pinned to the cross-section. Surface slots stay at dx=±0.5 (the
-  // two tile centres along the counter's length) — those align with
-  // the bar's working positions whether the mesh is stretched or not.
   { id: "bar-counter",    name: "Bar Counter",     category: "counter",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
-    tier: 3, stretchFootprint: true, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+    tier: 3, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
     tier: 3, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }] },
