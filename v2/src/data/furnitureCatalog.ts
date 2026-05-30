@@ -471,12 +471,15 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // a stove or counter rather than taking a floor tile of their own.
   // Same clearance rule as upper cabinets: cell below must be ≤1.2m, so
   // a stove (0.92m) qualifies and a fridge (≥2m) doesn't.
+  // Hood vents authored with their visible face on +Z, so without a
+  // flip the rotation lands them with the suction face pointing into
+  // the wall and the duct hardware facing the room.
   { id: "kitchen-hood",   name: "Range Hood",      category: "appliance",
     modelPath: "assets/kenney/hoodModern.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60,
-    tier: 1, placement: "wall-shelf", provides: "hood" },
+    tier: 1, placement: "wall-shelf", provides: "hood", rotationOffset: Math.PI },
   { id: "kitchen-hood-l", name: "Large Range Hood", category: "appliance",
     modelPath: "assets/kenney/hoodLarge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140, ratingBonus: 0.01,
-    tier: 2, placement: "wall-shelf", provides: "hood" },
+    tier: 2, placement: "wall-shelf", provides: "hood", rotationOffset: Math.PI },
   // Bar counter + bar end are a run-together set. fillTile drops the
   // standard 4% breathing margin so the bar counter actually reaches
   // its tile boundaries on the long side (was 1.84 m of a 2.0 m span,
@@ -618,9 +621,14 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
     modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2,
     tier: 1, placement: "surface", targetHeight: 0.4 },
+  // Kenney lampWall.glb authors the visible bulb on the +Z face; our
+  // wall-mount rotation puts the model's −Z toward the room, so without
+  // a flip the player sees the bulb-less back of the sconce. rotationOffset
+  // π flips the model in its own frame so the bulb ends up facing the
+  // room. Same fix bathroomMirror + coatRack already had.
   { id: "wall-lamp",      name: "Wall Sconce",       category: "lamp",
     modelPath: "assets/kenney/lampWall.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 25, style: 2, attractionBonus: 1,
-    tier: 1, placement: "wall", targetHeight: 0.3 },
+    tier: 1, placement: "wall", targetHeight: 0.3, rotationOffset: Math.PI },
 
   // Doors & windows. The "door" id is a procedural door with a separate
   // hinged panel so we can swing the panel without moving the frame.
@@ -750,15 +758,19 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // These are upper / corner cabinets — currently placed as floor items
   // but conceptually "storage". Future Phase: convert to a wall-shelf
   // placement that mounts above shorter counters.
+  // Upper cabinets all authored with the door / open face on +Z, so the
+  // wall-mount rotation pinned the cabinet doors INTO the wall and the
+  // unfinished back at the room. Flip in the model frame so the visible
+  // door / shelf side ends up facing the kitchen line.
   { id: "kitchen-upper",  name: "Upper Cabinet",   category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpper.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 80, style: 1,
-    tier: 1, stockCapacity: 2, dishCapacity: 6, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, dishCapacity: 6, placement: "wall-shelf", rotationOffset: Math.PI },
   { id: "kitchen-upper-d", name: "Upper Cabinet Double", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperDouble.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 130, style: 1,
-    tier: 2, stockCapacity: 4, dishCapacity: 12, placement: "wall-shelf" },
+    tier: 2, stockCapacity: 4, dishCapacity: 12, placement: "wall-shelf", rotationOffset: Math.PI },
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
-    tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf" },
+    tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf", rotationOffset: Math.PI },
   // Corner cabinets are FULL-HEIGHT base units (counter line), not
   // upper wall-shelf cabinets — they fit at the corner of a counter
   // run on the floor. Surface slot on top so the player can put a
@@ -818,9 +830,12 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 2, targetHeight: 0.04, flat: true },
 
   // === Cute/quirky decor. ===
+  // Kenney bear.glb's face sits on the +Z side of the mesh; without the
+  // π flip the wall-mount rotation aimed the back of the bear at the
+  // room. Same fix the coat rack + mirror needed.
   { id: "teddy-bear",     name: "Teddy Bear",      category: "decoration",
     modelPath: "assets/kenney/bear.glb", scale: S_DECOR * 0.7, size: { width: 1, depth: 1 }, cost: 22, attractionBonus: 1, style: 2,
-    tier: 1, placement: "wall" },
+    tier: 1, placement: "wall", rotationOffset: Math.PI },
   // Kenney's coatRack.glb has its hooks on the +Z face. Our wall-mount
   // convention is "GLB front = -Z", so without an explicit flip the
   // hooks end up jammed into the wall instead of facing the room.

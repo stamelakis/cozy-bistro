@@ -36,12 +36,15 @@ function framedArt(canvasColor: number, label = ""): THREE.Group {
   frame.castShadow = true;
   frame.receiveShadow = true;
   g.add(frame);
-  // Canvas (the colored bit), inset 4 cm in front of the frame.
+  // Canvas (the colored bit), inset 4 cm in FRONT of the frame. Wall-
+  // mount rotation puts model −Z toward the room, so the canvas sits on
+  // the −Z side. If it were at +0.04 the canvas would face the wall and
+  // the player would see the back of the frame from inside the room.
   const canvas = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, 0.02),
     new THREE.MeshStandardMaterial({ color: canvasColor, roughness: 0.5, emissive: canvasColor, emissiveIntensity: 0.15 }),
   );
-  canvas.position.set(0, 0, 0.04);
+  canvas.position.set(0, 0, -0.04);
   g.add(canvas);
   return g;
 }
@@ -60,17 +63,20 @@ function menuBoard(): THREE.Group {
   frame.position.y = yOff;
   frame.castShadow = true;
   g.add(frame);
+  // Chalkboard interior + chalk lines sit on the −Z side so the painted
+  // surface faces the room after the wall-mount rotation. +Z would face
+  // the wall and the player would only see the back of the frame.
   const board = new THREE.Mesh(
     new THREE.BoxGeometry(0.78, 0.98, 0.02),
     new THREE.MeshStandardMaterial({ color: 0x1d2820, roughness: 0.9 }),
   );
-  board.position.set(0, yOff, 0.04);
+  board.position.set(0, yOff, -0.04);
   g.add(board);
   const lineMat = new THREE.MeshStandardMaterial({ color: 0xf2ead8, emissive: 0xf2ead8, emissiveIntensity: 0.4 });
   for (let i = 0; i < 5; i += 1) {
     const len = 0.4 + Math.random() * 0.25;
     const line = new THREE.Mesh(new THREE.BoxGeometry(len, 0.025, 0.005), lineMat);
-    line.position.set(-0.1, yOff + 0.35 - i * 0.16, 0.06);
+    line.position.set(-0.1, yOff + 0.35 - i * 0.16, -0.06);
     g.add(line);
   }
   return g;
@@ -90,14 +96,17 @@ function neonSign(): THREE.Group {
   );
   tube.position.y = yOff;
   g.add(tube);
+  // Back panel sits on +Z (against the wall) so the tube glows out into
+  // the room. The PointLight goes to −Z (room side) so the falloff lands
+  // INSIDE the building instead of leaking through the wall to the lawn.
   const back = new THREE.Mesh(
     new THREE.BoxGeometry(0.7, 0.35, 0.03),
     new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.8 }),
   );
-  back.position.set(0, yOff, -0.02);
+  back.position.set(0, yOff, 0.02);
   g.add(back);
   const light = new THREE.PointLight(0xff3a8a, 0.6, 3, 2);
-  light.position.set(0, yOff, 0.15);
+  light.position.set(0, yOff, -0.15);
   g.add(light);
   return g;
 }
