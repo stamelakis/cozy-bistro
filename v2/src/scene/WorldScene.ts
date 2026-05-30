@@ -2389,6 +2389,11 @@ export class WorldScene {
       { id: "wooden-chair", x:  1,   z:  3,   rotY: Math.PI,  tier: 1 },
     ];
 
+    // Boot diagnostic — list every starter placement id the build is
+    // actually running with. Player can grep DevTools for this to
+    // confirm whether a missing piece (e.g. bar-counter) is because
+    // they're on an old cached bundle vs. a load failure.
+    console.log(`[WorldScene] starter placements: ${placements.map((p) => p.id).join(", ")}`);
     await Promise.all(placements.map(async (p) => {
       const def = getFurnitureDef(p.id);
       if (!def) {
