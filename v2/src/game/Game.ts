@@ -1059,9 +1059,35 @@ export class Game {
 
   // === Staff hire/fire (wraps economy + StaffSystem + fires callback) ===
 
+  /** Minimum luxury tier required to hire a given role. Most roles
+   * unlock at tier 1 (immediately available); barman is gated to
+   * tier 2 so the player meets the rest of the game before they
+   * have to think about a bar economy. Update this if more roles
+   * need staggered unlocks. */
+  getRoleUnlockTier(role: StaffRole): LuxuryTier {
+    return role === "barman" ? 2 : 1;
+  }
+
+  /** Whether the role is HIRABLE right now (tier unlocked + money
+   * available). Drives StaffPanel's button state — without it the
+   * UI shows a hire button that silently rejects on click. */
+  canHireStaff(role: StaffRole): { ok: boolean; reason?: string } {
+    const required = this.getRoleUnlockTier(role);
+    if (this.luxuryTier < required) {
+      return { ok: false, reason: `Unlocks at tier ${required}` };
+    }
+    if (!this.economy.canAfford(this.staff.getStaffHireCost(role))) {
+      return { ok: false, reason: "Not enough cash" };
+    }
+    return { ok: true };
+  }
+
   /** Try to hire a staff member. Returns true on success (money was
-   * available and was charged, headcount went up, callback fired). */
+   * available and was charged, headcount went up, callback fired).
+   * Tier gate is enforced here too — the UI's pre-check is a hint;
+   * this is the canonical guard. */
   hireStaff(role: StaffRole): boolean {
+    if (this.luxuryTier < this.getRoleUnlockTier(role)) return false;
     const cost = this.staff.getStaffHireCost(role);
     if (!this.economy.spendMoney(cost, "staff")) return false;
     const member = this.staff.addStaff(role);

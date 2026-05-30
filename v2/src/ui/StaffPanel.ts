@@ -194,17 +194,32 @@ export class StaffPanel {
       const idle = Math.max(0, count - working);
       const rolePayroll = count * perStaff;
       const row = this.rows[role];
+      const unlockTier = this.game.getRoleUnlockTier(role);
+      const locked = this.game.getLuxuryTier() < unlockTier;
       // Title row now includes the role payroll so the player can see
-      // expenses per category, not just an aggregate footer.
-      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${rolePayroll}/min</span>`;
-      row.activity.innerHTML = count === 0
-        ? `<span style="opacity:0.4">none hired</span>`
-        : `<span style="color:#a8e2a8">▶ ${working} working</span> · <span style="color:#ffd47a">⏸ ${idle} idle</span>`;
-      row.hire.title = `Hire ${label} ($${hireCost}) — adds $${perStaff}/min payroll`;
+      // expenses per category, not just an aggregate footer. Locked
+      // roles (e.g. barman before tier 2) gain a small "🔒 tier N"
+      // tag so the player sees the unlock without hovering.
+      const lockTag = locked
+        ? ` <span style="opacity:0.7;font-weight:600;font-size:10px;color:#ffd47a">🔒 tier ${unlockTier}</span>`
+        : "";
+      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${rolePayroll}/min</span>${lockTag}`;
+      row.activity.innerHTML = locked
+        ? `<span style="opacity:0.5">Unlocks at tier ${unlockTier}</span>`
+        : count === 0
+          ? `<span style="opacity:0.4">none hired</span>`
+          : `<span style="color:#a8e2a8">▶ ${working} working</span> · <span style="color:#ffd47a">⏸ ${idle} idle</span>`;
+      // Two gates on the hire button: tier unlock + cash. Title
+      // string surfaces whichever is blocking so the player isn't
+      // guessing why the + is greyed out (e.g. barman before tier
+      // 2 reads "Unlocks at tier 2" instead of just "disabled").
+      const hireGate = this.game.canHireStaff(role);
+      row.hire.title = hireGate.ok
+        ? `Hire ${label} ($${hireCost}) — adds $${perStaff}/min payroll`
+        : `${hireGate.reason} · would cost $${hireCost} + $${perStaff}/min`;
       row.fire.title = `Fire ${label} (−$${fireCost} severance)`;
-      const canHire = this.game.economy.canAfford(hireCost);
-      row.hire.disabled = !canHire;
-      row.hire.style.opacity = canHire ? "1" : "0.4";
+      row.hire.disabled = !hireGate.ok;
+      row.hire.style.opacity = hireGate.ok ? "1" : "0.4";
       row.fire.disabled = count === 0;
       row.fire.style.opacity = count === 0 ? "0.4" : "1";
       this.renderMembers(role, row.members);

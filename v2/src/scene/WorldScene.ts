@@ -2364,16 +2364,13 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
-      // Starter bar — 2-wide bar counter on the back wall to the
-      // right of the kitchen line, with two bar stools. Gives the
-      // player a working bar from spawn so the barman role + drink-
-      // routing pipeline can be exercised without forcing them to
-      // build one first. Bar counter half-integer anchor (x=2.5)
-      // spans tiles 2 and 3; seat slots are at dx=±0.5 / dz=+1, so
-      // stools land at (2, -3) and (3, -3) facing the counter.
+      // Starter bar counter — 2-wide on the back wall to the right
+      // of the kitchen line. Half-integer anchor (x=2.5) spans tiles
+      // 2 and 3. No stools yet — the player buys them when they're
+      // ready to hire a barman (tier 2 unlock). The counter alone
+      // gives the kitchen visual presence without prematurely
+      // surfacing the bar role.
       { id: "bar-counter",  x:  2.5, z: -4, rotY: 0, tier: 1 },
-      { id: "bar-stool",    x:  2,   z: -3, rotY: 0, tier: 1 },
-      { id: "bar-stool",    x:  3,   z: -3, rotY: 0, tier: 1 },
       // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Chairs go
       // in the four corner-adjacent cells (pinwheel pattern) so each
       // chair sits AT a tile center rather than straddling tile
