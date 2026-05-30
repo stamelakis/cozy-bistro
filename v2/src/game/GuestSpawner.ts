@@ -450,7 +450,13 @@ const WC_PATIENCE_SECONDS = 10.0;
 const SPAWN_INTERVAL_SECONDS = 8.0;
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
-const PATIENCE_BASE_SECONDS = 35;
+// Bumped from 35 → 55 to give the higher-throughput economy more
+// margin. With more concurrent customers and the cook-time global
+// dropped to 1.0, individual waits are similar but kitchens hit
+// short-burst saturation more often. 55 s base × 0.6 quick-lunch
+// = 33 s minimum (was 21 s), giving even the impatient archetype
+// enough time to clear cooking + delivery under typical loads.
+const PATIENCE_BASE_SECONDS = 55;
 
 /** Seats stay dirty for this many seconds after a guest leaves before a
  * new guest can sit. Adds a visible turnaround beat between meals. */

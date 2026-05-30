@@ -862,6 +862,31 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
+        // Same interrupt as the waiter: if a queued ticket is waiting
+        // for THIS chef's home floor (and matches a free station),
+        // abort the loiter walk and start cooking from where we are.
+        // Spares the customer a chef round-trip across the kitchen
+        // every time a new order lands while they're "going back".
+        const interruptTicket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
+        if (interruptTicket) {
+          const needed = interruptTicket.appliance || "stove";
+          const station = this.claimFreeStation(needed, c.homeFloor);
+          if (station) {
+            c.assignedStoveUid = station.uid;
+            interruptTicket.state = "cooking";
+            interruptTicket.clock = 0;
+            const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
+            interruptTicket.cookSeconds = Math.max(1, interruptTicket.cookSeconds * chefMult);
+            c.ticketId = interruptTicket.id;
+            c.target = this.chefStandPosFor(station);
+            this.planPath(c);
+            c.state = "movingToWork";
+            c.clock = 0;
+            c.character.action = "walk";
+            c.homeWorkWaitClock = 0;
+            break;
+          }
+        }
         this.moveActor(c, dt);
         if (this.distance(c.character.groundPos, c.target) < ARRIVAL_THRESHOLD) {
           c.character.action = "idle";
@@ -1081,6 +1106,30 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
+        // Smarter return: if there's a ready ticket waiting (especially
+        // on the waiter's home floor), abort the walk-home and start
+        // the delivery from wherever they are now. Customers waiting
+        // for food have a hard patience clock — making a waiter walk
+        // all the way home and then back out to the pickup wastes
+        // 5–15 s of patience on every cycle, which the user noticed as
+        // "a waiter passed by a waiting customer going 'back'".
+        // Cross-floor work still gates on the 2 s home-wait timer so
+        // a Floor 1 waiter doesn't abandon home to go grab a Floor 0
+        // ticket the moment one appears.
+        const interruptTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
+        if (interruptTicket) {
+          interruptTicket.state = "delivering";
+          interruptTicket.clock = 0;
+          w.ticketId = interruptTicket.id;
+          w.target = this.pickupPos.clone();
+          w.targetFloor = 0;
+          this.planPath(w);
+          w.state = "movingToWork";
+          w.clock = 0;
+          w.character.action = "walk";
+          w.homeWorkWaitClock = 0;
+          break;
+        }
         this.moveActor(w, dt);
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
           w.character.action = "idle";
