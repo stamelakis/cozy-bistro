@@ -1086,15 +1086,11 @@ export class WorldScene {
     floor.receiveShadow = true;
     this.threeScene.add(floor);
 
-    // Grid overlay so the iso "tile" feel reads (interior only). Lines
-    // at half-integer coords so items at integer snap visually sit
-    // inside cells. See the floor comment above for why the (0.5, 0.5)
-    // shift exists at all.
-    const grid = new THREE.GridHelper(10, 10, 0xa68969, 0xc4ab85);
-    (grid.material as THREE.Material).transparent = true;
-    (grid.material as THREE.Material).opacity = 0.3;
-    grid.position.set(0.5, 0.002, 0.5);
-    this.threeScene.add(grid);
+    // Grid overlay removed by player request — the floor reads cleanly
+    // without the half-integer tile guides. Build / move modes still
+    // snap to the same grid; the SeatMarkers + ghost previews provide
+    // enough visual feedback during placement that the grid lines were
+    // adding noise without information.
 
     // === Walls ===
     // Three materials:
