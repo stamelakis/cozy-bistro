@@ -321,12 +321,17 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bar-stool-sq",   name: "Square Bar Stool", category: "chair",
     modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 60, comfort: 1, style: 2, ratingBonus: 0.01,
     tier: 2, surface: "drink", targetHeight: 0.75 },
+  // Lounge chairs are tier-4 statement pieces. Their raw Kenney meshes
+  // are wider than they are deep, so the uniform-min auto-fit was
+  // leaving the front-to-back direction visibly under-filled. Stretch
+  // the footprint so X and Z each scale to the tile independently —
+  // the chair reads as the heftier lounger silhouette it actually is.
   { id: "lounge-relax",   name: "Relax Lounge",  category: "chair",
     modelPath: "assets/kenney/loungeChairRelax.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 480, comfort: 5, style: 4, ratingBonus: 0.07,
-    tier: 4 },
+    tier: 4, stretchFootprint: true },
   { id: "lounge-design",  name: "Designer Lounge Chair", category: "chair",
     modelPath: "assets/kenney/loungeDesignChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 620, comfort: 4, style: 5, ratingBonus: 0.07,
-    tier: 4 },
+    tier: 4, stretchFootprint: true },
   { id: "sofa",           name: "Sofa",          category: "chair",
     modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 370, comfort: 5, style: 3, ratingBonus: 0.06, seatingCapacity: 2,
     tier: 3, surface: "drink" },
@@ -351,9 +356,15 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "sofa-corner",    name: "Corner Sofa",   category: "chair",
     modelPath: "assets/kenney/loungeSofaCorner.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 2 }, cost: 950, comfort: 6, style: 4, ratingBonus: 0.08, seatingCapacity: 2,
     tier: 4, footprint: [[1, 1], [0, 1]], surface: "drink" },
+  // Designer Sofa — same fix as Long Sofa: its Kenney raw mesh is
+  // nearly square, so uniform-min auto-fit shrank it to about one tile
+  // and the 2-tile footprint visibly "stuck to one side", which read
+  // as the sofa being anchored to the cross-section line. With
+  // stretchFootprint the mesh spans both claimed tiles and recenters
+  // on the 2-tile span like the long sofa already does.
   { id: "sofa-design",    name: "Designer Sofa", category: "chair",
     modelPath: "assets/kenney/loungeDesignSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 1800, comfort: 5, style: 6, ratingBonus: 0.09, seatingCapacity: 2,
-    tier: 5, surface: "drink" },
+    tier: 5, stretchFootprint: true, surface: "drink" },
 
   // Kitchen — cooking burners ("stove" category). Sinks and dishwashers
   // live in "wash" below so the chef-assignment + per-stove flame
