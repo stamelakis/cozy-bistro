@@ -282,6 +282,12 @@ export class StaffRouter {
   /** Wash-loop callbacks — wired by Engine after GuestSpawner + the
    * dishware system exist. When unset, the waiter never tries to
    * wash and dirty plates simply pile up on the tables. */
+  /** Hook for re-parenting a staff character to a different storey's
+   * mount group when they cross the staircase. Engine wires this to
+   * WorldScene.reparentCharacterToFloor so the model lives under the
+   * right floor's visibility group while the mover handles the body Y
+   * interpolation across the steps. */
+  reparentCharacter?: (character: AnimatedCharacter, toFloor: number) => void;
   washCallbacks?: {
     getDirtyPickups: () => DirtyPickupInfo[];
     claimDirtyPickup: (id: number, memberId: string) => boolean;
@@ -425,6 +431,12 @@ export class StaffRouter {
     );
     if (a.path.length === 0) {
       a.path = [{ x: a.target.x, z: a.target.y, floor: a.targetFloor }];
+    }
+    // Diagnostic: log every cross-floor plan so we can see the stair leg
+    // actually being emitted. Trimmed to one console line per plan.
+    if (a.currentFloor !== a.targetFloor) {
+      const hop = a.path.find((s) => s.fromStair);
+      console.log(`[Router] ${a.role} plan F${a.currentFloor}→F${a.targetFloor} from (${a.character.groundPos.x.toFixed(1)},${a.character.groundPos.y.toFixed(1)}) to (${a.target.x.toFixed(1)},${a.target.y.toFixed(1)}): ${a.path.length} waypoints, stair=${hop ? `(${hop.x},${hop.z},F${hop.floor})` : "MISSING"}`);
     }
   }
 
@@ -1116,6 +1128,13 @@ export class StaffRouter {
         // Sync _baseY so the animator's per-frame reset doesn't snap
         // the body back to its starting storey on the next tick.
         a.character._baseY = anchorY;
+        // Move the model under the new floor's storey group so the
+        // storey-focus visibility shows it on the right floor. Without
+        // this, a Floor 1 → Floor 0 descent leaves the waiter parented
+        // to Floor 1's group (hidden when the player focuses on Floor
+        // 0) — they deliver invisibly and the plate appears as if the
+        // waiter walked through the ceiling.
+        this.reparentCharacter?.(a.character, consumed.floor);
       }
     }
     const wp = a.path[0] ?? { x: a.target.x, z: a.target.y, floor: a.targetFloor };

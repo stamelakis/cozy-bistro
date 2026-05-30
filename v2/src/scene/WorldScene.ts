@@ -2577,6 +2577,21 @@ export class WorldScene {
     if (character.root.parent !== newMount) newMount.add(character.root);
   }
 
+  /** Re-parent a character to a different storey's mount without
+   * touching its Y. Used by StaffRouter / GuestSpawner when an actor
+   * crosses the staircase: the mover has already set the body's world Y
+   * to the new slab via the multi-floor path's stair interpolation, we
+   * just need the model to live under the new floor's group so storey
+   * focus visibility shows it on the right floor. */
+  reparentCharacterToFloor(character: AnimatedCharacter, toFloor: number): void {
+    const newMount = this.getStoreyMount(toFloor);
+    if (character.root.parent !== newMount) {
+      // THREE.Object3D.add preserves local position, which is what we
+      // want — caller has already set world Y via the move interp.
+      newMount.add(character.root);
+    }
+  }
+
   /** Place the static staff models (chef + waiter + errand) at the kitchen
    * line. Guests are spawned dynamically by GuestSpawner — they're not
    * placed here. */

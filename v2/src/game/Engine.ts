@@ -520,6 +520,14 @@ export class Engine {
           // requirement instead of always claiming a stove.
           () => this.registry.getCookStations(),
         );
+        // Wire the storey re-parent hook so staff models follow their
+        // currentFloor through the stair cross — without this, a Floor 1
+        // waiter descending to Floor 0 stays parented to Floor 1's
+        // (hidden when player focuses on Floor 0) and looks like they
+        // teleported the plate without actually walking down.
+        this.router.reparentCharacter = (char, toFloor) => {
+          this.scene.reparentCharacterToFloor(char, toFloor);
+        };
         console.log("[Engine] real StaffRouter created with chef + waiter members", chefId, waiterId);
       }
       this.spawner = new GuestSpawner(
