@@ -1100,17 +1100,37 @@ export class GuestSpawner {
       if (g.returnSeatPos) {
         g.returnSeatPos.copy(g.seatPos);
       }
-      if (g.state === "walkingIn") {
-        g.target.copy(g.seatPos);
-        // Re-plan whenever the seat moves mid-walk so the guest still
-        // routes around obstacles after a table relocation.
-        this.planPath(g);
+      if (g.state === "walkingIn" && g.passedDoor) {
+        // Only re-plan when the seat ACTUALLY moved. The previous
+        // version copied g.seatPos to g.target every tick and called
+        // planPath unconditionally — fine for single-floor walks (the
+        // generated path was the same), but with multi-floor pathing
+        // every tick generated a fresh 3-waypoint path that started
+        // with the stair-landing tile, which the consume loop then
+        // ate before the next replan rebuilt it again, looping the
+        // guest in place near the stair landing. Compare to detect a
+        // real move (table relocation) and only re-plan then. Door
+        // approach legs (passedDoor=false) don't need this — they
+        // target DOOR_POSITION, not the seat.
+        const moved =
+          Math.abs(g.target.x - g.seatPos.x) > 0.01 ||
+          Math.abs(g.target.y - g.seatPos.y) > 0.01;
+        if (moved) {
+          g.target.copy(g.seatPos);
+          this.planPath(g);
+        }
       }
       // If the guest is currently HEADED back to the seat after the
       // bathroom, retarget them too so they don't aim for empty floor.
+      // Same "only on actual move" guard for the same reason.
       if (g.state === "returningFromToilet") {
-        g.target.copy(g.seatPos);
-        this.planPath(g);
+        const moved =
+          Math.abs(g.target.x - g.seatPos.x) > 0.01 ||
+          Math.abs(g.target.y - g.seatPos.y) > 0.01;
+        if (moved) {
+          g.target.copy(g.seatPos);
+          this.planPath(g);
+        }
       }
     }
   }
