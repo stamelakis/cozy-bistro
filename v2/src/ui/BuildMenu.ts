@@ -1210,11 +1210,20 @@ export class BuildMenu {
     if (def.category === "chair" && def.size.width === 1 && def.size.depth === 1) {
       const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4, excludeUid);
       if (slot && slot.chairUid == null) {
-        return {
-          quality: "snap-perfect",
-          x: slot.x, z: slot.z,
-          rotY: FurnitureRegistry.chairRotForSlot(slot.facingY),
-        };
+        // chairUid only tracks CHAIRS on the slot's cell — a non-chair
+        // item (side-table, decoration, plant) sitting on the same cell
+        // still blocks placement but doesn't set chairUid, so without
+        // this isCellBlocked guard the ghost showed snap-perfect green
+        // for a seat the click could never actually land on.
+        const slotCellX = Math.round(slot.x);
+        const slotCellZ = Math.round(slot.z);
+        if (!this.registry.isCellBlocked(slotCellX, slotCellZ, excludeUid, "tile", slot.floor)) {
+          return {
+            quality: "snap-perfect",
+            x: slot.x, z: slot.z,
+            rotY: FurnitureRegistry.chairRotForSlot(slot.facingY),
+          };
+        }
       }
     }
 
