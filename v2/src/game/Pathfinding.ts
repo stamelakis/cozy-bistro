@@ -24,9 +24,42 @@ export interface PlacedItem {
   defId: string;
   x: number;
   z: number;
+  /** Storey the item sits on. Multi-floor pathfinding filters blockers
+   * by floor so a Floor 0 table doesn't block a Floor 1 walk. Optional
+   * to keep older PlacedItem-producing callers compatible — defaults
+   * to ground floor when missing. */
+  floor?: number;
 }
 
 export type PathStep = THREE.Vector2;
+
+/** Multi-floor path step. The visible-move code in actors uses `floor`
+ * to set the actor's slab Y (and to detect the brief stair walk between
+ * consecutive steps on different floors). */
+export interface MultiFloorPathStep {
+  x: number;
+  z: number;
+  floor: number;
+  /** True when this step's floor differs from the previous step's, i.e.
+   * the actor just stepped OFF the stairs onto the new floor. The
+   * movement code uses this to drive the smooth Y interpolation
+   * between the previous step (on the lower / higher floor) and this
+   * one (at the stair landing). */
+  fromStair?: boolean;
+}
+
+/** Tile at the BOTTOM of the staircase (south end, on the lower floor).
+ * Matches WorldScene.addStaircaseSegment's Z_BOTTOM = -1.45, X_CENTER
+ * = -3.9. The stair runs from this tile UP-AND-NORTH to STAIR_TOP_TILE
+ * one storey higher. */
+const STAIR_BOTTOM_TILE = { x: -4, z: -2 };
+
+/** Tile at the TOP of the staircase (north end, on the upper floor's
+ * slab — tucked against the back wall). The slab around it has a hole
+ * for the stair to emerge through; only this exact tile is solid up
+ * top, so the actor lands here and walks off onto the rest of the
+ * upper floor from this cell. */
+const STAIR_TOP_TILE = { x: -4, z: -4 };
 
 /** Grid bounds inside the restaurant — cells (x, z) with both axes in
  * [-4, 5]. The building's exterior walls sit at half-integer
@@ -54,7 +87,7 @@ export class Pathfinding {
    * safe fallback if no path can be found at all — letting the actor
    * still attempt the move keeps the game from soft-locking when a
    * tight enclosure occasionally traps someone. */
-  findPath(fromX: number, fromZ: number, toX: number, toZ: number): PathStep[] {
+  findPath(fromX: number, fromZ: number, toX: number, toZ: number, floor: number = 0): PathStep[] {
     const startX = Math.round(fromX);
     const startZ = Math.round(fromZ);
     const goalX = Math.round(toX);
@@ -63,7 +96,7 @@ export class Pathfinding {
 
     if (startX === goalX && startZ === goalZ) return [finalTarget];
 
-    const { cells: blocked, edges: blockedEdges } = this.computeBlocked();
+    const { cells: blocked, edges: blockedEdges } = this.computeBlocked(floor);
     // Direct-line shortcut: if the two cells are colinear and the
     // intermediate cells are clear, skip A* entirely. Common case for
     // short trips with no obstacles between. We disable it whenever
@@ -130,6 +163,61 @@ export class Pathfinding {
     return [finalTarget];
   }
 
+  /** Plan a path from one floor to another (possibly equal) by walking
+   * the lower-floor pathfinder to the staircase, taking the stair, and
+   * walking the destination-floor pathfinder to the goal. Same-floor
+   * paths fall through to a single findPath call wrapped in the floor
+   * label. Multi-storey jumps chain one stair per floor difference.
+   *
+   * The returned waypoints carry their floor, and the first step on a
+   * new floor is flagged `fromStair: true` so movement code can drive
+   * the Y interpolation across the stair geometry between waypoints.
+   *
+   * The stair is treated as a portal — the actor visually walks the
+   * steps between the entry and exit waypoints (handled by the mover);
+   * the pathfinder doesn't model the three intermediate stair tiles. */
+  findMultiFloorPath(
+    from: { x: number; z: number; floor: number },
+    to: { x: number; z: number; floor: number },
+  ): MultiFloorPathStep[] {
+    if (from.floor === to.floor) {
+      const steps = this.findPath(from.x, from.z, to.x, to.z, from.floor);
+      return steps.map((s) => ({ x: s.x, z: s.y, floor: from.floor }));
+    }
+
+    const result: MultiFloorPathStep[] = [];
+    const ascending = to.floor > from.floor;
+    let curX = from.x, curZ = from.z, curFloor = from.floor;
+
+    // Walk one storey at a time so a Floor 0 → Floor 2 trip lands the
+    // actor cleanly at the back-left corner on each intermediate slab
+    // before climbing the next flight.
+    while (curFloor !== to.floor) {
+      const nextFloor = ascending ? curFloor + 1 : curFloor - 1;
+      // Stair "entry" on the current floor depends on direction:
+      // ascending → south bottom step; descending → north top step.
+      const entry = ascending ? STAIR_BOTTOM_TILE : STAIR_TOP_TILE;
+      const exit  = ascending ? STAIR_TOP_TILE    : STAIR_BOTTOM_TILE;
+      // Walk to the stair entry on this floor.
+      const walkToStair = this.findPath(curX, curZ, entry.x, entry.z, curFloor);
+      for (const s of walkToStair) {
+        result.push({ x: s.x, z: s.y, floor: curFloor });
+      }
+      // Stair traversal — land on the next floor at the opposite end.
+      result.push({ x: exit.x, z: exit.z, floor: nextFloor, fromStair: true });
+      curX = exit.x;
+      curZ = exit.z;
+      curFloor = nextFloor;
+    }
+
+    // Final leg on the destination floor.
+    const finalWalk = this.findPath(curX, curZ, to.x, to.z, to.floor);
+    for (const s of finalWalk) {
+      result.push({ x: s.x, z: s.y, floor: to.floor });
+    }
+    return result;
+  }
+
   /** True if every cell on the straight line between (x1,z1) and
    * (x2,z2) — exclusive of both endpoints — is unblocked. Bresenham-
    * style traversal so the shortcut works for any pair of cells, not
@@ -158,10 +246,15 @@ export class Pathfinding {
    * (corner sofas) honour their explicit footprint mask so the open
    * elbow stays walkable. Internal walls / windows live on edges and
    * never claim a tile — only the doorway piece allows crossing. */
-  private computeBlocked(): { cells: Set<string>; edges: Set<string> } {
+  private computeBlocked(floor: number = 0): { cells: Set<string>; edges: Set<string> } {
     const cells = new Set<string>();
     const edges = new Set<string>();
     for (const it of this.getItems()) {
+      // Only items on the SAME floor as the path block it. Items above
+      // or below don't affect the floor being walked — a chair on
+      // Floor 1 should not stop a customer crossing Floor 0 directly
+      // beneath it.
+      if ((it.floor ?? 0) !== floor) continue;
       const def = getFurnitureDef(it.defId);
       if (!def) continue;
       const rotY = (it as { rotY?: number }).rotY ?? 0;
