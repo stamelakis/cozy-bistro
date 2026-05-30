@@ -40,6 +40,7 @@ import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { LoginModal } from "../ui/LoginModal";
+import { BuildingPickModal } from "../ui/BuildingPickModal";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -917,27 +918,52 @@ export class Engine {
   /** Wipe the active save slot and reload. Asks for confirmation since
    * this is destructive. */
   /** Spawn the LoginModal AND start polling to see if the connecting
-   * identity is already authenticated (returning player). If so,
-   * skip the modal entirely. Otherwise the modal handles UI and
-   * resolves the gate when the player completes sign-up / login. */
+   * identity is already authenticated (returning player). On
+   * authenticated, check building ownership — players who haven't
+   * picked a plot yet see the BuildingPickModal next; players with
+   * a plot enter the game immediately. */
   private installAuthGate(container: HTMLElement): void {
-    const release = (): void => {
+    const enterGame = (): void => {
       this.game.setAuthGated(false);
     };
-    const modal = new LoginModal(container, this.cloud, release);
+    const afterAuth = (): void => {
+      // Auth complete. Check if this account has a plot; if not,
+      // show BuildingPickModal. The game stays auth-gated until a
+      // plot is owned so the world doesn't render an unrooted
+      // restaurant in some random spot.
+      if (this.cloud.getMyBuilding()) {
+        enterGame();
+        return;
+      }
+      // Poll for ~3s — the building cache may not have landed yet
+      // on the same tick as the auth_record. If still unowned
+      // after the grace period, show the picker.
+      let waited = 0;
+      const wait = (): void => {
+        waited += 200;
+        if (this.cloud.getMyBuilding()) {
+          enterGame();
+          return;
+        }
+        if (waited < 3000) { window.setTimeout(wait, 200); return; }
+        // Show the building picker.
+        new BuildingPickModal(container, this.cloud, () => enterGame());
+      };
+      window.setTimeout(wait, 200);
+    };
+
+    const modal = new LoginModal(container, this.cloud, afterAuth);
     // Poll for ~3s — if the cache lands with an existing auth_record
-    // claim on this identity, auto-release without showing the form.
-    // (The modal is already DOM-mounted but it's fine to dismiss
-    // it immediately if we never needed it.)
+    // claim on this identity, auto-dismiss the login modal and run
+    // the same post-auth flow (which then checks building ownership).
     let elapsed = 0;
     const stepMs = 250;
     const max = 3000;
     const tick = (): void => {
       elapsed += stepMs;
       if (this.cloud.isAuthenticated()) {
-        // Dismiss the modal's DOM and unblock the game.
         (modal as unknown as { root: HTMLElement }).root.remove();
-        release();
+        afterAuth();
         return;
       }
       if (elapsed < max) window.setTimeout(tick, stepMs);

@@ -53,6 +53,47 @@ pub struct AuthRecord {
     pub created_at: Timestamp,
 }
 
+/// A physical plot on the shared city map. Seeded at module init
+/// with N unowned buildings of mixed sizes; players claim one on
+/// first login via the `claim_building` reducer. Once claimed,
+/// `owner_identity` is the Identity of the player who chose it
+/// (which links back to their auth_record).
+///
+/// Plot coordinates are in TILES on the shared city grid (much
+/// larger than the legacy 10×10 per-restaurant grid — the city
+/// will be ~120×120). plot_w / plot_h are the building footprint
+/// in tiles; the interior placement grid is derived from these
+/// bounds, plus a fenced garden plot and a rooftop expansion
+/// added in later phases.
+///
+/// kind is a string tag picking which programmatic shell to
+/// render: "small" (1 storey, ~8×8), "medium" (1-2 storey, ~10×10),
+/// "large" (multi-storey, ~12×12). Future variants ("corner",
+/// "Greek-tower", etc.) can join the enum without a schema migration.
+#[table(name = building, public)]
+pub struct Building {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Architectural shell variant; drives the procedural mesh.
+    pub kind: String,
+    /// Plot anchor X on the city grid (tile units).
+    pub plot_x: i32,
+    /// Plot anchor Z on the city grid.
+    pub plot_z: i32,
+    /// Building footprint width in tiles.
+    pub plot_w: u32,
+    /// Building footprint depth in tiles.
+    pub plot_h: u32,
+    /// Owner Identity, or the zero Identity when unowned. Indexed
+    /// so the BuildingPickModal can query "who owns what" / "what's
+    /// available" in one pass.
+    #[index(btree)]
+    pub owner_identity: Identity,
+    /// When this building was claimed (None until owned).
+    pub claimed_at: Option<Timestamp>,
+}
+
 /// A "forgot password" ticket — created when a player clicks the
 /// forgot-password link in the login modal. Visible to the admin
 /// (Dunnin) via the AdminPanel; admin can call `admin_reset_password`

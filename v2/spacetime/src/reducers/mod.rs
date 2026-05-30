@@ -5,6 +5,7 @@
 
 mod lifecycle;
 mod auth;
+mod buildings;
 mod restaurants;
 mod achievements;
 mod leaderboard;
@@ -12,6 +13,7 @@ mod friends;
 
 pub use lifecycle::*;
 pub use auth::*;
+pub use buildings::*;
 pub use restaurants::*;
 pub use achievements::*;
 pub use leaderboard::*;

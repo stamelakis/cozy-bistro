@@ -34,7 +34,9 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import ClaimBuildingReducer from "./claim_building_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
@@ -57,6 +59,7 @@ import UnlockAchievementReducer from "./unlock_achievement_reducer";
 // Import all table schema definitions
 import AchievementUnlockRow from "./achievement_unlock_table";
 import AuthRecordRow from "./auth_record_table";
+import BuildingRow from "./building_table";
 import CoOwnerRow from "./co_owner_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
@@ -98,6 +101,20 @@ const tablesSchema = __schema({
       { name: 'auth_record_username_key', constraint: 'unique', columns: ['username'] },
     ],
   }, AuthRecordRow),
+  building: __table({
+    name: 'building',
+    indexes: [
+      { accessor: 'id', name: 'building_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'owner_identity', name: 'building_owner_identity_idx_btree', algorithm: 'btree', columns: [
+        'ownerIdentity',
+      ] },
+    ],
+    constraints: [
+      { name: 'building_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BuildingRow),
   co_owner: __table({
     name: 'co_owner',
     indexes: [
@@ -220,7 +237,9 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),

@@ -102,6 +102,52 @@ export class SpacetimeClient {
     return false;
   }
 
+  /** Public view of a single building plot on the city map. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  listBuildings(): { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; ownerIdentity: Identity; isMine: boolean; isUnowned: boolean }[] {
+    if (!this.conn) return [];
+    const me = this.identity;
+    const out: { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; ownerIdentity: Identity; isMine: boolean; isUnowned: boolean }[] = [];
+    try {
+      for (const b of this.conn.db.building.iter()) {
+        const mine = me ? identityEquals(b.ownerIdentity, me) : false;
+        // The zero Identity is the sentinel "unowned" marker (set
+        // by the seed reducer with Identity::__dummy()). Match it
+        // by checking the hex is all-zero — works regardless of
+        // whether the SDK exposes an Identity equality with the
+        // zero value or not.
+        const unowned = b.ownerIdentity.toHexString().split("").every((c) => c === "0");
+        out.push({
+          id: b.id,
+          kind: b.kind,
+          plotX: b.plotX,
+          plotZ: b.plotZ,
+          plotW: b.plotW,
+          plotH: b.plotH,
+          ownerIdentity: b.ownerIdentity,
+          isMine: mine,
+          isUnowned: unowned,
+        });
+      }
+    } catch { /* table not yet wired */ }
+    return out;
+  }
+
+  /** The building this player owns, or null. Returns null both for
+   * "unauthenticated" and "authenticated but hasn't picked yet". */
+  getMyBuilding(): { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number } | null {
+    for (const b of this.listBuildings()) {
+      if (b.isMine) return b;
+    }
+    return null;
+  }
+
+  /** Claim an unowned building. Resolves when the row updates;
+   * rejects with the reducer's error message. */
+  claimBuilding(buildingId: bigint): Promise<void> {
+    return this.callReducer("claimBuilding", () => this.conn!.reducers.claimBuilding({ buildingId }));
+  }
+
   /** Current logged-in account info, or null when unauthenticated. */
   getCurrentAccount(): { username: string; displayName: string; isAdmin: boolean } | null {
     if (!this.conn || !this.identity) return null;

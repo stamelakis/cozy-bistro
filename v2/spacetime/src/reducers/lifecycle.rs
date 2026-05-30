@@ -5,11 +5,15 @@ use spacetimedb::{reducer, ReducerContext, Table};
 use crate::tables::{player, Player};
 
 /// Runs once when the module is first published. Anything that needs a
-/// seed (default values, system messages, etc) goes here. For now —
-/// nothing to seed.
+/// seed (default values, system messages, building inventory, etc)
+/// goes here.
 #[reducer(init)]
-pub fn init(_ctx: &ReducerContext) {
+pub fn init(ctx: &ReducerContext) {
     log::info!("Cozy Bistro module initialized");
+    // Seed the city buildings if the table is empty (first publish
+    // or after a manual reset). Subsequent re-publishes preserve
+    // existing rows.
+    crate::reducers::buildings::seed_buildings_if_empty(ctx);
 }
 
 /// Called automatically whenever a client connects (after the WebSocket

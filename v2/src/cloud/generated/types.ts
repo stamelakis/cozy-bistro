@@ -28,6 +28,18 @@ export const AuthRecord = __t.object("AuthRecord", {
 });
 export type AuthRecord = __Infer<typeof AuthRecord>;
 
+export const Building = __t.object("Building", {
+  id: __t.u64(),
+  kind: __t.string(),
+  plotX: __t.i32(),
+  plotZ: __t.i32(),
+  plotW: __t.u32(),
+  plotH: __t.u32(),
+  ownerIdentity: __t.identity(),
+  claimedAt: __t.option(__t.timestamp()),
+});
+export type Building = __Infer<typeof Building>;
+
 export const CoOwner = __t.object("CoOwner", {
   id: __t.u64(),
   restaurantId: __t.u64(),
