@@ -1282,9 +1282,15 @@ export class BuildMenu {
     const sign = proj >= 0 ? 1 : -1;
     const mountNX = wallNormalX * sign;
     const mountNZ = wallNormalZ * sign;
-    // Push the item a hair off the wall plane so its own depth doesn't
-    // z-fight with the wall geometry.
-    const off = 0.07;
+    // Push the item PAST the wall surface, not just away from the wall
+    // axis. Walls are BoxGeometry with thickness 0.2, so their visible
+    // faces sit 0.1 from the wall's centre line — the previous 0.07
+    // mounted items 0.03 INSIDE the visible surface, which buried
+    // thicker pieces like the wine wall (back panel + bottle tips
+    // sank into the wall). 0.12 = 0.1 wall half-thickness + 0.02
+    // clearance, so flat paintings still hug the surface and thicker
+    // pieces sit cleanly in front of it.
+    const off = 0.12;
     return {
       x: best.x + mountNX * off,
       z: best.z + mountNZ * off,
