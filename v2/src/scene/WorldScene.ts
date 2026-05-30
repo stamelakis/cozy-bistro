@@ -183,6 +183,18 @@ export class WorldScene {
    * filled in by populateDemoRestaurant. */
   readonly demoPlacements: { defId: string; x: number; z: number; rotY: number; model: THREE.Object3D }[] = [];
 
+  /** Holds the placeholder shells for OTHER players' buildings on
+   * the shared city map. Player's own restaurant continues to
+   * render at world origin via the legacy code path; this group
+   * adds visual markers for every other claimed/unclaimed plot
+   * so the player sees the city around them. P2.4 stops here;
+   * full per-other-player restaurant interiors come later. */
+  private cityBuildings = new THREE.Group();
+  /** Camera anchor for the player's own plot — used by IsoCamera
+   * to point at the correct spot when the legacy hardcoded (0,0)
+   * doesn't match the claimed building's coordinates. */
+  ownedPlotAnchor: THREE.Vector2 = new THREE.Vector2(0, 0);
+
   constructor() {
     // Create the staff/demo "ready" promises SYNCHRONOUSLY here, before
     // any other code can grab a reference. The async populate functions
@@ -198,6 +210,10 @@ export class WorldScene {
     this.addLighting();
     this.weatherEffects = new WeatherEffects(this.threeScene);
     this.addBuilding();
+    // City buildings (other players' plots) live in their own group so
+    // they can be re-populated when SpacetimeClient pushes updates
+    // without disturbing the player's own restaurant.
+    this.threeScene.add(this.cityBuildings);
     // Per-station effects (flames, toaster glow, coffee steam, etc.)
     // are created lazily by syncStationEffects() once each station
     // is placed — no global state to set up here.
@@ -2343,6 +2359,87 @@ export class WorldScene {
    * progressively-unlocked dining tables. */
   private readonly tierGroups = new Map<number, THREE.Object3D[]>();
   private currentTierVisible = 5;
+
+  /** Render placeholder shells for the OTHER players' plots on the
+   * shared city map. The player's own restaurant continues to use
+   * the legacy origin-centered render path; this just adds visual
+   * "other people's plots exist" feedback so the world reads as
+   * a city rather than a single isolated building.
+   *
+   * Shells are simple Greek-Island-styled cubes (whitewashed walls,
+   * terracotta roof, stone foundation) sized to match plot
+   * dimensions. Each is positioned at the building's (plot_x,
+   * plot_z) on the world grid. Player's own plot is skipped here
+   * — the actual restaurant goes there via the existing pipeline.
+   *
+   * Called by Engine once the SpacetimeDB cache lands. Safe to
+   * call again on cache updates (e.g. another player claims a
+   * plot) — fully rebuilds the group. */
+  populateCityBuildings(
+    buildings: readonly { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; isMine: boolean }[],
+    skipMine: boolean = true,
+  ): void {
+    // Wipe + rebuild — buildings change rarely so the cost is fine.
+    while (this.cityBuildings.children.length > 0) {
+      const c = this.cityBuildings.children[0];
+      this.cityBuildings.remove(c);
+    }
+    for (const b of buildings) {
+      if (skipMine && b.isMine) continue;
+      this.cityBuildings.add(this.makeBuildingShell(b));
+    }
+  }
+
+  /** Build one Greek-Island-style placeholder shell. */
+  private makeBuildingShell(b: { kind: string; plotX: number; plotZ: number; plotW: number; plotH: number }): THREE.Group {
+    const g = new THREE.Group();
+    // Heights derived from kind — small = 1 storey, medium = 2,
+    // large = 3. Each "storey" is 3 m (matches the player's own
+    // building's STOREY_HEIGHT) so other plots read at the same
+    // scale as the player's house when they visit later.
+    const storeys = b.kind === "small" ? 1 : b.kind === "medium" ? 2 : 3;
+    const wallH = storeys * 3.0;
+    const w = b.plotW;
+    const h = b.plotH;
+    // Stone foundation — slightly larger than the building, just a
+    // thin slab to read as "the lot".
+    const foundation = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 1, 0.2, h + 1),
+      new THREE.MeshStandardMaterial({ color: 0xa89882, roughness: 0.95, metalness: 0 }),
+    );
+    foundation.position.y = 0.1;
+    foundation.receiveShadow = true;
+    g.add(foundation);
+    // Whitewashed walls — single block. Subtle warm undertone so it
+    // catches the sunset lighting rather than reading as flat grey.
+    const walls = new THREE.Mesh(
+      new THREE.BoxGeometry(w, wallH, h),
+      new THREE.MeshStandardMaterial({ color: 0xf4ece0, roughness: 0.85, metalness: 0 }),
+    );
+    walls.position.y = 0.2 + wallH / 2;
+    walls.castShadow = true;
+    walls.receiveShadow = true;
+    g.add(walls);
+    // Blue door — Greek Island staple. Centered on the +Z face,
+    // half-height. Just visual flair; not interactive in P2.4.
+    const door = new THREE.Mesh(
+      new THREE.BoxGeometry(0.8, 2.0, 0.05),
+      new THREE.MeshStandardMaterial({ color: 0x2b6cb0, roughness: 0.6, metalness: 0.1 }),
+    );
+    door.position.set(0, 1.2, h / 2 + 0.03);
+    g.add(door);
+    // Terracotta roof — a thin slab capping the walls. Slight
+    // overhang for that authentic eave look.
+    const roof = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.4, 0.25, h + 0.4),
+      new THREE.MeshStandardMaterial({ color: 0xc97a4a, roughness: 0.85, metalness: 0 }),
+    );
+    roof.position.y = 0.2 + wallH + 0.125;
+    roof.castShadow = true;
+    g.add(roof);
+    g.position.set(b.plotX, 0, b.plotZ);
+    return g;
+  }
 
   private async populateDemoRestaurant(): Promise<void> {
     // NOTE: demoReady/staffReady promises are created in the constructor

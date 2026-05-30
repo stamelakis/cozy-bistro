@@ -925,6 +925,12 @@ export class Engine {
   private installAuthGate(container: HTMLElement): void {
     const enterGame = (): void => {
       this.game.setAuthGated(false);
+      // Render the rest of the city — every OTHER player's plot
+      // gets a small Greek-Island shell so the world reads as
+      // multiplayer even before we ship per-other-restaurant
+      // interiors. Re-poll the cache for a couple of seconds in
+      // case the building list lands after the auth_record one.
+      this.refreshCityBuildings();
     };
     const afterAuth = (): void => {
       // Auth complete. Check if this account has a plot; if not,
@@ -967,6 +973,37 @@ export class Engine {
         return;
       }
       if (elapsed < max) window.setTimeout(tick, stepMs);
+    };
+    window.setTimeout(tick, stepMs);
+  }
+
+  /** Read the current building list from SpacetimeDB and have
+   * WorldScene render placeholder shells for every OTHER player's
+   * plot. Called once on auth complete; can be called again later
+   * when buildings update (other players claim a plot, etc.).
+   * Cheap — the WorldScene rebuild wipes + re-adds the small group.
+   *
+   * Re-polls for ~5 s after the first call so a slow cache fill
+   * still gets picked up. Each poll only does work if the building
+   * count changed since the previous pass. */
+  private cityBuildingCount = -1;
+  private refreshCityBuildings(): void {
+    const apply = (): void => {
+      const list = this.cloud.listBuildings();
+      if (list.length === this.cityBuildingCount) return;
+      this.cityBuildingCount = list.length;
+      this.scene.populateCityBuildings(list);
+      const mine = this.cloud.getMyBuilding();
+      if (mine) this.scene.ownedPlotAnchor.set(mine.plotX, mine.plotZ);
+    };
+    apply();
+    // Poll for 5s to catch a late cache fill.
+    let waited = 0;
+    const stepMs = 500;
+    const tick = (): void => {
+      waited += stepMs;
+      apply();
+      if (waited < 5000) window.setTimeout(tick, stepMs);
     };
     window.setTimeout(tick, stepMs);
   }
