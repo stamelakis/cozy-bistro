@@ -220,7 +220,12 @@ export class WorldScene {
     this.staffReady = new Promise((r) => { this.resolveStaffReady = r; });
     this.demoReady = new Promise((r) => { this.resolveDemoReady = r; });
 
-    this.threeScene.fog = new THREE.Fog(0xd8c4a3, 30, 80);
+    // Fog pushed out from 30..80 → 100..250 so the expanded city
+    // doesn't disappear into the haze 80m from the camera. At the
+    // current iso zoom the player can see ~150m around them; the
+    // city ends at ±140 so the fog now starts beyond the buildings
+    // and only kicks in for the void past the terrain edge.
+    this.threeScene.fog = new THREE.Fog(0xd8c4a3, 100, 250);
     this.addLighting();
     this.weatherEffects = new WeatherEffects(this.threeScene);
     this.addBuilding();
@@ -1846,35 +1851,102 @@ export class WorldScene {
     this.addCityScenery();
   }
 
-  /** Greek-Island stone path network. Now a full grid covering
-   * the expanded terrain: paths every 24 tiles in both axes from
-   * −120 to +120, so every scenery house has a road-frontage
-   * within walking distance. Two extra "main avenues" along the
-   * center axes (x=0, z=0) are slightly wider so the town has a
-   * spine visible from above. */
+  /** Four asphalt avenues laid out so they don't cut through the
+   * player's restaurant block or any of the 12 claim plots:
+   *   - east-west at z=-36 (between restaurant and north plot row)
+   *   - east-west at z=+36 (between south plot row and legacy road)
+   *   - north-south at x=-36 (between west plot columns)
+   *   - north-south at x=+36 (between east plot columns)
+   * Each avenue is built the same way as the legacy addPavementAndRoad
+   * (pavement strips + curbs + asphalt road + lane dashes) so the
+   * whole city's road system reads as one consistent style — not the
+   * earlier mismatched stone-strip grid.
+   * The legacy main east-west road at z=13.5 was already extended to
+   * 260 m elsewhere in this file; together the five avenues form a
+   * cross-shaped main network around the player's block. */
   private addCityStreets(): void {
-    const stoneMat = new THREE.MeshStandardMaterial({ color: 0xc2b39a, roughness: 0.95, metalness: 0 });
+    // North-side service road serving the z=-48 plot row.
+    this.makeCityAvenue("ew", -36);
+    // South-side service road serving the z=48 plot row (note: the
+    // legacy main road at z=13.5 is between this and the restaurant).
+    this.makeCityAvenue("ew",  36);
+    // West-side service road serving the x=-48 column.
+    this.makeCityAvenue("ns", -36);
+    // East-side service road serving the x=+48 column.
+    this.makeCityAvenue("ns",  36);
+  }
+
+  /** Build one full asphalt avenue at the given axis offset. The
+   * avenue runs the full 260 m city span and includes pavements +
+   * curbs + lane dashes, matching the legacy main road. `orientation`
+   * = "ew" means the strip runs along X (constant Z); "ns" means
+   * along Z (constant X). */
+  private makeCityAvenue(orientation: "ew" | "ns", offset: number): void {
     const STRIP_LEN = 260;
-    const SIDE_W = 3;
-    const MAIN_W = 5;
-    const makeStrip = (orientation: "ew" | "ns", offset: number, width: number): void => {
-      const w = orientation === "ew" ? STRIP_LEN : width;
-      const h = orientation === "ew" ? width : STRIP_LEN;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), stoneMat);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set(orientation === "ns" ? offset : 0, 0.005, orientation === "ew" ? offset : 0);
-      m.receiveShadow = true;
-      this.threeScene.add(m);
+    const pavementMat = new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 });
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 });
+    const curbMat = new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 });
+    const laneMat = new THREE.MeshStandardMaterial({
+      color: 0xe6e0c4, roughness: 0.85,
+      emissive: 0xe6e0c4, emissiveIntensity: 0.05,
+    });
+    // Z layout when orientation === "ew" (X axis when "ns"):
+    //   inner pavements at ±4.5 from the centre line
+    //   curbs at ±3
+    //   asphalt road spans ±3 (6 m wide, same as legacy)
+    // For "ns" we just swap which axis is which.
+    const place = (mesh: THREE.Mesh, along: number, perp: number): void => {
+      mesh.rotation.x = -Math.PI / 2;
+      if (orientation === "ew") mesh.position.set(0, 0, offset + perp);
+      else                       mesh.position.set(offset + perp, 0, 0);
+      // Note: along is unused for full-length strips; reserved for
+      // future shorter spans.
+      void along;
     };
-    // Main spine — wider beige strip through the centre.
-    makeStrip("ew", 0, MAIN_W);
-    makeStrip("ns", 0, MAIN_W);
-    // Secondary grid — covers ±120 every 24 tiles, gaps at the
-    // main spines we already drew.
-    for (let v = -120; v <= 120; v += 24) {
-      if (v === 0) continue;
-      makeStrip("ew", v, SIDE_W);
-      makeStrip("ns", v, SIDE_W);
+
+    const makePavement = (perp: number): void => {
+      const geo = orientation === "ew"
+        ? new THREE.PlaneGeometry(STRIP_LEN, 5)
+        : new THREE.PlaneGeometry(5, STRIP_LEN);
+      const p = new THREE.Mesh(geo, pavementMat);
+      place(p, 0, perp);
+      p.receiveShadow = true;
+      this.threeScene.add(p);
+    };
+    const makeCurb = (perp: number): void => {
+      const geo = orientation === "ew"
+        ? new THREE.BoxGeometry(STRIP_LEN, 0.12, 0.18)
+        : new THREE.BoxGeometry(0.18, 0.12, STRIP_LEN);
+      const c = new THREE.Mesh(geo, curbMat);
+      if (orientation === "ew") c.position.set(0, 0.06, offset + perp);
+      else                       c.position.set(offset + perp, 0.06, 0);
+      c.castShadow = true;
+      c.receiveShadow = true;
+      this.threeScene.add(c);
+    };
+
+    makePavement(-5.5);
+    makeCurb(-3);
+    const roadGeo = orientation === "ew"
+      ? new THREE.PlaneGeometry(STRIP_LEN, 6)
+      : new THREE.PlaneGeometry(6, STRIP_LEN);
+    const road = new THREE.Mesh(roadGeo, roadMat);
+    place(road, 0, 0);
+    road.receiveShadow = true;
+    this.threeScene.add(road);
+    makeCurb(3);
+    makePavement(5.5);
+
+    // Lane dashes down the middle.
+    for (let t = -STRIP_LEN / 2 + 2; t <= STRIP_LEN / 2 - 2; t += 4) {
+      const dashGeo = orientation === "ew"
+        ? new THREE.PlaneGeometry(1.2, 0.18)
+        : new THREE.PlaneGeometry(0.18, 1.2);
+      const dash = new THREE.Mesh(dashGeo, laneMat);
+      dash.rotation.x = -Math.PI / 2;
+      if (orientation === "ew") dash.position.set(t, 0.005, offset);
+      else                       dash.position.set(offset, 0.005, t);
+      this.threeScene.add(dash);
     }
   }
 
@@ -1903,13 +1975,15 @@ export class WorldScene {
       { x: -24, z:  48, w: 8,  h: 8  }, { x:   0, z:  48, w: 10, h: 10 },
       { x:  24, z:  48, w: 8,  h: 8  },
     ];
-    // Legacy single-restaurant block — keep the camera-anchor
-    // area clear so the player's own restaurant + the existing
-    // fence / asphalt don't fight with scenery.
-    claimPlots.push({ x: 0, z: 0, w: 16, h: 30 });
+    // Legacy single-restaurant block — bigger keep-out so scenery
+    // doesn't crowd the player's fence + pavement + main road.
+    // Footprint covers x ∈ [-12, 12] and z ∈ [-12, 22] (the
+    // restaurant + its garden + the legacy pavement strip just
+    // south of it, ending past the legacy road).
+    claimPlots.push({ x: 0, z: 5, w: 24, h: 34 });
 
     const overlapsClaim = (x: number, z: number, size: number): boolean => {
-      const halfS = size / 2 + 2; // small breathing room
+      const halfS = size / 2 + 2;
       for (const c of claimPlots) {
         if (Math.abs(x - c.x) < (c.w / 2 + halfS) && Math.abs(z - c.z) < (c.h / 2 + halfS)) {
           return true;
@@ -1917,16 +1991,23 @@ export class WorldScene {
       }
       return false;
     };
-    // Streets sit on every multiple of 24 in both axes. Scenery
-    // buildings should occupy the QUADRANTS between streets so
-    // they're not bisected by asphalt-style pathways.
-    const onStreet = (x: number, z: number, size: number): boolean => {
-      const halfS = size / 2 + 1;
-      // x or z falling within 3m (street width) of a 24-multiple
-      // grid line means we're on the road.
-      const distX = Math.abs(x - Math.round(x / 24) * 24);
-      const distZ = Math.abs(z - Math.round(z / 24) * 24);
-      return distX < halfS + 2 || distZ < halfS + 2;
+    // Avoid the actual asphalt avenues. Each avenue is 11 m total
+    // (centre 6 m road + 2.5 m pavements either side). A scenery
+    // house within (halfS + 6) of an avenue's centre would land on
+    // the pavement / road and look broken.
+    //   - Legacy main road: z = 13.5
+    //   - North service:    z = -36
+    //   - South service:    z = +36
+    //   - West  service:    x = -36
+    //   - East  service:    x = +36
+    const onAvenue = (x: number, z: number, size: number): boolean => {
+      const buf = size / 2 + 7;
+      if (Math.abs(z - 13.5) < buf) return true;
+      if (Math.abs(z - (-36)) < buf) return true;
+      if (Math.abs(z - 36) < buf) return true;
+      if (Math.abs(x - (-36)) < buf) return true;
+      if (Math.abs(x - 36) < buf) return true;
+      return false;
     };
 
     // Seeded RNG so the city layout is reproducible.
@@ -1947,7 +2028,7 @@ export class WorldScene {
         if (rng() < 0.65) continue;
         const size = 3 + Math.floor(rng() * 4); // 3..6 tiles
         if (overlapsClaim(gx, gz, size)) continue;
-        if (onStreet(gx, gz, size)) continue;
+        if (onAvenue(gx, gz, size)) continue;
         sceneryGroup.add(this.makeSceneryHouse(
           gx, gz, size,
           1 + Math.floor(rng() * 2), // 1-2 storeys
@@ -2275,7 +2356,10 @@ export class WorldScene {
     //   z = 10.5..16.5   road
     //   z = 16.5         far curb
     //   z = 16.5..21.5   far pavement (across the road)
-    const STRIP_WIDTH = 80;
+    // Bumped 80 → 260 so the legacy main road actually spans the
+    // expanded city instead of being abruptly chopped off east + west
+    // of the player's plot.
+    const STRIP_WIDTH = 260;
     const pavementMat = new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 });
     const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 });
     const curbMat = new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 });
