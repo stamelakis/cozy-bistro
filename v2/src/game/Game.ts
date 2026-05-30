@@ -2,7 +2,7 @@ import { EconomySystem } from "../systems/EconomySystem";
 import { ReputationSystem } from "../systems/ReputationSystem";
 import { CookingSystem } from "../systems/CookingSystem";
 import { CustomerSystem } from "../systems/CustomerSystem";
-import { DayCycleSystem, rentIntervalSeconds } from "../systems/DayCycleSystem";
+import { DayCycleSystem } from "../systems/DayCycleSystem";
 import { DishwareSystem } from "../systems/DishwareSystem";
 import { StaffSystem, STAFF_UPGRADE_MAX, type StaffRole } from "../systems/StaffSystem";
 import { WeatherSystem } from "./WeatherSystem";
@@ -50,6 +50,13 @@ export interface DayEndSummary {
  *  T1=$40, T2=$80, T3=$160, T4=$320, T5=$640.
  * Index 0 is unused (tiers are 1-indexed). */
 const RENT_BY_TIER = [0, 40, 80, 160, 320, 640];
+/** Number of in-game days where rent is waived — gives a brand-new
+ * restaurant breathing room to upgrade a couple of recipes, hire one
+ * or two extra staff, and reach the break-even line before fixed
+ * costs start eating starter cash. Day N's rent fires at end-of-day,
+ * so rent first hits on the rollover from day RENT_GRACE_DAYS to
+ * day RENT_GRACE_DAYS+1. */
+const RENT_GRACE_DAYS = 30;
 /** Default money charged per staff member per real minute. */
 const DEFAULT_PAYROLL_PER_STAFF_PER_MINUTE = 6;
 /** Default cost per unit of ingredient when auto-shopping. */
@@ -86,7 +93,14 @@ const DEFAULT_STOCK_TARGET = 5;
  * training upgrade then claws some of it back. Patience is unaffected
  * — the customer cap is the same, you just need a more trained chef
  * (or more chefs) to keep up. */
-const COOK_TIME_GLOBAL_MULT = 1.5;
+// Dropped from 1.5 → 1.0 so each chef can handle ~50% more dishes per
+// minute. With the lower SPAWN_INTERVAL_SECONDS and a 5-storey kitchen
+// throughput target, the old 1.5 made every chef a bottleneck at
+// ~10 concurrent customers (matching the user's report of 4 chefs
+// being only "modestly busy" while 6 waiters were full-out). At 1.0
+// the same 4 chefs comfortably feed ~25 concurrent; staffing
+// recommendations in the scenario notes scale from there.
+const COOK_TIME_GLOBAL_MULT = 1.0;
 
 /** Duration (in REAL minutes) for the next recipe upgrade. Base is
  * 1 minute at tier 1 / current level 1, doubling per tier AND per
@@ -320,11 +334,10 @@ export class Game {
     if (dayTick.dayEnded) {
       this.rolloverDay();
     }
-    // Rent ticks on the slow "rent period" timer (default = 1 in-game day).
-    const rentPeriodsDue = this.day.consumePendingRentPeriods(rentIntervalSeconds);
-    if (rentPeriodsDue > 0) {
-      this.economy.forceSpendMoney(this.getDailyRent() * rentPeriodsDue, "rent");
-    }
+    // Rent is now charged inside rolloverDay (gated on RENT_GRACE_DAYS).
+    // The old consumePendingRentPeriods path used a 24-real-hour timer
+    // that never fired in practice; keeping the function in DayCycleSystem
+    // for save compat but not draining it here.
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
     const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
@@ -456,6 +469,13 @@ export class Game {
     // Capture the day's totals BEFORE resetting them — used by both the
     // day-end modal callback AND the persistent history.
     const dayNumber = this.day.getDayNumber();
+    // Rent fires once at the END of each day past the grace period.
+    // dayNumber here is the day that JUST ENDED, so the first rent
+    // payment lands on the rollover from day RENT_GRACE_DAYS to day
+    // RENT_GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free).
+    if (dayNumber > RENT_GRACE_DAYS) {
+      this.economy.forceSpendMoney(this.getDailyRent(), "rent");
+    }
     const revenue = this.economy.getDailyRevenue();
     const expenses = this.economy.getDailyExpenses();
     const served = this.customers.getDailyServed();

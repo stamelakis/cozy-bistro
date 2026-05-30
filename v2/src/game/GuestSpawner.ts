@@ -440,7 +440,14 @@ const WC_PATIENCE_SECONDS = 10.0;
  * rather than a constant queue; attractiveness, the boost mode, and
  * the admin spawn-rate slider all multiply this so a well-decorated
  * mid-game bistro still spawns nearly as often as before. */
-const SPAWN_INTERVAL_SECONDS = 18.0;
+// Lowered from 18 → 8 so a 5-storey building can actually feel full.
+// Math: avg customer visit ≈ 100 s; with 8 s base * ~0.5 attraction-mod
+// * ~0.7 weather = ~3 s/spawn = ~20/min, supporting ~33 concurrent at
+// "everyday" conditions and climbing toward 75–100 concurrent under
+// peak modifiers (paid boost + sunny + high attraction). Below ~6 s
+// the chef pipeline starts to choke at typical staff levels — see the
+// scenario tuning notes.
+const SPAWN_INTERVAL_SECONDS = 8.0;
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
 const PATIENCE_BASE_SECONDS = 35;
@@ -675,7 +682,12 @@ export class GuestSpawner {
       // Furniture attractionBonus speeds up spawning (capped so a hoarder
       // with 100 plants doesn't break the game).
       const attraction = this.registry?.getAggregateStats().attractionBonus ?? 0;
-      const attractionMult = Math.max(0.45, 1 - Math.min(0.55, attraction * 0.015));
+      // Floor 0.35 (was 0.45). Lets a heavily-decorated late-game
+      // restaurant pull spawn intervals close to 35% of base, which —
+      // combined with the lower base — gets close to the 1 s/spawn
+      // needed to fill ~100 concurrent seats. Cap on the attraction
+      // input stays at 0.65 (max 65% reduction).
+      const attractionMult = Math.max(0.35, 1 - Math.min(0.65, attraction * 0.015));
       // AdminPanel spawn-rate multiplier (1 = default).
       const adminMult = this.game.admin.spawnRateMultiplier;
       this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult;
