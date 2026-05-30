@@ -197,7 +197,8 @@ export class Hud {
       { key: "wages", icon: "💵", label: "WAGES/MIN",
         tint: "rgba(180, 200, 180, 0.14)", accent: "#bce0bc",
         tooltip: "Total staff payroll per in-game minute, across every hired chef, " +
-                 "waiter, and errand helper. Charged continuously throughout the day; " +
+                 "barman, waiter, and errand helper. Each training level adds +$1/min " +
+                 "to that member's wage. Charged continuously throughout the day; " +
                  "compare to RENT to see your full fixed-cost burden." },
     ];
     for (const s of specs) {
@@ -551,11 +552,15 @@ export class Hud {
     // would raise it), neutral otherwise.
     this.fields.storage.style.color = (stockMax > 0 && stockTarget >= stockMax)
       ? "#e8c89a" : "#e0c898";
-    // Total payroll per in-game minute = headcount × per-staff rate.
+    // Total payroll per in-game minute = base × headcount + sum of
+    // training levels ($1/min per level per member). Read from
+    // StaffSystem so the HUD matches the per-row breakdown in the
+    // StaffPanel and the actual tickSalary charge.
     const headcount = this.game.staff.getTotalStaff();
     const perStaff = this.game.admin.payrollPerStaffPerMinute;
-    const wagesPerMin = headcount * perStaff;
+    const wagesPerMin = this.game.staff.getTotalPayrollPerMinute(perStaff);
     this.fields.wages.textContent = `$${wagesPerMin}`;
+    void headcount; // still useful nearby for future tooltip work
     // Functional seats — available now / total currently provisioned.
     // Spawner is optional on the very first frames so default to "—".
     const seatStats = this.actions.getSeatStats?.();

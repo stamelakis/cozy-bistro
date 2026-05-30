@@ -224,7 +224,11 @@ export class StaffPanel {
       const label = this.game.staff.getStaffRoleLabel(role);
       const working = this.game.getStaffWorkingCount?.(role) ?? 0;
       const idle = Math.max(0, count - working);
-      const rolePayroll = count * perStaff;
+      // Role payroll = base × count + sum-of-training-levels. Pulled
+      // from StaffSystem so it stays in sync with what tickSalary
+      // actually charges (each training level adds $1/min per
+      // member, on top of the base per-staff wage).
+      const rolePayroll = this.game.staff.getRolePayrollPerMinute(role, perStaff);
       const row = this.rows[role];
       const unlockTier = this.game.getRoleUnlockTier(role);
       const locked = this.game.getLuxuryTier() < unlockTier;

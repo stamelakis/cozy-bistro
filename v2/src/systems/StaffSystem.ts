@@ -385,10 +385,40 @@ export class StaffSystem {
     }
 
     this.lastSalaryChargeAt = time;
-    const due = this.salaryRemainder + (this.getTotalStaff() * payrollPerStaffPerMinute * elapsedMs) / 60000;
+    // Per-member payroll = base + upgradeLevel ($1/min per level).
+    // A fully-trained (L5) member costs base+5/min; a fresh L0 hire
+    // costs exactly base. Summing across the roster is the same cost
+    // as before for an all-L0 crew, with training fees layered on
+    // top — the player pays for the productivity boost.
+    const totalPayroll = this.getTotalPayrollPerMinute(payrollPerStaffPerMinute);
+    const due = this.salaryRemainder + (totalPayroll * elapsedMs) / 60000;
     const charge = Math.floor(due);
     this.salaryRemainder = due - charge;
     return { charge };
+  }
+
+  /** Sum of every hired member's per-minute wage = base × headcount +
+   * total training levels. Used by tickSalary for the charge and by
+   * Hud / StaffPanel for the on-screen totals so the numbers match. */
+  getTotalPayrollPerMinute(basePerStaff: number): number {
+    let total = 0;
+    for (const m of this.members) {
+      total += basePerStaff + (m.upgradeLevel ?? 0);
+    }
+    return total;
+  }
+
+  /** Per-role payroll/min — same formula, restricted to one role.
+   * StaffPanel's per-row "$X/min" badge sums this so a row with
+   * trained members shows the higher cost honestly instead of
+   * displaying flat base × count. */
+  getRolePayrollPerMinute(role: StaffRole, basePerStaff: number): number {
+    let total = 0;
+    for (const m of this.members) {
+      if (m.role !== role) continue;
+      total += basePerStaff + (m.upgradeLevel ?? 0);
+    }
+    return total;
   }
 
   /** Reset the salary accumulator (e.g. on save load so the first tick after load doesn't double-charge). */
