@@ -48,18 +48,25 @@ export interface MultiFloorPathStep {
   fromStair?: boolean;
 }
 
-/** Tile at the BOTTOM of the staircase (south end, on the lower floor).
- * Matches WorldScene.addStaircaseSegment's Z_BOTTOM = -1.45, X_CENTER
- * = -3.9. The stair runs from this tile UP-AND-NORTH to STAIR_TOP_TILE
- * one storey higher. */
-const STAIR_BOTTOM_TILE = { x: -4, z: -2 };
+/** LOWER-floor landing tile — the cell DIRECTLY SOUTH of the
+ * staircase's bottom step. The stair tiles themselves (Z=-2..-4 at
+ * X=-4) sit inside the stairwell volume; an actor that pathed to the
+ * very bottom stair tile (-4, -2) ended up "slightly inside the
+ * stair" because that cell is part of the visible step geometry.
+ * Anchoring at the cell IN FRONT OF the stair (-4, -1) gives the
+ * actor a flat lower-floor tile to stand on before climbing — and a
+ * flat lower-floor tile to land on after descending. */
+const STAIR_BOTTOM_TILE = { x: -4, z: -1 };
 
-/** Tile at the TOP of the staircase (north end, on the upper floor's
- * slab — tucked against the back wall). The slab around it has a hole
- * for the stair to emerge through; only this exact tile is solid up
- * top, so the actor lands here and walks off onto the rest of the
- * upper floor from this cell. */
-const STAIR_TOP_TILE = { x: -4, z: -4 };
+/** UPPER-floor landing tile — the cell DIRECTLY EAST of the stair's
+ * top step. The slab on the upper floor has a hole punched through
+ * the stair column (X=-4, Z=-2..-4 are over the hole), so the cell
+ * IMMEDIATELY EAST of the top step is the first solid upper-floor
+ * cell an ascending actor steps off onto. Using (-4, -4) would land
+ * them ON the top step, which is correct elevation but they're still
+ * "inside the stair" from a tile-grid perspective. (-3, -4) is the
+ * clean entry point to the upper floor proper. */
+const STAIR_TOP_TILE = { x: -3, z: -4 };
 
 /** Grid bounds inside the restaurant — cells (x, z) with both axes in
  * [-4, 5]. The building's exterior walls sit at half-integer
