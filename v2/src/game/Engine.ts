@@ -923,7 +923,28 @@ export class Engine {
    * picked a plot yet see the BuildingPickModal next; players with
    * a plot enter the game immediately. */
   private installAuthGate(container: HTMLElement): void {
-    const enterGame = (): void => {
+    // didClaim=true means the player JUST claimed via the picker
+    // (one-time starter cash bonus applies). didClaim=false means
+    // a returning player whose plot was already on file (no bonus
+    // — they already got it on the original claim).
+    const enterGame = (didClaim: boolean): void => {
+      const mine = this.cloud.getMyBuilding();
+      if (mine) {
+        // Per-plot rent multiplier — small 0.6×, medium 1.0×, large 1.4×.
+        this.game.plotRentMultiplier =
+          mine.kind === "small" ? 0.6 :
+          mine.kind === "large" ? 1.4 :
+          1.0;
+        if (didClaim) {
+          // Starter cash bonus inverse to size — compensates a small
+          // plot's tight interior with extra capital to spend on it.
+          const bonus = mine.kind === "small" ? 5000 : mine.kind === "medium" ? 2000 : 0;
+          if (bonus > 0) {
+            this.game.economy.earnMoney(bonus, "grant");
+            console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot`);
+          }
+        }
+      }
       this.game.setAuthGated(false);
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as
@@ -938,7 +959,7 @@ export class Engine {
       // plot is owned so the world doesn't render an unrooted
       // restaurant in some random spot.
       if (this.cloud.getMyBuilding()) {
-        enterGame();
+        enterGame(false);
         return;
       }
       // Poll for ~3s — the building cache may not have landed yet
@@ -948,12 +969,13 @@ export class Engine {
       const wait = (): void => {
         waited += 200;
         if (this.cloud.getMyBuilding()) {
-          enterGame();
+          enterGame(false);
           return;
         }
         if (waited < 3000) { window.setTimeout(wait, 200); return; }
-        // Show the building picker.
-        new BuildingPickModal(container, this.cloud, () => enterGame());
+        // Show the building picker. The fresh claim triggers the
+        // starter cash bonus (via enterGame(true)).
+        new BuildingPickModal(container, this.cloud, () => enterGame(true));
       };
       window.setTimeout(wait, 200);
     };

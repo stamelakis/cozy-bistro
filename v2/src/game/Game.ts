@@ -903,12 +903,18 @@ export class Game {
     snapshotItems(): readonly { defId: string }[];
   };
 
-  /** Daily rent owed this in-game day. Scales with luxury tier and the
-   * admin.rentMultiplier knob. */
+  /** Per-plot rent multiplier — small plots pay 60% rent, medium
+   * 100%, large 140%. Set by Engine when the player's claimed
+   * building is resolved. Default 1.0 keeps the legacy single-
+   * plot behaviour working when no building is set. */
+  plotRentMultiplier = 1.0;
+
+  /** Daily rent owed this in-game day. Scales with luxury tier,
+   * the admin.rentMultiplier knob, AND the plot size. */
   getDailyRent(): number {
     const tier = Math.max(1, Math.min(5, this.luxuryTier));
     const raw = RENT_BY_TIER[tier] ?? RENT_BY_TIER[1];
-    return Math.max(0, Math.round(raw * this.admin.rentMultiplier));
+    return Math.max(0, Math.round(raw * this.admin.rentMultiplier * this.plotRentMultiplier));
   }
 
   // === Dirty-dish pile ===

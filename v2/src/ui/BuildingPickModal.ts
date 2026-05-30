@@ -2,27 +2,35 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 
 /**
  * Full-screen modal shown to a freshly signed-up player whose
- * account doesn't yet own a building. Lists every unowned plot
- * on the shared city map with a thumbnail-style preview (size +
- * coordinates) and a "claim" button.
+ * account doesn't yet own a building. Shows two synced views of
+ * the city:
  *
- * The current city map seeds 12 buildings of three sizes
- * (small/medium/large) — see spacetime/src/reducers/buildings.rs
- * for the seed layout. The modal renders them in a scrollable
- * grid so the player can browse and pick.
+ *   1. A top-down mini-map at the top — every plot drawn at its
+ *      (plot_x, plot_z) coordinates, coloured by availability.
+ *      Hovering / clicking a plot focuses it; occupied plots
+ *      display their owner's username.
+ *   2. A scrollable grid of cards at the bottom — one per
+ *      AVAILABLE plot, with size, dimensions, rent & bonus
+ *      details, and a Claim button.
  *
- * On successful claim, the modal dismisses and fires
- * onClaimed(buildingId) so the engine can re-parent the camera
- * to the new plot and lift the auth gate.
+ * Trade-offs per plot kind (user-explicit design):
+ *   - small  → ×0.6 daily rent · +$5,000 starter cash · 8×8 interior (P3)
+ *   - medium → ×1.0 daily rent · +$2,000 starter cash · 10×10 interior (P3)
+ *   - large  → ×1.4 daily rent · no bonus · 12×12 interior (P3)
+ *
+ * The interior-size differences land in P3; rent + starter cash
+ * are active now.
  */
 export class BuildingPickModal {
   private readonly root: HTMLElement;
   private readonly listEl: HTMLElement;
+  private readonly mapEl: SVGSVGElement;
   private readonly cloud: SpacetimeClient;
   private readonly onClaimed: (buildingId: bigint) => void;
   private busy = false;
   private messageEl: HTMLElement;
   private claimingId: bigint | null = null;
+  private focusedId: bigint | null = null;
 
   constructor(parent: HTMLElement, cloud: SpacetimeClient, onClaimed: (buildingId: bigint) => void) {
     this.cloud = cloud;
@@ -34,8 +42,6 @@ export class BuildingPickModal {
       width: "100vw", height: "100vh",
       display: "flex",
       alignItems: "center", justifyContent: "center",
-      // Daytime Mediterranean palette so the building-pick step
-      // feels like browsing real-estate on a sunny Greek street.
       background: "linear-gradient(135deg, rgba(70, 110, 150, 0.95) 0%, rgba(40, 70, 110, 0.98) 100%)",
       zIndex: "2000",
       pointerEvents: "auto",
@@ -44,10 +50,10 @@ export class BuildingPickModal {
 
     const card = document.createElement("div");
     Object.assign(card.style, {
-      width: "min(720px, calc(100vw - 40px))",
-      maxHeight: "88vh",
+      width: "min(820px, calc(100vw - 40px))",
+      maxHeight: "92vh",
       display: "flex", flexDirection: "column",
-      padding: "22px 26px",
+      padding: "20px 24px",
       background: "rgba(28, 20, 14, 0.98)",
       color: "#fff5dc",
       font: "13px/1.5 system-ui, sans-serif",
@@ -60,25 +66,66 @@ export class BuildingPickModal {
     const title = document.createElement("div");
     title.textContent = "🏠 PICK YOUR BUILDING";
     Object.assign(title.style, {
-      fontSize: "18px",
-      fontWeight: "700",
-      letterSpacing: "0.06em",
-      marginBottom: "4px",
+      fontSize: "18px", fontWeight: "700", letterSpacing: "0.06em", marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
     card.appendChild(title);
     const subtitle = document.createElement("div");
-    subtitle.textContent = "Choose an empty plot — you'll own it and build your restaurant inside.";
-    Object.assign(subtitle.style, {
-      fontSize: "12px",
-      opacity: "0.7",
-      marginBottom: "16px",
-    } as Partial<CSSStyleDeclaration>);
+    subtitle.textContent = "Tap a plot on the map or click an open card. Plot size changes rent + starter cash.";
+    Object.assign(subtitle.style, { fontSize: "12px", opacity: "0.7", marginBottom: "12px" } as Partial<CSSStyleDeclaration>);
     card.appendChild(subtitle);
 
+    // Trade-off legend.
+    const legend = document.createElement("div");
+    Object.assign(legend.style, {
+      display: "grid",
+      gridTemplateColumns: "repeat(3, 1fr)",
+      gap: "6px",
+      marginBottom: "12px",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    const legendCard = (icon: string, kind: string, rent: string, bonus: string, interior: string, hex: string): HTMLElement => {
+      const el = document.createElement("div");
+      el.innerHTML =
+        `<div style="font-weight:600;margin-bottom:2px"><span style="color:${hex}">${icon}</span> ${kind}</div>` +
+        `<div style="opacity:0.75">Rent ${rent} · ${bonus}</div>` +
+        `<div style="opacity:0.55;font-size:10px">${interior}</div>`;
+      Object.assign(el.style, {
+        padding: "6px 8px",
+        background: "rgba(255,245,220,0.04)",
+        borderLeft: `3px solid ${hex}`,
+        borderRadius: "3px",
+      } as Partial<CSSStyleDeclaration>);
+      return el;
+    };
+    legend.appendChild(legendCard("🏠", "Small", "×0.6", "+$5,000", "8×8 interior (later)", "#9bd4ff"));
+    legend.appendChild(legendCard("🏢", "Medium", "×1.0", "+$2,000", "10×10 interior (now)", "#f0d484"));
+    legend.appendChild(legendCard("🏛️", "Large", "×1.4", "no bonus", "12×12 interior (later)", "#f4a878"));
+    card.appendChild(legend);
+
+    // === Mini-map ===
+    const mapWrap = document.createElement("div");
+    Object.assign(mapWrap.style, {
+      width: "100%", height: "260px",
+      background: "rgba(255,245,220,0.03)",
+      borderRadius: "6px",
+      marginBottom: "12px",
+      position: "relative",
+      overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    card.appendChild(mapWrap);
+    this.mapEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    this.mapEl.setAttribute("viewBox", "-60 -60 120 120");
+    this.mapEl.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    Object.assign(this.mapEl.style, {
+      width: "100%", height: "100%", display: "block",
+    } as Partial<CSSStyleDeclaration>);
+    mapWrap.appendChild(this.mapEl);
+
+    // === Card list (available plots only) ===
     this.listEl = document.createElement("div");
     Object.assign(this.listEl.style, {
       display: "grid",
-      gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+      gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
       gap: "10px",
       overflowY: "auto",
       flex: "1",
@@ -100,8 +147,8 @@ export class BuildingPickModal {
 
     this.render();
 
-    // Poll the live cache — buildings can refresh while modal is up
-    // (e.g. another player claims one). 2 Hz is plenty.
+    // Live refresh — 2 Hz so concurrent claims by other players
+    // remove options without waiting for a manual reload.
     const tick = (): void => {
       if (!document.body.contains(this.root)) return;
       this.render();
@@ -111,6 +158,97 @@ export class BuildingPickModal {
   }
 
   private render(): void {
+    this.renderMap();
+    this.renderCards();
+  }
+
+  private renderMap(): void {
+    // Clear + redraw.
+    while (this.mapEl.firstChild) this.mapEl.removeChild(this.mapEl.firstChild);
+    const all = this.cloud.listBuildings();
+    const accounts = this.cloud.listAccounts();
+    const ownerByHex = new Map<string, string>();
+    for (const a of accounts) ownerByHex.set(a.identity.toHexString(), a.displayName);
+
+    // Faint background grid lines so coordinates read as a city.
+    for (let v = -48; v <= 48; v += 24) {
+      const ns = "http://www.w3.org/2000/svg";
+      const vLine = document.createElementNS(ns, "line");
+      vLine.setAttribute("x1", String(v)); vLine.setAttribute("x2", String(v));
+      vLine.setAttribute("y1", "-60"); vLine.setAttribute("y2", "60");
+      vLine.setAttribute("stroke", "rgba(255,245,220,0.06)");
+      vLine.setAttribute("stroke-width", "0.3");
+      this.mapEl.appendChild(vLine);
+      const hLine = document.createElementNS(ns, "line");
+      hLine.setAttribute("y1", String(v)); hLine.setAttribute("y2", String(v));
+      hLine.setAttribute("x1", "-60"); hLine.setAttribute("x2", "60");
+      hLine.setAttribute("stroke", "rgba(255,245,220,0.06)");
+      hLine.setAttribute("stroke-width", "0.3");
+      this.mapEl.appendChild(hLine);
+    }
+
+    for (const b of all) {
+      const ns = "http://www.w3.org/2000/svg";
+      const g = document.createElementNS(ns, "g");
+      g.style.cursor = b.isUnowned ? "pointer" : "default";
+      const isFocused = this.focusedId === b.id;
+      const rect = document.createElementNS(ns, "rect");
+      const x = b.plotX - b.plotW / 2;
+      const y = b.plotZ - b.plotH / 2;
+      rect.setAttribute("x", String(x));
+      rect.setAttribute("y", String(y));
+      rect.setAttribute("width", String(b.plotW));
+      rect.setAttribute("height", String(b.plotH));
+      rect.setAttribute("rx", "0.4");
+      const fillByKind = b.kind === "small" ? "#9bd4ff" : b.kind === "medium" ? "#f0d484" : "#f4a878";
+      const fill = b.isUnowned ? fillByKind : "#5c5048";
+      rect.setAttribute("fill", fill);
+      rect.setAttribute("fill-opacity", b.isUnowned ? (isFocused ? "0.95" : "0.7") : "0.35");
+      rect.setAttribute("stroke", isFocused ? "#fff5dc" : "rgba(28,20,14,0.6)");
+      rect.setAttribute("stroke-width", isFocused ? "0.6" : "0.25");
+      g.appendChild(rect);
+
+      // Owner label for claimed plots.
+      if (!b.isUnowned) {
+        const ownerName = ownerByHex.get(b.ownerIdentity.toHexString()) ?? "occupied";
+        const text = document.createElementNS(ns, "text");
+        text.setAttribute("x", String(b.plotX));
+        text.setAttribute("y", String(b.plotZ + 1.2));
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("font-size", "3.5");
+        text.setAttribute("fill", "#fff5dc");
+        text.setAttribute("fill-opacity", "0.75");
+        text.textContent = ownerName;
+        g.appendChild(text);
+      } else {
+        // Number for unowned plots so they're easy to reference.
+        const text = document.createElementNS(ns, "text");
+        text.setAttribute("x", String(b.plotX));
+        text.setAttribute("y", String(b.plotZ + 1.2));
+        text.setAttribute("text-anchor", "middle");
+        text.setAttribute("font-size", "3.5");
+        text.setAttribute("fill", "#1c140e");
+        text.setAttribute("font-weight", "700");
+        text.textContent = `#${b.id}`;
+        g.appendChild(text);
+      }
+
+      g.addEventListener("mouseenter", () => {
+        if (b.isUnowned && this.focusedId !== b.id) {
+          this.focusedId = b.id;
+          this.render();
+        }
+      });
+      g.addEventListener("click", () => {
+        if (b.isUnowned && !this.busy) {
+          this.claim(b.id);
+        }
+      });
+      this.mapEl.appendChild(g);
+    }
+  }
+
+  private renderCards(): void {
     this.listEl.innerHTML = "";
     const all = this.cloud.listBuildings();
     const unowned = all.filter((b) => b.isUnowned);
@@ -128,31 +266,40 @@ export class BuildingPickModal {
       this.listEl.appendChild(empty);
       return;
     }
-    // Order by kind (small / medium / large) then by id for a
-    // stable layout each render.
     const order = (k: string): number => (k === "small" ? 0 : k === "medium" ? 1 : 2);
     unowned.sort((a, b) => order(a.kind) - order(b.kind) || Number(a.id - b.id));
     for (const b of unowned) {
-      const card = document.createElement("div");
-      Object.assign(card.style, {
+      const cardEl = document.createElement("div");
+      const focused = this.focusedId === b.id;
+      Object.assign(cardEl.style, {
         padding: "10px 12px",
-        background: "rgba(255,245,220,0.04)",
-        border: "1px solid rgba(255,245,220,0.22)",
+        background: focused ? "rgba(216, 185, 143, 0.16)" : "rgba(255,245,220,0.04)",
+        border: focused ? "1px solid #d8b98f" : "1px solid rgba(255,245,220,0.22)",
         borderRadius: "6px",
         display: "flex",
         flexDirection: "column",
-        gap: "4px",
+        gap: "3px",
+        cursor: "pointer",
       } as Partial<CSSStyleDeclaration>);
       const icon = b.kind === "small" ? "🏠" : b.kind === "medium" ? "🏢" : "🏛️";
       const kindLabel = b.kind.charAt(0).toUpperCase() + b.kind.slice(1);
       const heading = document.createElement("div");
       heading.innerHTML = `<span style="font-size:18px;margin-right:6px">${icon}</span><b>${kindLabel}</b> <span style="opacity:0.55;font-size:11px">#${b.id}</span>`;
-      card.appendChild(heading);
+      cardEl.appendChild(heading);
+
       const meta = document.createElement("div");
       meta.style.opacity = "0.7";
       meta.style.fontSize = "11px";
       meta.textContent = `${b.plotW} × ${b.plotH} tiles · plot (${b.plotX}, ${b.plotZ})`;
-      card.appendChild(meta);
+      cardEl.appendChild(meta);
+
+      const tradeoff = document.createElement("div");
+      tradeoff.style.fontSize = "10px";
+      tradeoff.style.opacity = "0.75";
+      const rentText = b.kind === "small" ? "Rent ×0.6" : b.kind === "large" ? "Rent ×1.4" : "Rent ×1.0";
+      const bonusText = b.kind === "small" ? "+$5,000 starter" : b.kind === "medium" ? "+$2,000 starter" : "no bonus";
+      tradeoff.textContent = `${rentText} · ${bonusText}`;
+      cardEl.appendChild(tradeoff);
 
       const btn = document.createElement("button");
       btn.textContent = this.claimingId === b.id ? "Claiming…" : "Claim this plot";
@@ -169,10 +316,17 @@ export class BuildingPickModal {
         opacity: this.busy ? "0.5" : "1",
       } as Partial<CSSStyleDeclaration>);
       btn.disabled = this.busy;
-      btn.onclick = () => this.claim(b.id);
-      card.appendChild(btn);
+      btn.onclick = (e) => { e.stopPropagation(); this.claim(b.id); };
+      cardEl.appendChild(btn);
 
-      this.listEl.appendChild(card);
+      cardEl.onmouseenter = () => {
+        if (this.focusedId !== b.id) {
+          this.focusedId = b.id;
+          this.render();
+        }
+      };
+
+      this.listEl.appendChild(cardEl);
     }
   }
 
@@ -184,9 +338,6 @@ export class BuildingPickModal {
     this.render();
     try {
       await this.cloud.claimBuilding(buildingId);
-      // Wait one tick so the local cache reflects the new owner
-      // before we double-check via getMyBuilding (avoids a race
-      // where the reducer applied but onApplied hasn't fired yet).
       await new Promise((r) => setTimeout(r, 100));
       const mine = this.cloud.getMyBuilding();
       if (mine && mine.id === buildingId) {
