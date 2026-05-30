@@ -2573,6 +2573,13 @@ export class WorldScene {
     if (fromFloor === toFloor) return;
     const dy = (toFloor - fromFloor) * WorldScene.STOREY_HEIGHT;
     character.root.position.y += dy;
+    // ALSO bump _baseY by the same delta so the CharacterAnimator's
+    // per-frame "reset position.y = _baseY" doesn't snap the body back
+    // to the storey we just moved them off of. For IDLE staff (mover
+    // isn't running, so it can't keep _baseY in sync via the multi-
+    // floor walk logic) this is the only place _baseY gets updated
+    // for a floor change.
+    if (character._baseY != null) character._baseY += dy;
     const newMount = this.getStoreyMount(toFloor);
     if (character.root.parent !== newMount) newMount.add(character.root);
   }
