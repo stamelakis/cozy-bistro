@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { furnitureCatalog, inferQualityTier, type FurnitureDef } from "../data/furnitureCatalog";
+import { furnitureCatalog, inferQualityTier, scaledCost, type FurnitureDef } from "../data/furnitureCatalog";
 import type { LuxuryTier } from "../data/types";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
@@ -517,7 +517,7 @@ export class BuildMenu {
       fontSize: "12px",
     } as Partial<CSSStyleDeclaration>);
     const nameSpan = document.createElement("span");
-    nameSpan.textContent = `${def.name} — $${def.cost}`;
+    nameSpan.textContent = `${def.name} — $${scaledCost(def)}`;
     btn.appendChild(nameSpan);
     if (def.surface === "drink") {
       const badge = document.createElement("span");
@@ -660,7 +660,7 @@ export class BuildMenu {
   }
 
   private async startPlacing(def: FurnitureDef): Promise<void> {
-    if (this.game.economy.canAfford(def.cost) === false) {
+    if (this.game.economy.canAfford(scaledCost(def)) === false) {
       this.flashRoot("Not enough money", "error");
       return;
     }
@@ -1658,14 +1658,15 @@ export class BuildMenu {
       this.flashRoot("Cell already occupied", "error");
       return;
     }
-    if (!this.game.economy.spendMoney(def.cost, "decor")) {
+    const purchasePrice = scaledCost(def);
+    if (!this.game.economy.spendMoney(purchasePrice, "decor")) {
       this.flashRoot("Not enough money", "error");
       return;
     }
     // Bake the preview into the scene using the plan's final pose (which
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
-    const cost = def.cost;
+    const cost = purchasePrice;
     // Capture the surface-host info before the async load — if the
     // plan is for a surface item, we need parentUid + slotIndex when
     // registering and hostTopY for the Y position.

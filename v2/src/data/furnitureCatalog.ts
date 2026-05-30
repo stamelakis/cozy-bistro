@@ -898,3 +898,28 @@ export function inferQualityTier(def: FurnitureDef): 1 | 2 | 3 | 4 | 5 {
   if (cost < 500) return 4;
   return 5;
 }
+
+// ============================================================================
+//                              TIER PRICE SCALER
+// ============================================================================
+// `def.cost` in the catalog is the BASE price (what a T1 version of the item
+// would cost). The build-menu purchase + refund flows multiply that by a tier
+// curve so higher-tier gear costs meaningfully more — without this, the late
+// game offers $3,000 T5 fridges that a mid-game restaurant can afford with a
+// single busy day.
+//
+// Variant A1 (user pick): cost × tier^1.2. T5 ≈ ×6.9.
+//
+// Snapped UP to the nearest $10 so the displayed price reads cleanly. T1
+// items skip both the multiplier and the rounding so chairs stay at $18 etc.
+// instead of getting bumped to $20 by ceiling rounding.
+// ============================================================================
+
+const TIER_PRICE_EXPONENT = 1.2;
+
+export function scaledCost(def: FurnitureDef): number {
+  const tier = inferQualityTier(def);
+  if (tier <= 1) return def.cost;
+  const raw = def.cost * Math.pow(tier, TIER_PRICE_EXPONENT);
+  return Math.ceil(raw / 10) * 10;
+}

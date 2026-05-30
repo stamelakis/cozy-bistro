@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
-import { getFurnitureDef, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
+import { getFurnitureDef, scaledCost, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
 import { fitFurniture, placementY, snapToAdjacentWall } from "../assets/fitFurniture";
 
 /**
@@ -357,8 +357,12 @@ export class FurnitureRegistry {
     const def = getFurnitureDef(item.defId);
     if (!def) return { defId: item.defId, refund: 0 };
     // Mirror of 2D's value formula, scaled down to roughly 50%-of-cost-plus-stats.
+    // Uses scaledCost (tier-multiplied) instead of raw def.cost so a T5
+    // fridge the player paid $20k for refunds half of $20k, not half of
+    // the unscaled $3k base — without this, selling late-game gear was
+    // a wealth-destroying trap.
     const refund = Math.floor(
-      def.cost * 0.5
+      scaledCost(def) * 0.5
       + (def.style ?? 0) * 4
       + (def.comfort ?? 0) * 3
       + (def.ratingBonus ?? 0) * 200
@@ -442,8 +446,11 @@ export class FurnitureRegistry {
       // — sell appeared to work (refund paid) but the mesh stayed.
       child.model.removeFromParent();
       this.items.splice(cIdx, 1);
+      // 100% refund for undo-of-place (vs the 50% sell refund) — the
+      // player gets back exactly what they paid, which is the scaled
+      // tier price, not the raw base cost.
       const cDef = getFurnitureDef(child.defId);
-      totalChildRefund += cDef?.cost ?? 0;
+      totalChildRefund += cDef ? scaledCost(cDef) : 0;
     }
     // Re-find the host's index since the splices above shifted entries.
     const finalIdx = this.items.findIndex((it) => it.uid === uid);
@@ -456,7 +463,7 @@ export class FurnitureRegistry {
     this.surfaceExtentCache.delete(uid);
     for (const child of children) this.surfaceExtentCache.delete(child.uid);
     const def = getFurnitureDef(item.defId);
-    return { defId: item.defId, refund: (def?.cost ?? 0) + totalChildRefund };
+    return { defId: item.defId, refund: (def ? scaledCost(def) : 0) + totalChildRefund };
   }
 
   /** Read-only snapshot of every placed item (used by BuildMenu auto-arrange
