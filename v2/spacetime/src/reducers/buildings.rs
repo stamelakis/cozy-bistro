@@ -99,6 +99,19 @@ pub fn claim_building(ctx: &ReducerContext, building_id: u64) -> Result<(), Stri
     Ok(())
 }
 
+/// Public bootstrap — force-seed the buildings table when it's
+/// empty. Used to recover the city when `init` already ran on
+/// an earlier publish without the seed call (init fires ONCE per
+/// database lifetime; adding the seed call after init's first
+/// run means it never executes naturally). Idempotent — once
+/// buildings exist this is a no-op, so leaving the reducer
+/// callable by anyone is harmless.
+#[reducer]
+pub fn bootstrap_city(ctx: &ReducerContext) -> Result<(), String> {
+    seed_buildings_if_empty(ctx);
+    Ok(())
+}
+
 /// Admin-only: release a building back to the unowned pool. Used
 /// during testing / by Dunnin to recover an abandoned plot. The
 /// auth check is the same one admin_reset_password uses.

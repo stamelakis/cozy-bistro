@@ -8,6 +8,7 @@ import { type Infer as __Infer } from "spacetimedb";
 // Import all reducer arg schemas
 import AdminReleaseBuildingReducer from "../admin_release_building_reducer";
 import AdminResetPasswordReducer from "../admin_reset_password_reducer";
+import BootstrapCityReducer from "../bootstrap_city_reducer";
 import ClaimBuildingReducer from "../claim_building_reducer";
 import CreateRestaurantReducer from "../create_restaurant_reducer";
 import DeleteRestaurantReducer from "../delete_restaurant_reducer";
@@ -28,6 +29,7 @@ import UnlockAchievementReducer from "../unlock_achievement_reducer";
 
 export type AdminReleaseBuildingParams = __Infer<typeof AdminReleaseBuildingReducer>;
 export type AdminResetPasswordParams = __Infer<typeof AdminResetPasswordReducer>;
+export type BootstrapCityParams = __Infer<typeof BootstrapCityReducer>;
 export type ClaimBuildingParams = __Infer<typeof ClaimBuildingReducer>;
 export type CreateRestaurantParams = __Infer<typeof CreateRestaurantReducer>;
 export type DeleteRestaurantParams = __Infer<typeof DeleteRestaurantReducer>;

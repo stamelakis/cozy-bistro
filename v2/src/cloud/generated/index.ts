@@ -36,6 +36,7 @@ import {
 // Import all reducer arg schemas
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import BootstrapCityReducer from "./bootstrap_city_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
@@ -239,6 +240,7 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
