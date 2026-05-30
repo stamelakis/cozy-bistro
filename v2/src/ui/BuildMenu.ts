@@ -428,12 +428,12 @@ export class BuildMenu {
     if (!this.tierContentEl) return;
     this.tierContentEl.innerHTML = "";
     const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "wash", "appliance", "counter", "storage",
+      "table", "chair", "stove", "wash", "appliance", "counter", "bar", "storage",
       "wall", "door", "bathroom", "decoration", "plant", "lamp",
     ];
     const categoryLabels: Record<FurnitureDef["category"], string> = {
       table: "Tables", chair: "Chairs", stove: "Cooking", wash: "Dishwashing",
-      appliance: "Appliances", counter: "Counters", storage: "Storage",
+      appliance: "Appliances", counter: "Counters", bar: "Bar", storage: "Storage",
       wall: "Walls & Partitions", door: "Doors & Windows",
       bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
     };

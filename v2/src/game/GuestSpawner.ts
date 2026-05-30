@@ -243,6 +243,11 @@ interface ActiveGuest {
    * world Y by floor × storey height when they sit so they appear on
    * the right slab even before the stair-climbing path lands. */
   seatFloor: number;
+  /** True when the guest is seated AT a bar counter (vs. a regular
+   * dining or coffee table). Routes their order request to the
+   * barman pool instead of the waiter pool, and the cooked drink
+   * gets delivered directly by the barman without a waiter trip. */
+  seatAtBar?: boolean;
   platePos: THREE.Vector2;
   /** If true, the guest entered the restaurant but no functional seat was
    * free, so they're parked at a yellow overflow chair until a real seat
@@ -327,6 +332,11 @@ interface ActiveGuest {
   /** uid of the toilet they reserved while in walkingToToilet /
    * atToilet states. Cleared on visit complete or abandonment. */
   toiletUid?: string;
+  /** Storey the reserved toilet lives on. Drives pickPathTargetFloor
+   * for the walkingToToilet leg so a Floor 0 guest assigned a Floor 1
+   * toilet actually takes the stair instead of pretending to walk
+   * through the slab. Cleared alongside toiletUid. */
+  toiletFloor?: number;
   /** Rotation (Y) of the reserved toilet. Used so atToilet snaps the
    * guest onto the bowl facing outward (away from the wall) instead of
    * facing wherever the last moveToward call left them looking. */
@@ -342,6 +352,9 @@ interface ActiveGuest {
   /** uid of the sink they reserved while in walkingToSink / atSink.
    * Cleared after the wash dwell or on despawn. */
   sinkUid?: string;
+  /** Storey the reserved sink lives on. Same purpose as toiletFloor —
+   * lets a cross-floor handwash trip pick up the stair leg. */
+  sinkFloor?: number;
   /** Rotation (Y) of the reserved sink so atSink can face the guest
    * toward the basin instead of leaving them looking sideways. */
   sinkRotY?: number;
@@ -375,6 +388,17 @@ interface ActiveGuest {
   washAttemptComplete?: boolean;
   /** Pre-visit seat pose so they snap back to it after returning. */
   returnSeatPos?: THREE.Vector2;
+  /** True once the spawner has pushed an order request into
+   * StaffRouter.orderRequests for this guest. Stops the seated block
+   * from re-enqueueing every tick. Cleared (by virtue of being a
+   * one-shot flag) when the request fires its callback OR is
+   * cancelled by cancelOrderRequest. */
+  orderRequested?: boolean;
+  /** True once a waiter has completed the take-order dwell and the
+   * spawner's takeOrder callback has built g.order. Drives the
+   * transition into beginNextCourse — without this latch the seated
+   * block would try to build the order on its own timer fallback. */
+  orderTaken?: boolean;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -413,7 +437,13 @@ const TABLE_HEIGHT_Y = 0.76;
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
 const TIME_TO_ORDER = 3.0;
-const TIME_TO_EAT = 8.0;
+// 60s per course. Gives every meal a real "sit and chew" presence —
+// the dining room reads as occupied instead of churning. Patience
+// resets between courses so the longer eating beat costs the player
+// nothing in customer anger; it just slows seat turnover (and grows
+// average concurrent customer count proportionally for the same
+// spawn rate).
+const TIME_TO_EAT = 60.0;
 /** Dwell at a toilet (in seconds). Short enough that a busy restaurant
  * can cycle the same fixture among multiple guests, long enough that
  * the trip reads as deliberate when you watch a single guest do it. */
@@ -440,23 +470,29 @@ const WC_PATIENCE_SECONDS = 10.0;
  * rather than a constant queue; attractiveness, the boost mode, and
  * the admin spawn-rate slider all multiply this so a well-decorated
  * mid-game bistro still spawns nearly as often as before. */
-// Lowered from 18 → 8 so a 5-storey building can actually feel full.
-// Math: avg customer visit ≈ 100 s; with 8 s base * ~0.5 attraction-mod
-// * ~0.7 weather = ~3 s/spawn = ~20/min, supporting ~33 concurrent at
-// "everyday" conditions and climbing toward 75–100 concurrent under
-// peak modifiers (paid boost + sunny + high attraction). Below ~6 s
-// the chef pipeline starts to choke at typical staff levels — see the
-// scenario tuning notes.
-const SPAWN_INTERVAL_SECONDS = 8.0;
+// 6.67 s (was 8 s) — +20% spawn rate. With the longer eating beat
+// (TIME_TO_EAT = 60s) average visits are now 3-4 minutes, so the
+// concurrent customer count grows roughly with rate × visit-length.
+// Math: 6.67 s base * ~0.5 attraction-mod * ~0.7 weather = ~2.3 s/
+// spawn = ~26/min, comfortably filling a 50-100 seat building under
+// peak modifiers. Below ~5 s the chef pipeline starts to choke at
+// typical staff levels.
+const SPAWN_INTERVAL_SECONDS = 6.67;
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
-// Bumped from 35 → 55 to give the higher-throughput economy more
-// margin. With more concurrent customers and the cook-time global
-// dropped to 1.0, individual waits are similar but kitchens hit
-// short-burst saturation more often. 55 s base × 0.6 quick-lunch
-// = 33 s minimum (was 21 s), giving even the impatient archetype
-// enough time to clear cooking + delivery under typical loads.
-const PATIENCE_BASE_SECONDS = 55;
+// Two-phase patience budget. Was a single PATIENCE_BASE_SECONDS pool
+// reused for both "waiting for the waiter to take my order" and
+// "waiting for the food to arrive". Splitting them gives the player
+// finer-grained signal about WHY a guest left:
+//   - ORDER_PATIENCE exhausted = waiter pool is too thin / too far
+//     (the customer never got someone to flag down).
+//   - SERVE_PATIENCE exhausted = kitchen throughput is the bottleneck
+//     (chefs / appliances couldn't keep up).
+// Both are multiplied by the archetype's patienceMultiplier (0.6×
+// Quick Lunch → 1.3× Foodie). SERVE patience resets at the start of
+// every course so multi-course orders don't accumulate pressure.
+const ORDER_PATIENCE_BASE_SECONDS = 60;
+const SERVE_PATIENCE_BASE_SECONDS = 90;
 
 /** Seats stay dirty for this many seconds after a guest leaves before a
  * new guest can sit. Adds a visible turnaround beat between meals. */
@@ -479,7 +515,16 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
     }
     case "seated": {
       const menuIcon = drinkTable ? "📋🥤" : "📋";
-      return g.order.length === 0 ? `${prefix} ${menuIcon}` : `${prefix} ⏳`;
+      if (g.order.length === 0) {
+        // Order not taken yet — show the order-patience countdown so
+        // the player can see "this customer is about to leave because
+        // no waiter came to take their order." Only visible once
+        // they've actually flagged a waiter (orderRequested); the
+        // pre-flag 3s settle beat just shows the menu icon.
+        const secs = Math.max(0, Math.ceil(g.patience));
+        return g.orderRequested ? `${prefix} ${menuIcon} ${secs}s` : `${prefix} ${menuIcon}`;
+      }
+      return `${prefix} ⏳`;
     }
     case "waitingForFood": {
       // Show patience countdown so the player feels the urgency.
@@ -579,6 +624,13 @@ export class GuestSpawner {
   /** Optional: route around blocking furniture when set. Falls back to a
    * straight line otherwise. */
   pathfind?: Pathfinding;
+  /** Optional: hook for re-parenting a guest character to a different
+   * storey's mount group when they cross the staircase. Without this
+   * wire, guests stay parented to the main scene (always visible) for
+   * their entire visit — a Floor 1 customer would be visible from
+   * the ground floor view because their parent ignores storey focus.
+   * Engine wires this to WorldScene.reparentCharacterToFloor. */
+  reparentCharacter?: (character: AnimatedCharacter, toFloor: number) => void;
 
   constructor(
     scene: THREE.Scene,
@@ -650,6 +702,16 @@ export class GuestSpawner {
         // Door approach legs stay on Floor 0; seat leg jumps to
         // seatFloor once we've passed the interior door.
         return g.passedDoor ? g.seatFloor : 0;
+      case "walkingToToilet":
+        // Cross-floor toilet trips: pickFreeToilet may assign a
+        // fixture on another storey, so target that storey explicitly
+        // — without this the planner aimed at the toilet's XZ on
+        // g.currentFloor and the guest pretended to walk through
+        // the slab.
+        return g.toiletFloor ?? g.currentFloor;
+      case "walkingToSink":
+        // Same idea for the sink leg.
+        return g.sinkFloor ?? g.currentFloor;
       case "returningFromToilet":
         return g.seatFloor;
       case "walkingToDoor":
@@ -789,6 +851,12 @@ export class GuestSpawner {
     // Patience exhausted — angry exit. Route via the door.
     this.game.customers.recordLost(1);
     this.game.reputation.recordRating(1);
+    // Cancel any pending order request / in-flight cooking ticket up
+    // front so a waiter walking toward the now-empty seat gets pulled
+    // off immediately instead of completing a wasted trip and
+    // dwelling at the empty chair for 1.5s. (despawnGuest also calls
+    // cancelTicket as a safety net.)
+    this.router.cancelTicket(g.id);
     // Route every reservation through the single chokepoint — eaten
     // courses become dirty, in-flight ones go back to clean.
     this.settleGuestDishes(g);
@@ -885,6 +953,27 @@ export class GuestSpawner {
     this.dishwareLogger = fn;
   }
   private dishwareLogger?: (msg: string) => void;
+
+  /** Called by StaffRouter when a waiter completes the take-order
+   * dwell at a seated guest's table. Builds the recipe list (the
+   * old auto-order path used to do this inside the seated state
+   * machine) and latches g.orderTaken so the next seated tick calls
+   * beginNextCourse. No-op if the guest has left in the meantime. */
+  onWaiterTookOrder(guestId: string): void {
+    const g = this.guests.find((x) => x.id === guestId);
+    if (!g) return;
+    g.orderTaken = true;
+    if (g.order.length === 0) {
+      const surface = this.tableSurfaceForGuest(g);
+      g.order = this.buildOrder(g.archetype, surface);
+    }
+    // Order is in — flip from the order-patience budget to the longer
+    // serve-patience budget so the kitchen has its full window to
+    // cook + deliver. Without this, a customer whose order was taken
+    // at the 55s mark of a 60s order budget would only have 5s left
+    // for the entire kitchen pipeline.
+    g.patience = SERVE_PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
+  }
 
   getActiveGuestCount(): number {
     return this.guests.length;
@@ -1098,6 +1187,7 @@ export class GuestSpawner {
         // doesn't silently drift down — eaten courses become dirty,
         // in-flight ones go back to clean.
         if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
+          this.router.cancelTicket(g.id);
           this.settleGuestDishes(g);
           g.target = DOOR_POSITION.clone();
           this.planPath(g);
@@ -1117,6 +1207,19 @@ export class GuestSpawner {
       // visit would strand the guest at the table's OLD position.
       if (g.returnSeatPos) {
         g.returnSeatPos.copy(g.seatPos);
+      }
+      // Retroactive floor reconciliation. Seated guests SHOULD live
+      // under their seatFloor's storey group so storey-focus visibility
+      // hides them when the player looks at another floor. Guests
+      // spawned BEFORE the reparent fix shipped (or anything else that
+      // could leave a guest parented to the wrong floor) get repaired
+      // here. The reparent callback compares parents internally and
+      // no-ops when they already match, so this is just a cheap
+      // pointer check most of the time. Currents floor is also synced
+      // so the next path leg anchors Y to the right slab.
+      if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
+        if (g.currentFloor !== g.seatFloor) g.currentFloor = g.seatFloor;
+        this.reparentCharacter?.(g.character, g.seatFloor);
       }
       if (g.state === "walkingIn" && g.passedDoor) {
         // Only re-plan when the seat ACTUALLY moved. The previous
@@ -1175,42 +1278,104 @@ export class GuestSpawner {
     return this.findFreeOverflowChair() != null;
   }
 
-  /** First placed toilet not currently reserved by another guest.
-   * Returns the uid, the rotY of the toilet (so the guest can face
-   * outward when sitting), the toilet's centre (where they snap onto
-   * the bowl), and the "stand in front" walk target. Null when either
-   * no toilet exists or every one is busy. */
-  private findFreeToilet(): {
+  /** Nearest UNRESERVED toilet, ranked by **walking pathway distance**
+   * from the supplied guest's current position. Falls back to straight-
+   * line distance when no pathfinder is wired. Cross-floor candidates
+   * are considered (the multi-floor planner handles the stair leg) —
+   * a Floor 0 guest will go upstairs when the only free toilet is on
+   * Floor 1, but the small per-stair penalty keeps a slightly-farther
+   * same-floor toilet from losing to a barely-closer upstairs one.
+   *
+   * Returns the uid, rotY (so the guest can face outward when sitting),
+   * the toilet's centre (snap-on-bowl point), the stand-in-front walk
+   * target, AND the toilet's storey so the spawner can drive the walk
+   * path to the right floor. Null when either no toilet exists or
+   * every one is busy. */
+  private findFreeToilet(g: ActiveGuest): {
     uid: string;
     rotY: number;
     center: THREE.Vector2;
     standPos: THREE.Vector2;
+    floor: number;
   } | null {
     if (!this.registry) return null;
-    const toilets = this.registry.getToilets();
-    for (const t of toilets) {
-      if (this.reservedToilets.has(t.uid)) continue;
-      return {
-        uid: t.uid,
-        rotY: t.rotY,
-        center: new THREE.Vector2(t.x, t.z),
-        standPos: t.standPos.clone(),
-      };
+    const toilets = this.registry.getToilets().filter((t) => !this.reservedToilets.has(t.uid));
+    if (toilets.length === 0) return null;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < toilets.length; i += 1) {
+      const t = toilets[i];
+      const dist = this.pathwayDistance(g, t.standPos, t.floor);
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
     }
-    return null;
+    if (bestIdx < 0) return null;
+    const t = toilets[bestIdx];
+    return {
+      uid: t.uid,
+      rotY: t.rotY,
+      center: new THREE.Vector2(t.x, t.z),
+      standPos: t.standPos.clone(),
+      floor: t.floor,
+    };
   }
 
-  /** First placed bathroom sink not currently reserved. Mirrors
-   * findFreeToilet — returns rotY too so atSink can face the guest
-   * toward the basin. */
-  private findFreeSink(): { uid: string; rotY: number; standPos: THREE.Vector2 } | null {
+  /** Nearest UNRESERVED sink, same pathway-distance ranking as
+   * findFreeToilet. Returns rotY too so atSink can face the guest
+   * toward the basin, and the sink's floor so the trip path targets
+   * the right storey. */
+  private findFreeSink(g: ActiveGuest): { uid: string; rotY: number; standPos: THREE.Vector2; floor: number } | null {
     if (!this.registry) return null;
-    const sinks = this.registry.getBathroomSinks();
-    for (const s of sinks) {
-      if (this.reservedSinks.has(s.uid)) continue;
-      return { uid: s.uid, rotY: s.rotY, standPos: s.standPos.clone() };
+    const sinks = this.registry.getBathroomSinks().filter((s) => !this.reservedSinks.has(s.uid));
+    if (sinks.length === 0) return null;
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < sinks.length; i += 1) {
+      const s = sinks[i];
+      const dist = this.pathwayDistance(g, s.standPos, s.floor);
+      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
     }
-    return null;
+    if (bestIdx < 0) return null;
+    const s = sinks[bestIdx];
+    return { uid: s.uid, rotY: s.rotY, standPos: s.standPos.clone(), floor: s.floor };
+  }
+
+  /** Walking distance from a guest's current position to a fixed XZ
+   * on a specified floor. Uses the multi-floor pathfinder when
+   * available so a Floor 0 guest ranking a Floor 1 toilet pays the
+   * stair cost honestly; falls back to straight-line + per-floor
+   * penalty when no pathfinder is wired (e.g. early Engine boot).
+   *
+   * STAIR_PENALTY is added per floor crossed so a tied-distance same-
+   * floor toilet beats an upstairs one (matches the "guest gravitates
+   * to their own floor's bathroom" intuition). Tuned to ~3 units =
+   * roughly 1.5 seconds of walking, enough to break ties without
+   * disqualifying genuinely-closer upstairs fixtures. */
+  private pathwayDistance(g: ActiveGuest, to: THREE.Vector2, toFloor: number): number {
+    const STAIR_PENALTY = 3;
+    const from = g.character.groundPos;
+    const fromFloor = g.currentFloor;
+    if (!this.pathfind) {
+      const flat = Math.hypot(to.x - from.x, to.y - from.y);
+      return flat + Math.abs(toFloor - fromFloor) * STAIR_PENALTY;
+    }
+    const path = this.pathfind.findMultiFloorPath(
+      { x: from.x, z: from.y, floor: fromFloor },
+      { x: to.x, z: to.y, floor: toFloor },
+    );
+    if (path.length === 0) {
+      return Math.hypot(to.x - from.x, to.y - from.y) + Math.abs(toFloor - fromFloor) * STAIR_PENALTY;
+    }
+    let length = 0;
+    let prevX = from.x, prevZ = from.y;
+    for (const step of path) {
+      if (step.fromStair) {
+        length += STAIR_PENALTY;
+      } else {
+        length += Math.hypot(step.x - prevX, step.z - prevZ);
+      }
+      prevX = step.x; prevZ = step.z;
+    }
+    return length;
   }
 
   /** Pick the first overflow chair not already claimed by another waiter. */
@@ -1343,6 +1508,7 @@ export class GuestSpawner {
         seatPos,
         seatFacingY: seatFacing,
         seatFloor: available?.floor ?? 0,
+        seatAtBar: available?.atBar ?? false,
         platePos,
         target: targetPos,
         passedDoor: false,
@@ -1351,7 +1517,12 @@ export class GuestSpawner {
         order: [],
         orderIndex: 0,
         ticketId: null,
-        patience: PATIENCE_BASE_SECONDS * archetype.patienceMultiplier,
+        // Fresh spawn → waiting for a waiter to take their order, so
+        // start on the ORDER patience budget. Gets reset to the longer
+        // SERVE budget the moment a waiter completes the take-order
+        // dwell (onWaiterTookOrder) and again at each course transition
+        // (beginNextCourse).
+        patience: ORDER_PATIENCE_BASE_SECONDS * archetype.patienceMultiplier,
         totalPaid: 0,
         totalSatisfaction: 0,
         archetype,
@@ -1412,6 +1583,11 @@ export class GuestSpawner {
     // this catches them here. settleGuestDishes is idempotent so calling
     // it twice is harmless.
     this.settleGuestDishes(g);
+    // Cancel any in-flight order so a chef doesn't keep cooking for a
+    // ghost and a waiter doesn't walk a plate to an empty seat. Safe
+    // to call when the ticket already completed (returns false) or was
+    // never created (g.ticketId null) — cancelTicket finds-by-guestId.
+    this.router.cancelTicket(g.id);
     this.scene.remove(g.character.root);
     this.animator.remove(g.character.root);
     if (g.waiting) {
@@ -1663,25 +1839,28 @@ export class GuestSpawner {
         // given up waiting — we DON'T clear willUseToilet on give-up
         // because finalizeVisit needs to know they wanted to go.
         if (g.willUseToilet && !g.usedToilet && !g.toiletAttemptComplete) {
-          const toilet = this.findFreeToilet();
+          const toilet = this.findFreeToilet(g);
           // Log once per attempt — the first time we enter this block.
           // toiletWaitRemaining is only set on busy retries, so its
           // undefined state is a clean "first attempt" signal.
           if (DEBUG_GUEST_LOGS && g.toiletWaitRemaining === undefined) {
             const toiletCountTotal = this.registry?.getToilets().length ?? 0;
             const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
-            console.log(`[Guest ${g.id}] WC user — toilet search: ${toilet ? `uid=${toilet.uid}` : `null (${toiletCountTotal} toilets placed, ${this.reservedToilets.size} reserved)`} · sinks placed: ${sinkCountTotal}`);
+            console.log(`[Guest ${g.id}] WC user — toilet search: ${toilet ? `uid=${toilet.uid} (F${toilet.floor})` : `null (${toiletCountTotal} toilets placed, ${this.reservedToilets.size} reserved)`} · sinks placed: ${sinkCountTotal}`);
           }
           if (toilet) {
             this.reservedToilets.add(toilet.uid);
             g.toiletUid = toilet.uid;
             g.toiletRotY = toilet.rotY;
             g.toiletCenter = toilet.center;
+            g.toiletFloor = toilet.floor;
             g.returnSeatPos = g.seatPos.clone();
             g.target = toilet.standPos.clone();
+            // Set state BEFORE planPath so pickPathTargetFloor reads
+            // walkingToToilet and routes to g.toiletFloor.
+            g.state = "walkingToToilet";
             this.planPath(g);
             g.character.action = "walk";
-            g.state = "walkingToToilet";
             g.stateClock = 0;
             g.toiletWaitRemaining = undefined;
             break;
@@ -1710,20 +1889,21 @@ export class GuestSpawner {
         // branch above; finalizeVisit's penalty fires if they wanted
         // to wash and there was no sink (or every one stayed busy).
         if (g.willWashOnly && !g.washedHands && !g.washAttemptComplete) {
-          const sink = this.findFreeSink();
+          const sink = this.findFreeSink(g);
           if (DEBUG_GUEST_LOGS && g.washWaitRemaining === undefined) {
             const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
-            console.log(`[Guest ${g.id}] wash-only — sink search: ${sink ? `uid=${sink.uid}` : `null (${sinkCountTotal} sinks placed, ${this.reservedSinks.size} reserved)`}`);
+            console.log(`[Guest ${g.id}] wash-only — sink search: ${sink ? `uid=${sink.uid} (F${sink.floor})` : `null (${sinkCountTotal} sinks placed, ${this.reservedSinks.size} reserved)`}`);
           }
           if (sink) {
             this.reservedSinks.add(sink.uid);
             g.sinkUid = sink.uid;
             g.sinkRotY = sink.rotY;
+            g.sinkFloor = sink.floor;
             g.returnSeatPos = g.seatPos.clone();
             g.target = sink.standPos.clone();
+            g.state = "walkingToSink";
             this.planPath(g);
             g.character.action = "walk";
-            g.state = "walkingToSink";
             g.stateClock = 0;
             g.washWaitRemaining = undefined;
             break;
@@ -1741,26 +1921,38 @@ export class GuestSpawner {
           }
           g.washAttemptComplete = true;
         }
-        // Brief moment to "look at menu" — then build a multi-course
-        // order (1-3 dishes typically) and start the first course.
-        if (g.stateClock >= TIME_TO_ORDER) {
+        // Waiter-takes-order flow. After the post-sit settling beat
+        // (TIME_TO_ORDER doubles as "guest looks at menu" so the
+        // request doesn't fire the very first frame they sit down),
+        // push an order request into the router. A waiter walks over,
+        // dwells, and triggers the takeOrderCallback below — which is
+        // the only place g.order gets built. Until then the guest sits
+        // patiently with patience ticking (drives the "waiter is too
+        // slow" angry-exit path naturally).
+        if (g.stateClock >= TIME_TO_ORDER && !g.orderRequested && !g.orderTaken) {
+          g.orderRequested = true;
+          // Bar-seated guests flag their order as atBar so the
+          // barman pool picks it up (the waiter pool filters atBar
+          // requests out — see StaffRouter.tickWaiter idle).
+          this.router.enqueueOrderRequest(g.id, g.seatPos, g.seatFloor, g.seatAtBar ?? false);
+        }
+        if (g.orderTaken && g.order.length === 0) {
+          // Callback was supposed to populate g.order. Defensive: if
+          // it didn't (callback wiring missing) build one here so the
+          // guest doesn't get stuck. Same surface-aware build the old
+          // path used.
+          const surface = this.tableSurfaceForGuest(g);
+          g.order = this.buildOrder(g.archetype, surface);
           if (g.order.length === 0) {
-            // First tick past the order timer — build the order. Look
-            // up the table's surface so drink-only coffee tables get a
-            // drinks-only short order. Falls back to "food" if the
-            // seat is somehow detached from a known table.
-            const surface = this.tableSurfaceForGuest(g);
-            g.order = this.buildOrder(g.archetype, surface);
-            if (g.order.length === 0) {
-              this.markLostAndExit(g);
-              break;
-            }
+            this.markLostAndExit(g);
+            break;
           }
+        }
+        if (g.orderTaken && g.order.length > 0) {
           // Try to start the first course. beginNextCourse returns
           // false when the kitchen is out of clean plates / glasses;
           // we stay in "seated" and retry on the next tick while the
-          // guest's patience runs down — that's the "delayed order"
-          // UX the player picked. Success transitions to
+          // guest's patience runs down. Success transitions to
           // waitingForFood.
           this.beginNextCourse(g);
         }
@@ -1805,6 +1997,7 @@ export class GuestSpawner {
           g.toiletUid = undefined;
           g.toiletCenter = undefined;
           g.toiletRotY = undefined;
+          g.toiletFloor = undefined;
           g.usedToilet = true;
           g.toiletAttemptComplete = true;
           // Restore the chair-sized seatHeight for the rest of the
@@ -1813,19 +2006,20 @@ export class GuestSpawner {
             g.character.seatHeight = g.originalSeatHeight;
             g.originalSeatHeight = undefined;
           }
-          const sink = this.findFreeSink();
+          const sink = this.findFreeSink(g);
           if (DEBUG_GUEST_LOGS) {
             const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
-            console.log(`[Guest ${g.id}] left toilet → findFreeSink: ${sink ? `uid=${sink.uid} at (${sink.standPos.x.toFixed(2)}, ${sink.standPos.y.toFixed(2)})` : `null (${sinkCountTotal} placed, ${this.reservedSinks.size} reserved)`}`);
+            console.log(`[Guest ${g.id}] left toilet → findFreeSink: ${sink ? `uid=${sink.uid} (F${sink.floor}) at (${sink.standPos.x.toFixed(2)}, ${sink.standPos.y.toFixed(2)})` : `null (${sinkCountTotal} placed, ${this.reservedSinks.size} reserved)`}`);
           }
           if (sink) {
             this.reservedSinks.add(sink.uid);
             g.sinkUid = sink.uid;
             g.sinkRotY = sink.rotY;
+            g.sinkFloor = sink.floor;
             g.target = sink.standPos.clone();
+            g.state = "walkingToSink";
             this.planPath(g);
             g.character.action = "walk";
-            g.state = "walkingToSink";
             g.stateClock = 0;
           } else {
             g.target = (g.returnSeatPos ?? g.seatPos).clone();
@@ -1872,6 +2066,7 @@ export class GuestSpawner {
           if (g.sinkUid) this.reservedSinks.delete(g.sinkUid);
           g.sinkUid = undefined;
           g.sinkRotY = undefined;
+          g.sinkFloor = undefined;
           g.washedHands = true;
           g.target = (g.returnSeatPos ?? g.seatPos).clone();
           g.returnSeatPos = undefined;
@@ -1915,7 +2110,11 @@ export class GuestSpawner {
           if (g.orderIndex < g.order.length) {
             // Move to next course — go back to seated for a moment
             // (the guest considers what they ordered next, then waits).
-            g.patience = PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
+            // Next course — same dish stack the waiter already wrote
+            // down at the take-order step, no second waiter visit. Use
+            // the SERVE budget directly so a slow kitchen on course 2
+            // gets the full plate-arrival window.
+            g.patience = SERVE_PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
             this.beginNextCourse(g);
           } else {
             // Full order complete — leave a single averaged rating + walk out via the door.
@@ -2009,6 +2208,12 @@ export class GuestSpawner {
         // Sync _baseY so the animator's per-frame reset doesn't snap
         // the body back to the storey it was on when the path started.
         g.character._baseY = anchorY;
+        // Re-parent into the new floor's storey group so the storey-
+        // focus visibility hides the guest when the player is looking
+        // at a different floor. Without this, the guest stays parented
+        // to the main scene (always visible) for the entire visit and
+        // a Floor 1 customer leaks into the ground floor view.
+        this.reparentCharacter?.(g.character, consumed.floor);
       }
     }
     const wp = g.path[0] ?? { x: g.target.x, z: g.target.y, floor: g.currentFloor };
@@ -2188,10 +2393,19 @@ export class GuestSpawner {
     // but for now we only consume the head of the list — that's
     // enough since no current recipe declares more than one.
     const apps = this.game.cooking.getRecipeAppliances(recipe);
-    const primaryAppliance = apps[0] ?? recipe.stationNeeded ?? "stove";
+    // Force every drink-category recipe to route through the bar
+    // appliance, regardless of what its individual `appliances` list
+    // declares. Player's design decision: drinks are made at the bar
+    // counter by the barman, not by the chef at a stove / blender /
+    // coffee machine. Recipe data still carries the old appliance
+    // tags so the menu UI's "needs X" hints stay accurate for the
+    // INGREDIENT prep story (you still need a coffee machine in
+    // visual terms), but ticket routing is bar-only.
+    const primaryAppliance: import("../data/types").ApplianceId =
+      recipe.category === "drink" ? "bar" : (apps[0] ?? recipe.stationNeeded ?? "stove");
     g.ticketId = this.router.enqueueOrder(
       g.id, recipe.id, g.seatPos, this.game.getBaseCookSeconds(recipe),
-      primaryAppliance, g.seatFloor,
+      primaryAppliance, g.seatFloor, g.seatAtBar ?? false,
     );
     g.state = "waitingForFood";
     g.stateClock = 0;
@@ -2209,6 +2423,9 @@ export class GuestSpawner {
     this.game.reputation.recordRating(1);
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
     this.sfx?.thud();
+    // Drop any pending order request / in-flight ticket so a waiter
+    // doesn't keep walking toward this guest's seat after they bail.
+    this.router.cancelTicket(g.id);
     this.settleGuestDishes(g);
     g.character.action = "walk";
     g.target = DOOR_POSITION.clone();

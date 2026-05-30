@@ -47,7 +47,7 @@ export class StaffPanel {
       "Train staff in the Upgrades modal to raise their effective tier."
     );
 
-    (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => this.addRow(role));
+    (["chef", "barman", "waiter", "errand"] as StaffRole[]).forEach((role) => this.addRow(role));
 
     // Footer: total payroll + status.
     this.payrollLine = document.createElement("div");
@@ -185,7 +185,7 @@ export class StaffPanel {
     let totalCount = 0;
     let totalPayroll = 0;
     const perStaff = this.game.admin.payrollPerStaffPerMinute;
-    (["chef", "waiter", "errand"] as StaffRole[]).forEach((role) => {
+    (["chef", "barman", "waiter", "errand"] as StaffRole[]).forEach((role) => {
       const count = this.game.staff.getStaffCount(role);
       const hireCost = this.game.staff.getStaffHireCost(role);
       const fireCost = this.game.staff.getStaffFireCost(role);

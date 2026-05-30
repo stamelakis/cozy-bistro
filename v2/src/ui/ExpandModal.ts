@@ -142,12 +142,22 @@ export class ExpandModal {
       boostBtn.disabled = true;
       boostBtn.style.opacity = "0.7";
     } else {
-      const cost = this.game.getBoostCost();
-      boostBtn.textContent = `Boost guests — $${cost}`;
-      const can = this.game.economy.canAfford(cost);
-      boostBtn.disabled = !can;
-      boostBtn.style.opacity = can ? "1" : "0.5";
-      boostBtn.onclick = () => { if (this.game.buyBoost()) this.refresh(); };
+      const cooldown = this.game.getBoostCooldownRemaining();
+      if (cooldown > 0) {
+        const s = Math.max(0, Math.floor(cooldown));
+        const mm = Math.floor(s / 60).toString().padStart(2, "0");
+        const ss = (s % 60).toString().padStart(2, "0");
+        boostBtn.textContent = `Cooldown ${mm}:${ss}`;
+        boostBtn.disabled = true;
+        boostBtn.style.opacity = "0.5";
+      } else {
+        const cost = this.game.getBoostCost();
+        boostBtn.textContent = `Boost guests — $${cost}`;
+        const can = this.game.economy.canAfford(cost);
+        boostBtn.disabled = !can;
+        boostBtn.style.opacity = can ? "1" : "0.5";
+        boostBtn.onclick = () => { if (this.game.buyBoost()) this.refresh(); };
+      }
     }
     this.body.appendChild(boostBtn);
   }

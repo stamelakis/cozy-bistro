@@ -442,6 +442,9 @@ export class Engine {
       if (role === "waiter") {
         return this.router?.snapshotStatus().filter((s) => s.role === "waiter" && s.label).length ?? 0;
       }
+      if (role === "barman") {
+        return this.router?.snapshotStatus().filter((s) => s.role === "barman" && s.label).length ?? 0;
+      }
       return this.errand?.snapshotStatus().filter((s) => s.label).length ?? 0;
     };
     // StaffPanel queries this for the "tickets queued" footer — keeps the
@@ -518,7 +521,10 @@ export class Engine {
         // may already have the records. ensureBaseHeadcount pads
         // missing ones with auto-named members so we can attach
         // training to them.
-        const baseCounts = { chef: 1, waiter: 1, errand: this.scene.errandChar ? 1 : 0 };
+        // Barman count starts at 0 — the player hires one when they
+        // build a bar counter and want it staffed. No "base barman"
+        // gets pre-spawned with the world.
+        const baseCounts = { chef: 1, waiter: 1, errand: this.scene.errandChar ? 1 : 0, barman: 0 };
         this.game.staff.ensureBaseHeadcount(baseCounts);
         // First member of each role is the base char.
         const chefId = this.game.staff.getMembers("chef")[0]!.id;
@@ -556,6 +562,14 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
+      // Re-parent guests onto the right storey group as they cross the
+      // stair. Without this hook, every guest is parented to the main
+      // scene for their entire visit (always visible) — a Floor 1
+      // customer would render in the ground-floor view too, leaking
+      // upper-floor activity into the focused storey.
+      this.spawner.reparentCharacter = (char, toFloor) => {
+        this.scene.reparentCharacterToFloor(char, toFloor);
+      };
       // We deliberately don't wire dishware.onDishWashed: the wash
       // trip path removes the specific mesh it picked up (via
       // pickupDirty) and firing onDishWashed afterward would yank a
@@ -568,6 +582,16 @@ export class Engine {
         const spawner = this.spawner;
         const registry = this.registry;
         const dishware = this.game.dishware;
+        // Wire the waiter take-order callback so when a waiter finishes
+        // the dwell at a seated guest's table, the spawner builds the
+        // recipe list + enqueues the cooking ticket. Without this wire
+        // the seated guest would sit forever; the spawner's seated
+        // block has a defensive fallback that builds the order if
+        // g.orderTaken becomes true with an empty g.order, but the
+        // happy path is for this callback to do it.
+        this.router.takeOrderCallback = (guestId) => {
+          spawner.onWaiterTookOrder(guestId);
+        };
         this.router.washCallbacks = {
           getDirtyPickups: () => spawner.getDirtyPickups(),
           claimDirtyPickup: (id, memberId) => spawner.claimDirtyPickup(id, memberId),
@@ -876,7 +900,7 @@ export class Engine {
       console.warn("[syncStaff] no router — skipping all roles");
       return;
     }
-    const roles: ("chef" | "waiter" | "errand")[] = ["chef", "waiter", "errand"];
+    const roles: ("chef" | "waiter" | "errand" | "barman")[] = ["chef", "waiter", "errand", "barman"];
     for (const role of roles) {
       // Errand role needs its own router; skip cleanly if absent rather
       // than blocking chef/waiter restoration.
@@ -889,7 +913,9 @@ export class Engine {
         ? this.router.getChefCount()
         : role === "waiter"
           ? this.router.getWaiterCount()
-          : this.errand!.getHelperCount();
+          : role === "barman"
+            ? this.router.getBarmanCount()
+            : this.errand!.getHelperCount();
       console.log(`[syncStaff] ${role}: want=${members.length}, have=${have} (will spawn ${Math.max(0, members.length - have)})`);
       // Members 0..have-1 are already attached to actors (the base
       // char + any earlier extras). Spawn extras for the remaining
@@ -906,6 +932,7 @@ export class Engine {
           `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
         if (role === "chef") this.router.addChef(char, member.id, member.homeFloor ?? 0);
         else if (role === "waiter") this.router.addWaiter(char, member.id, member.homeFloor ?? 0);
+        else if (role === "barman") this.router.addBarman(char, member.id, member.homeFloor ?? 0);
         else this.errand!.addHelper(char, member.id);
       }
     }
@@ -915,12 +942,14 @@ export class Engine {
    * Picks an offset slot so multiple extras of the same role don't pile
    * onto a single spot. Pops a floating "+1 Role" toast at the new
    * character's spot so the player can see where to look. */
-  private async handleStaffHired(role: "chef" | "waiter" | "errand"): Promise<void> {
+  private async handleStaffHired(role: "chef" | "waiter" | "errand" | "barman"): Promise<void> {
     const currentInRouter = role === "chef"
       ? (this.router?.getChefCount() ?? 0)
       : role === "waiter"
         ? (this.router?.getWaiterCount() ?? 0)
-        : (this.errand?.getHelperCount() ?? 0);
+        : role === "barman"
+          ? (this.router?.getBarmanCount() ?? 0)
+          : (this.errand?.getHelperCount() ?? 0);
     const offsetSlot = currentInRouter;
     // Game.hireStaff already appended the new member record. Grab the
     // tail of the roster so we have the auto-generated name + id.
@@ -943,11 +972,12 @@ export class Engine {
       `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
     if (role === "chef") this.router?.addChef(char, member.id, member.homeFloor ?? 0);
     else if (role === "waiter") this.router?.addWaiter(char, member.id, member.homeFloor ?? 0);
+    else if (role === "barman") this.router?.addBarman(char, member.id, member.homeFloor ?? 0);
     else this.errand?.addHelper(char, member.id);
   }
 
-  private labelForRole(role: "chef" | "waiter" | "errand"): string {
-    return role === "chef" ? "Chef" : role === "waiter" ? "Waiter" : "Errand";
+  private labelForRole(role: "chef" | "waiter" | "errand" | "barman"): string {
+    return role === "chef" ? "Chef" : role === "waiter" ? "Waiter" : role === "barman" ? "Barman" : "Errand";
   }
 
   /** Look up the world position of the actor that represents a
@@ -964,10 +994,11 @@ export class Engine {
 
   /** Remove the most-recently-added staff character of this role from
    * its router pool, and drop their model from the scene. */
-  private handleStaffFired(role: "chef" | "waiter" | "errand"): void {
+  private handleStaffFired(role: "chef" | "waiter" | "errand" | "barman"): void {
     let removed: { character: { root: import("three").Object3D } | null } | null = null;
     if (role === "chef") removed = { character: this.router?.removeChef() ?? null };
     else if (role === "waiter") removed = { character: this.router?.removeWaiter() ?? null };
+    else if (role === "barman") removed = { character: this.router?.removeBarman() ?? null };
     else removed = { character: this.errand?.removeHelper() ?? null };
     const model = removed?.character?.root;
     if (model) {

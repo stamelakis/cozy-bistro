@@ -84,6 +84,11 @@ export interface ResolvedSeatSlot {
    * tables only serve drink-only orders. Mirrors the def's surface flag
    * (default "food" when unset). */
   surface: "food" | "drink";
+  /** True when the underlying furniture is a bar-category piece (the
+   * customer is sitting AT the bar counter, not a regular drink table
+   * like a coffee table). Drives the barman-vs-waiter routing: bar-
+   * seat orders + bar-seat deliveries go through the barman pool. */
+  atBar: boolean;
 }
 
 let nextUidCounter = 1;
@@ -571,6 +576,7 @@ export class FurnitureRegistry {
           chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
+          atBar: def.category === "bar",
         });
       }
     }
@@ -871,8 +877,8 @@ export class FurnitureRegistry {
    * GuestSpawner to route WC-needing customers to the nearest free
    * fixture. The "standing spot" is one tile in front of the toilet
    * along its facing axis — that's where the customer stops. */
-  getToilets(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] {
-    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] = [];
+  getToilets(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; floor: number }[] {
+    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; floor: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "bathroom") continue;
@@ -884,7 +890,7 @@ export class FurnitureRegistry {
         it.x + Math.sin(it.rotY),
         it.z + Math.cos(it.rotY),
       );
-      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos });
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos, floor: it.floor });
     }
     return out;
   }
@@ -893,8 +899,8 @@ export class FurnitureRegistry {
    * "bathroom-sink"). GuestSpawner routes WC visitors to a free sink
    * after the toilet step so the wash-hands quality also feeds back
    * into the rating. Same +Z-stand-spot convention as toilets. */
-  getBathroomSinks(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] {
-    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2 }[] = [];
+  getBathroomSinks(): { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; floor: number }[] {
+    const out: { uid: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; floor: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "bathroom") continue;
@@ -904,7 +910,7 @@ export class FurnitureRegistry {
         it.x + Math.sin(it.rotY),
         it.z + Math.cos(it.rotY),
       );
-      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos });
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, standPos, floor: it.floor });
     }
     return out;
   }

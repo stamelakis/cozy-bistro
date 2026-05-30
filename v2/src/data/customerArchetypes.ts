@@ -13,7 +13,10 @@ export interface CustomerArchetype {
   name: string;
   /** Selection weight (0-100). All weights sum to ~100. */
   weight: number;
-  /** Multiplied into the base PATIENCE_BASE_SECONDS. */
+  /** Multiplied into both ORDER_PATIENCE_BASE_SECONDS and
+   * SERVE_PATIENCE_BASE_SECONDS — same scalar for both phases of the
+   * customer's wait. Quick Lunch (0.6×) is impatient at every step;
+   * Foodie (1.3×) is forgiving at every step. */
   patienceMultiplier: number;
   /** Multiplied into the tip computed from the star rating. */
   tipMultiplier: number;

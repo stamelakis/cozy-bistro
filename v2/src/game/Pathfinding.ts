@@ -56,7 +56,7 @@ export interface MultiFloorPathStep {
  * Anchoring at the cell IN FRONT OF the stair (-4, -1) gives the
  * actor a flat lower-floor tile to stand on before climbing — and a
  * flat lower-floor tile to land on after descending. */
-const STAIR_BOTTOM_TILE = { x: -4, z: -1 };
+export const STAIR_BOTTOM_TILE = { x: -4, z: -1 };
 
 /** UPPER-floor landing tile — the cell DIRECTLY EAST of the stair's
  * top step. The slab on the upper floor has a hole punched through
@@ -66,7 +66,7 @@ const STAIR_BOTTOM_TILE = { x: -4, z: -1 };
  * them ON the top step, which is correct elevation but they're still
  * "inside the stair" from a tile-grid perspective. (-3, -4) is the
  * clean entry point to the upper floor proper. */
-const STAIR_TOP_TILE = { x: -3, z: -4 };
+export const STAIR_TOP_TILE = { x: -3, z: -4 };
 
 /** Grid bounds inside the restaurant — cells (x, z) with both axes in
  * [-4, 5]. The building's exterior walls sit at half-integer

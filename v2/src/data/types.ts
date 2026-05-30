@@ -80,7 +80,7 @@ export interface PlacedFurniture {
  * by one or more catalog items via FurnitureDef.provides. A recipe is
  * "makeable" iff every appliance in its `appliances` list is provided
  * by at least one placed item. */
-export type ApplianceId = "stove" | "counter" | "toaster" | "coffee" | "blender" | "microwave" | "hood";
+export type ApplianceId = "stove" | "counter" | "toaster" | "coffee" | "blender" | "microwave" | "hood" | "bar";
 
 /** Human labels for the appliance ids — used by the menu UI to show
  * "needs Toaster + Counter" badges on each recipe row. */
@@ -92,6 +92,7 @@ export const APPLIANCE_LABELS: Record<ApplianceId, string> = {
   blender: "Blender",
   microwave: "Microwave",
   hood: "Range Hood",
+  bar: "Bar Counter",
 };
 
 export interface RecipeDefinition {
@@ -132,7 +133,7 @@ export interface HiredStaff {
  * at once. */
 export interface HiredStaffMember {
   id: string;
-  role: "chef" | "waiter" | "errand";
+  role: "chef" | "waiter" | "errand" | "barman";
   name: string;
   upgradeLevel: number;
   /** Total playtime (seconds) at which the in-flight training
@@ -176,7 +177,7 @@ export interface SavedTicketState {
 }
 
 export interface SavedStaffActorState {
-  role: "chef" | "waiter" | "errand";
+  role: "chef" | "waiter" | "errand" | "barman";
   index: number;
   x: number;
   y: number;

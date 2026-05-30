@@ -23,6 +23,9 @@ const TINT_BY_ID: Record<string, number> = {
   chef:    0xf2ece0, // off-white apron
   waiter:  0x4a5a78, // dark slate uniform
   errand:  0x8aa67b, // sage canvas
+  // Barman shares the waiter GLB (same silhouette) but with a deep
+  // black uniform tint so the player can tell them apart at a glance.
+  barman:  0x161617,
   "guest-v0": 0xc69a7a,
   "guest-v1": 0xb8a07c,
   "guest-v2": 0xa88c70,
@@ -32,6 +35,15 @@ const TINT_BY_ID: Record<string, number> = {
   "guest-v6": 0xae9684,
 };
 const DEFAULT_TINT = 0xe6c9a0;
+
+/** Character ids that re-use another character's GLB instead of
+ * shipping their own. Used so we don't have to author a second mesh
+ * for the barman — they wear the waiter's geometry with a different
+ * tint applied via TINT_BY_ID. Keyed by the requested id, value is
+ * the GLB filename stem actually loaded. */
+const GLB_ALIAS: Record<string, string> = {
+  barman: "waiter",
+};
 
 export class CharacterLoader {
   private readonly modelLoader: ModelLoader;
@@ -43,7 +55,10 @@ export class CharacterLoader {
   }
 
   async load(characterId: string): Promise<THREE.Group> {
-    const root = await this.modelLoader.load(`assets/characters/${characterId}.glb`);
+    // Resolve alias roles (e.g. barman → waiter GLB). Tint is still
+    // looked up by the REQUESTED id so the alias gets its own colour.
+    const glbId = GLB_ALIAS[characterId] ?? characterId;
+    const root = await this.modelLoader.load(`assets/characters/${glbId}.glb`);
     this.patchMaterials(root, characterId);
     this.computeNormalsIfMissing(root);
     // Scale FIRST so bbox computation reflects the rendered size, THEN

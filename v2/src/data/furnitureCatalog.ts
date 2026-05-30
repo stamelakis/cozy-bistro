@@ -43,7 +43,7 @@ export interface FurnitureDef {
   /** Human label for the build menu. */
   name: string;
   /** Game category (mirrors 2D categories). */
-  category: "table" | "chair" | "stove" | "wash" | "appliance" | "counter" | "storage" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
+  category: "table" | "chair" | "stove" | "wash" | "appliance" | "counter" | "bar" | "storage" | "decoration" | "plant" | "lamp" | "door" | "bathroom" | "wall";
   /** Relative path under v2/public — fed to ModelLoader.load(). */
   modelPath: string;
   /** Fill ratio used by fitFurniture as a multiplier on top of the
@@ -498,18 +498,26 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // desserts), same way coffee tables do. Despite the "counter"
   // category, GuestSpawner treats anything with seatSlots as a serving
   // surface — see getTableSurface in FurnitureRegistry.
-  { id: "bar-counter",    name: "Bar Counter",     category: "counter",
+  // Moved to the new "bar" build category. bar-counter ALSO provides
+  // the "bar" appliance — that's the only station a barman will cook
+  // at and the only one any drink recipe will route to. Without this,
+  // drinks would queue forever once the chef pool was filtered to
+  // exclude bar tickets.
+  { id: "bar-counter",    name: "Bar Counter",     category: "bar",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
     tier: 3, fillTile: true, dishCapacity: 8, surface: "drink",
+    provides: "bar",
     seatSlots: BAR_COUNTER_SEAT_SLOTS,
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
-  { id: "bar-end",        name: "Bar End",         category: "counter",
+  { id: "bar-end",        name: "Bar End",         category: "bar",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
     // Surface slot shifted to dx=0.25 so anything placed on the bar end
     // sits ON the shifted mesh rather than floating where the tile centre
     // used to be. dz=0 stays at the depth midline. rotateSlotOffset
     // applies model.rotation.y to this, so a 180°-rotated bar end gets
     // its surface slot mirrored to dx=−0.25 along with the mesh.
+    // Doesn't provide "bar" itself — only the main counter does the
+    // cooking work, the end is decorative.
     tier: 3, fillTile: true, anchorEdge: "x+", dishCapacity: 4, surfaceSlots: [{ dx: 0.25, dz: 0 }] },
   // Built-in slots into a cabinet run flush with the wall — reads as
   // bigger/taller than a free-standing fridge for the same footprint.

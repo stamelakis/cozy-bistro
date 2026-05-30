@@ -2364,6 +2364,16 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
+      // Starter bar — 2-wide bar counter on the back wall to the
+      // right of the kitchen line, with two bar stools. Gives the
+      // player a working bar from spawn so the barman role + drink-
+      // routing pipeline can be exercised without forcing them to
+      // build one first. Bar counter half-integer anchor (x=2.5)
+      // spans tiles 2 and 3; seat slots are at dx=±0.5 / dz=+1, so
+      // stools land at (2, -3) and (3, -3) facing the counter.
+      { id: "bar-counter",  x:  2.5, z: -4, rotY: 0, tier: 1 },
+      { id: "bar-stool",    x:  2,   z: -3, rotY: 0, tier: 1 },
+      { id: "bar-stool",    x:  3,   z: -3, rotY: 0, tier: 1 },
       // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Chairs go
       // in the four corner-adjacent cells (pinwheel pattern) so each
       // chair sits AT a tile center rather than straddling tile
@@ -2525,14 +2535,18 @@ export class WorldScene {
    * overlap. `homeFloor` (default 0) parents the model into that
    * storey's mount so visibility tracks the focused floor. Returns the
    * AnimatedCharacter, or null if the GLB failed to load. */
-  async spawnExtraStaff(role: "chef" | "waiter" | "errand", offsetSlot: number, homeFloor = 0): Promise<AnimatedCharacter | null> {
+  async spawnExtraStaff(role: "chef" | "waiter" | "errand" | "barman", offsetSlot: number, homeFloor = 0): Promise<AnimatedCharacter | null> {
     // Matches the new starter homes in populateCharacters — further south
     // so the walking distance to the kitchen line is large enough to read.
-    const homeByRole: Record<"chef" | "waiter" | "errand", { x: number; z: number; facingY: number; action: CharacterAction }> = {
+    // Barman spawns alongside the waiter line on the kitchen side; the
+    // router immediately routes them to their bar counter via the idle
+    // picker, so this is just a temporary "landing pad" pose.
+    const homeByRole: Record<"chef" | "waiter" | "errand" | "barman", { x: number; z: number; facingY: number; action: CharacterAction }> = {
       // Reverted to original facingY values — the formula tweaks made
       // crab walking worse instead of better.
       chef:   { x: -1.5, z: -1.0, facingY: 0,            action: "idle" },
       waiter: { x:  1.5, z: -1.0, facingY: 0,            action: "idle" },
+      barman: { x:  2.5, z: -1.0, facingY: 0,            action: "idle" },
       errand: { x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle" },
     };
     const base = homeByRole[role];

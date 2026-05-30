@@ -28,6 +28,11 @@ const EXPANSION_GROWTH = 2;
  * dishwashers placed in the registry shorten this — see
  * Game.getEffectiveDishWashInterval. */
 const DISH_WASH_INTERVAL = 3;
+/** Seconds the player must wait after a paid boost ends before they
+ * can buy another. 15 real minutes — long enough that the boost reads
+ * as a tactical "pull a busy hour into the next 60s" rather than a
+ * way to permanently double spawn rate by spamming the button. */
+const BOOST_COOLDOWN_SECONDS = 15 * 60;
 /** Above this pile, guests visibly notice and rate the restaurant lower. */
 const DIRTY_PILE_PENALTY_THRESHOLD = 8;
 
@@ -162,6 +167,10 @@ export class Game {
   /** Seconds remaining of an active marketing boost. While > 0,
    * GuestSpawner halves its spawn interval. */
   private boostRemaining = 0;
+  /** Seconds left before the next boost can be purchased again. Set
+   * to BOOST_COOLDOWN_SECONDS the moment a boost finishes; ticks down
+   * with sim time. While > 0, buyBoost rejects. */
+  private boostCooldownRemaining = 0;
   /** Currently applied interior theme id (ground floor / legacy field).
    * Upper floors override via `themeByFloor`. */
   private themeId: string = RESTAURANT_THEMES[0].id;
@@ -372,9 +381,18 @@ export class Game {
       this.autoShopClock = 0;
       this.dispatchAutoShopTrip();
     }
-    // Boost timer counts down with real sim time.
+    // Boost timer counts down with real sim time. When it expires,
+    // start the cooldown — without this the player could re-buy a
+    // boost the instant the previous one ended and effectively keep a
+    // permanent +2× spawn rate going.
     if (this.boostRemaining > 0) {
+      const before = this.boostRemaining;
       this.boostRemaining = Math.max(0, this.boostRemaining - dt);
+      if (before > 0 && this.boostRemaining === 0) {
+        this.boostCooldownRemaining = BOOST_COOLDOWN_SECONDS;
+      }
+    } else if (this.boostCooldownRemaining > 0) {
+      this.boostCooldownRemaining = Math.max(0, this.boostCooldownRemaining - dt);
     }
     // Wash dirty plates + glasses through the dishware system. Per-tier
     // pools track which dishes go back to which prestige level when
@@ -1000,6 +1018,21 @@ export class Game {
     return this.boostRemaining;
   }
 
+  /** Seconds left on the post-boost cooldown (0 = ready to buy
+   * again). UI uses this to disable the boost button + show a
+   * countdown so the player can tell why their click is being
+   * rejected. */
+  getBoostCooldownRemaining(): number {
+    return this.boostCooldownRemaining;
+  }
+
+  /** Full cooldown length in seconds — exposed so the UI can compute
+   * a progress fraction if it wants. Kept as a getter (not a const
+   * import) for symmetry with the duration / cost accessors. */
+  getBoostCooldownDurationSeconds(): number {
+    return BOOST_COOLDOWN_SECONDS;
+  }
+
   /** Cost of buying a 60s boost. Scales gently with player wealth so it
    * stays meaningful in the late game. */
   getBoostCost(): number {
@@ -1008,8 +1041,17 @@ export class Game {
   getBoostDurationSeconds(): number {
     return 60;
   }
-  /** Try to buy a boost. Returns true if money was spent and timer was reset. */
+  /** Try to buy a boost. Returns true if money was spent and timer was
+   * reset. Rejects without charging when:
+   *   - a boost is already active (no stacking — would double-pay for
+   *     the same effective spawn rate)
+   *   - the post-boost cooldown is still ticking
+   *   - the player can't afford it
+   * The UI also disables the button in these cases as a UX hint, but
+   * this guard is the canonical gate. */
   buyBoost(): boolean {
+    if (this.boostRemaining > 0) return false;
+    if (this.boostCooldownRemaining > 0) return false;
     if (!this.economy.spendMoney(this.getBoostCost(), "decor")) return false;
     this.boostRemaining = this.getBoostDurationSeconds();
     return true;

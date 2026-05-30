@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 
 /**
@@ -38,7 +38,16 @@ export interface Ticket {
   seatPos: THREE.Vector2;
   /** Per-state timer (seconds). */
   clock: number;
-  /** Seconds the chef needs to "cook" before READY (from recipe). */
+  /** BASE cook time from the recipe, before any chef-specific
+   * multiplier. Immutable across the ticket's lifetime — kept separate
+   * so re-pickups (chef fired mid-cook, recoverStalledTickets bounce)
+   * don't compound the multiplier. The legacy `cookSeconds` field is
+   * the LIVE timer-target for the current chef, recomputed from base
+   * on each pickup. */
+  baseCookSeconds: number;
+  /** Seconds the chef needs to "cook" before READY (from recipe). Set
+   * at pickup as baseCookSeconds × thisChef.cookMultiplier so the
+   * current cook attempt matches who's actually doing the work. */
   cookSeconds: number;
   /** Which appliance the chef must claim to cook this recipe — the
    * recipe's first appliances entry, or "stove" / "counter" derived
@@ -51,6 +60,46 @@ export interface Ticket {
    * multi-floor pathfinding is still pending. Defaults to 0 for
    * tickets created before this field existed. */
   seatFloor: number;
+  /** World position where the waiter picks up the finished plate /
+   * glass. Set when the cook (chef or barman) marks the ticket
+   * "ready" — the cook's stand-in-front spot at the station they
+   * used. Falls back to the router's legacy `pickupPos` if unset
+   * (e.g. degenerate cook path with no assigned station). Critical
+   * for bar drinks: a barman cooks at the bar counter, not at the
+   * fixed kitchen pickup spot, so the waiter has to walk to the
+   * actual counter to grab the glass. */
+  pickupPos?: THREE.Vector2;
+  /** Storey the pickup spot lives on. Same purpose as pickupPos —
+   * lets a cross-floor pickup (Floor 1 barman → Floor 0 waiter)
+   * generate a stair segment. */
+  pickupFloor?: number;
+  /** True when the seat lives at a bar counter — i.e. the customer
+   * is sitting at the same furniture piece the barman cooks at. Used
+   * to ROUTE the post-cook step: bar-seated tickets get delivered
+   * directly by the barman (no waiter trip), regular tickets get
+   * marked "ready" for the waiter to pick up. Defaults to false for
+   * tickets created before this field existed. */
+  seatAtBar?: boolean;
+}
+
+/** A seated guest who hasn't placed their order yet. GuestSpawner
+ * pushes one of these when the guest reaches the seated state and is
+ * ready to order; an idle waiter walks to the seat, dwells briefly
+ * "taking the order", then signals back via takeOrderCallback so the
+ * spawner builds the recipe list and enqueues a cooking ticket.
+ *
+ * `claimedBy` holds the memberId of the waiter currently walking
+ * toward this seat, so a second waiter doesn't double-up on the same
+ * customer. Cleared when the trip completes / is abandoned. */
+export interface OrderRequest {
+  guestId: string;
+  seatPos: THREE.Vector2;
+  seatFloor: number;
+  claimedBy: string | null;
+  /** True when the seat is at a bar counter. Bar-seat orders are
+   * claimed by barmen instead of waiters — the customer is at the
+   * bar, the barman is at the bar, no waiter trip needed. */
+  atBar?: boolean;
 }
 
 /** Snapshot of a dirty piece's id + world position + kind (plate vs
@@ -111,7 +160,7 @@ interface StaffActor {
   character: AnimatedCharacter;
   /** Which pool this actor belongs to. Used by moveActor to apply the
    * right training-upgrade speed multiplier. */
-  role: "chef" | "waiter";
+  role: "chef" | "waiter" | "barman";
   /** HiredStaffMember id this actor represents — links the physical
    * character in the world to the trainable record in StaffSystem.
    * Multiplier callbacks key off this. */
@@ -180,6 +229,12 @@ interface StaffActor {
    * at the station" instead of "going to pick up a plate" / "carrying
    * to a seat". */
   washTrip?: WashTrip | null;
+  /** Waiter only: active take-order task. While set, the state
+   * machine's movingToWork / working reinterpret to mean "walking to
+   * the seated guest" / "dwelling at the seat to take the order".
+   * Cleared on completion / abandonment. Mutually exclusive with
+   * washTrip and ticketId (the waiter is only ever doing one thing). */
+  takeOrderRequest?: OrderRequest | null;
 }
 
 /** Snapshot of a placed stove the router can assign a chef to. */
@@ -211,7 +266,14 @@ export interface StationInfo {
 // deliveries cross the dining room and they need to keep up with
 // ticket flow.
 const CHEF_SPEED = 1.2;
-const WAITER_SPEED = 1.44; // +20% over CHEF_SPEED
+// Waiter is 200% of CHEF_SPEED — the take-order step added a second
+// dining-room trip on top of delivery, and a 4-floor building stretches
+// out their average route. 2.4 is faster than the customer WALK_SPEED
+// (1.8) so a waiter delivering visibly overtakes a customer walking
+// past, which reads as "hustling" rather than "matched pace". Keeps
+// per-customer wait times sane even when one waiter is covering
+// multiple floors.
+const WAITER_SPEED = 2.4;
 /** How long an idle waiter (or chef) will wait for HOME-FLOOR work
  * before falling back to cross-floor work. Tuned for ~2s so a local
  * chef / waiter has a moment to free up before the staff member
@@ -219,6 +281,11 @@ const WAITER_SPEED = 1.44; // +20% over CHEF_SPEED
  * setups stay local, mixed setups still get cross-floor coverage when
  * the local pool is dry for more than a couple of seconds. */
 const CROSS_FLOOR_WAIT_SECONDS = 2.0;
+/** How long a waiter dwells at a seated guest's table "taking the
+ * order" before the kitchen ticket is enqueued. Short on purpose —
+ * the visible beat reads as a brief stop, and any longer makes the
+ * customer's patience timer punish realistic staffing levels. */
+const TAKE_ORDER_DWELL_SECONDS = 1.5;
 
 /** Flip to true (or rebuild) to log every actor's per-frame movement
  * sample (`[Router/move] state now @ (x, y) target …`). Was on by
@@ -253,8 +320,29 @@ export class StaffRouter {
   /** Public queue: GuestSpawner enqueues, GuestSpawner polls for DELIVERED. */
   readonly tickets: Ticket[] = [];
 
+  /** Public queue of guests waiting for a waiter to take their order.
+   * GuestSpawner pushes when a guest reaches the seated state; waiters
+   * drain it in their idle handler. Removed when the order-taking
+   * trip completes successfully or is cancelled. */
+  readonly orderRequests: OrderRequest[] = [];
+
+  /** Engine wires this — fires when a waiter completes the dwell at a
+   * seated guest's table. GuestSpawner's handler builds the recipe
+   * list and calls enqueueOrder. Returns nothing; the spawner's call
+   * to enqueueOrder writes the resulting ticket id back onto the
+   * guest. If the guest has already left, the spawner's handler is
+   * expected to no-op. */
+  takeOrderCallback?: (guestId: string) => void;
+
   private readonly chefs: StaffActor[] = [];
   private readonly waiters: StaffActor[] = [];
+  /** Barmen pool. Behave like chefs but only cook drink-category
+   * recipes, and only at bar-counter stations. Bar-seated guests'
+   * order requests route here instead of to the waiter pool — the
+   * barman handles both the take-order and the serve trip directly,
+   * since the customer is already standing at the bar counter and
+   * the barman doesn't have to walk anywhere meaningful. */
+  private readonly barmen: StaffActor[] = [];
 
   /** Where the chef cooks (next to the stove). */
   private readonly stovePos: THREE.Vector2;
@@ -417,32 +505,56 @@ export class StaffRouter {
     return null;
   }
 
-  /** A loiter spot for a chef who isn't cooking right now. If the chef
-   * has a remembered last stove (and it's still placed), drift a small
-   * random offset around that stove's stand position. Otherwise fall
-   * back to their original home. Mirrors the errand helper's
-   * pickIdleSpot — keeps chefs near the appliance they're "assigned"
-   * to in the player's eyes. */
+  /** A loiter spot for a chef who isn't cooking right now. Priority
+   * (top wins):
+   *   1. Their LAST station (if it still exists) — preserves the
+   *      "this chef cooks here" association the player just saw.
+   *   2. Any STOVE on the chef's home floor — stoves outrank other
+   *      appliances because they're the iconic "I'm a cook" station.
+   *   3. Any cook station on the home floor (counter, toaster, etc.)
+   *      — chefs gather near appliances even if no stove is placed.
+   *   4. Their original spawn home — fallback when the kitchen is
+   *      empty of cooking gear.
+   * In every case a small random jitter is added so multiple idle
+   * chefs don't stack on the exact same tile. */
   private pickChefIdleSpot(c: StaffActor): THREE.Vector2 {
+    const jitter = (v: THREE.Vector2): THREE.Vector2 => {
+      v.x += (Math.random() - 0.5) * 1.2;
+      v.y += (Math.random() - 0.5) * 0.8;
+      return v;
+    };
+    // 1. Last station they cooked at (Phase C.2: any cook station,
+    // not just a stove — search broader pool first, then stoves so
+    // old save state remains valid).
     if (c.lastStoveUid) {
-      // Phase C.2: the "last station" might be any cook station, not
-      // just a stove. Search the broader cook-stations pool first, fall
-      // back to the legacy stove pool so old save state stays valid.
       const fromStations = this.getCookStations?.().find((s) => s.uid === c.lastStoveUid);
       const fromStoves = !fromStations
         ? this.getStoves?.().find((s) => s.uid === c.lastStoveUid)
         : undefined;
       const station = fromStations ?? fromStoves;
-      if (station) {
-        const base = this.chefStandPosFor(station);
-        base.x += (Math.random() - 0.5) * 1.2;
-        base.y += (Math.random() - 0.5) * 0.8;
-        return base;
-      }
+      if (station) return jitter(this.chefStandPosFor(station));
       // The station was sold/moved — forget it so we don't keep
       // searching for a ghost next tick.
       c.lastStoveUid = null;
     }
+    // 2. Any STOVE on this chef's home floor — stoves are the
+    // default "chef station" so gravitate there before counters.
+    if (this.getCookStations) {
+      const stove = this.getCookStations().find((s) => s.provides === "stove" && s.floor === c.homeFloor);
+      if (stove) return jitter(this.chefStandPosFor(stove));
+    }
+    if (this.getStoves) {
+      const stove = this.getStoves().find((s) => s.floor === c.homeFloor);
+      if (stove) return jitter(this.chefStandPosFor(stove));
+    }
+    // 3. Any cook station on the home floor (toaster, counter,
+    // blender, coffee machine, etc.) — chef should be near the
+    // appliance they'd next pick up from.
+    if (this.getCookStations) {
+      const station = this.getCookStations().find((s) => s.floor === c.homeFloor);
+      if (station) return jitter(this.chefStandPosFor(station));
+    }
+    // 4. Fallback — original spawn home.
     return c.home.clone();
   }
 
@@ -516,6 +628,33 @@ export class StaffRouter {
     });
   }
 
+  /** Append a barman. Behaves like a chef internally (state machine,
+   * cook-station claim) but only operates on bar-counter stations and
+   * drink recipes. Movement speed matches the chef — they barely walk,
+   * but when they do it's the same slow tend-the-station shuffle. */
+  addBarman(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
+    this.cacheFeetLift(char, homeFloor);
+    this.barmen.push({
+      character: char,
+      role: "barman",
+      memberId,
+      homeFloor,
+      currentFloor: homeFloor,
+      targetFloor: homeFloor,
+      home: char.groundPos.clone(),
+      state: "idle",
+      ticketId: null,
+      target: char.groundPos.clone(),
+      clock: 0,
+      speed: CHEF_SPEED,
+      path: [],
+      replanAccum: 0,
+      homeWorkWaitClock: 0,
+      assignedStoveUid: null,
+      lastStoveUid: null,
+    });
+  }
+
   /** Cache the character's raw feet-lift (offset above the floor slab,
    * independent of which storey they're standing on). _baseY captured
    * by the animator already bakes in homeFloor × STOREY for upper-floor
@@ -535,6 +674,12 @@ export class StaffRouter {
   removeChef(): AnimatedCharacter | null {
     return this.popPreferIdle(this.chefs);
   }
+  /** Pop a barman out of the pool. Same pattern as removeChef —
+   * prefers idle members so an in-flight drink doesn't get stranded
+   * when the player fires one. */
+  removeBarman(): AnimatedCharacter | null {
+    return this.popPreferIdle(this.barmen);
+  }
   removeWaiter(): AnimatedCharacter | null {
     return this.popPreferIdle(this.waiters);
   }
@@ -545,7 +690,7 @@ export class StaffRouter {
    * the player reassigns a member's home floor — the visual model
    * needs to be re-parented + Y-shifted to the new storey. */
   getCharacterByMemberId(id: string): AnimatedCharacter | null {
-    for (const pool of [this.chefs, this.waiters]) {
+    for (const pool of [this.chefs, this.waiters, this.barmen]) {
       for (const a of pool) {
         if (a.memberId === id) return a.character;
       }
@@ -559,7 +704,7 @@ export class StaffRouter {
    * the same — only the world frame's parent changes.) */
   updateActorHomeFloor(memberId: string, fromFloor: number, toFloor: number, storeyHeight: number): void {
     void fromFloor; void storeyHeight;
-    for (const pool of [this.chefs, this.waiters]) {
+    for (const pool of [this.chefs, this.waiters, this.barmen]) {
       for (const a of pool) {
         if (a.memberId !== memberId) continue;
         a.homeFloor = toFloor;
@@ -632,12 +777,22 @@ export class StaffRouter {
       this.busyWashUids.delete(removed.washTrip.stationUid);
       removed.washTrip = null;
     }
+    // Release any take-order claim — the request goes back to the
+    // queue so another waiter can pick it up. Without this, firing
+    // the only waiter mid-walk-to-table leaves the request claimed
+    // forever and no future waiter takes it.
+    if (removed.takeOrderRequest) {
+      const req = this.orderRequests.find((o) => o.guestId === removed.takeOrderRequest!.guestId);
+      if (req) req.claimedBy = null;
+      removed.takeOrderRequest = null;
+    }
     pool.splice(idx, 1);
     return removed.character;
   }
 
   getChefCount(): number { return this.chefs.length; }
   getWaiterCount(): number { return this.waiters.length; }
+  getBarmanCount(): number { return this.barmen.length; }
 
   /** Look up the animated character that represents a specific
    * HiredStaffMember — Engine uses this to anchor floating-text
@@ -645,6 +800,7 @@ export class StaffRouter {
   findCharacterByMemberId(memberId: string): AnimatedCharacter | null {
     for (const c of this.chefs) if (c.memberId === memberId) return c.character;
     for (const w of this.waiters) if (w.memberId === memberId) return w.character;
+    for (const b of this.barmen) if (b.memberId === memberId) return b.character;
     return null;
   }
 
@@ -670,11 +826,58 @@ export class StaffRouter {
 
   /** Snapshot used by the UI status-bubble layer. Returns one entry per
    * staff member with their current activity label. Empty label = no bubble. */
-  snapshotStatus(): { character: AnimatedCharacter; role: "chef" | "waiter"; label: string }[] {
-    const out: { character: AnimatedCharacter; role: "chef" | "waiter"; label: string }[] = [];
+  snapshotStatus(): { character: AnimatedCharacter; role: "chef" | "waiter" | "barman"; label: string }[] {
+    const out: { character: AnimatedCharacter; role: "chef" | "waiter" | "barman"; label: string }[] = [];
     for (const c of this.chefs) out.push({ character: c.character, role: "chef", label: chefLabel(c.state) });
-    for (const w of this.waiters) out.push({ character: w.character, role: "waiter", label: waiterLabel(w.state) });
+    for (const w of this.waiters) out.push({ character: w.character, role: "waiter", label: waiterLabel(w) });
+    for (const b of this.barmen) out.push({ character: b.character, role: "barman", label: barmanLabel(b) });
     return out;
+  }
+
+  /** Called by GuestSpawner when a guest reaches the seated state and
+   * is ready to order. The router routes a waiter to the seat; on
+   * arrival + brief dwell the takeOrderCallback fires and the spawner
+   * builds the recipe list + calls enqueueOrder. Pre-existing request
+   * for the same guest is replaced (defensive — shouldn't happen
+   * given the spawner's orderRequested latch). */
+  enqueueOrderRequest(guestId: string, seatPos: THREE.Vector2, seatFloor: number = 0, atBar: boolean = false): void {
+    // Drop any prior request for this guest first so a re-seat between
+    // toilet trips doesn't strand a stale claim.
+    this.cancelOrderRequest(guestId);
+    this.orderRequests.push({
+      guestId,
+      seatPos: seatPos.clone(),
+      seatFloor,
+      claimedBy: null,
+      atBar,
+    });
+    console.log(`[Router] order request enqueued for ${guestId} (floor ${seatFloor}, atBar=${atBar}) — ${this.orderRequests.length} pending`);
+  }
+
+  /** Drop a pending or in-flight order request for `guestId`. If a
+   * waiter is currently walking toward / dwelling at the seat, they
+   * get pulled off and sent home. Called from cancelTicket (guest
+   * left mid-meal) and directly when a guest's seated trip aborts
+   * before any cooking ticket exists. */
+  cancelOrderRequest(guestId: string): boolean {
+    const idx = this.orderRequests.findIndex((o) => o.guestId === guestId);
+    if (idx < 0) return false;
+    const req = this.orderRequests[idx];
+    if (req.claimedBy) {
+      const waiter = this.waiters.find((w) => w.memberId === req.claimedBy);
+      if (waiter && waiter.takeOrderRequest?.guestId === guestId) {
+        waiter.takeOrderRequest = null;
+        const rest = this.pickWaiterIdleSpot(waiter);
+        waiter.target = rest.pos;
+        waiter.targetFloor = rest.floor;
+        this.planPath(waiter);
+        waiter.state = "returningHome";
+        waiter.character.action = "walk";
+        waiter.clock = 0;
+      }
+    }
+    this.orderRequests.splice(idx, 1);
+    return true;
   }
 
   /** Called by GuestSpawner when a guest places an order. */
@@ -682,26 +885,91 @@ export class StaffRouter {
     guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number,
     appliance: string = "stove",
     seatFloor: number = 0,
+    seatAtBar: boolean = false,
   ): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     this.tickets.push({
       id, guestId, recipeId, state: "queued",
-      seatPos: seatPos.clone(), clock: 0, cookSeconds, appliance, seatFloor,
+      seatPos: seatPos.clone(), clock: 0,
+      baseCookSeconds: cookSeconds,
+      cookSeconds, appliance, seatFloor,
+      seatAtBar,
     });
     console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
     return id;
+  }
+
+  /** GuestSpawner calls this when a guest leaves (angry / table sold /
+   * any premature exit) so the in-flight ticket doesn't strand a chef
+   * cooking for a ghost or a waiter carrying a plate to an empty
+   * seat. Without this, the ticket lingered in the array forever:
+   *   - cooking → chef finishes, ticket becomes 'ready', no guest
+   *     to deliver to, waiter walks the plate to an empty seat
+   *   - ready → never cleared; eventually a waiter picks it up and
+   *     wastes a walk to nowhere
+   *   - delivering → waiter arrives at empty seat, drops invisible
+   *     plate, walks home — only state that was self-cleaning.
+   *
+   * Detaches the staff actor from the ticket (releases stove, hides
+   * plate visual, sends them home) before splicing it out so they
+   * don't keep `c.ticketId` / `w.ticketId` referencing a dead id. */
+  cancelTicket(guestId: string): boolean {
+    // Always drop any pending order request first — guests can leave
+    // before they get to enqueue a cooking ticket (no waiter ever
+    // came, customer gave up while seated), and the order-request
+    // queue would otherwise strand a stale entry that a future waiter
+    // would walk toward.
+    this.cancelOrderRequest(guestId);
+    const idx = this.tickets.findIndex((t) => t.guestId === guestId);
+    if (idx < 0) return false;
+    const ticket = this.tickets[idx];
+    // Detach any chef currently working on it.
+    for (const c of this.chefs) {
+      if (c.ticketId !== ticket.id) continue;
+      this.releaseStove(c);
+      c.ticketId = null;
+      // Route them home via the loiter spot — cheaper than restarting
+      // their state machine and lets the working/moveActor branches
+      // gracefully unwind.
+      c.target = this.pickChefIdleSpot(c);
+      this.planPath(c);
+      c.state = "returningHome";
+      c.character.action = "walk";
+      c.clock = 0;
+    }
+    // Detach any waiter currently delivering it.
+    for (const w of this.waiters) {
+      if (w.ticketId !== ticket.id) continue;
+      w.ticketId = null;
+      if (w.heldPlate) w.heldPlate.visible = false;
+      {
+        const rest = this.pickWaiterIdleSpot(w);
+        w.target = rest.pos;
+        w.targetFloor = rest.floor;
+        this.planPath(w);
+      }
+      w.state = "returningHome";
+      w.character.action = "walk";
+      w.clock = 0;
+    }
+    this.readyStallLogged.delete(ticket.id);
+    this.tickets.splice(idx, 1);
+    console.log(`[Router] cancelTicket ${ticket.id} (guest ${guestId}) — was ${ticket.state}`);
+    return true;
   }
 
   /** GuestSpawner calls this to learn if its ticket has been delivered. */
   popDeliveredFor(guestId: string): boolean {
     const i = this.tickets.findIndex((t) => t.guestId === guestId && t.state === "delivered");
     if (i < 0) return false;
+    this.readyStallLogged.delete(this.tickets[i].id);
     this.tickets.splice(i, 1);
     return true;
   }
 
   update(dt: number): void {
     for (const c of this.chefs) this.tickChef(c, dt);
+    for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
     this.recoverStalledTickets(dt);
     this.logHeartbeatIfDue(dt);
@@ -746,8 +1014,23 @@ export class StaffRouter {
         const owner = this.waiters.find((w) => w.ticketId === t.id);
         if (!owner) { t.state = "ready"; t.clock = 0; }
       }
+      // 'ready' has no auto-recovery (no chef/waiter is "stuck" on it
+      // by definition — it's waiting in the pickup queue) but a ticket
+      // that sits ready for 30s+ tells us the waiter pool is starved
+      // or blocked. The customer's own patience drives the abandon path
+      // — this log just helps diagnose "why is no waiter picking up?"
+      // during playtesting. Logs once per stall, not every tick.
+      if (t.state === "ready" && t.clock > 30 && !this.readyStallLogged.has(t.id)) {
+        this.readyStallLogged.add(t.id);
+        const idle = this.waiters.filter((w) => w.state === "idle").length;
+        console.warn(`[Router] ticket ${t.id} has been READY for >30s — ${idle}/${this.waiters.length} waiters idle. Pool starved?`);
+      }
     }
   }
+  /** Set of ticket ids we've already logged a 'ready stall' warning for,
+   * so the warn doesn't spam every tick. Entries are dropped when the
+   * ticket leaves the array (popDeliveredFor / cancelTicket). */
+  private readonly readyStallLogged = new Set<string>();
 
   // === Chef state machine ===
 
@@ -756,75 +1039,24 @@ export class StaffRouter {
 
     switch (c.state) {
       case "idle": {
-        // Phase 7d: a chef only cooks for tickets where the guest sits
-        // on this chef's home floor. Until multi-floor pathfinding
-        // ships, cooking for a guest on a different storey would mean
-        // the chef teleports through walls / floors to the stove and
-        // back; cleaner to let an idle chef on the right floor pick it
-        // up, or leave the ticket queued until one is hired.
-        // Chefs cook at stoves on their OWN floor (claimFreeStove gates
-        // that). But the customer the order's for can live on any floor.
-        // Two-pass selection: home-floor tickets first, cross-floor only
-        // after CROSS_FLOOR_WAIT_SECONDS of idleness with nothing on the
-        // home floor queued. Lets a Floor-N chef stay focused on their
-        // own customers while still covering for an empty other floor
-        // once it's clear no local work is coming.
-        const homeTicket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
-        if (homeTicket) {
+        // Chef ignores bar tickets — those belong to the barman pool.
+        // Without the appliance filter a chef would call
+        // claimFreeStation("bar") and happily cook a drink at a bar
+        // counter, defeating the "drinks require a barman" rule.
+        const isChefTicket = (t: Ticket): boolean =>
+          t.state === "queued" && t.appliance !== "bar";
+        const homeTickets = this.tickets.filter((t) => isChefTicket(t) && t.seatFloor === c.homeFloor);
+        if (homeTickets.length > 0) {
           c.homeWorkWaitClock = 0;
-        }
-        const ticket = homeTicket
-          ?? (c.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
-              ? this.tickets.find((t) => t.state === "queued")
-              : undefined);
-        if (!ticket) {
-          // No work right now. Tick the home-work wait clock so the
-          // cross-floor fallback eventually unlocks if nothing matches
-          // home-floor.
-          c.homeWorkWaitClock += dt;
+          if (this.tryClaimCookForChef(c, homeTickets)) break;
           break;
         }
-        // Pick a station that provides the recipe's required appliance.
-        // The chef defers (stays idle) when no matching station is free,
-        // so a recipe that needs the toaster can't get cooked at the
-        // stove just because the stove happens to be open. Pre-Phase-C
-        // tickets without an appliance default to "stove" — keeps old
-        // saves alive while we migrate.
-        const needed = ticket.appliance || "stove";
-        const station = this.claimFreeStation(needed, c.homeFloor);
-        let target: THREE.Vector2;
-        if (station) {
-          c.assignedStoveUid = station.uid;
-          target = this.chefStandPosFor(station);
-        } else if (needed === "stove" && this.getStoves && this.getStoves().length === 0) {
-          // No stoves placed AND the recipe needs stove — fall back to
-          // the legacy shared cooking spot so the kitchen still
-          // functions in a degenerate "no appliance" save. No
-          // reservation possible here; multiple chefs may pile on.
-          c.assignedStoveUid = null;
-          target = this.stovePos.clone();
-        } else {
-          // Matching station exists but all are busy, OR the player
-          // hasn't built the appliance this recipe needs (e.g. a
-          // counter recipe with no counter placed). Wait it out — the
-          // ticket stays queued and the chef stays idle.
-          break;
+        c.homeWorkWaitClock += dt;
+        if (c.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
+        const anyTickets = this.tickets.filter(isChefTicket);
+        if (anyTickets.length > 0) {
+          this.tryClaimCookForChef(c, anyTickets);
         }
-        ticket.state = "cooking";
-        ticket.clock = 0;
-        // Apply THIS chef's cook-time multiplier on pickup so the
-        // timer the kitchen counts down matches the chef who's
-        // actually doing the work.
-        const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
-        ticket.cookSeconds = Math.max(1, ticket.cookSeconds * chefMult);
-        c.ticketId = ticket.id;
-        c.target = target;
-        this.planPath(c);
-        c.state = "movingToWork";
-        c.clock = 0;
-        c.character.action = "walk";
-        c.homeWorkWaitClock = 0;
-        console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
         break;
       }
       case "movingToWork": {
@@ -851,6 +1083,13 @@ export class StaffRouter {
         if (c.clock >= ticket.cookSeconds) {
           ticket.state = "ready";
           ticket.clock = 0;
+          // Record where the plate is sitting so the waiter walks to
+          // THIS station to pick it up instead of the legacy fixed
+          // pickup spot. Uses the chef's current ground pose since
+          // they're standing in front of the station they just cooked
+          // at; same floor as the chef (no cross-floor cooking).
+          ticket.pickupPos = c.character.groundPos.clone();
+          ticket.pickupFloor = c.currentFloor;
           this.releaseStove(c);
           c.target = this.pickChefIdleSpot(c);
           this.planPath(c);
@@ -862,30 +1101,14 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
-        // Same interrupt as the waiter: if a queued ticket is waiting
-        // for THIS chef's home floor (and matches a free station),
-        // abort the loiter walk and start cooking from where we are.
-        // Spares the customer a chef round-trip across the kitchen
-        // every time a new order lands while they're "going back".
-        const interruptTicket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
-        if (interruptTicket) {
-          const needed = interruptTicket.appliance || "stove";
-          const station = this.claimFreeStation(needed, c.homeFloor);
-          if (station) {
-            c.assignedStoveUid = station.uid;
-            interruptTicket.state = "cooking";
-            interruptTicket.clock = 0;
-            const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
-            interruptTicket.cookSeconds = Math.max(1, interruptTicket.cookSeconds * chefMult);
-            c.ticketId = interruptTicket.id;
-            c.target = this.chefStandPosFor(station);
-            this.planPath(c);
-            c.state = "movingToWork";
-            c.clock = 0;
-            c.character.action = "walk";
-            c.homeWorkWaitClock = 0;
-            break;
-          }
+        // Same interrupt as the waiter: if a queued home-floor ticket
+        // matches a free station, abort the loiter walk and start
+        // cooking from where we are. Bar tickets are excluded here
+        // too — chef never picks them up, ever.
+        const interruptTickets = this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance !== "bar" && t.seatFloor === c.homeFloor);
+        if (interruptTickets.length > 0 && this.tryClaimCookForChef(c, interruptTickets)) {
+          break;
         }
         this.moveActor(c, dt);
         if (this.distance(c.character.groundPos, c.target) < ARRIVAL_THRESHOLD) {
@@ -896,6 +1119,300 @@ export class StaffRouter {
         break;
       }
     }
+  }
+
+  // === Barman state machine ===
+  //
+  // The barman mirrors the chef closely — same idle/move/work/return
+  // cycle, same station-claim flow, same recovery on guest-bail — but
+  // restricted to bar tickets (recipe.appliance === "bar") and bar
+  // counter stations (provides === "bar"). Sharing tickets with the
+  // chef pool would let a chef pick up a drink ticket that needs a
+  // bar counter; the appliance filter on claimFreeStation already
+  // prevents that mismatch, but routing drink tickets exclusively
+  // through the barmen pool keeps the chef from even seeing them and
+  // makes "no barman hired" visibly fail instead of silently waiting.
+  //
+  // Bar-seated guests get a DIRECT serve path (the customer is at the
+  // counter, the barman is at the counter, no waiter trip needed) —
+  // see the "ready" handler below.
+  private tickBarman(b: StaffActor, dt: number): void {
+    b.clock += dt;
+    switch (b.state) {
+      case "idle": {
+        // Priority for the barman, top to bottom:
+        //   1. Home-floor bar customer waiting to order → walk to
+        //      their stool, dwell, fire callback (spawner then
+        //      enqueues the cooking ticket).
+        //   2. Home-floor queued bar ticket → cook at the bar counter.
+        //   3. Cross-floor versions of either after the wait clock
+        //      expires (rare — barman usually owns one floor's bar).
+        const homeOrder = this.orderRequests.find((o) =>
+          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor);
+        if (homeOrder) {
+          this.startBarmanTakeOrder(b, homeOrder);
+          break;
+        }
+        const homeTickets = this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor);
+        if (homeTickets.length > 0) {
+          b.homeWorkWaitClock = 0;
+          if (this.tryClaimDrinkForBarman(b, homeTickets)) break;
+          break;
+        }
+        b.homeWorkWaitClock += dt;
+        if (b.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
+        // Cross-floor: a barman on Floor 1 can take an unattended
+        // Floor 0 bar order once the local wait expires.
+        const anyOrder = this.orderRequests.find((o) => o.claimedBy === null && o.atBar);
+        if (anyOrder) {
+          this.startBarmanTakeOrder(b, anyOrder);
+          break;
+        }
+        const anyTickets = this.tickets.filter((t) => t.state === "queued" && t.appliance === "bar");
+        if (anyTickets.length > 0) {
+          this.tryClaimDrinkForBarman(b, anyTickets);
+        }
+        break;
+      }
+      case "movingToWork": {
+        this.moveActor(b, dt);
+        if (this.distance(b.character.groundPos, b.target) < ARRIVAL_THRESHOLD) {
+          // Take-order arrival — stand at the seat for the dwell, no
+          // "mixing" pose since we're just chatting.
+          if (b.takeOrderRequest) {
+            b.character.action = "idle";
+            b.state = "working";
+            b.clock = 0;
+            break;
+          }
+          // Deliver-arrival — barman walked the finished drink to a
+          // bar customer's stool. Mark delivered + go home; no dwell.
+          const deliveringTicket = b.ticketId
+            ? this.tickets.find((t) => t.id === b.ticketId && t.state === "delivering")
+            : undefined;
+          if (deliveringTicket) {
+            deliveringTicket.state = "delivered";
+            b.ticketId = null;
+            b.target = this.pickBarmanIdleSpot(b);
+            this.planPath(b);
+            b.state = "returningHome";
+            b.character.action = "walk";
+            b.clock = 0;
+            break;
+          }
+          // Normal cooking arrival.
+          b.character.action = "carry"; // forward pitch reads as "mixing"
+          b.state = "working";
+          b.clock = 0;
+        }
+        break;
+      }
+      case "working": {
+        // Take-order dwell — same timer the waiter uses. Fire the
+        // spawner callback on completion so it builds the recipe
+        // list + enqueues the cooking ticket; the barman then picks
+        // that ticket up next tick via the idle handler.
+        if (b.takeOrderRequest) {
+          if (b.clock >= TAKE_ORDER_DWELL_SECONDS) {
+            const req = b.takeOrderRequest;
+            this.takeOrderCallback?.(req.guestId);
+            const reqIdx = this.orderRequests.findIndex((o) => o.guestId === req.guestId);
+            if (reqIdx >= 0) this.orderRequests.splice(reqIdx, 1);
+            b.takeOrderRequest = null;
+            b.target = this.pickBarmanIdleSpot(b);
+            this.planPath(b);
+            b.state = "returningHome";
+            b.character.action = "walk";
+            b.clock = 0;
+          }
+          break;
+        }
+        const ticket = this.tickets.find((t) => t.id === b.ticketId);
+        if (!ticket) {
+          // Customer left mid-mix. Drop the station + walk home.
+          this.releaseStove(b);
+          b.target = this.pickBarmanIdleSpot(b);
+          this.planPath(b);
+          b.state = "returningHome";
+          b.character.action = "walk";
+          b.clock = 0;
+          b.ticketId = null;
+          break;
+        }
+        if (b.clock >= ticket.cookSeconds) {
+          // Pickup is right here at the bar counter — see chef branch
+          // for the same pattern. Critical for bar drinks where the
+          // "pickup" is the bar counter, not the kitchen line.
+          ticket.pickupPos = b.character.groundPos.clone();
+          ticket.pickupFloor = b.currentFloor;
+          this.releaseStove(b);
+          // Bar-seated customers get a direct serve from the barman —
+          // no waiter trip, the bar IS the pickup AND the seat. Other
+          // customers (table seats) get the ticket marked "ready" so
+          // the waiter pool picks it up.
+          if (ticket.seatAtBar) {
+            ticket.state = "delivering";
+            ticket.clock = 0;
+            // b.ticketId stays set — the movingToWork branch checks
+            // ticket.state === "delivering" to know it's a deliver leg.
+            b.target = ticket.seatPos.clone();
+            b.targetFloor = ticket.seatFloor;
+            this.planPath(b);
+            b.state = "movingToWork";
+            b.character.action = "carry";
+            b.clock = 0;
+          } else {
+            ticket.state = "ready";
+            ticket.clock = 0;
+            b.target = this.pickBarmanIdleSpot(b);
+            this.planPath(b);
+            b.state = "returningHome";
+            b.character.action = "walk";
+            b.ticketId = null;
+            b.clock = 0;
+          }
+        }
+        break;
+      }
+      case "returningHome": {
+        // Same interrupt as the chef — but also catch a fresh bar
+        // order request (customer just sat down at the bar) so we
+        // don't make them wait for the round-trip back to the home
+        // spot before flagging us down.
+        const interruptOrder = this.orderRequests.find((o) =>
+          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor);
+        if (interruptOrder) {
+          this.startBarmanTakeOrder(b, interruptOrder);
+          break;
+        }
+        const interruptTickets = this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor);
+        if (interruptTickets.length > 0 && this.tryClaimDrinkForBarman(b, interruptTickets)) {
+          break;
+        }
+        this.moveActor(b, dt);
+        if (this.distance(b.character.groundPos, b.target) < ARRIVAL_THRESHOLD) {
+          b.character.action = "idle";
+          b.state = "idle";
+          b.clock = 0;
+        }
+        break;
+      }
+    }
+  }
+
+  /** Bar variant of startWaiterTakeOrder — claim the request so two
+   * barmen don't race for the same bar customer, point at the seat,
+   * flip into movingToWork. Reuses the actor's takeOrderRequest
+   * field; the working state handles the dwell + callback. */
+  private startBarmanTakeOrder(b: StaffActor, req: OrderRequest): void {
+    req.claimedBy = b.memberId;
+    b.takeOrderRequest = req;
+    b.target = req.seatPos.clone();
+    b.targetFloor = req.seatFloor;
+    this.planPath(b);
+    b.state = "movingToWork";
+    b.clock = 0;
+    b.character.action = "walk";
+    b.homeWorkWaitClock = 0;
+    console.log(`[Router] barman taking bar order from ${req.guestId} (floor ${req.seatFloor})`);
+  }
+
+  /** Bar-counter variant of tryClaimCookForChef — same iterate-until-
+   * a-station-is-free pattern, but the only valid appliance is "bar"
+   * and there's no legacy fallback (no bar counter means no drinks). */
+  private tryClaimDrinkForBarman(b: StaffActor, candidates: readonly Ticket[]): boolean {
+    for (const ticket of candidates) {
+      const station = this.claimFreeStation("bar", b.homeFloor);
+      if (!station) continue;
+      b.assignedStoveUid = station.uid;
+      const target = this.chefStandPosFor(station);
+      ticket.state = "cooking";
+      ticket.clock = 0;
+      const chefMult = this.getChefCookMultiplier?.(b.memberId) ?? 1;
+      ticket.cookSeconds = Math.max(1, ticket.baseCookSeconds * chefMult);
+      b.ticketId = ticket.id;
+      b.target = target;
+      this.planPath(b);
+      b.state = "movingToWork";
+      b.clock = 0;
+      b.character.action = "walk";
+      b.homeWorkWaitClock = 0;
+      console.log(`[Router] barman picked up ${ticket.id} (bar) → ${station.uid} (mult ${chefMult.toFixed(2)})`);
+      return true;
+    }
+    return false;
+  }
+
+  /** Barman loiter spot — prefers their last bar counter, then any
+   * bar counter on home floor, then the spawn home. Mirrors
+   * pickChefIdleSpot but locked to "bar" stations. */
+  private pickBarmanIdleSpot(b: StaffActor): THREE.Vector2 {
+    const jitter = (v: THREE.Vector2): THREE.Vector2 => {
+      v.x += (Math.random() - 0.5) * 1.2;
+      v.y += (Math.random() - 0.5) * 0.8;
+      return v;
+    };
+    if (b.lastStoveUid) {
+      const station = this.getCookStations?.().find((s) => s.uid === b.lastStoveUid && s.provides === "bar");
+      if (station) return jitter(this.chefStandPosFor(station));
+      b.lastStoveUid = null;
+    }
+    if (this.getCookStations) {
+      const bar = this.getCookStations().find((s) => s.provides === "bar" && s.floor === b.homeFloor);
+      if (bar) return jitter(this.chefStandPosFor(bar));
+    }
+    return b.home.clone();
+  }
+
+  /** Walk a list of candidate queued tickets and start cooking the
+   * first one whose required station is free (or whose required
+   * appliance is "stove" and no stoves are placed — degenerate
+   * fallback to the legacy stovePos). Returns true when a cook was
+   * started, false when nothing in the list could be claimed.
+   *
+   * Shared by the idle-pickup and returningHome-interrupt paths so
+   * both behave identically when the queue head is uncookable: skip
+   * to the next candidate instead of giving up. Without iteration,
+   * one toaster-needs-no-toaster ticket at position 0 would freeze
+   * the chef even when position 1's stove ticket was ready to go. */
+  private tryClaimCookForChef(c: StaffActor, candidates: readonly Ticket[]): boolean {
+    for (const ticket of candidates) {
+      const needed = ticket.appliance || "stove";
+      const station = this.claimFreeStation(needed, c.homeFloor);
+      let target: THREE.Vector2;
+      if (station) {
+        c.assignedStoveUid = station.uid;
+        target = this.chefStandPosFor(station);
+      } else if (needed === "stove" && this.getStoves && this.getStoves().length === 0) {
+        // No stoves placed AND the recipe needs stove — fall back to
+        // the legacy shared cooking spot so the kitchen still
+        // functions in a degenerate "no appliance" save. No
+        // reservation possible here; multiple chefs may pile on.
+        c.assignedStoveUid = null;
+        target = this.stovePos.clone();
+      } else {
+        // Matching station exists but all are busy, OR the player
+        // hasn't built the appliance this recipe needs. Try the next
+        // candidate.
+        continue;
+      }
+      ticket.state = "cooking";
+      ticket.clock = 0;
+      const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
+      ticket.cookSeconds = Math.max(1, ticket.baseCookSeconds * chefMult);
+      c.ticketId = ticket.id;
+      c.target = target;
+      this.planPath(c);
+      c.state = "movingToWork";
+      c.clock = 0;
+      c.character.action = "walk";
+      c.homeWorkWaitClock = 0;
+      console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
+      return true;
+    }
+    return false;
   }
 
   /** Release the chef's stove reservation and remember it as their
@@ -919,14 +1436,67 @@ export class StaffRouter {
     ticket.state = "delivering";
     ticket.clock = 0;
     w.ticketId = ticket.id;
-    w.target = this.pickupPos.clone();
-    w.targetFloor = 0; // pickup is always the ground-floor kitchen
+    // Walk to the SPECIFIC station the cook stood at when they marked
+    // the ticket ready — for bar drinks that's the bar counter, for
+    // regular dishes that's wherever the chef cooked. Falls back to
+    // the legacy fixed pickupPos if the ticket somehow has no
+    // pickupPos (defensive — every ready-transition sets it now).
+    const pickupPos = ticket.pickupPos ?? this.pickupPos;
+    const pickupFloor = ticket.pickupFloor ?? 0;
+    w.target = pickupPos.clone();
+    w.targetFloor = pickupFloor;
     this.planPath(w);
     w.state = "movingToWork";
     w.clock = 0;
     w.character.action = "walk";
     w.homeWorkWaitClock = 0;
-    console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}) → walking to pickup`);
+    console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}, pickupFloor=${pickupFloor}) → walking to pickup`);
+  }
+
+  /** Pick a "rest spot" for an idle waiter.
+   *   - If they're already on their home floor, they STAY IN PLACE
+   *     (current ground position) — no pointless trek back to their
+   *     spawn point every time a delivery finishes.
+   *   - If they're on a different floor (just finished cross-floor
+   *     work), they drift back to the stair landing on their home
+   *     floor. Random jitter prevents multiple waiters from stacking
+   *     on the exact same landing tile.
+   * Returns the {pos, floor} pair callers feed into target +
+   * targetFloor + planPath. */
+  private pickWaiterIdleSpot(w: StaffActor): { pos: THREE.Vector2; floor: number } {
+    if (w.currentFloor === w.homeFloor) {
+      // Already on the right floor — stay put. The returningHome
+      // arrival check trips on the first tick and they go straight to
+      // idle without walking anywhere.
+      return { pos: w.character.groundPos.clone(), floor: w.homeFloor };
+    }
+    // Cross-floor return — head to the stair landing on home floor.
+    // Floor 0's stair anchor is the BOTTOM tile; every upper floor
+    // shares the same TOP tile geometry (the stairwell column lives
+    // at the same X/Z on every storey).
+    const landing = w.homeFloor === 0 ? STAIR_BOTTOM_TILE : STAIR_TOP_TILE;
+    const pos = new THREE.Vector2(
+      landing.x + (Math.random() - 0.5) * 1.6,
+      landing.z + (Math.random() - 0.5) * 1.6,
+    );
+    return { pos, floor: w.homeFloor };
+  }
+
+  /** Shared "begin take-order trip" transition — claim the request
+   * (so two waiters don't race for the same seat), point the waiter
+   * at the guest's seat, and flip into movingToWork. The dwell +
+   * callback fires later in working state. */
+  private startWaiterTakeOrder(w: StaffActor, req: OrderRequest): void {
+    req.claimedBy = w.memberId;
+    w.takeOrderRequest = req;
+    w.target = req.seatPos.clone();
+    w.targetFloor = req.seatFloor;
+    this.planPath(w);
+    w.state = "movingToWork";
+    w.clock = 0;
+    w.character.action = "walk";
+    w.homeWorkWaitClock = 0;
+    console.log(`[Router] waiter taking order from ${req.guestId} (floor ${req.seatFloor})`);
   }
 
   /** Shared "begin wash trip" transition — used by the idle picker
@@ -948,21 +1518,28 @@ export class StaffRouter {
     switch (w.state) {
       case "idle": {
         // Waiter work selection priority (top to bottom):
-        //   1. Home-floor ready ticket → pick it up
-        //   2. Home-floor dirty plate → wash trip
-        //   3. ANY home-floor work IN THE PIPELINE (queued/cooking
-        //      ticket OR a dirty just sitting there waiting to age) →
-        //      stay idle and wait. Don't cross floors to poach Floor 0
-        //      work when our own floor has a customer about to be
-        //      ready in 10 seconds; that's what made waiters look like
-        //      they 'prioritized ground floor instead of their own
-        //      floor's customers'.
-        //   4. Only after a meaningful idle gap with TRULY NOTHING on
-        //      our floor — no ready, no cooking, no queued, no dirty —
-        //      do we consider cross-floor work.
-        const homeTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
+        //   1. Home-floor READY ticket → deliver (food is cooling)
+        //   2. Home-floor pending ORDER REQUEST → take order (seated
+        //      customer waiting to order; patience already ticking)
+        //   3. Home-floor DIRTY plate → wash trip (inventory)
+        //   4. Home-floor pipeline (queued/cooking ticket) → stay put.
+        //      Don't cross to another floor when our own kitchen is
+        //      about to hand us food.
+        //   5. After CROSS_FLOOR_WAIT_SECONDS of TRULY nothing local,
+        //      consider cross-floor work in the same delivery →
+        //      take-order → wash order.
+        // Waiter skips bar-seat work — the barman handles the entire
+        // round trip for customers sitting at the bar counter.
+        const homeTicket = this.tickets.find((t) =>
+          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar);
         if (homeTicket) {
           this.startWaiterDelivery(w, homeTicket);
+          break;
+        }
+        const homeOrderReq = this.orderRequests.find((o) =>
+          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar);
+        if (homeOrderReq) {
+          this.startWaiterTakeOrder(w, homeOrderReq);
           break;
         }
         const homeTrip = this.tryStartWashTrip(w, w.homeFloor);
@@ -971,11 +1548,10 @@ export class StaffRouter {
           break;
         }
         // Is there future home-floor work coming our way? (queued or
-        // cooking ticket on our floor). If yes, stay put — we'll grab
-        // it the moment it becomes 'ready', no need to wander off and
-        // burn customer patience on a stair round trip.
-        const homePipeline = this.tickets.some((t) =>
-          t.seatFloor === w.homeFloor && (t.state === "queued" || t.state === "cooking"));
+        // cooking ticket on our floor, or an unclaimed order request).
+        // If yes, stay put — we'll grab it the moment it's ready.
+        const homePipeline =
+          this.tickets.some((t) => t.seatFloor === w.homeFloor && (t.state === "queued" || t.state === "cooking"));
         if (homePipeline) {
           // Reset the cross-floor wait so a brief 'pipeline gap' just
           // before the next batch arrives doesn't bleed into the
@@ -987,10 +1563,16 @@ export class StaffRouter {
         // back to cross-floor work once it crosses the threshold.
         w.homeWorkWaitClock += dt;
         if (w.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
-        // Cross-floor fallback.
-        const anyTicket = this.tickets.find((t) => t.state === "ready");
+        // Cross-floor fallback — same priority order as home, and same
+        // bar-seat exclusion (bar work is barman-only, never waiter).
+        const anyTicket = this.tickets.find((t) => t.state === "ready" && !t.seatAtBar);
         if (anyTicket) {
           this.startWaiterDelivery(w, anyTicket);
+          break;
+        }
+        const anyOrderReq = this.orderRequests.find((o) => o.claimedBy === null && !o.atBar);
+        if (anyOrderReq) {
+          this.startWaiterTakeOrder(w, anyOrderReq);
           break;
         }
         const anyTrip = this.tryStartWashTrip(w);
@@ -1002,6 +1584,15 @@ export class StaffRouter {
       case "movingToWork": {
         this.moveActor(w, dt);
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
+          // Take-order trip reinterprets movingToWork → "walking to
+          // seated guest". On arrival we just enter the dwell state;
+          // working handles the timer + callback.
+          if (w.takeOrderRequest) {
+            w.character.action = "idle"; // "standing at the table"
+            w.state = "working";
+            w.clock = 0;
+            break;
+          }
           // Wash trips reinterpret movingToWork — same shared walking
           // code, branch on whether we're heading to a dirty pickup or
           // to the wash station after picking up.
@@ -1070,6 +1661,29 @@ export class StaffRouter {
         break;
       }
       case "working": {
+        // Take-order dwell — wait TAKE_ORDER_DWELL_SECONDS at the
+        // seated guest's table, then fire the spawner's callback so it
+        // builds the recipe list + enqueues the cooking ticket.
+        if (w.takeOrderRequest) {
+          if (w.clock >= TAKE_ORDER_DWELL_SECONDS) {
+            const req = w.takeOrderRequest;
+            this.takeOrderCallback?.(req.guestId);
+            // Remove the request from the queue — spawner may have
+            // already done it inside the callback, but a defensive
+            // splice keeps the queue clean if the callback's wiring
+            // is missing or the guest left before the splice.
+            const reqIdx = this.orderRequests.findIndex((o) => o.guestId === req.guestId);
+            if (reqIdx >= 0) this.orderRequests.splice(reqIdx, 1);
+            w.takeOrderRequest = null;
+            w.target = w.home.clone();
+            w.targetFloor = w.homeFloor;
+            this.planPath(w);
+            w.state = "returningHome";
+            w.character.action = "walk";
+            w.clock = 0;
+          }
+          break;
+        }
         if (w.washTrip) {
           // Dwelling at the wash station. Two paths split here:
           //   SINK: dwell is the full scrub time. When it ends the
@@ -1085,7 +1699,19 @@ export class StaffRouter {
             const trip = w.washTrip;
             const isDishwasher = trip.stationDefId.startsWith("dishwasher");
             if (isDishwasher) {
-              this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind);
+              // The carried dirty piece was already removed from the
+              // world by pickupDirty — if loadDishwasher fails (batch
+              // filled up between trip-start and arrival, or the
+              // dishwasher was sold mid-walk), the dish would silently
+              // vanish from the inventory. Fall back to washOne so the
+              // piece still becomes clean ("waiter dumped it in the
+              // sink on the way past"). Without this, an inventory leak
+              // is hard to spot in playtesting.
+              const loaded = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+              if (!loaded) {
+                this.dishwareLogger?.(`dishwasher-load-failed kind=${trip.kind} uid=${trip.stationUid} → washOne fallback`);
+                this.washCallbacks?.washOne(trip.kind);
+              }
               // Dishwashers don't lock — clearing busyWashUids is a
               // safety net for legacy code paths that may still have
               // claimed it.
@@ -1122,14 +1748,21 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
-        // Mid-return interrupt: a home-floor ticket just became ready,
+        // Mid-return interrupt: home-floor ticket just became ready —
         // skip the walk-back-then-walk-out round trip and start the
-        // delivery NOW. Was making waiters pass customers heading 'back'
-        // before re-engaging on the very ticket that customer was
-        // waiting on.
-        const interruptTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
+        // delivery NOW. Same idea for a freshly-seated guest waiting
+        // to order: starting the take-order now instead of after the
+        // home loop saves several seconds of customer wait time.
+        const interruptTicket = this.tickets.find((t) =>
+          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar);
         if (interruptTicket) {
           this.startWaiterDelivery(w, interruptTicket);
+          break;
+        }
+        const interruptOrder = this.orderRequests.find((o) =>
+          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar);
+        if (interruptOrder) {
+          this.startWaiterTakeOrder(w, interruptOrder);
           break;
         }
         this.moveActor(w, dt);
@@ -1362,10 +1995,29 @@ function chefLabel(state: StaffActor["state"]): string {
   }
 }
 
-function waiterLabel(state: StaffActor["state"]): string {
-  switch (state) {
-    case "movingToWork": return "→ pickup";
-    case "working":       return "🍽️ serving";
+function barmanLabel(b: StaffActor): string {
+  switch (b.state) {
+    case "movingToWork": return "→ bar";
+    case "working":       return "🍸 mixing";
+    case "returningHome": return "← bar";
+    default:              return "";
+  }
+}
+
+function waiterLabel(w: StaffActor): string {
+  // Use the active task type (take-order / wash / serve) to label the
+  // bubble — without it every movingToWork waiter just said "→ pickup"
+  // and the player couldn't tell who was taking an order from who was
+  // grabbing a plate.
+  switch (w.state) {
+    case "movingToWork":
+      if (w.takeOrderRequest) return "📋 → order";
+      if (w.washTrip) return w.washTrip.phase === "pickup" ? "🧽 → dirty" : "🧽 → wash";
+      return "→ pickup";
+    case "working":
+      if (w.takeOrderRequest) return "📋 ordering";
+      if (w.washTrip) return "🧽 washing";
+      return "🍽️ serving";
     case "returningHome": return "← back";
     default:              return "";
   }

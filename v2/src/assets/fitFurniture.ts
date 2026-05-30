@@ -44,6 +44,7 @@ const DEFAULT_HEIGHTS: Record<FurnitureDef["category"], number> = {
   wash: 0.92,         // sinks + dishwashers — same kitchen-counter line
   appliance: 0.40,    // small tabletop kitchen tools (sit on counters)
   counter: 0.92,
+  bar: 1.05,          // bar tops sit slightly taller than counters
   storage: 0.92,      // fridges + cabinets — match the counter line
   decoration: 0.55,   // small props (crates, books, pillows)
   plant: 0.85,        // potted plant + foliage

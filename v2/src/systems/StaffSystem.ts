@@ -1,14 +1,18 @@
 import type { HiredStaff, HiredStaffMember, SaveGameState } from "../data/types";
 import { randomStaffName } from "../data/staffNames";
 
-export type StaffRole = "chef" | "waiter" | "errand";
+export type StaffRole = "chef" | "waiter" | "errand" | "barman";
 
 export const chefHireCost = 80;
 export const waiterHireCost = 70;
 export const errandHireCost = 65;
+// Barman sits between chef and waiter — narrower job (drinks only)
+// but a real station-owner, not a runner. Hire cost mirrors chef's.
+export const barmanHireCost = 80;
 export const chefFireCost = 18;
 export const waiterFireCost = 14;
 export const errandFireCost = 12;
+export const barmanFireCost = 18;
 export const defaultPayrollPerStaffPerMinute = 0;
 
 /** A payroll tick result describes what the scene should charge and how to bookkeep. */
@@ -57,7 +61,7 @@ export class StaffSystem {
    * `upgradeLevel`, so the player trains an individual instead of
    * buffing the whole role. */
   private members: HiredStaffMember[] = [];
-  private pendingStaffFirings: Record<StaffRole, number> = { chef: 0, waiter: 0, errand: 0 };
+  private pendingStaffFirings: Record<StaffRole, number> = { chef: 0, waiter: 0, errand: 0, barman: 0 };
   private lastSalaryChargeAt = 0;
   private salaryRemainder = 0;
   /** Monotonic counter for generating unique member ids within a
@@ -173,13 +177,22 @@ export class StaffSystem {
   // === Pricing ===
 
   getStaffHireCost(role: StaffRole): number {
-    const baseCost = role === "chef" ? chefHireCost : role === "waiter" ? waiterHireCost : errandHireCost;
+    const baseCost =
+      role === "chef" ? chefHireCost :
+      role === "waiter" ? waiterHireCost :
+      role === "barman" ? barmanHireCost :
+      errandHireCost;
     const currentCount = this.getStaffCount(role);
     return roundStaffMoney(baseCost * (1 + currentCount * 0.1));
   }
 
   getStaffFireCost(role: StaffRole): number {
-    return role === "chef" ? chefFireCost : role === "waiter" ? waiterFireCost : errandFireCost;
+    return (
+      role === "chef" ? chefFireCost :
+      role === "waiter" ? waiterFireCost :
+      role === "barman" ? barmanFireCost :
+      errandFireCost
+    );
   }
 
   // === Training upgrades — per member ===
@@ -389,6 +402,7 @@ export class StaffSystem {
   getStaffRoleLabel(role: StaffRole): string {
     if (role === "chef") return "Chef";
     if (role === "waiter") return "Waiter";
+    if (role === "barman") return "Barman";
     return "Errand helper";
   }
 
@@ -421,24 +435,29 @@ export class StaffSystem {
       // Legacy save — generate members from the per-role counts and
       // apply the legacy per-role staffUpgrades level to every member
       // of that role (best we can do without per-member history).
+      // Legacy save format only counted chef/waiter/errand. Barman is
+      // a new role — saves never have a barman count, so default to 0;
+      // the player hires one fresh in the new session.
       const counts: Record<StaffRole, number> = {
         chef: save?.staff?.chefs ?? 0,
         waiter: save?.staff?.waiters ?? 0,
         errand: save?.staff?.errandBoys ?? 0,
+        barman: 0,
       };
       const legacyLevels: Record<StaffRole, number> = {
         chef: clampLevel(save?.staffUpgrades?.chef),
         waiter: clampLevel(save?.staffUpgrades?.waiter),
         errand: clampLevel(save?.staffUpgrades?.errand),
+        barman: 0,
       };
-      for (const role of ["chef", "waiter", "errand"] as StaffRole[]) {
+      for (const role of ["chef", "waiter", "errand", "barman"] as StaffRole[]) {
         for (let i = 0; i < counts[role]; i += 1) {
           const m = this.addStaff(role);
           m.upgradeLevel = legacyLevels[role];
         }
       }
     }
-    this.pendingStaffFirings = { chef: 0, waiter: 0, errand: 0 };
+    this.pendingStaffFirings = { chef: 0, waiter: 0, errand: 0, barman: 0 };
     this.resetSalaryTick();
   }
 

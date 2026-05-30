@@ -25,6 +25,21 @@ interface PooledBubble {
   inUse: boolean;
 }
 
+/** Walk an Object3D's parent chain; return false if any ancestor is
+ * marked visible=false. Used as the primary floor-leak filter for the
+ * status bubbles: when a character is parented to a storey group that
+ * the focus / tier rules have hidden, their bubble shouldn't render
+ * either. Stops at the first parentless node (the scene root, or a
+ * detached object). */
+function isAncestorChainVisible(node: THREE.Object3D | null): boolean {
+  let cur: THREE.Object3D | null = node;
+  while (cur) {
+    if (cur.visible === false) return false;
+    cur = cur.parent;
+  }
+  return true;
+}
+
 export class StatusBubbles {
   private readonly host: HTMLElement;
   private readonly canvas: HTMLCanvasElement;
@@ -57,11 +72,22 @@ export class StatusBubbles {
     const storeyH = this.getStoreyHeight?.() ?? 3;
     for (const entry of entries) {
       if (!entry.label) continue;
-      // Floor filter — derive the character's storey from their world Y
-      // (root.position.y ≈ floor * storeyHeight + feet-lift). Hide the
-      // bubble when the player is focused on a different storey so the
-      // ground floor's "pickup" / "cooking" labels don't leak through
-      // the upper slab.
+      // Primary filter: walk the character's parent chain. If ANY
+      // ancestor in the three.js graph is invisible, the character's
+      // mesh isn't on screen — so the bubble shouldn't be either. This
+      // catches every case where a staff/guest is parented to a hidden
+      // storey group (upper floor not in focus, or storey not yet
+      // unlocked by tier). Strictly more reliable than the Y-rounded
+      // floor calc which gets fooled mid-stair, by non-zero feetLift,
+      // or by characters whose model origin doesn't sit exactly on the
+      // slab.
+      if (!isAncestorChainVisible(entry.character.root)) continue;
+      // Secondary filter: derive the character's storey from their
+      // world Y as a defence in depth — if a future code path adds an
+      // unparented character (root attached directly to the scene),
+      // the Y check still keeps a Floor 1 bubble out of the Floor 0
+      // view. Math.round picks the nearest slab; an actor mid-stair
+      // rounds toward whichever floor is closer.
       const charY = entry.character.root.position.y;
       const charFloor = Math.round(charY / storeyH);
       if (focused !== undefined && charFloor !== focused) continue;

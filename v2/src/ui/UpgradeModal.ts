@@ -303,6 +303,14 @@ export class UpgradeModal {
         current: (lv) => `Walks at ${100 + 10 * lv}% of base speed`,
         next: (lv) => `→ ${100 + 10 * (lv + 1)}% (+10% serve speed)`,
       },
+      barman: {
+        // Same training curve as the chef — training shaves drink mix
+        // time the same way it shaves cook time. The visual + label is
+        // bar-themed so the player doesn't confuse training screens.
+        emoji: "🍸", label: "Barman", stat: "mix speed",
+        current: (lv) => `Mixes at ${100 - 10 * lv}% of base time`,
+        next: (lv) => `→ ${100 - 10 * (lv + 1)}% (-10% mix time)`,
+      },
       errand: {
         emoji: "📦", label: "Errand Helper", stat: "carry capacity",
         current: (lv) => `Carries ${10 + 2 * lv} units per trip`,
@@ -322,7 +330,7 @@ export class UpgradeModal {
     }
 
     // Sort: chef → waiter → errand, within role by name.
-    const order: Record<StaffRole, number> = { chef: 0, waiter: 1, errand: 2 };
+    const order: Record<StaffRole, number> = { chef: 0, barman: 1, waiter: 2, errand: 3 };
     const sorted = [...players].sort((a, b) =>
       (order[a.role] - order[b.role]) || a.name.localeCompare(b.name),
     );

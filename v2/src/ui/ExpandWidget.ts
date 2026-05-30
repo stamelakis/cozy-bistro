@@ -97,12 +97,32 @@ export class ExpandWidget {
       this.boostBtn.disabled = true;
       this.boostBtn.style.opacity = "0.7";
     } else {
-      const c = this.game.getBoostCost();
-      const d = this.game.getBoostDurationSeconds();
-      this.boostBtn.textContent = `📣 Boost guests ${d}s — $${c}`;
-      const can = this.game.economy.canAfford(c);
-      this.boostBtn.disabled = !can;
-      this.boostBtn.style.opacity = can ? "1" : "0.5";
+      const cooldown = this.game.getBoostCooldownRemaining();
+      if (cooldown > 0) {
+        // mm:ss format so a 15-minute wait reads cleanly at any
+        // remaining value (00:42 is more legible than "42s" right
+        // before it lapses, and "14:59" beats "899s").
+        this.boostBtn.textContent = `📣 Cooldown ${formatMmSs(cooldown)}`;
+        this.boostBtn.disabled = true;
+        this.boostBtn.style.opacity = "0.5";
+      } else {
+        const c = this.game.getBoostCost();
+        const d = this.game.getBoostDurationSeconds();
+        this.boostBtn.textContent = `📣 Boost guests ${d}s — $${c}`;
+        const can = this.game.economy.canAfford(c);
+        this.boostBtn.disabled = !can;
+        this.boostBtn.style.opacity = can ? "1" : "0.5";
+      }
     }
   }
+}
+
+/** mm:ss formatter shared with the boost button. Floor seconds (not
+ * ceil) so the counter visibly hits 00:00 the moment the cooldown
+ * actually ends instead of rendering 00:01 for one extra frame. */
+function formatMmSs(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const mm = Math.floor(s / 60).toString().padStart(2, "0");
+  const ss = (s % 60).toString().padStart(2, "0");
+  return `${mm}:${ss}`;
 }
