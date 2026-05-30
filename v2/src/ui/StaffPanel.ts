@@ -47,7 +47,14 @@ export class StaffPanel {
       "Train staff in the Upgrades modal to raise their effective tier."
     );
 
-    (["chef", "barman", "waiter", "errand"] as StaffRole[]).forEach((role) => this.addRow(role));
+    const rolesToShow: StaffRole[] = ["chef", "barman", "waiter", "errand"];
+    rolesToShow.forEach((role) => this.addRow(role));
+    // Build-time sanity check the player can grep in DevTools — if
+    // this line is missing from the console output, the browser is
+    // serving a cached StaffPanel and a hard reload + Vite restart
+    // is needed. Logs the exact roster the panel knows about so a
+    // mis-ordered or missing role is immediately obvious.
+    console.log(`[StaffPanel] mounted rows for: ${rolesToShow.join(", ")}`);
 
     // Footer: total payroll + status.
     this.payrollLine = document.createElement("div");
