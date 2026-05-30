@@ -1810,15 +1810,60 @@ export class WorldScene {
     const tex = WorldScene.makeGrassTexture();
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(5, 5);
+    // Bumped tile repeat 5×5 → 9×9 to match the bigger plane —
+    // without this the grass texture stretched to a blurry blob.
+    tex.repeat.set(9, 9);
+    // Plane bumped 90×90 → 160×160 to cover the seeded city span
+    // (plots reach to ±48; we want generous green margin around
+    // them so distant plots aren't sitting on a void edge).
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(90, 90),
+      new THREE.PlaneGeometry(160, 160),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
     grass.position.y = -0.01;
     grass.receiveShadow = true;
     this.threeScene.add(grass);
+    // City paths — stone-coloured strips between plot rows /
+    // columns, Greek-Island vibe (no asphalt). The seeded plots
+    // sit at x = -48, -24, 0, 24, 48 and z = -48, 0, 48; we want
+    // paths in the GAPS so plots stay on grass and paths connect
+    // their edges.
+    this.addCityStreets();
+  }
+
+  /** Greek-Island stone paths weaving between the seeded plots.
+   * Three horizontal strips (z = ±36, 0) and four vertical strips
+   * (x = ±36, ±12) form a loose grid so a visitor on any plot can
+   * walk to any other. Same beige stone material as the existing
+   * legacy pavement so the visual reads as one continuous town
+   * surface rather than two clashing road systems. */
+  private addCityStreets(): void {
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0xc2b39a, roughness: 0.95, metalness: 0 });
+    const STRIP_LEN = 140; // a touch under the grass span so edges stay green
+    const STRIP_W = 3;
+    const makeStrip = (orientation: "ew" | "ns", offset: number): void => {
+      const w = orientation === "ew" ? STRIP_LEN : STRIP_W;
+      const h = orientation === "ew" ? STRIP_W : STRIP_LEN;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), stoneMat);
+      m.rotation.x = -Math.PI / 2;
+      // Sits just above the grass plane (which is at y=-0.01) so
+      // there's no z-fighting; still under any building foundation.
+      m.position.set(orientation === "ns" ? offset : 0, 0.005, orientation === "ew" ? offset : 0);
+      m.receiveShadow = true;
+      this.threeScene.add(m);
+    };
+    // East-West strips at three rows — between and around the
+    // seeded plot rows at z = -48, 0, 48.
+    makeStrip("ew", -36);
+    makeStrip("ew",  -12);
+    makeStrip("ew",   12);
+    makeStrip("ew",   36);
+    // North-South strips at the gaps.
+    makeStrip("ns", -36);
+    makeStrip("ns", -12);
+    makeStrip("ns",  12);
+    makeStrip("ns",  36);
   }
 
   /** Procedural grass texture — high-resolution layered noise in a
