@@ -152,6 +152,14 @@ interface StaffActor {
    * Mirrors a.target's XZ — set by the state machine whenever
    * a.target is reassigned. Drives the multi-floor pathfind. */
   targetFloor: number;
+  /** Seconds the actor has been idle WITHOUT any home-floor work
+   * available. Increments while idle with no matching home-floor
+   * ticket / wash job; resets to 0 whenever home-floor work is picked
+   * up. Cross-floor fallback only kicks in once this passes
+   * CROSS_FLOOR_WAIT_SECONDS — gives a local chef / waiter a moment
+   * to free up before the staff member crosses the stair to handle
+   * someone else's floor. */
+  homeWorkWaitClock: number;
   /** Seconds accumulated since the last replan. Drives the periodic
    * re-route in moveActor so a stale path computed before the player
    * placed an obstacle gets refreshed on the next tick — without this,
@@ -204,6 +212,13 @@ export interface StationInfo {
 // ticket flow.
 const CHEF_SPEED = 1.2;
 const WAITER_SPEED = 1.44; // +20% over CHEF_SPEED
+/** How long an idle waiter (or chef) will wait for HOME-FLOOR work
+ * before falling back to cross-floor work. Tuned for ~2s so a local
+ * chef / waiter has a moment to free up before the staff member
+ * crosses the stair to handle someone else's floor — strictly local
+ * setups stay local, mixed setups still get cross-floor coverage when
+ * the local pool is dry for more than a couple of seconds. */
+const CROSS_FLOOR_WAIT_SECONDS = 2.0;
 
 /** Flip to true (or rebuild) to log every actor's per-frame movement
  * sample (`[Router/move] state now @ (x, y) target …`). Was on by
@@ -473,6 +488,7 @@ export class StaffRouter {
       speed: CHEF_SPEED,
       path: [],
       replanAccum: 0,
+      homeWorkWaitClock: 0,
       assignedStoveUid: null,
       lastStoveUid: null,
     });
@@ -495,6 +511,7 @@ export class StaffRouter {
       speed: WAITER_SPEED,
       path: [],
       replanAccum: 0,
+      homeWorkWaitClock: 0,
       washTrip: null,
     });
   }
@@ -746,19 +763,27 @@ export class StaffRouter {
         // back; cleaner to let an idle chef on the right floor pick it
         // up, or leave the ticket queued until one is hired.
         // Chefs cook at stoves on their OWN floor (claimFreeStove gates
-        // that). But the customer the order's for can live on any floor —
-        // the plate goes to the shared kitchen pickup either way. Prefer
-        // home-floor tickets so a dedicated Floor-N chef stays busy with
-        // their floor's orders first, then fall back to cross-floor work
-        // when their floor has nothing queued. Without the fallback, a
-        // Floor 1 customer with no Floor 1 chef present would sit
-        // forever waiting on a ticket no chef would touch — which is
-        // why the Floor 1 waiter then 'ignored' them: their ticket never
-        // reached the 'ready' state for delivery.
-        const ticket =
-          this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor)
-          ?? this.tickets.find((t) => t.state === "queued");
-        if (!ticket) break;
+        // that). But the customer the order's for can live on any floor.
+        // Two-pass selection: home-floor tickets first, cross-floor only
+        // after CROSS_FLOOR_WAIT_SECONDS of idleness with nothing on the
+        // home floor queued. Lets a Floor-N chef stay focused on their
+        // own customers while still covering for an empty other floor
+        // once it's clear no local work is coming.
+        const homeTicket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
+        if (homeTicket) {
+          c.homeWorkWaitClock = 0;
+        }
+        const ticket = homeTicket
+          ?? (c.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
+              ? this.tickets.find((t) => t.state === "queued")
+              : undefined);
+        if (!ticket) {
+          // No work right now. Tick the home-work wait clock so the
+          // cross-floor fallback eventually unlocks if nothing matches
+          // home-floor.
+          c.homeWorkWaitClock += dt;
+          break;
+        }
         // Pick a station that provides the recipe's required appliance.
         // The chef defers (stays idle) when no matching station is free,
         // so a recipe that needs the toaster can't get cooked at the
@@ -798,6 +823,7 @@ export class StaffRouter {
         c.state = "movingToWork";
         c.clock = 0;
         c.character.action = "walk";
+        c.homeWorkWaitClock = 0;
         console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
         break;
       }
@@ -865,17 +891,22 @@ export class StaffRouter {
 
     switch (w.state) {
       case "idle": {
-        // Priority 1: deliver a ready ticket. Plates that are already
-        // cooked and waiting on the pass take precedence over wash work.
-        // Phase 8e: the waiter now handles tickets on ANY floor by
-        // crossing the staircase (P8c findMultiFloorPath). Preference
-        // stays on tickets matching the waiter's homeFloor so a
-        // dedicated Floor-1 waiter still grabs Floor-1 work first,
-        // but if no home-floor ticket is queued they pick up cross-
-        // floor work instead of leaving a customer stranded.
-        const ticket =
-          this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor)
-          ?? this.tickets.find((t) => t.state === "ready");
+        // Two-pass work selection:
+        //   1. Home-floor ticket / wash trip — picks up immediately.
+        //   2. Cross-floor work — gated behind CROSS_FLOOR_WAIT_SECONDS
+        //      of waiting with no home-floor work. Local chefs / waiters
+        //      get a few seconds to free up before the staff member
+        //      crosses the stair to handle someone else's floor.
+        // homeWorkWaitClock resets on EVERY successful work pickup so
+        // the wait starts fresh once a job completes.
+        const homeTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
+        if (homeTicket) {
+          w.homeWorkWaitClock = 0;
+        }
+        const ticket = homeTicket
+          ?? (w.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
+              ? this.tickets.find((t) => t.state === "ready")
+              : undefined);
         if (ticket) {
           ticket.state = "delivering";
           ticket.clock = 0;
@@ -895,11 +926,17 @@ export class StaffRouter {
           w.state = "movingToWork";
           w.clock = 0;
           w.character.action = "walk";
+          w.homeWorkWaitClock = 0;
           console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}) → walking to pickup`);
           break;
         }
-        // Priority 2: bus a dirty plate to the sink.
-        const trip = this.tryStartWashTrip(w);
+        // Priority 2: bus a dirty plate to the sink. Same
+        // home-floor-first / cross-floor-after-wait gate as tickets.
+        const homeTrip = this.tryStartWashTrip(w, w.homeFloor);
+        const trip = homeTrip
+          ?? (w.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
+              ? this.tryStartWashTrip(w)
+              : null);
         if (trip) {
           w.washTrip = trip;
           w.target = trip.dirtyPos.clone();
@@ -912,6 +949,12 @@ export class StaffRouter {
           w.state = "movingToWork";
           w.clock = 0;
           w.character.action = "walk";
+          w.homeWorkWaitClock = 0;
+        } else {
+          // No work available anywhere right now — accumulate the
+          // wait clock so the cross-floor fallback unlocks once it
+          // crosses CROSS_FLOOR_WAIT_SECONDS.
+          w.homeWorkWaitClock += dt;
         }
         break;
       }
@@ -1057,12 +1100,24 @@ export class StaffRouter {
    * Distance is straight-line ground distance — good enough for
    * picking "nearest" since the pathfinder takes over once we hand
    * off the trip; a slightly-suboptimal pick is fine. */
-  private tryStartWashTrip(w: StaffActor): WashTrip | null {
+  private tryStartWashTrip(w: StaffActor, restrictToFloor?: number): WashTrip | null {
     if (!this.washCallbacks) return null;
-    const stations = this.washCallbacks.getWashStations();
-    if (stations.length === 0) return null;
-    const dirties = this.washCallbacks.getDirtyPickups();
+    const allStations = this.washCallbacks.getWashStations();
+    if (allStations.length === 0) return null;
+    const allDirties = this.washCallbacks.getDirtyPickups();
+    if (allDirties.length === 0) return null;
+    // Optional floor restriction — used by the idle handler to prefer
+    // home-floor work before falling back to cross-floor. With it set,
+    // both the dirty piece AND the station must live on the same floor
+    // so the waiter handles the whole trip without crossing a stair.
+    const dirties = restrictToFloor === undefined
+      ? allDirties
+      : allDirties.filter((d) => d.floor === restrictToFloor);
     if (dirties.length === 0) return null;
+    const stations = restrictToFloor === undefined
+      ? allStations
+      : allStations.filter((s) => s.floor === restrictToFloor);
+    if (stations.length === 0) return null;
     const here = w.character.groundPos;
     // Nearest unclaimed dirty piece.
     let pickedDirty: DirtyPickupInfo | null = null;
