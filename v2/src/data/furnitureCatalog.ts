@@ -330,16 +330,20 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "assets/kenney/stoolBarSquare.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 60, comfort: 1, style: 2, ratingBonus: 0.01,
     tier: 2, surface: "drink", targetHeight: 0.75 },
   // Lounge chairs are tier-4 statement pieces. Their raw Kenney meshes
-  // are wider than they are deep, so the uniform-min auto-fit was
-  // leaving the front-to-back direction visibly under-filled. Stretch
-  // the footprint so X and Z each scale to the tile independently —
-  // the chair reads as the heftier lounger silhouette it actually is.
+  // have different aspect ratios (relax is 0.49×0.67, design is
+  // 0.73×0.41), so the previous stretchFootprint kept them at full tile
+  // coverage but smashed both to a square ≈0.64×0.64 — and a square
+  // chair has no visible "front" so pressing R looked like a no-op.
+  // Drop stretchFootprint and bump the scale to ≈1.0 so uniform-min
+  // fit lets each chair keep its natural aspect ratio while still
+  // landing close to tile-filling on at least one axis. Rotation is
+  // now visible because the chair silhouette is asymmetric.
   { id: "lounge-relax",   name: "Relax Lounge",  category: "chair",
-    modelPath: "assets/kenney/loungeChairRelax.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 480, comfort: 5, style: 4, ratingBonus: 0.07,
-    tier: 4, stretchFootprint: true },
+    modelPath: "assets/kenney/loungeChairRelax.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 480, comfort: 5, style: 4, ratingBonus: 0.07,
+    tier: 4 },
   { id: "lounge-design",  name: "Designer Lounge Chair", category: "chair",
-    modelPath: "assets/kenney/loungeDesignChair.glb", scale: S_CHAIR, size: { width: 1, depth: 1 }, cost: 620, comfort: 4, style: 5, ratingBonus: 0.07,
-    tier: 4, stretchFootprint: true },
+    modelPath: "assets/kenney/loungeDesignChair.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 620, comfort: 4, style: 5, ratingBonus: 0.07,
+    tier: 4 },
   { id: "sofa",           name: "Sofa",          category: "chair",
     modelPath: "assets/kenney/loungeSofa.glb", scale: S_SOFA_WIDE, size: { width: 2, depth: 1 }, cost: 370, comfort: 5, style: 3, ratingBonus: 0.06, seatingCapacity: 2,
     tier: 3, surface: "drink" },

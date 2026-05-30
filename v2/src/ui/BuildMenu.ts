@@ -963,9 +963,16 @@ export class BuildMenu {
       // Even-sized tile items anchor at the cross-section of cells, so
       // they need a half-integer snap — otherwise their footprint
       // straddles cells unevenly. Use the placingDef's size to pick
-      // the parity.
-      this.hoverCell.set(this.snapAxis(point.x, this.placingDef?.size.width ?? 1), 0,
-                         this.snapAxis(point.z, this.placingDef?.size.depth ?? 1));
+      // the parity, swapping width/depth when the player has rotated
+      // the placement 90° (computePlacementPlan does the same).
+      const def = this.placingDef;
+      const w = def?.size.width ?? 1;
+      const d = def?.size.depth ?? 1;
+      const swapped = Math.abs(Math.sin(this.rotationY)) > 0.5;
+      const xs = swapped ? d : w;
+      const zs = swapped ? w : d;
+      this.hoverCell.set(this.snapAxis(point.x, xs), 0,
+                         this.snapAxis(point.z, zs));
     }
 
     // Pickup-mode raycast: while the player is in sell or move-pickup,
@@ -1175,8 +1182,18 @@ export class BuildMenu {
       return { quality: "blocked", x: rawPoint.x, z: rawPoint.z, rotY: this.rotationY };
     }
 
-    const cellX = this.snapAxis(rawPoint.x, def.size.width);
-    const cellZ = this.snapAxis(rawPoint.z, def.size.depth);
+    // Rotation matters for the snap parity: at rotY=0 a 2×1 sofa is 2-wide
+    // along X (snap X to half-integer) and 1-deep along Z (snap Z to integer).
+    // At rotY=π/2 the rotation swaps the world-space width and depth onto
+    // X/Z, so the snap axes need to swap too — otherwise pressing R on a
+    // 2×1 sofa leaves the snap aligned to the old axis and the mesh lands
+    // straddling tile boundaries on the wrong side. Mirrors the same swap
+    // the wall-shelf path uses above.
+    const tileSwapped = Math.abs(Math.sin(this.rotationY)) > 0.5;
+    const tileXSize = tileSwapped ? def.size.depth : def.size.width;
+    const tileZSize = tileSwapped ? def.size.width : def.size.depth;
+    const cellX = this.snapAxis(rawPoint.x, tileXSize);
+    const cellZ = this.snapAxis(rawPoint.z, tileZSize);
     // When moving an existing item, ignore that item in every overlap /
     // slot-occupancy check — otherwise it would falsely block its own
     // destination.
