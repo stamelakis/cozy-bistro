@@ -608,16 +608,27 @@ export class GuestSpawner {
     }
   }
 
-  /** Decide which storey the guest's `target` lives on. Walk-in /
-   * return-from-toilet paths aim at the guest's seat, which carries
-   * its own floor (seatFloor). Door / exit / bathroom side-trips stay
-   * on the guest's currentFloor — those targets are floor-agnostic
-   * positions (the door is always on floor 0, but if the guest is on
-   * a higher floor heading home the chain naturally crosses back
-   * down through the seat-floor → 0 pathfinding). */
+  /** Decide which storey the guest's `target` lives on. walkingIn
+   * covers THREE legs that need different target floors:
+   *   1. Outside → door exterior — target on Floor 0 (door is ground
+   *      floor; the guest is approaching from the lawn).
+   *   2. Door exterior → door interior — still Floor 0.
+   *   3. Door interior → assigned seat — target on g.seatFloor (the
+   *      multi-floor planner inserts the stair if seatFloor > 0).
+   *
+   * Without the per-leg check, leg 1 / 2 above sent an upper-floor
+   * guest's planner from {outside, floor:0} to {door, floor:1},
+   * which generated an ascent path "via the stair" to the door —
+   * routing the guest into the building, up the stairs, then trying
+   * to walk to a XZ that lives outside the building on Floor 1. The
+   * guest got stuck mid-stair because the destination wasn't on a
+   * reachable Floor 1 cell. */
   private pickPathTargetFloor(g: ActiveGuest): number {
     switch (g.state) {
       case "walkingIn":
+        // Door approach legs stay on Floor 0; seat leg jumps to
+        // seatFloor once we've passed the interior door.
+        return g.passedDoor ? g.seatFloor : 0;
       case "returningFromToilet":
         return g.seatFloor;
       case "walkingToDoor":
