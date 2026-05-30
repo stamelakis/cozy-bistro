@@ -949,8 +949,8 @@ export class FurnitureRegistry {
    *     dishwasher batch cycle; the waiter has already left.
    * standPos puts the waiter one tile in front (+Z) of the unit,
    * matching the toilet / sink stand convention. */
-  getWashStations(): { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number }[] {
-    const out: { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number }[] = [];
+  getWashStations(): { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number; floor: number }[] {
+    const out: { uid: string; defId: string; x: number; z: number; rotY: number; standPos: THREE.Vector2; dwell: number; floor: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "wash") continue;
@@ -962,7 +962,7 @@ export class FurnitureRegistry {
         it.x + Math.sin(it.rotY),
         it.z + Math.cos(it.rotY),
       );
-      out.push({ uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY, standPos, dwell });
+      out.push({ uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY, standPos, dwell, floor: it.floor });
     }
     return out;
   }

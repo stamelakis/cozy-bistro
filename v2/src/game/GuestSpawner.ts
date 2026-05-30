@@ -27,6 +27,11 @@ interface DirtyTableMesh {
    * null while it's free for any waiter to claim. */
   claimedBy: string | null;
   pos: THREE.Vector2;
+  /** Storey the dirty piece sits on (= the seat's floor). Wash trips
+   * route through the stairs when the waiter's currentFloor doesn't
+   * match this — without the floor, a Floor 0 waiter would walk to
+   * the Floor 1 dirty XZ on Floor 0 and pretend to pick it up. */
+  floor: number;
   /** Which seat (tableUid#slotIndex) the dirty piece belongs to.
    * spawnLeftoversForGuest reads back the COUNT of existing dirty
    * pieces with the same seatId so a second customer's plates start
@@ -39,6 +44,7 @@ export interface DirtyPickupInfo {
   id: number;
   kind: DishKind;
   pos: THREE.Vector2;
+  floor: number;
 }
 
 /** Stable seat identifier: `${tableUid}#${slotIndex}`. Lets a seated guest
@@ -1454,6 +1460,7 @@ export class GuestSpawner {
       this.dirtyTableMeshes.push({
         id: this.nextDirtyId, mesh, kind, claimedBy: null,
         pos: new THREE.Vector2(x, z),
+        floor: g.seatFloor,
         seatId,
       });
       this.nextDirtyId += 1;
@@ -1474,7 +1481,7 @@ export class GuestSpawner {
     const out: DirtyPickupInfo[] = [];
     for (const d of this.dirtyTableMeshes) {
       if (d.claimedBy) continue;
-      out.push({ id: d.id, kind: d.kind, pos: d.pos.clone() });
+      out.push({ id: d.id, kind: d.kind, pos: d.pos.clone(), floor: d.floor });
     }
     return out;
   }

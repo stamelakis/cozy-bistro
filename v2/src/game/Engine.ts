@@ -556,7 +556,7 @@ export class Engine {
           releaseDirtyPickup: (id) => spawner.releaseDirtyPickup(id),
           pickupDirty: (id) => spawner.pickupDirty(id),
           getWashStations: () => registry.getWashStations().map((s) => ({
-            uid: s.uid, defId: s.defId, standPos: s.standPos, dwell: s.dwell,
+            uid: s.uid, defId: s.defId, standPos: s.standPos, dwell: s.dwell, floor: s.floor,
           })),
           washOne: (kind) => { dishware.washOne(kind); },
           canDishwasherLoad: (uid, kind) => dishware.canDishwasherLoad(uid, kind),

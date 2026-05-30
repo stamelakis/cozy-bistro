@@ -60,6 +60,10 @@ export interface DirtyPickupInfo {
   id: number;
   kind: DishKind;
   pos: THREE.Vector2;
+  /** Storey the dirty piece sits on. Needed by the multi-floor wash
+   * trip so a waiter on Floor 1 actually descends the stair to grab a
+   * Floor 0 dirty plate instead of teleporting to its XZ on Floor 1. */
+  floor: number;
 }
 
 /** Snapshot of a placed wash station — sink or dishwasher. `dwell` is
@@ -74,6 +78,10 @@ export interface WashStationInfo {
   defId: string;
   standPos: THREE.Vector2;
   dwell: number;
+  /** Storey the wash station is placed on. Lets the waiter take the
+   * stair to a different-floor sink / dishwasher instead of standing
+   * on the right XZ but the wrong elevation. */
+  floor: number;
 }
 
 /** Waiter wash trip state. The waiter walks from idle → pickup the
@@ -81,6 +89,9 @@ export interface WashStationInfo {
 interface WashTrip {
   dirtyId: number;
   dirtyPos: THREE.Vector2;
+  /** Storey the dirty piece sits on. The "pickup" phase routes through
+   * the stair when this differs from the waiter's currentFloor. */
+  dirtyFloor: number;
   kind: DishKind;
   stationUid: string;
   /** Catalog id of the wash station ("sink", "dishwasher",
@@ -88,6 +99,10 @@ interface WashTrip {
    * working state — sinks wash immediately, dishwashers load. */
   stationDefId: string;
   stationPos: THREE.Vector2;
+  /** Storey the wash station sits on. The "wash" phase routes through
+   * the stair when this differs from the waiter's currentFloor at the
+   * moment they pick up the dirty piece. */
+  stationFloor: number;
   dwell: number;
   phase: "pickup" | "wash";
 }
@@ -867,7 +882,11 @@ export class StaffRouter {
         if (trip) {
           w.washTrip = trip;
           w.target = trip.dirtyPos.clone();
-          w.targetFloor = w.homeFloor; // wash trips stay in the kitchen
+          // Target the dirty piece's floor — the multi-floor path
+          // includes the stair when the waiter's currentFloor doesn't
+          // match. Without this, a Floor 1 waiter would walk to the
+          // Floor 0 dirty XZ on Floor 1 (through the ceiling).
+          w.targetFloor = trip.dirtyFloor;
           this.planPath(w);
           w.state = "movingToWork";
           w.clock = 0;
@@ -901,6 +920,10 @@ export class StaffRouter {
               w.character.action = "carry";
               w.washTrip.phase = "wash";
               w.target = w.washTrip.stationPos.clone();
+              // Target the station's floor — pickup may have been on
+              // a different storey than the station (e.g. Floor 1
+              // dirty plate carried down to a Floor 0 dishwasher).
+              w.targetFloor = w.washTrip.stationFloor;
               this.planPath(w);
               break; // stay in movingToWork
             }
@@ -1055,10 +1078,12 @@ export class StaffRouter {
     return {
       dirtyId: pickedDirty.id,
       dirtyPos: pickedDirty.pos.clone(),
+      dirtyFloor: pickedDirty.floor,
       kind: pickedDirty.kind,
       stationUid: pickedStation.uid,
       stationDefId: pickedStation.defId,
       stationPos: pickedStation.standPos.clone(),
+      stationFloor: pickedStation.floor,
       dwell: pickedStation.dwell,
       phase: "pickup",
     };
