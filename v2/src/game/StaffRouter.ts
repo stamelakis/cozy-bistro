@@ -911,75 +911,91 @@ export class StaffRouter {
 
   // === Waiter state machine ===
 
+  /** Shared "begin delivery" transition — used by both the idle work
+   * picker and the returningHome interrupt. Moves the ticket to
+   * 'delivering', targets the pickup spot (always Floor 0 — the
+   * kitchen lives there), and flips the waiter into movingToWork. */
+  private startWaiterDelivery(w: StaffActor, ticket: Ticket): void {
+    ticket.state = "delivering";
+    ticket.clock = 0;
+    w.ticketId = ticket.id;
+    w.target = this.pickupPos.clone();
+    w.targetFloor = 0; // pickup is always the ground-floor kitchen
+    this.planPath(w);
+    w.state = "movingToWork";
+    w.clock = 0;
+    w.character.action = "walk";
+    w.homeWorkWaitClock = 0;
+    console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}) → walking to pickup`);
+  }
+
+  /** Shared "begin wash trip" transition — used by the idle picker
+   * and (potentially) the returningHome interrupt. */
+  private startWaiterWashTrip(w: StaffActor, trip: WashTrip): void {
+    w.washTrip = trip;
+    w.target = trip.dirtyPos.clone();
+    w.targetFloor = trip.dirtyFloor;
+    this.planPath(w);
+    w.state = "movingToWork";
+    w.clock = 0;
+    w.character.action = "walk";
+    w.homeWorkWaitClock = 0;
+  }
+
   private tickWaiter(w: StaffActor, dt: number): void {
     w.clock += dt;
 
     switch (w.state) {
       case "idle": {
-        // Two-pass work selection:
-        //   1. Home-floor ticket / wash trip — picks up immediately.
-        //   2. Cross-floor work — gated behind CROSS_FLOOR_WAIT_SECONDS
-        //      of waiting with no home-floor work. Local chefs / waiters
-        //      get a few seconds to free up before the staff member
-        //      crosses the stair to handle someone else's floor.
-        // homeWorkWaitClock resets on EVERY successful work pickup so
-        // the wait starts fresh once a job completes.
+        // Waiter work selection priority (top to bottom):
+        //   1. Home-floor ready ticket → pick it up
+        //   2. Home-floor dirty plate → wash trip
+        //   3. ANY home-floor work IN THE PIPELINE (queued/cooking
+        //      ticket OR a dirty just sitting there waiting to age) →
+        //      stay idle and wait. Don't cross floors to poach Floor 0
+        //      work when our own floor has a customer about to be
+        //      ready in 10 seconds; that's what made waiters look like
+        //      they 'prioritized ground floor instead of their own
+        //      floor's customers'.
+        //   4. Only after a meaningful idle gap with TRULY NOTHING on
+        //      our floor — no ready, no cooking, no queued, no dirty —
+        //      do we consider cross-floor work.
         const homeTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
         if (homeTicket) {
-          w.homeWorkWaitClock = 0;
-        }
-        const ticket = homeTicket
-          ?? (w.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
-              ? this.tickets.find((t) => t.state === "ready")
-              : undefined);
-        if (ticket) {
-          ticket.state = "delivering";
-          ticket.clock = 0;
-          w.ticketId = ticket.id;
-          w.target = this.pickupPos.clone();
-          // Pickup floor = KITCHEN's floor (not the waiter's home).
-          // pickupPos is a scene-wide constant pinned to the ground-
-          // floor kitchen; if the waiter lives on Floor 1, they have
-          // to descend the stair to actually pick the plate up. Old
-          // code set targetFloor = homeFloor here, which made the
-          // Floor 1 waiter walk to pickupPos XZ on Floor 1 ("through
-          // the ceiling") and pretend to pick up nothing. Multi-
-          // kitchen support (each storey gets its own pickupPos
-          // tied to the cooking chef) is a future pass.
-          w.targetFloor = 0;
-          this.planPath(w);
-          w.state = "movingToWork";
-          w.clock = 0;
-          w.character.action = "walk";
-          w.homeWorkWaitClock = 0;
-          console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}) → walking to pickup`);
+          this.startWaiterDelivery(w, homeTicket);
           break;
         }
-        // Priority 2: bus a dirty plate to the sink. Same
-        // home-floor-first / cross-floor-after-wait gate as tickets.
         const homeTrip = this.tryStartWashTrip(w, w.homeFloor);
-        const trip = homeTrip
-          ?? (w.homeWorkWaitClock >= CROSS_FLOOR_WAIT_SECONDS
-              ? this.tryStartWashTrip(w)
-              : null);
-        if (trip) {
-          w.washTrip = trip;
-          w.target = trip.dirtyPos.clone();
-          // Target the dirty piece's floor — the multi-floor path
-          // includes the stair when the waiter's currentFloor doesn't
-          // match. Without this, a Floor 1 waiter would walk to the
-          // Floor 0 dirty XZ on Floor 1 (through the ceiling).
-          w.targetFloor = trip.dirtyFloor;
-          this.planPath(w);
-          w.state = "movingToWork";
-          w.clock = 0;
-          w.character.action = "walk";
+        if (homeTrip) {
+          this.startWaiterWashTrip(w, homeTrip);
+          break;
+        }
+        // Is there future home-floor work coming our way? (queued or
+        // cooking ticket on our floor). If yes, stay put — we'll grab
+        // it the moment it becomes 'ready', no need to wander off and
+        // burn customer patience on a stair round trip.
+        const homePipeline = this.tickets.some((t) =>
+          t.seatFloor === w.homeFloor && (t.state === "queued" || t.state === "cooking"));
+        if (homePipeline) {
+          // Reset the cross-floor wait so a brief 'pipeline gap' just
+          // before the next batch arrives doesn't bleed into the
+          // cross-floor fallback timer.
           w.homeWorkWaitClock = 0;
-        } else {
-          // No work available anywhere right now — accumulate the
-          // wait clock so the cross-floor fallback unlocks once it
-          // crosses CROSS_FLOOR_WAIT_SECONDS.
-          w.homeWorkWaitClock += dt;
+          break;
+        }
+        // Genuinely nothing local. Tick the wait clock and only fall
+        // back to cross-floor work once it crosses the threshold.
+        w.homeWorkWaitClock += dt;
+        if (w.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
+        // Cross-floor fallback.
+        const anyTicket = this.tickets.find((t) => t.state === "ready");
+        if (anyTicket) {
+          this.startWaiterDelivery(w, anyTicket);
+          break;
+        }
+        const anyTrip = this.tryStartWashTrip(w);
+        if (anyTrip) {
+          this.startWaiterWashTrip(w, anyTrip);
         }
         break;
       }
@@ -1106,28 +1122,14 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
-        // Smarter return: if there's a ready ticket waiting (especially
-        // on the waiter's home floor), abort the walk-home and start
-        // the delivery from wherever they are now. Customers waiting
-        // for food have a hard patience clock — making a waiter walk
-        // all the way home and then back out to the pickup wastes
-        // 5–15 s of patience on every cycle, which the user noticed as
-        // "a waiter passed by a waiting customer going 'back'".
-        // Cross-floor work still gates on the 2 s home-wait timer so
-        // a Floor 1 waiter doesn't abandon home to go grab a Floor 0
-        // ticket the moment one appears.
+        // Mid-return interrupt: a home-floor ticket just became ready,
+        // skip the walk-back-then-walk-out round trip and start the
+        // delivery NOW. Was making waiters pass customers heading 'back'
+        // before re-engaging on the very ticket that customer was
+        // waiting on.
         const interruptTicket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
         if (interruptTicket) {
-          interruptTicket.state = "delivering";
-          interruptTicket.clock = 0;
-          w.ticketId = interruptTicket.id;
-          w.target = this.pickupPos.clone();
-          w.targetFloor = 0;
-          this.planPath(w);
-          w.state = "movingToWork";
-          w.clock = 0;
-          w.character.action = "walk";
-          w.homeWorkWaitClock = 0;
+          this.startWaiterDelivery(w, interruptTicket);
           break;
         }
         this.moveActor(w, dt);
