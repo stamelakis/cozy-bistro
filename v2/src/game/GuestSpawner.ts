@@ -1926,15 +1926,25 @@ export class GuestSpawner {
     // (or lower) floor — promote currentFloor so the next walk leg
     // anchors the body's Y to the new slab.
     const STOREY = 3;
+    // Lazily compute the guest's raw feet-lift the first time we need
+    // it. Guests spawn at the Floor 0 door so _baseY captured by the
+    // animator IS the raw lift (no homeFloor pre-bake) — but we cache
+    // it as _feetLift so the formulas below stay consistent with how
+    // staff handle the same maths.
+    if (g.character._feetLift == null) {
+      g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
+    }
+    const feetLift = g.character._feetLift;
     while (g.path.length > 0 && Math.hypot(g.path[0].x - pos.x, g.path[0].z - pos.y) < PATH_ARRIVAL_THRESHOLD) {
       const consumed = g.path.shift()!;
       g.prevWaypoint = consumed;
       if (consumed.fromStair) {
         g.currentFloor = consumed.floor;
-        // _baseY caches the feet-lift offset; the stair Y interpolation
-        // below stops setting position.y once we leave the stair span,
-        // so anchor it explicitly at the new slab here too.
-        g.character.root.position.y = consumed.floor * STOREY + (g.character._baseY ?? 0);
+        const anchorY = consumed.floor * STOREY + feetLift;
+        g.character.root.position.y = anchorY;
+        // Sync _baseY so the animator's per-frame reset doesn't snap
+        // the body back to the storey it was on when the path started.
+        g.character._baseY = anchorY;
       }
     }
     const wp = g.path[0] ?? { x: g.target.x, z: g.target.y, floor: g.currentFloor };
@@ -1942,30 +1952,29 @@ export class GuestSpawner {
     const dz = wp.z - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) {
-      // Even at-rest, keep the Y locked to the current floor's slab so
-      // a guest who sat down doesn't drift off of it.
-      g.character.root.position.y = g.currentFloor * STOREY + (g.character._baseY ?? 0);
+      const anchorY = g.currentFloor * STOREY + feetLift;
+      g.character.root.position.y = anchorY;
+      g.character._baseY = anchorY;
       return;
     }
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Stair walk — interpolate Y between the previous waypoint's floor
-    // and this waypoint's floor as the guest traverses the stair span
-    // (X stays at the stair's column, Z runs from the bottom endpoint
-    // to the top endpoint). Without this the guest would teleport their
-    // Y when the fromStair step gets consumed.
     if (wp.fromStair && g.prevWaypoint) {
       const segStartX = g.prevWaypoint.x;
       const segStartZ = g.prevWaypoint.z;
       const segLen = Math.hypot(wp.x - segStartX, wp.z - segStartZ);
       const trav = Math.hypot(pos.x - segStartX, pos.y - segStartZ);
       const t = segLen > 0.01 ? Math.max(0, Math.min(1, trav / segLen)) : 0;
-      const startY = g.prevWaypoint.floor * STOREY + (g.character._baseY ?? 0);
-      const endY   = wp.floor * STOREY + (g.character._baseY ?? 0);
-      g.character.root.position.y = startY + (endY - startY) * t;
+      const startY = g.prevWaypoint.floor * STOREY + feetLift;
+      const endY   = wp.floor * STOREY + feetLift;
+      const interpY = startY + (endY - startY) * t;
+      g.character.root.position.y = interpY;
+      g.character._baseY = interpY;
     } else {
-      g.character.root.position.y = g.currentFloor * STOREY + (g.character._baseY ?? 0);
+      const anchorY = g.currentFloor * STOREY + feetLift;
+      g.character.root.position.y = anchorY;
+      g.character._baseY = anchorY;
     }
     // GLB forward = -Z (three.js standard) → atan2(-dx, -dz). See
     // StaffRouter.moveActor for the derivation.

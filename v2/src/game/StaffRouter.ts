@@ -430,6 +430,7 @@ export class StaffRouter {
 
   /** Append a chef to the pool. Their current ground position becomes home. */
   addChef(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
+    this.cacheFeetLift(char, homeFloor);
     this.chefs.push({
       character: char,
       role: "chef",
@@ -451,6 +452,7 @@ export class StaffRouter {
   }
 
   addWaiter(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
+    this.cacheFeetLift(char, homeFloor);
     this.waiters.push({
       character: char,
       role: "waiter",
@@ -468,6 +470,18 @@ export class StaffRouter {
       replanAccum: 0,
       washTrip: null,
     });
+  }
+
+  /** Cache the character's raw feet-lift (offset above the floor slab,
+   * independent of which storey they're standing on). _baseY captured
+   * by the animator already bakes in homeFloor × STOREY for upper-floor
+   * staff (the spawn code lifts them onto their slab); subtracting it
+   * back out gives us the floor-agnostic offset every mover needs to
+   * compute Y when the actor crosses to a different storey. */
+  private cacheFeetLift(char: AnimatedCharacter, homeFloor: number): void {
+    const STOREY = 3;
+    const captured = char._baseY ?? char.root.position.y;
+    char._feetLift = captured - homeFloor * STOREY;
   }
 
   /** Pop a chef out of the pool. Returns the AnimatedCharacter so the
@@ -1091,12 +1105,17 @@ export class StaffRouter {
     // Consume reached waypoints. Stair-end waypoints promote the
     // actor's currentFloor so the body Y anchors to the new slab.
     const STOREY = 3;
+    const feetLift = a.character._feetLift ?? 0;
     while (a.path.length > 0 && Math.hypot(a.path[0].x - pos.x, a.path[0].z - pos.y) < PATH_ARRIVAL_THRESHOLD) {
       const consumed = a.path.shift()!;
       a.prevWaypoint = consumed;
       if (consumed.fromStair) {
         a.currentFloor = consumed.floor;
-        a.character.root.position.y = consumed.floor * STOREY + (a.character._baseY ?? 0);
+        const anchorY = consumed.floor * STOREY + feetLift;
+        a.character.root.position.y = anchorY;
+        // Sync _baseY so the animator's per-frame reset doesn't snap
+        // the body back to its starting storey on the next tick.
+        a.character._baseY = anchorY;
       }
     }
     const wp = a.path[0] ?? { x: a.target.x, z: a.target.y, floor: a.targetFloor };
@@ -1104,7 +1123,9 @@ export class StaffRouter {
     const dz = wp.z - pos.y;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) {
-      a.character.root.position.y = a.currentFloor * STOREY + (a.character._baseY ?? 0);
+      const anchorY = a.currentFloor * STOREY + feetLift;
+      a.character.root.position.y = anchorY;
+      a.character._baseY = anchorY;
       return;
     }
     // Apply this MEMBER's training multiplier (waiter serve speed,
@@ -1115,21 +1136,27 @@ export class StaffRouter {
     const step = Math.min(dist, a.speed * speedMult * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
-    // Stair walk Y — lerp between the previous waypoint's floor*STOREY
-    // and the next waypoint's floor*STOREY based on XZ progress across
-    // the stair span. Without this the waiter's body teleports its Y
-    // the moment the fromStair waypoint gets consumed.
+    // Stair walk Y — lerp between the previous waypoint's slab anchor
+    // and the next waypoint's slab anchor based on XZ progress across
+    // the stair span. Slab anchor = floor*STOREY + feetLift (not _baseY,
+    // which would double-count any pre-baked homeFloor offset). _baseY
+    // is also updated each tick so the animator's reset doesn't snap
+    // the body back to its starting storey mid-climb.
     if (wp.fromStair && a.prevWaypoint) {
       const segStartX = a.prevWaypoint.x;
       const segStartZ = a.prevWaypoint.z;
       const segLen = Math.hypot(wp.x - segStartX, wp.z - segStartZ);
       const trav = Math.hypot(pos.x - segStartX, pos.y - segStartZ);
       const t = segLen > 0.01 ? Math.max(0, Math.min(1, trav / segLen)) : 0;
-      const startY = a.prevWaypoint.floor * STOREY + (a.character._baseY ?? 0);
-      const endY   = wp.floor * STOREY + (a.character._baseY ?? 0);
-      a.character.root.position.y = startY + (endY - startY) * t;
+      const startY = a.prevWaypoint.floor * STOREY + feetLift;
+      const endY   = wp.floor * STOREY + feetLift;
+      const interpY = startY + (endY - startY) * t;
+      a.character.root.position.y = interpY;
+      a.character._baseY = interpY;
     } else {
-      a.character.root.position.y = a.currentFloor * STOREY + (a.character._baseY ?? 0);
+      const anchorY = a.currentFloor * STOREY + feetLift;
+      a.character.root.position.y = anchorY;
+      a.character._baseY = anchorY;
     }
     // GLB default forward is -Z (three.js standard) — confirmed by the
     // seat-slot facing values that demonstrably point customers at the

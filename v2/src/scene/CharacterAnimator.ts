@@ -36,6 +36,13 @@ export interface AnimatedCharacter {
   // was added to the animator — preserves CharacterLoader.liftFeetToOrigin
   // through the per-frame position reset.
   _baseY?: number;
+  /** Raw "lift the feet off the ground" offset, independent of any
+   * storey-Y. Captured at add-time as (_baseY − homeFloor × STOREY)
+   * for upper-floor staff, or simply _baseY for guests / ground-floor
+   * staff. Movers compute world Y as currentFloor × STOREY + _feetLift
+   * and update _baseY each frame so the animator's reset doesn't snap
+   * the body back to its starting storey. */
+  _feetLift?: number;
 }
 
 export class CharacterAnimator {
