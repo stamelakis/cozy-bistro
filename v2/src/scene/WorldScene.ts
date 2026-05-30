@@ -88,6 +88,19 @@ interface PerimeterWallState {
   currentMat: "solid" | "ghost";
   doors: number[];
   windows: number[];
+  /** World-space Y offset added to every wall segment's centre Y.
+   * 0 for the ground floor (Y=1.5 centre, 0..3 bounds). For storey
+   * idx≥1 this is idx * STOREY_HEIGHT, so floor 1 walls sit at Y=3..6
+   * centred at 4.5 and the same window-cut maths still works. */
+  yOffset?: number;
+  /** Object3D each wall segment is parented to. Ground floor goes
+   * straight into the scene; upper floors go into their storey group
+   * so visibility + theming track the focused floor. */
+  parent?: THREE.Object3D;
+  /** The MeshStandardMaterial for solid segments on this floor.
+   * Ground floor uses the shared wallMat; upper storeys use the
+   * per-storey clone so DecorModal can theme each floor. */
+  wallMatRef?: THREE.MeshStandardMaterial;
 }
 
 export class WorldScene {
@@ -980,11 +993,18 @@ export class WorldScene {
    * now so windows + doors can cut them. Single-mesh back/left/right
    * walls were replaced with a segmented system identical to the
    * front wall. */
-  private readonly perimeterWalls: Map<WallDir, PerimeterWallState> = new Map([
-    ["front", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
-    ["back",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
-    ["left",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
-    ["right", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
+  /** Per-floor perimeter wall state. Floor 0 is the ground floor (parent =
+   * scene, yOffset = 0, wallMatRef defaults to the shared wallMat). Upper
+   * storeys add entries at storey-build time with parent = storey group,
+   * yOffset = idx * STOREY_HEIGHT, and wallMatRef = the per-storey clone
+   * so theme switching from DecorModal lands on the right floor. */
+  private readonly perimeterWalls: Map<number, Map<WallDir, PerimeterWallState>> = new Map([
+    [0, new Map<WallDir, PerimeterWallState>([
+      ["front", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
+      ["back",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
+      ["left",  { meshes: [], currentMat: "solid", doors: [] as number[], windows: [] as number[] }],
+      ["right", { meshes: [], currentMat: "ghost", doors: [] as number[], windows: [] as number[] }],
+    ])],
   ]);
 
   // === Multi-storey building ===========================================
@@ -1095,10 +1115,10 @@ export class WorldScene {
     // lintel partial gap so the player can see in / out through them
     // from either side. Default door list is empty; the engine
     // refills both lists from the registry as the player builds.
-    this.rebuildPerimeterWall("front", [], []);
-    this.rebuildPerimeterWall("back",  [], []);
-    this.rebuildPerimeterWall("left",  [], []);
-    this.rebuildPerimeterWall("right", [], []);
+    this.rebuildPerimeterWall(0, "front", [], []);
+    this.rebuildPerimeterWall(0, "back",  [], []);
+    this.rebuildPerimeterWall(0, "left",  [], []);
+    this.rebuildPerimeterWall(0, "right", [], []);
     // Restaurant rating sign mounted on the lintel — a small marquee
     // that shows the current ★ rating, just like a real bistro
     // entrance. Hooked up by updateRatingSign() from Engine.
@@ -1158,17 +1178,11 @@ export class WorldScene {
    * architecture. */
   private addUpperStoreys(): void {
     const W = 10;                                          // footprint, same as ground floor
-    const T = 0.2;                                         // wall thickness, matches wallBoxFor
     const H = WorldScene.STOREY_HEIGHT;
-    // Same x,z anchors as the ground-floor segmented walls so the upper
-    // boxes sit directly on top of them. wallSegmentPosition is the
-    // authoritative reference for these coordinates.
-    const wallSpecs: { dir: WallDir; xz: [number, number]; horizontal: boolean }[] = [
-      { dir: "front", xz: [0.5,  5.5], horizontal: true  },
-      { dir: "back",  xz: [0.5, -4.5], horizontal: true  },
-      { dir: "left",  xz: [-4.5, 0.5], horizontal: false },
-      { dir: "right", xz: [ 5.5, 0.5], horizontal: false },
-    ];
+    // T (wall thickness) and wallSpecs are no longer needed here — the
+    // wall geometry comes from rebuildPerimeterWall / wallBoxFor /
+    // wallSegmentPosition now, with this storey's parent + yOffset
+    // wired through the per-floor PerimeterWallState entries below.
     // Slab materials — solid (blank-canvas off-white) and ghost (see-
     // through pale). Stored on the instance so applyUpperStoreyVisibility
     // can flip per-mesh references between them.
@@ -1198,23 +1212,35 @@ export class WorldScene {
       slab.position.set(0.5, baseY, 0.5);
       slab.receiveShadow = true;
       group.add(slab);
-      // 4 perimeter walls — solid 3 m boxes, mapped by direction so the
-      // ghost pass can match them up with the ground-floor walls'
-      // camera-relative ghost decisions.
+      // 4 perimeter walls — registered into the per-floor perimeterWalls
+      // map so they get the same dynamic cut/lintel pipeline as the
+      // ground floor. Without this, windows placed on Floor 1+ left no
+      // hole in the wall (the player saw the window mesh from outside
+      // but the inside view was a solid wall). yOffset = baseY shifts
+      // every segment up to this storey's slab; parent = group means
+      // they hide with the storey when it's out of focus; wallMatRef =
+      // wallMatStorey ties them into the per-floor theme clone.
+      const floorMap = new Map<WallDir, PerimeterWallState>([
+        ["front", { meshes: [], currentMat: "ghost", doors: [], windows: [], yOffset: baseY, parent: group, wallMatRef: wallMatStorey }],
+        ["back",  { meshes: [], currentMat: "solid", doors: [], windows: [], yOffset: baseY, parent: group, wallMatRef: wallMatStorey }],
+        ["left",  { meshes: [], currentMat: "solid", doors: [], windows: [], yOffset: baseY, parent: group, wallMatRef: wallMatStorey }],
+        ["right", { meshes: [], currentMat: "ghost", doors: [], windows: [], yOffset: baseY, parent: group, wallMatRef: wallMatStorey }],
+      ]);
+      this.perimeterWalls.set(idx, floorMap);
+      // walls map is now populated lazily by the first rebuild call —
+      // keep an empty placeholder so the upperStoreys interface stays
+      // stable for callers (updateWallVisibility, etc.).
       const walls = new Map<WallDir, THREE.Mesh>();
-      for (const spec of wallSpecs) {
-        const geom = spec.horizontal
-          ? new THREE.BoxGeometry(W, H, T)
-          : new THREE.BoxGeometry(T, H, W);
-        const mesh = new THREE.Mesh(geom, wallMatStorey);
-        mesh.position.set(spec.xz[0], baseY + H / 2, spec.xz[1]);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        group.add(mesh);
-        walls.set(spec.dir, mesh);
-      }
       this.upperStoreys.set(idx, { group, slab, walls, slabMat, wallMat: wallMatStorey });
       this.threeScene.add(group);
+      // Build the initial (no-opening) wall segments for this storey
+      // right away — Engine will call rebuildAllPerimeterWalls later
+      // when furniture is restored, but until then the slab needs walls
+      // around it or the storey reads as a floating plate.
+      this.rebuildPerimeterWall(idx, "front", [], []);
+      this.rebuildPerimeterWall(idx, "back",  [], []);
+      this.rebuildPerimeterWall(idx, "left",  [], []);
+      this.rebuildPerimeterWall(idx, "right", [], []);
     }
     // Second pass: each flight is parented to the storey it LEAVES
     // FROM (idx-1), so revealing the lower floor reveals the stair
@@ -1364,14 +1390,21 @@ export class WorldScene {
    * opening + lintel, leaving the middle band see-through so the
    * actual window mesh placed on top is what the player looks
    * through. */
-  rebuildPerimeterWall(dir: WallDir, doorEdges: number[], windowEdges: number[]): void {
-    const state = this.perimeterWalls.get(dir);
+  rebuildPerimeterWall(floor: number, dir: WallDir, doorEdges: number[], windowEdges: number[]): void {
+    const floorMap = this.perimeterWalls.get(floor);
+    if (!floorMap) return;
+    const state = floorMap.get(dir);
     if (!state) return;
     state.doors = [...doorEdges];
     state.windows = [...windowEdges];
-    // Tear down every existing mesh + free its geometry.
+    const parent = state.parent ?? this.threeScene;
+    const yOffset = state.yOffset ?? 0;
+    const wallMat = state.wallMatRef ?? this.wallMat;
+    // Tear down every existing mesh + free its geometry. Remove from
+    // whichever parent the segments live under (scene for floor 0,
+    // storey group for upper floors).
     for (const m of state.meshes) {
-      this.threeScene.remove(m);
+      parent.remove(m);
       m.geometry.dispose();
     }
     state.meshes.length = 0;
@@ -1389,7 +1422,7 @@ export class WorldScene {
       ...windowEdges.filter((c) => c > axisMin && c < axisMax).map((c) => ({ center: c, type: "window" as const })),
     ].sort((a, b) => a.center - b.center);
 
-    const mats = this.materialsFor(dir, state.currentMat);
+    const mats = this.materialsFor(dir, state.currentMat, wallMat);
     const addBox = (
       axisFrom: number, axisTo: number,
       yCenter: number, yHeight: number,
@@ -1399,11 +1432,14 @@ export class WorldScene {
       const center = (axisFrom + axisTo) / 2;
       const geom = this.wallBoxFor(dir, span, yHeight);
       const mesh = new THREE.Mesh(geom, mats);
-      const pos = this.wallSegmentPosition(dir, center, yCenter);
+      // yOffset lifts every segment up to its storey's slab so the same
+      // 1.5 / 2.5 / sillTop centres still produce a wall that hugs the
+      // floor and ceiling on storey > 0.
+      const pos = this.wallSegmentPosition(dir, center, yCenter + yOffset);
       mesh.position.copy(pos);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      this.threeScene.add(mesh);
+      parent.add(mesh);
       state.meshes.push(mesh);
     };
 
@@ -1454,14 +1490,15 @@ export class WorldScene {
    * wallMat, outside face uses wallExteriorMat, top / bottom / end-
    * caps fall back to wallMat. Returns six copies of wallGhostMat
    * when the wall is currently ghost-faded (camera on its outside). */
-  private materialsFor(dir: WallDir, kind: "solid" | "ghost"): THREE.Material[] {
+  private materialsFor(dir: WallDir, kind: "solid" | "ghost", wallMat?: THREE.MeshStandardMaterial): THREE.Material[] {
     if (kind === "ghost") {
       return [
         this.wallGhostMat, this.wallGhostMat, this.wallGhostMat,
         this.wallGhostMat, this.wallGhostMat, this.wallGhostMat,
       ];
     }
-    const int = this.wallMat;
+    // Per-storey clone if supplied (upper floors), shared wallMat otherwise.
+    const int = wallMat ?? this.wallMat;
     const ext = this.wallExteriorMat;
     // BoxGeometry face order: [+X, -X, +Y, -Y, +Z, -Z].
     switch (dir) {
@@ -1476,20 +1513,34 @@ export class WorldScene {
    * changed. Forwards into the new system with the wall's current
    * window list preserved. */
   rebuildFrontWall(doorXs: readonly number[]): void {
-    const state = this.perimeterWalls.get("front");
+    const state = this.perimeterWalls.get(0)?.get("front");
     if (!state) return;
-    this.rebuildPerimeterWall("front", [...doorXs], state.windows);
+    this.rebuildPerimeterWall(0, "front", [...doorXs], state.windows);
   }
 
-  /** Re-render every perimeter wall from the supplied openings.
-   * Engine calls this after a door OR window changes anywhere on the
-   * building — cheap because each wall ignores updates to its own
-   * inputs when nothing changed. */
-  rebuildAllPerimeterWalls(openings: Record<WallDir, { doors: number[]; windows: number[] }>): void {
-    this.rebuildPerimeterWall("front", openings.front.doors, openings.front.windows);
-    this.rebuildPerimeterWall("back",  openings.back.doors,  openings.back.windows);
-    this.rebuildPerimeterWall("left",  openings.left.doors,  openings.left.windows);
-    this.rebuildPerimeterWall("right", openings.right.doors, openings.right.windows);
+  /** Re-render every perimeter wall on EVERY floor from the supplied
+   * openings. Engine groups openings by floor + direction so a window
+   * placed on Floor 1 only rebuilds Floor 1's walls. Floors with no
+   * matching state (storey not built yet) are silently skipped. */
+  rebuildAllPerimeterWalls(openingsByFloor: Map<number, Record<WallDir, { doors: number[]; windows: number[] }>>): void {
+    for (const [floor, byDir] of openingsByFloor) {
+      if (!this.perimeterWalls.has(floor)) continue;
+      this.rebuildPerimeterWall(floor, "front", byDir.front.doors, byDir.front.windows);
+      this.rebuildPerimeterWall(floor, "back",  byDir.back.doors,  byDir.back.windows);
+      this.rebuildPerimeterWall(floor, "left",  byDir.left.doors,  byDir.left.windows);
+      this.rebuildPerimeterWall(floor, "right", byDir.right.doors, byDir.right.windows);
+    }
+    // Floors with state but no entry in the openings map need a rebuild
+    // too — that's what fires when the last window on a storey is sold
+    // (the floor drops out of the openings map entirely). Reset them to
+    // empty so the cut is filled back in.
+    for (const [floor] of this.perimeterWalls) {
+      if (openingsByFloor.has(floor)) continue;
+      this.rebuildPerimeterWall(floor, "front", [], []);
+      this.rebuildPerimeterWall(floor, "back",  [], []);
+      this.rebuildPerimeterWall(floor, "left",  [], []);
+      this.rebuildPerimeterWall(floor, "right", [], []);
+    }
   }
 
   /** Swap wall materials so the two walls closest to the camera become
@@ -1519,6 +1570,8 @@ export class WorldScene {
     const dirKinds: Record<WallDir, "solid" | "ghost"> = {
       back: backKind, left: leftKind, right: rightKind, front: frontKind,
     };
+    void dirKinds; // applyWallKind already updates each storey's wall
+                   // segments via the per-floor perimeterWalls map.
     for (const [, storey] of this.upperStoreys) {
       if (!storey.group.visible) continue;
       // Slab is solid (it's the floor of THIS storey, the ceiling of
@@ -1528,13 +1581,11 @@ export class WorldScene {
       // reassign back to the shared slabMatSolid every frame and the
       // upper floors stayed off-white regardless of theme selection.
       storey.slab.material = storey.slabMat;
-      for (const [dir, mesh] of storey.walls) {
-        // Same fix on the perimeter walls: solid walls keep the storey
-        // clone (which carries its theme colour); ghosted (camera-side)
-        // walls fall back to the shared transparent ghost material so
-        // we don't have to clone that per storey too.
-        mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : storey.wallMat;
-      }
+      // Walls used to be single static meshes managed here; now they're
+      // the segmented per-floor perimeterWalls system rebuilt on the
+      // floor's openings and ghosted by applyWallKind. The storey.walls
+      // map stays present (empty) for interface compatibility but is no
+      // longer the source of truth.
     }
     // Roof similarly: only renders when focused on the top storey;
     // always solid in that case.
@@ -1543,13 +1594,19 @@ export class WorldScene {
     }
   }
 
-  /** Switch one wall's segments between solid (multi-mat) and ghost. */
+  /** Switch one wall's segments between solid (multi-mat) and ghost on
+   * every floor. The same camera-relative dir → kind mapping applies to
+   * every storey, so all floors get flipped together (e.g. when the
+   * camera ends up on the +Z side of the building, the front wall on
+   * the ground floor AND every upper floor goes ghost). */
   private applyWallKind(dir: WallDir, kind: "solid" | "ghost"): void {
-    const state = this.perimeterWalls.get(dir);
-    if (!state || state.currentMat === kind) return;
-    state.currentMat = kind;
-    const mats = this.materialsFor(dir, kind);
-    for (const m of state.meshes) m.material = mats;
+    for (const [, floorMap] of this.perimeterWalls) {
+      const state = floorMap.get(dir);
+      if (!state || state.currentMat === kind) continue;
+      state.currentMat = kind;
+      const mats = this.materialsFor(dir, kind, state.wallMatRef);
+      for (const m of state.meshes) m.material = mats;
+    }
   }
 
   // === Exterior — grass, wildflowers, trees, rocks ============================

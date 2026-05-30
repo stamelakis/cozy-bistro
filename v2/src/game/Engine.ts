@@ -781,12 +781,20 @@ export class Engine {
    * of one of those coords belongs to that wall. Windows can live on
    * any perimeter wall; real doors stay confined to the front wall as
    * before. */
-  private allPerimeterOpenings(excludeUid: string | null = null): { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } } {
-    const out = {
-      front: { doors: [] as number[], windows: [] as number[] },
-      back:  { doors: [] as number[], windows: [] as number[] },
-      left:  { doors: [] as number[], windows: [] as number[] },
-      right: { doors: [] as number[], windows: [] as number[] },
+  private allPerimeterOpenings(excludeUid: string | null = null): Map<number, { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } }> {
+    const out = new Map<number, { front: { doors: number[]; windows: number[] }; back: { doors: number[]; windows: number[] }; left: { doors: number[]; windows: number[] }; right: { doors: number[]; windows: number[] } }>();
+    const getFloor = (floor: number) => {
+      let entry = out.get(floor);
+      if (!entry) {
+        entry = {
+          front: { doors: [], windows: [] },
+          back:  { doors: [], windows: [] },
+          left:  { doors: [], windows: [] },
+          right: { doors: [], windows: [] },
+        };
+        out.set(floor, entry);
+      }
+      return entry;
     };
     for (const it of this.registry.snapshotItems()) {
       // Skip the door / window currently floating with the player's
@@ -797,25 +805,26 @@ export class Engine {
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "door") continue;
       const isWindow = def.id.startsWith("window");
+      const floor = getFloor(it.floor);
       // Front wall (z = 5.5).
       if (Math.abs(it.z - 5.5) < 0.1) {
-        if (isWindow) out.front.windows.push(it.x);
-        else out.front.doors.push(it.x);
+        if (isWindow) floor.front.windows.push(it.x);
+        else floor.front.doors.push(it.x);
         continue;
       }
       // Back wall (z = -4.5) — only windows live here today.
       if (Math.abs(it.z + 4.5) < 0.1) {
-        if (isWindow) out.back.windows.push(it.x);
+        if (isWindow) floor.back.windows.push(it.x);
         continue;
       }
       // Left wall (x = -4.5) — axis is Z.
       if (Math.abs(it.x + 4.5) < 0.1) {
-        if (isWindow) out.left.windows.push(it.z);
+        if (isWindow) floor.left.windows.push(it.z);
         continue;
       }
       // Right wall (x = 5.5).
       if (Math.abs(it.x - 5.5) < 0.1) {
-        if (isWindow) out.right.windows.push(it.z);
+        if (isWindow) floor.right.windows.push(it.z);
         continue;
       }
     }
