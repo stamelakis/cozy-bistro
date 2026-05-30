@@ -84,8 +84,14 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
   }
 
   // === XZ auto-fit ===
-  const targetW = TILE * def.size.width * FOOTPRINT_MARGIN;
-  const targetD = TILE * def.size.depth * FOOTPRINT_MARGIN;
+  // Most items get the 4% breathing-room margin so neighbouring placements
+  // don't visibly z-fight and the grid lines stay readable. Items in a
+  // run-together set (bar counters that need to abut bar ends, kitchen
+  // counter runs, etc.) opt in to `fillTile` which removes that margin
+  // so adjacent placements actually touch without a visible seam.
+  const margin = def.fillTile ? 1.0 : FOOTPRINT_MARGIN;
+  const targetW = TILE * def.size.width * margin;
+  const targetD = TILE * def.size.depth * margin;
   // Default: uniform XZ scale, sized so the mesh fits ENTIRELY inside
   // its footprint (use MIN of the two axis ratios). When def.stretchFoot­
   // print is on, scale X and Z independently so the mesh fills the
@@ -129,6 +135,28 @@ export function fitFurniture(model: THREE.Object3D, def: FurnitureDef): number {
     child.position.x += localShiftX;
     child.position.y += localShiftY;
     child.position.z += localShiftZ;
+  }
+
+  // Anchor-edge shift — push the mesh toward one tile boundary instead
+  // of leaving it centred. Bar ends are the canonical case: the mesh
+  // is a thin slab and the player wants the FLAT face flush with the
+  // tile edge that touches the abutting bar counter (so the two pieces
+  // read as one continuous bar instead of two centred props with a gap
+  // between them). The shift is applied in MODEL-LOCAL X so it rotates
+  // with the placed item — anchorEdge "x+" pushes toward +X-after-rotation,
+  // "x-" toward -X-after-rotation. Half-tile edge is def.size.width / 2.
+  if (def.anchorEdge === "x+" || def.anchorEdge === "x-") {
+    model.updateMatrixWorld(true);
+    const bbE = new THREE.Box3().setFromObject(model);
+    const halfTile = (TILE * def.size.width) / 2;
+    const halfMesh = (bbE.max.x - bbE.min.x) / 2;
+    const sign = def.anchorEdge === "x+" ? 1 : -1;
+    const worldShift = sign * (halfTile - halfMesh);
+    // Convert to local (children X is scaled by fitX in world).
+    const localShift = worldShift / fitX;
+    for (const child of model.children) {
+      child.position.x += localShift;
+    }
   }
 
   // Bake the def's rotationOffset into the model's internal frame so

@@ -132,6 +132,23 @@ export interface FurnitureDef {
    * fine because flat items have targetHeight ≈ 0.04 so they sit
    * essentially on the floor under everything else. */
   flat?: boolean;
+  /** Skip the standard FOOTPRINT_MARGIN (the 4% breathing room around
+   * each tile) so the mesh fills the entire footprint with no visible
+   * gap to adjacent placements. Used by run-together pieces (bar
+   * counter + bar end, future kitchen counter runs) where the player
+   * expects neighbouring items to abut cleanly without a seam. */
+  fillTile?: boolean;
+  /** Push the mesh toward one X-axis tile edge instead of centring it
+   * in the tile. Bar ends use this so the FLAT side of the end cap
+   * lands at the tile boundary where the bar counter connects, and the
+   * ROUNDED side faces outward at the opposite tile edge. The shift is
+   * applied in model-local X, so it rotates with the placed item:
+   *   "x+" → flat side at the +X edge of the natural orientation
+   *   "x-" → flat side at the −X edge of the natural orientation
+   * Rotating the item 180° flips which world tile-edge the flat side
+   * lands on, so the player can mirror the same model for left vs
+   * right end caps. */
+  anchorEdge?: "x+" | "x-";
 
   // === Gameplay stats (Game.getFurnitureBonuses sums these across all placed) ===
   style?: number;
@@ -442,12 +459,28 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "kitchen-hood-l", name: "Large Range Hood", category: "appliance",
     modelPath: "assets/kenney/hoodLarge.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 140, ratingBonus: 0.01,
     tier: 2, placement: "wall-shelf", provides: "hood" },
+  // Bar counter + bar end are a run-together set. fillTile drops the
+  // standard 4% breathing margin so the bar counter actually reaches
+  // its tile boundaries on the long side (was 1.84 m of a 2.0 m span,
+  // leaving 8 cm gaps that read as "the bar doesn't touch the end
+  // cap"). The bar end is a thin slab (raw 0.10 m wide); without an
+  // anchor edge it sat centred in a 1.0 m tile, leaving ~0.25 m of
+  // air between it and the bar counter's edge. anchorEdge:"x+" pushes
+  // the bar end's mesh so the flat side lands at the +X tile edge,
+  // which is where the bar counter abuts when the player places them
+  // adjacent. Rotating the bar end 180° flips it to the right-hand
+  // end cap (flat side at −X, rounded outward to +X).
   { id: "bar-counter",    name: "Bar Counter",     category: "counter",
     modelPath: "assets/kenney/kitchenBar.glb", scale: S_KITCHEN, size: { width: 2, depth: 1 }, cost: 300, ratingBonus: 0.03,
-    tier: 3, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+    tier: 3, fillTile: true, dishCapacity: 8, surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "bar-end",        name: "Bar End",         category: "counter",
     modelPath: "assets/kenney/kitchenBarEnd.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250, ratingBonus: 0.04,
-    tier: 3, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }] },
+    // Surface slot shifted to dx=0.25 so anything placed on the bar end
+    // sits ON the shifted mesh rather than floating where the tile centre
+    // used to be. dz=0 stays at the depth midline. rotateSlotOffset
+    // applies model.rotation.y to this, so a 180°-rotated bar end gets
+    // its surface slot mirrored to dx=−0.25 along with the mesh.
+    tier: 3, fillTile: true, anchorEdge: "x+", dishCapacity: 4, surfaceSlots: [{ dx: 0.25, dz: 0 }] },
   // Built-in slots into a cabinet run flush with the wall — reads as
   // bigger/taller than a free-standing fridge for the same footprint.
   { id: "fridge-built-in", name: "Built-in Fridge", category: "storage",
