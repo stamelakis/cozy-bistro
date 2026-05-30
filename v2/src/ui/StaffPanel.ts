@@ -106,22 +106,47 @@ export class StaffPanel {
     this.rows[role] = { label, activity, hire, fire, members };
   }
 
+  /** Cache of the most-recent roster signature per role. Lets
+   * renderMembers SKIP the destroy-and-rebuild pass when nothing
+   * changed since the last update — without this, the 5Hz HUD tick
+   * wiped (innerHTML = "") and recreated every member row every
+   * 200ms, which meant the floor-selector buttons disappeared
+   * between mousedown and mouseup whenever a click straddled a
+   * render boundary. User-visible effect: "click button, nothing
+   * happens, click again, finally works". */
+  private memberRosterSig: Record<string, string> = {};
+
   /** Build (or rebuild) the per-member roster with one floor selector
-   * per member. Called from `update` whenever the panel refreshes so
-   * a hire/fire/reassign immediately reflects in the strip. */
+   * per member. Called from `update` whenever the panel refreshes —
+   * but actually rebuilds only when the roster signature changed
+   * (members added / fired / reassigned / training-flag toggled).
+   * Otherwise the existing DOM stays put so in-flight clicks aren't
+   * destroyed mid-gesture. */
   private renderMembers(role: StaffRole, hostEl: HTMLElement): void {
     const tier = this.game.getLuxuryTier();
     const numStoreys = WorldScene.getNumStoreys();
     // Hide the whole strip on tier 1 — only one floor exists, no
     // assignment to make.
     if (tier < 2) {
-      hostEl.style.display = "none";
-      hostEl.innerHTML = "";
+      if (hostEl.childElementCount > 0 || hostEl.style.display !== "none") {
+        hostEl.style.display = "none";
+        hostEl.innerHTML = "";
+        this.memberRosterSig[role] = "";
+      }
       return;
     }
+    const members = this.game.staff.getMembers(role);
+    // Signature captures everything that affects what the UI draws:
+    // tier (gates the active floor buttons), the member list (id +
+    // current home floor). If two consecutive ticks produce the
+    // same string, the existing DOM is correct as-is.
+    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}`).join(",");
+    if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
+      return;
+    }
+    this.memberRosterSig[role] = sig;
     hostEl.innerHTML = "";
     hostEl.style.display = "block";
-    const members = this.game.staff.getMembers(role);
     for (const member of members) {
       const row = document.createElement("div");
       Object.assign(row.style, {
