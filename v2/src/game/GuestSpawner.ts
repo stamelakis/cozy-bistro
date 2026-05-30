@@ -11,7 +11,8 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 import type { DishKind } from "../data/dishwareCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
-import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
+import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste } from "../data/customerArchetypes";
+import { RESTAURANT_THEMES } from "../data/themes";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
@@ -295,11 +296,12 @@ interface ActiveGuest {
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
-  /** What this guest came in for. "drink" → only drinks (sips a coffee
-   * etc.); "food" → only food courses; "any" → either is fine. Drives
-   * the floor pick at spawn — a drink-only guest prefers a drink-only
-   * floor, a food-only guest prefers a non-drink-only floor. */
-  wantsDrinks: "drink" | "food" | "any";
+  /** Full taste profile rolled at spawn (see CustomerTaste in
+   * data/customerArchetypes.ts). Drives seat scoring, order bias,
+   * and satisfaction bonuses. Diet (food/drink/both) is the hard
+   * filter; the rest are scoring inputs. Replaces the old
+   * wantsDrinks single-axis field. */
+  taste: CustomerTaste;
   /** Remaining waypoints from the most recent pathfind. Re-planned each
    * time the guest's target changes. Each step carries its floor so
    * the mover can drive the smooth Y ride across stair transitions
@@ -470,14 +472,18 @@ const WC_PATIENCE_SECONDS = 10.0;
  * rather than a constant queue; attractiveness, the boost mode, and
  * the admin spawn-rate slider all multiply this so a well-decorated
  * mid-game bistro still spawns nearly as often as before. */
-// 6.67 s (was 8 s) — +20% spawn rate. With the longer eating beat
-// (TIME_TO_EAT = 60s) average visits are now 3-4 minutes, so the
-// concurrent customer count grows roughly with rate × visit-length.
-// Math: 6.67 s base * ~0.5 attraction-mod * ~0.7 weather = ~2.3 s/
-// spawn = ~26/min, comfortably filling a 50-100 seat building under
-// peak modifiers. Below ~5 s the chef pipeline starts to choke at
+// 5.5 s (was 6.67) — extra +20% bump on top of the previous one to
+// compensate for the new STRICT diet filter. Drink-only customers
+// now refuse food seats (and vice versa); if you've only built
+// food tables, every drink-only roll is a missed spawn. The extra
+// throughput gives the player a reasonable customer flow even with
+// a single-surface restaurant. A well-balanced bar + dining setup
+// will see fewer rejections and so handle the full bumped rate.
+// Math: 5.5 s base * ~0.5 attraction-mod * ~0.7 weather = ~1.9 s/
+// spawn = ~31/min, fillable across 75-150 concurrent seats under
+// peak modifiers. Below ~4 s the chef pipeline starts to choke at
 // typical staff levels.
-const SPAWN_INTERVAL_SECONDS = 6.67;
+const SPAWN_INTERVAL_SECONDS = 5.5;
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
 // Two-phase patience budget. Was a single PATIENCE_BASE_SECONDS pool
@@ -515,14 +521,18 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
     }
     case "seated": {
       const menuIcon = drinkTable ? "📋🥤" : "📋";
+      const tasteIcons = formatTasteIcons(g.taste);
       if (g.order.length === 0) {
         // Order not taken yet — show the order-patience countdown so
         // the player can see "this customer is about to leave because
         // no waiter came to take their order." Only visible once
         // they've actually flagged a waiter (orderRequested); the
-        // pre-flag 3s settle beat just shows the menu icon.
+        // pre-flag 3s settle beat just shows the menu icon. Taste
+        // icons trail so the player can spot WHY a customer picked
+        // this seat (🎨 = decor-sensitive, 🪟 = window lover, etc.)
         const secs = Math.max(0, Math.ceil(g.patience));
-        return g.orderRequested ? `${prefix} ${menuIcon} ${secs}s` : `${prefix} ${menuIcon}`;
+        const base = g.orderRequested ? `${prefix} ${menuIcon} ${secs}s` : `${prefix} ${menuIcon}`;
+        return tasteIcons ? `${base} ${tasteIcons}` : base;
       }
       return `${prefix} ⏳`;
     }
@@ -542,6 +552,20 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
     case "exitingDoor":    return "";
     case "walkingOut":     return "";
   }
+}
+
+/** Compact icon string for the guest's STRONG taste preferences.
+ * Empty when nothing crosses the threshold so casual guests don't
+ * carry visual noise. Order: decor, window, privacy, bar. Player
+ * uses it to understand at a glance why a customer parked at a
+ * specific seat (e.g. 🎨🪟 → they wanted decor AND a window). */
+function formatTasteIcons(taste: ActiveGuest["taste"]): string {
+  const parts: string[] = [];
+  if (taste.decorAffinity > 0.6) parts.push("🎨");
+  if (taste.windowAffinity > 0.6) parts.push("🪟");
+  if (taste.privacyBias > 0.4) parts.push("🤫");
+  if (taste.barAffinity > 0.6) parts.push("🍸");
+  return parts.join("");
 }
 
 /** Cheap color hash so different recipes look different on the plate
@@ -965,7 +989,7 @@ export class GuestSpawner {
     g.orderTaken = true;
     if (g.order.length === 0) {
       const surface = this.tableSurfaceForGuest(g);
-      g.order = this.buildOrder(g.archetype, surface);
+      g.order = this.buildOrder(g.archetype, surface, g.taste);
     }
     // Order is in — flip from the order-patience budget to the longer
     // serve-patience budget so the kitchen has its full window to
@@ -1043,122 +1067,156 @@ export class GuestSpawner {
     return this.registry.getResolvedSeatSlots(true).filter((s) => s.chairUid != null);
   }
 
-  /** Roll a fresh guest's seat preference. Tuned so a healthy mix of
-   * food + drink seats stays useful — most guests are food-curious
-   * and a quarter want pure drink visits. */
-  private rollGuestSeatPref(): "drink" | "food" | "any" {
-    const r = Math.random();
-    if (r < 0.25) return "drink";
-    if (r < 0.75) return "food";
-    return "any";
-  }
-
-  /** Group free functional seats by storey. Output values are arrays of
-   * seats with chairs (the same seats `listFunctionalSeats` returns)
-   * that aren't currently occupied / dirty. Used by the floor-picker
-   * below to decide which storey a fresh guest should sit on. */
-  private freeSeatsByFloor(): Map<number, ResolvedSeatSlot[]> {
-    const out = new Map<number, ResolvedSeatSlot[]>();
-    for (const s of this.listFunctionalSeats()) {
+  /** Every functional seat that's currently unclaimed (free + clean
+   * + not in-flight). Used by the taste-driven picker to score
+   * candidates. */
+  private listFreeSeats(): ResolvedSeatSlot[] {
+    return this.listFunctionalSeats().filter((s) => {
       const id = makeSeatId(s);
-      if (this.occupiedSeats.has(id)) continue;
-      if (this.dirtyUntil.has(id)) continue;
-      if (this.inFlightSpawnSeats.has(id)) continue;
-      let bucket = out.get(s.floor);
-      if (!bucket) { bucket = []; out.set(s.floor, bucket); }
-      bucket.push(s);
-    }
-    return out;
-  }
-
-  /** Categorise a floor by which surface types of seats it offers.
-   *   - "drink-only" → has drink seats and NO food seats
-   *   - "food"       → has no drink seats (food-only, or empty)
-   *   - "mixed"      → has BOTH drink and food seats
-   * Floors with no free seats at all return "food" (treated as a food
-   * floor since they have no drink-only seats either — matches the
-   * user-described rule "no seats for drinks only = food floor"). */
-  private classifyFloor(seats: readonly ResolvedSeatSlot[]): "drink-only" | "food" | "mixed" {
-    let hasDrink = false;
-    let hasFood = false;
-    for (const s of seats) {
-      if (s.surface === "drink") hasDrink = true;
-      else hasFood = true;
-      if (hasDrink && hasFood) return "mixed";
-    }
-    if (hasDrink && !hasFood) return "drink-only";
-    return "food";
-  }
-
-  /** Score a floor for the tie-breaker pick. Lower is better:
-   *   1. Distance to the entrance (ground = 0, Floor 1 = 1, …)
-   *   2. Negative decor count (more decor → lower → wins)
-   *   3. Negative window count (more windows → lower → wins)
-   * Compared lexicographically by the caller. */
-  private floorScore(floor: number): [number, number, number] {
-    const features = this.registry?.countFloorFeatures(floor) ?? { decor: 0, window: 0 };
-    return [floor, -features.decor, -features.window];
-  }
-
-  /** Pick a floor for a guest with `pref` from the supplied
-   * free-seats-by-floor map. Returns the floor index, or null when
-   * every floor is full. Preference logic per the user's seating
-   * design: drink-only guests favour drink-only floors first, food-
-   * only guests favour non-drink-only floors first; otherwise (mixed
-   * floors, or fallback) we tie-break with the floorScore tuple
-   * (ground > decor > windows). */
-  private pickFloorForPref(pref: "drink" | "food" | "any", freeByFloor: Map<number, ResolvedSeatSlot[]>): number | null {
-    const usable: { floor: number; classification: "drink-only" | "food" | "mixed" }[] = [];
-    for (const [floor, seats] of freeByFloor) {
-      // Filter floors whose remaining free seats can actually host this
-      // guest. A drink-only guest needs at least one drink seat free,
-      // a food-only guest needs a food seat, and "any" takes anything.
-      let candidates = seats;
-      if (pref === "drink") candidates = seats.filter((s) => s.surface === "drink");
-      else if (pref === "food") candidates = seats.filter((s) => s.surface === "food");
-      if (candidates.length === 0) continue;
-      usable.push({ floor, classification: this.classifyFloor(seats) });
-    }
-    if (usable.length === 0) return null;
-    // Preferred-class pass: drink-only guests look for a drink-only
-    // floor, food-only guests look for any floor that ISN'T drink-only.
-    let preferred: typeof usable;
-    if (pref === "drink") preferred = usable.filter((u) => u.classification === "drink-only");
-    else if (pref === "food") preferred = usable.filter((u) => u.classification !== "drink-only");
-    else preferred = usable;
-    if (preferred.length === 0) preferred = usable; // fall back to anything
-    // Tie-break by the floorScore tuple — lexicographic comparison so
-    // the floor closest to the entrance wins, then the one with the
-    // most decor, then the one with the most windows.
-    preferred.sort((a, b) => {
-      const sa = this.floorScore(a.floor);
-      const sb = this.floorScore(b.floor);
-      for (let i = 0; i < sa.length; i += 1) {
-        if (sa[i] !== sb[i]) return sa[i] - sb[i];
-      }
-      return 0;
+      if (this.occupiedSeats.has(id)) return false;
+      if (this.dirtyUntil.has(id)) return false;
+      if (this.inFlightSpawnSeats.has(id)) return false;
+      return true;
     });
-    return preferred[0].floor;
   }
 
-  /** Public for spawn — chooses a seat for a guest with `pref`, taking
-   * the preferred floor + a free seat on it. Returns null when no
-   * viable seat exists anywhere. */
-  private pickSeatForGuestPref(pref: "drink" | "food" | "any"): ResolvedSeatSlot | null {
-    const freeByFloor = this.freeSeatsByFloor();
-    const floor = this.pickFloorForPref(pref, freeByFloor);
-    if (floor === null) return null;
-    const seats = freeByFloor.get(floor)!;
-    // Same surface filter the picker applied, so a drink-only guest
-    // doesn't end up at a food seat on a mixed floor.
-    let candidates = seats;
-    if (pref === "drink") candidates = seats.filter((s) => s.surface === "drink");
-    else if (pref === "food") candidates = seats.filter((s) => s.surface === "food");
-    if (candidates.length === 0) candidates = seats;
-    // First-fit within the chosen floor — keeps the existing behaviour
-    // (older guests with no preference picked the first available
-    // seat) for the common case.
-    return candidates[0];
+  /** Score a free seat for a guest with the given taste. Higher =
+   * better. NEGATIVE INFINITY means "diet doesn't match — invalid
+   * candidate; reject" (the caller filters those out).
+   *
+   * The score is a weighted sum of:
+   *   - theme match: +30 if the seat's floor uses the guest's
+   *     preferred theme
+   *   - decor density: per-seat decor + plant + lamp items within
+   *     ~6 tiles, weighted by decorAffinity. Max ≈ +60.
+   *   - window adjacency: +20 × windowAffinity if a window is placed
+   *     within ~2 tiles of the seat
+   *   - privacy: ±30 × privacyBias. Penalises proximity to "loud"
+   *     kitchen items (stove, sink, dishwasher) when privacyBias > 0;
+   *     bonuses it when negative (extrovert wants the bustle).
+   *   - bar affinity: +30 × barAffinity if the seat is AT the bar
+   *   - group fit: +15 if the host table has ≥ groupSize seats
+   *   - entrance pull: −2 per floor up from ground (small tiebreaker
+   *     so we don't make a casual guest climb 4 floors for a 5%
+   *     prettier seat) */
+  private scoreSeat(seat: ResolvedSeatSlot, taste: CustomerTaste): number {
+    if (!this.dietMatchesSeat(seat, taste.diet)) return -Infinity;
+    let score = 0;
+    // Theme match.
+    const themeId = this.game.getThemeForFloor?.(seat.floor)?.id ?? "plain-white";
+    if (themeId === taste.preferredTheme) score += 30;
+    // Decor density around the seat.
+    const decorScore = this.computeNearbyDecorScore(seat);
+    score += decorScore * taste.decorAffinity;
+    // Window adjacency.
+    if (this.isSeatWindowAdjacent(seat)) score += 20 * taste.windowAffinity;
+    // Privacy / noise — distance to nearest loud kitchen station.
+    const noise = this.computeKitchenProximity(seat);
+    // noise is 0..1 (1 = right next to a stove); privacy +1 wants
+    // away from it, −1 wants close to it.
+    score += -noise * 30 * taste.privacyBias;
+    // Bar affinity — bonus if seat is AT the bar.
+    if (seat.atBar) score += 30 * taste.barAffinity;
+    // Group fit — bonus if the table has enough seats.
+    const tableSeats = this.tableSeatCount(seat.tableUid);
+    if (tableSeats >= taste.groupSize) score += 15;
+    // Small entrance pull tiebreaker (negligible for taste-driven
+    // picks, decisive when two seats score identically).
+    score -= 2 * seat.floor;
+    return score;
+  }
+
+  /** Hard filter — drink-only guest can only sit at a "drink"
+   * surface (bar counter / coffee table); food-only can only sit
+   * at a "food" surface (regular dining table); "both" can use
+   * either. Strict per user spec; spawn rate is bumped elsewhere
+   * to compensate for the resulting rejection rate. */
+  private dietMatchesSeat(seat: ResolvedSeatSlot, diet: DietKind): boolean {
+    if (diet === "both") return true;
+    if (diet === "drink") return seat.surface === "drink";
+    return seat.surface === "food";
+  }
+
+  /** Sum decor "quality" within ~6 tiles of the seat. Each decor /
+   * plant / lamp item on the SAME floor contributes (style + 10 ×
+   * ratingBonus) weighted by 1 / (1 + d²) where d is distance in
+   * tiles. Caps at ~+60 total for a heavily decorated corner. */
+  private computeNearbyDecorScore(seat: ResolvedSeatSlot): number {
+    if (!this.registry) return 0;
+    let score = 0;
+    for (const it of this.registry.snapshotItems()) {
+      if (it.floor !== seat.floor) continue;
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      if (def.category !== "decoration" && def.category !== "plant" && def.category !== "lamp") continue;
+      const dx = it.x - seat.x;
+      const dz = it.z - seat.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 6) continue;
+      const quality = (def.style ?? 1) + 10 * (def.ratingBonus ?? 0);
+      score += quality / (1 + dist * dist);
+    }
+    return Math.min(60, score * 4);
+  }
+
+  /** True if a window is placed on a wall within ~2 tiles of the
+   * seat. Approximates "seat by the window" without actually
+   * computing which wall segment the seat looks at. */
+  private isSeatWindowAdjacent(seat: ResolvedSeatSlot): boolean {
+    if (!this.registry) return false;
+    for (const it of this.registry.snapshotItems()) {
+      if (it.floor !== seat.floor) continue;
+      if (!it.defId.startsWith("window") && !it.defId.startsWith("int-window")) continue;
+      const dx = it.x - seat.x;
+      const dz = it.z - seat.z;
+      if (Math.hypot(dx, dz) < 2.5) return true;
+    }
+    return false;
+  }
+
+  /** 0..1 — how close the seat is to a "loud" kitchen station
+   * (stove, sink, dishwasher). 1 = right next to one, 0 = >5 tiles
+   * away. Drives the privacy / noise scoring. */
+  private computeKitchenProximity(seat: ResolvedSeatSlot): number {
+    if (!this.registry) return 0;
+    let minDist = Infinity;
+    for (const it of this.registry.snapshotItems()) {
+      if (it.floor !== seat.floor) continue;
+      const def = getFurnitureDef(it.defId);
+      if (!def) continue;
+      if (def.category !== "stove" && def.category !== "wash") continue;
+      const d = Math.hypot(it.x - seat.x, it.z - seat.z);
+      if (d < minDist) minDist = d;
+    }
+    if (!Number.isFinite(minDist)) return 0;
+    if (minDist >= 5) return 0;
+    return 1 - minDist / 5;
+  }
+
+  /** Number of seat slots on the seat's host table. Caches per
+   * tableUid would help if we hit hot paths but seat picking runs
+   * once per spawn so the linear scan is fine. */
+  private tableSeatCount(tableUid: string): number {
+    if (!this.registry) return 1;
+    const all = this.registry.getResolvedSeatSlots();
+    let n = 0;
+    for (const s of all) if (s.tableUid === tableUid) n += 1;
+    return n;
+  }
+
+  /** Score every free seat against the taste, return the highest-
+   * scoring one. Returns null when no valid seat exists (every
+   * candidate failed the diet filter — strict mode means the guest
+   * is rejected and the spawn slot is skipped). */
+  private pickBestSeatForTaste(taste: CustomerTaste): ResolvedSeatSlot | null {
+    const free = this.listFreeSeats();
+    let best: ResolvedSeatSlot | null = null;
+    let bestScore = -Infinity;
+    for (const s of free) {
+      const score = this.scoreSeat(s, taste);
+      if (score > bestScore) { bestScore = score; best = s; }
+    }
+    return best;
   }
 
   /** Count of functional seats not currently occupied + not in the dirty
@@ -1439,12 +1497,24 @@ export class GuestSpawner {
   }
 
   private async spawnGuest(): Promise<void> {
-    // Roll the guest's preference BEFORE picking a seat — the pick
-    // routes drink-only guests to drink-only floors and food-only
-    // guests away from drink-only floors per the user-specified seat
-    // assignment rules.
-    const seatPref = this.rollGuestSeatPref();
-    const available = this.pickSeatForGuestPref(seatPref);
+    // Roll archetype + full taste BEFORE picking a seat — the
+    // scorer needs every field. Diet is the only hard filter; the
+    // rest of the taste shapes seat scoring (theme, decor, window,
+    // privacy, bar, group fit). If NO seat matches the strict diet
+    // filter the spawn is skipped (the customer is rejected at the
+    // door; bumped spawn rate compensates).
+    const archetype = rollArchetype();
+    const themeIds = RESTAURANT_THEMES.map((t) => t.id);
+    const taste = rollCustomerTaste(archetype, themeIds);
+    const available = this.pickBestSeatForTaste(taste);
+    // One-line spawn diagnostic — surfaces the rolled taste and the
+    // resulting seat so the player can tie an observed "why did
+    // they sit there" to the actual scoring. Off-floor visits, bar
+    // grabs, etc., show up immediately in DevTools.
+    if (DEBUG_GUEST_LOGS || !available) {
+      const seatTag = available ? `seat=${available.tableUid}#${available.slotIndex}(F${available.floor},${available.surface}${available.atBar ? ",bar" : ""})` : "seat=NONE";
+      console.log(`[Guest spawn] ${archetype.id} diet=${taste.diet} cat=${taste.preferredCategory} theme=${taste.preferredTheme} decor=${taste.decorAffinity.toFixed(2)} win=${taste.windowAffinity.toFixed(2)} priv=${taste.privacyBias.toFixed(2)} bar=${taste.barAffinity.toFixed(2)} group=${taste.groupSize} → ${seatTag}`);
+    }
     const waitingChair = available ? null : this.findFreeOverflowChair();
     if (!available && !waitingChair) return;
     let seatId: SeatId = "";
@@ -1477,8 +1547,8 @@ export class GuestSpawner {
       };
       this.animator.add(character);
 
-      const archetype = rollArchetype();
       // Loud announcement for a food critic so the player knows to ace it.
+      // (archetype + taste were rolled before the seat pick above.)
       if (archetype.id === "critic") {
         this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966");
         this.sfx?.alert();
@@ -1526,7 +1596,7 @@ export class GuestSpawner {
         totalPaid: 0,
         totalSatisfaction: 0,
         archetype,
-        wantsDrinks: seatPref,
+        taste,
         path: [],
         currentFloor: 0,
         replanAccum: 0,
@@ -1942,7 +2012,7 @@ export class GuestSpawner {
           // guest doesn't get stuck. Same surface-aware build the old
           // path used.
           const surface = this.tableSurfaceForGuest(g);
-          g.order = this.buildOrder(g.archetype, surface);
+          g.order = this.buildOrder(g.archetype, surface, g.taste);
           if (g.order.length === 0) {
             this.markLostAndExit(g);
             break;
@@ -2264,7 +2334,7 @@ export class GuestSpawner {
    *   - "food" (default): the classic appetizer + main + dessert run.
    *   - "drink": 1-2 drinks, no kitchen courses. Coffee tables seat
    *     guests for a quick beverage with much faster turnover. */
-  private buildOrder(archetype: CustomerArchetype, surface: "food" | "drink" = "food"): RecipeDefinition[] {
+  private buildOrder(archetype: CustomerArchetype, surface: "food" | "drink" = "food", taste?: CustomerTaste): RecipeDefinition[] {
     const menu = this.game.cooking.getMenuRecipeIds();
     const onMenu = menu.length > 0
       ? menu.map((id) => recipes.find((r) => r.id === id)).filter((r): r is RecipeDefinition => !!r)
@@ -2293,19 +2363,31 @@ export class GuestSpawner {
 
     const expectation = this.game.customers.rollCustomerExpectation();
     const order: RecipeDefinition[] = [];
-    // Bias-shifted appetizer chance: 0.4 for -1, 0.6 for 0, 0.8 for +1.
-    const appChance = 0.6 + archetype.orderSizeBias * 0.2;
+    // Cuisine taste bias — 60% of the time, override the rolled
+    // expectation with the guest's preferred category for the main
+    // slot. Foodies / dessert-lovers / appetizer-seekers actually
+    // get more of their preferred category. The other 40% still
+    // uses the global expectation so menu variety stays alive.
+    const tasteOverride = taste && taste.preferredCategory !== "drink" && Math.random() < 0.6;
+    const targetCat = tasteOverride ? taste!.preferredCategory : expectation.category;
+    // Appetizer chance, with a bump when the guest specifically
+    // prefers appetizers (they'll order one even if they're a
+    // quick-lunch type).
+    let appChance = 0.6 + archetype.orderSizeBias * 0.2;
+    if (taste?.preferredCategory === "appetizer") appChance = Math.min(0.95, appChance + 0.25);
     if (Math.random() < appChance) {
       const apps = onMenu.filter((r) => r.category === "appetizer");
       if (apps.length > 0) order.push(apps[between(0, apps.length - 1)]);
     }
-    // Always try for a main matching expectation (fallback: any main, then any).
-    const matching = onMenu.filter((r) => r.category === expectation.category);
+    // Main course: prefer the targetCat (taste override or
+    // expectation); fall back to any main; then any recipe.
+    const matching = onMenu.filter((r) => r.category === targetCat);
     const mains = matching.length > 0 ? matching : onMenu.filter((r) => r.category === "main");
     const mainPool = mains.length > 0 ? mains : onMenu;
     order.push(mainPool[between(0, mainPool.length - 1)]);
-    // Dessert chance: 0.15 for -1, 0.35 for 0, 0.55 for +1.
-    const dessertChance = 0.35 + archetype.orderSizeBias * 0.2;
+    // Dessert chance, with bump for dessert-preferring guests.
+    let dessertChance = 0.35 + archetype.orderSizeBias * 0.2;
+    if (taste?.preferredCategory === "dessert") dessertChance = Math.min(0.95, dessertChance + 0.3);
     if (Math.random() < dessertChance) {
       const desserts = onMenu.filter((r) => r.category === "dessert");
       if (desserts.length > 0) order.push(desserts[between(0, desserts.length - 1)]);
@@ -2440,7 +2522,15 @@ export class GuestSpawner {
     if (!recipe) return;
     // Use upgrade-aware effective values (level 1 = base, +30%/+1.5 per level).
     const price = this.game.getEffectiveSellPrice(recipe);
-    const satisfaction = this.game.getEffectiveSatisfaction(recipe);
+    let satisfaction = this.game.getEffectiveSatisfaction(recipe);
+    // Cuisine taste bonus — if the served dish's category matches
+    // the guest's preferredCategory, they're extra-pleased. Small
+    // additive bump (+2) so it nudges the final star rating without
+    // dominating recipe quality / staff training / decor inputs.
+    if (recipe.category === g.taste.preferredCategory) {
+      satisfaction += 2;
+      this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y + 0.2, "♥ taste", "#ffd47a");
+    }
     this.game.economy.earnMoney(price, "payment");
     g.totalPaid += price;
     g.totalSatisfaction += satisfaction;
