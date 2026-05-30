@@ -243,9 +243,17 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // Tables. Dining tables are 2×2 tiles so they have a real seat for
   // each of the 4 chairs that pack around them. Coffee tables stay 1×1
   // since they're not dining seating.
+  // Small Table is 2×2 tiles but the Kenney mesh ships ~1.88:1 — the
+  // uniform-min auto-fit fills the width and leaves the depth at ≈1.0 m,
+  // so the table reads as a 2×1 plank stuck to the cross-section line
+  // between the two depth rows. stretchFootprint scales X and Z
+  // independently so the top covers all four cells. Some leg/top
+  // proportion change is visible vs the raw mesh (Z stretches ~1.87×
+  // more than X), but a square small table is a legit silhouette and
+  // is way preferable to half the footprint visibly empty.
   { id: "small-table",   name: "Small Table",   category: "table",
     modelPath: "assets/kenney/table.glb", scale: S_TABLE, size: { width: 2, depth: 2 }, cost: 22, style: 1,
-    tier: 1,
+    tier: 1, stretchFootprint: true,
     targetHeight: H_TABLE, seatSlots: STANDARD_TABLE_SEAT_SLOTS,
     surfaceSlots: [{ dx: 0, dz: 0 }] },
   { id: "round-table",   name: "Round Table",   category: "table",
