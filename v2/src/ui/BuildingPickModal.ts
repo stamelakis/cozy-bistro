@@ -97,9 +97,9 @@ export class BuildingPickModal {
       } as Partial<CSSStyleDeclaration>);
       return el;
     };
-    legend.appendChild(legendCard("🏠", "Small", "×0.6", "+$5,000", "8×8 interior (later)", "#9bd4ff"));
-    legend.appendChild(legendCard("🏢", "Medium", "×1.0", "+$2,000", "10×10 interior (now)", "#f0d484"));
-    legend.appendChild(legendCard("🏛️", "Large", "×1.4", "no bonus", "12×12 interior (later)", "#f4a878"));
+    legend.appendChild(legendCard("🏠", "Small", "×0.6", "+$6,000", "8×8 interior (later)", "#9bd4ff"));
+    legend.appendChild(legendCard("🏢", "Medium", "×1.0", "+$4,000", "10×10 interior (now)", "#f0d484"));
+    legend.appendChild(legendCard("🏛️", "Large", "×1.4", "+$2,000", "12×12 interior (later)", "#f4a878"));
     card.appendChild(legend);
 
     // === Mini-map ===
@@ -297,7 +297,7 @@ export class BuildingPickModal {
       tradeoff.style.fontSize = "10px";
       tradeoff.style.opacity = "0.75";
       const rentText = b.kind === "small" ? "Rent ×0.6" : b.kind === "large" ? "Rent ×1.4" : "Rent ×1.0";
-      const bonusText = b.kind === "small" ? "+$5,000 starter" : b.kind === "medium" ? "+$2,000 starter" : "no bonus";
+      const bonusText = b.kind === "small" ? "+$6,000 starter" : b.kind === "medium" ? "+$4,000 starter" : "+$2,000 starter";
       tradeoff.textContent = `${rentText} · ${bonusText}`;
       cardEl.appendChild(tradeoff);
 

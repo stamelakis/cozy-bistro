@@ -936,13 +936,13 @@ export class Engine {
           mine.kind === "large" ? 1.4 :
           1.0;
         if (didClaim) {
-          // Starter cash bonus inverse to size — compensates a small
-          // plot's tight interior with extra capital to spend on it.
-          const bonus = mine.kind === "small" ? 5000 : mine.kind === "medium" ? 2000 : 0;
-          if (bonus > 0) {
-            this.game.economy.earnMoney(bonus, "grant");
-            console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot`);
-          }
+          // Starter cash bonus inverse to size — small gets the most
+          // to compensate for the tight interior; large still gets
+          // something so claiming the prestige plot doesn't feel
+          // like a punishment.
+          const bonus = mine.kind === "small" ? 6000 : mine.kind === "medium" ? 4000 : 2000;
+          this.game.economy.earnMoney(bonus, "grant");
+          console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot`);
         }
       }
       this.game.setAuthGated(false);
