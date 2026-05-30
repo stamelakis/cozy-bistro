@@ -625,6 +625,20 @@ export class BuildMenu {
         if (this.moveMode) this.toggleMoveMode();
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
+        // Wall / wall-shelf items have their rotation FORCED by the wall
+        // they snap to — R must not change them. The old code patched
+        // currentPlan.rotY for every placement type, and a click before
+        // the next pointer-move snapped the rotation back; clicks
+        // immediately after R placed the item perpendicular to the wall
+        // (bbox piercing through the wall, mesh sticking into the room).
+        const placement = this.placingDef?.placement ?? "tile";
+        const wallLocked = placement === "wall" || placement === "wall-shelf";
+        if (wallLocked) {
+          // Swallow R for wall items — preview already shows the forced
+          // orientation and clicks should honour that, not the player's
+          // accumulated rotationY.
+          return;
+        }
         this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
         // Patch currentPlan too — otherwise a click immediately after R
         // (no mouse move in between) consumes the plan that
@@ -634,9 +648,7 @@ export class BuildMenu {
         // into this.rotationY, so the formula
         //   tile items:    plan.rotY = this.rotationY
         //   surface items: plan.rotY = snap.rotY + this.rotationY
-        // both stay in sync. Wall / wall-shelf items will re-clamp
-        // back to host.rotY on the next pointer move (their rotation
-        // is forced and R has never affected them).
+        // both stay in sync.
         if (this.currentPlan) {
           this.currentPlan.rotY = (this.currentPlan.rotY + Math.PI / 2) % (Math.PI * 2);
           this.preview.rotation.y = this.currentPlan.rotY;
