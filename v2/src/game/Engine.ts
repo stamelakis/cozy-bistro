@@ -17,6 +17,7 @@ import { UpgradeModal } from "../ui/UpgradeModal";
 import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
 import { FloorSelector } from "../ui/FloorSelector";
+import { CameraControls } from "../ui/CameraControls";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
@@ -81,6 +82,7 @@ export class Engine {
   readonly expandModal: ExpandModal;
   readonly expandWidget: ExpandWidget;
   readonly floorSelector: FloorSelector;
+  readonly cameraControls: CameraControls;
   readonly stockWidget: StockStatusWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
@@ -276,6 +278,11 @@ export class Engine {
     // so it can read NUM_STOREYS / STOREY_HEIGHT statics. The
     // onFocusChanged callback is wired AFTER BuildMenu exists below.
     this.floorSelector = new FloorSelector(container, this.scene, this.camera);
+    // Camera-control widget (zoom + rotate buttons with live indicators).
+    // Pinned top-left so it doesn't clash with the top-center FloorSelector.
+    // Polled from the same 5 Hz HUD tick below so the zoom % and compass
+    // arrow track wheel-zoom and right-drag-rotate as well as button clicks.
+    this.cameraControls = new CameraControls(container, this.camera);
     // Classify each floor by what its seats serve so the FloorSelector
     // can show a sub-label under each button (food / drinks / mix /
     // empty). Re-evaluated on the selector's own 1.5s timer so the tag
@@ -1330,6 +1337,7 @@ export class Engine {
       this.menuPanel.update();
       this.expandWidget.update();
       this.stockWidget.update();
+      this.cameraControls.update();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
       // Rating sign mounted on the door lintel — keeps the visible star
       // count in sync with the actual restaurant rating.

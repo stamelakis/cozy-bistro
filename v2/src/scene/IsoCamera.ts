@@ -5,12 +5,26 @@ import * as THREE from "three";
  * feel of the 2D game while letting us rotate the view freely and pan/zoom.
  *
  * Standard iso angles: 30° down from horizontal, 45° around vertical.
+ *
+ * Zoom range is very wide (1.5 → 200 world-unit half-heights) so the
+ * player can either pull in tight on a single seat OR pull all the way
+ * out to scan the entire city map for plots / other players' buildings.
+ * The UI's CameraControls reads MIN_ZOOM / MAX_ZOOM to draw a percentage.
  */
 export class IsoCamera {
+  /** Tightest zoom — half-view shows ~3 world units (one chair). */
+  static readonly MIN_ZOOM = 1.5;
+  /** Loosest zoom — half-view shows ~400 world units (whole city + buffer). */
+  static readonly MAX_ZOOM = 200;
+  /** Default zoom on game start — comfortable mid-iso view of the restaurant. */
+  static readonly DEFAULT_ZOOM = 12;
+  /** Default azimuth angle (45° = classic iso facing northeast). */
+  static readonly DEFAULT_AZIMUTH = Math.PI / 4;
+
   readonly threeCamera: THREE.OrthographicCamera;
   private target = new THREE.Vector3(0, 0, 0);
-  private zoom = 12; // half-height of view in world units
-  private azimuth = Math.PI / 4; // 45°
+  private zoom = IsoCamera.DEFAULT_ZOOM; // half-height of view in world units
+  private azimuth = IsoCamera.DEFAULT_AZIMUTH; // 45°
   private elevation = Math.atan(1 / Math.SQRT2); // ~35.26°, true iso
 
   private dragging = false;
@@ -101,10 +115,100 @@ export class IsoCamera {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    const factor = Math.exp(e.deltaY * 0.0015);
-    this.zoom = THREE.MathUtils.clamp(this.zoom * factor, 3, 40);
+    // Wheel zoom uses an exponential factor so each tick of the wheel
+    // multiplies the zoom by a constant ratio — feels natural across
+    // the full 1.5..200 range without the "stuck" feeling a linear
+    // step gives at the far ends. Rate scaled up from the original
+    // 0.0015 so a similar number of wheel ticks covers the wider
+    // zoom range (~17 ticks min↔max instead of ~33).
+    const factor = Math.exp(e.deltaY * 0.0030);
+    this.zoom = THREE.MathUtils.clamp(this.zoom * factor, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
     this.resize(window.innerWidth, window.innerHeight);
   };
+
+  // ─── Public read-only accessors for the on-screen CameraControls ───
+  // The HUD's CameraControls widget reads these every frame to draw the
+  // zoom percent + a cardinal-direction rotation indicator. They never
+  // mutate state, so they're cheap to poll.
+
+  /** Current zoom (half-view height in world units). */
+  getZoom(): number {
+    return this.zoom;
+  }
+
+  /**
+   * Zoom expressed as a 0..1 value where 0 = MAX_ZOOM (most pulled
+   * out) and 1 = MIN_ZOOM (most zoomed in). Used by the UI to render
+   * a slider-style "100% / 30% / 5%" readout that increases as the
+   * player zooms IN — which is the mental model most players have.
+   */
+  getZoomPercent(): number {
+    // Log-scale so the percentage moves linearly with wheel ticks
+    // (which are also exponential). Otherwise 90% of the slider would
+    // be crammed into the lower half of the zoom range.
+    const t = Math.log(this.zoom / IsoCamera.MIN_ZOOM) /
+              Math.log(IsoCamera.MAX_ZOOM / IsoCamera.MIN_ZOOM);
+    return 1 - THREE.MathUtils.clamp(t, 0, 1);
+  }
+
+  /** Current azimuth in radians, normalised to [0, 2π). */
+  getAzimuth(): number {
+    const two = Math.PI * 2;
+    return ((this.azimuth % two) + two) % two;
+  }
+
+  /** Azimuth in degrees [0, 360). */
+  getAzimuthDegrees(): number {
+    return (this.getAzimuth() * 180) / Math.PI;
+  }
+
+  /**
+   * Compass-style cardinal label for the camera's "forward" axis. The
+   * isometric camera looks toward the origin from the +X/+Z quadrant
+   * at azimuth = π/4, so the on-screen "up" direction roughly aligns
+   * with -X / -Z (north-west-ish). We map azimuth to one of 8 cardinal
+   * sectors based on which world direction is at the top of the screen.
+   */
+  getCardinalLabel(): string {
+    // Top-of-screen world direction = -(cos(az), sin(az)). Convert to
+    // a compass bearing where 0° = N, increasing clockwise.
+    const az = this.getAzimuth();
+    // The default azimuth (π/4 = 45°) reads as North on the on-screen
+    // compass — that's the orientation players grew up with from the
+    // legacy iso build. So we offset by -π/4 and invert.
+    const bearing = ((-(az - IsoCamera.DEFAULT_AZIMUTH) * 180) / Math.PI + 360) % 360;
+    const labels = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    const idx = Math.round(bearing / 45) % 8;
+    return labels[idx];
+  }
+
+  // ─── Public mutators for the CameraControls buttons ────────────────
+
+  /** Multiply the zoom by `factor` (clamped). Used by zoom buttons:
+   * factor < 1 zooms IN (smaller half-view), factor > 1 zooms OUT. */
+  zoomBy(factor: number): void {
+    this.zoom = THREE.MathUtils.clamp(this.zoom * factor, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
+    this.resize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Snap the zoom to its default starting value. */
+  resetZoom(): void {
+    this.zoom = IsoCamera.DEFAULT_ZOOM;
+    this.resize(window.innerWidth, window.innerHeight);
+  }
+
+  /** Rotate the camera around the vertical axis by `deltaRad` radians.
+   * Positive = counter-clockwise (compass east → north). */
+  rotateBy(deltaRad: number): void {
+    this.azimuth += deltaRad;
+    this.updatePose();
+  }
+
+  /** Snap the rotation back to the default 45° iso azimuth. */
+  resetRotation(): void {
+    this.azimuth = IsoCamera.DEFAULT_AZIMUTH;
+    this.updatePose();
+  }
 
   private dragButton = 0; // which mouse button started the drag
   private dragMoved = 0;  // total px moved during this drag
