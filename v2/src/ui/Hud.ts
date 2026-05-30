@@ -371,10 +371,11 @@ export class Hud {
           "Lists payments in (customer orders), payments out (rent, wages, ingredient runs, " +
           "furniture purchases). Use it to figure out where your money is going.",
         click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.22)" },
-      { icon: "☁ Cloud",       title:
-          "CLOUD — online features.\n" +
-          "Leaderboards (high scores), friends, public restaurants. Requires a cloud account " +
-          "(set up under Slots). Offline play continues to work normally if cloud is off.",
+      { icon: "👋 Social",     title:
+          "SOCIAL — friends + leaderboards.\n" +
+          "See other players on this server, send friend requests by username, browse the daily " +
+          "leaderboards. Visiting other players' restaurants is a future feature; for now this is " +
+          "the lobby.",
         click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
       // Slots button — DEV-only convenience. Hidden in production
       // (multiplayer single-slot per player, autosaved). The tag

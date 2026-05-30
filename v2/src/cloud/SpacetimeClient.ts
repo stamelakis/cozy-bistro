@@ -148,6 +148,28 @@ export class SpacetimeClient {
     return this.callReducer("claimBuilding", () => this.conn!.reducers.claimBuilding({ buildingId }));
   }
 
+  /** Every known account on this server (auth_record snapshot).
+   * SocialModal's username search drives off this. Includes self
+   * unless the caller filters. */
+  listAccounts(): { username: string; displayName: string; identity: Identity; isAdmin: boolean; isMe: boolean }[] {
+    if (!this.conn) return [];
+    const me = this.identity;
+    const out: { username: string; displayName: string; identity: Identity; isAdmin: boolean; isMe: boolean }[] = [];
+    try {
+      for (const a of this.conn.db.auth_record.iter()) {
+        if (!a.username) continue; // skip placeholders if any
+        out.push({
+          username: a.username,
+          displayName: a.displayName,
+          identity: a.identity,
+          isAdmin: a.isAdmin,
+          isMe: me ? identityEquals(a.identity, me) : false,
+        });
+      }
+    } catch { /* not wired yet */ }
+    return out;
+  }
+
   /** Current logged-in account info, or null when unauthenticated. */
   getCurrentAccount(): { username: string; displayName: string; isAdmin: boolean } | null {
     if (!this.conn || !this.identity) return null;

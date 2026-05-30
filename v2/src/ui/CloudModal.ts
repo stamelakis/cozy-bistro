@@ -11,7 +11,12 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
  * subscribes to its change events so the UI live-refreshes when other
  * players' rows arrive.
  */
-type Tab = "leaderboards" | "friends" | "restaurants";
+// P6 — "Cloud" rebrand to "Social". The legacy "restaurants" tab
+// was removed (the building-pick + plot-claim flow replaces it).
+// Friends + Leaderboards remain the social meat. A username search
+// is added inside the friends tab so players can find each other
+// without needing a friend code.
+type Tab = "leaderboards" | "friends";
 
 const CATEGORIES = [
   { id: "daily_revenue", label: "Daily Revenue", scoreLabel: "$" },
@@ -62,7 +67,7 @@ export class CloudModal {
       marginBottom: "10px",
     } as Partial<CSSStyleDeclaration>);
     const title = document.createElement("div");
-    title.textContent = "☁ CLOUD";
+    title.textContent = "👋 SOCIAL";
     Object.assign(title.style, { fontSize: "16px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
     header.appendChild(title);
     const closeBtn = document.createElement("button");
@@ -85,7 +90,6 @@ export class CloudModal {
     const tabList: { id: Tab; label: string }[] = [
       { id: "leaderboards", label: "🏆 Leaderboards" },
       { id: "friends",      label: "👥 Friends" },
-      { id: "restaurants",  label: "🏠 Restaurants" },
     ];
     for (const t of tabList) {
       const btn = document.createElement("button");
@@ -144,8 +148,7 @@ export class CloudModal {
       return;
     }
     if (this.tab === "leaderboards") this.renderLeaderboards();
-    else if (this.tab === "friends") this.renderFriends();
-    else this.renderRestaurants();
+    else this.renderFriends();
   }
 
   private renderLeaderboards(): void {
@@ -245,6 +248,62 @@ export class CloudModal {
     meSection.appendChild(hexLine);
     this.body.appendChild(meSection);
 
+    // Username search — find players on this server by username
+    // substring. Clicking a result pre-fills the hex below so the
+    // friend-request flow stays the same (just less typing).
+    this.body.appendChild(sectionHeader("Find a player"));
+    const searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.placeholder = "Search usernames…";
+    Object.assign(searchInput.style, {
+      width: "100%", padding: "5px 8px", boxSizing: "border-box",
+      background: "rgba(255,245,220,0.08)", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)", borderRadius: "4px",
+      font: "inherit", fontSize: "12px", marginBottom: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(searchInput);
+    const resultsList = document.createElement("div");
+    Object.assign(resultsList.style, {
+      maxHeight: "120px", overflowY: "auto", marginBottom: "10px",
+      border: "1px solid rgba(255,245,220,0.10)", borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(resultsList);
+    const renderResults = (): void => {
+      const q = searchInput.value.trim().toLowerCase();
+      resultsList.innerHTML = "";
+      const accounts = this.cloud.listAccounts()
+        .filter((a) => !a.isMe)
+        .filter((a) => q === "" ? true : a.username.includes(q) || a.displayName.toLowerCase().includes(q));
+      if (accounts.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = q ? "No matches." : "No other players yet.";
+        Object.assign(empty.style, { padding: "8px 10px", fontSize: "11px", opacity: "0.6" } as Partial<CSSStyleDeclaration>);
+        resultsList.appendChild(empty);
+        return;
+      }
+      for (const a of accounts.slice(0, 30)) {
+        const row = document.createElement("div");
+        Object.assign(row.style, {
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          padding: "5px 8px", fontSize: "11px",
+          borderBottom: "1px solid rgba(255,245,220,0.06)",
+        } as Partial<CSSStyleDeclaration>);
+        const name = document.createElement("span");
+        name.innerHTML = `${escapeHtml(a.displayName)} ${a.isAdmin ? "<span style=\"opacity:0.65;font-size:9px\">admin</span>" : ""}<br><span style="opacity:0.55;font-size:10px">@${a.username}</span>`;
+        row.appendChild(name);
+        const sendQuickBtn = document.createElement("button");
+        sendQuickBtn.textContent = "Friend";
+        Object.assign(sendQuickBtn.style, btnStyle("rgba(120,180,200,0.22)") as Partial<CSSStyleDeclaration>);
+        sendQuickBtn.onclick = () => {
+          this.cloud.sendFriendRequestByHex(a.identity.toHexString());
+        };
+        row.appendChild(sendQuickBtn);
+        resultsList.appendChild(row);
+      }
+    };
+    searchInput.oninput = renderResults;
+    renderResults();
+
     // Send-request row.
     const sendSection = sectionHeader("Send a friend request");
     this.body.appendChild(sendSection);
@@ -322,64 +381,6 @@ export class CloudModal {
     }
   }
 
-  private renderRestaurants(): void {
-    const rows = this.cloud.getRestaurants();
-    this.body.appendChild(sectionHeader(`Restaurants (${rows.length})`));
-    if (rows.length === 0) {
-      this.body.appendChild(muted("No restaurants visible to you yet."));
-      return;
-    }
-    for (const r of rows) {
-      const card = document.createElement("div");
-      Object.assign(card.style, {
-        padding: "8px 10px", marginBottom: "8px",
-        background: r.isMine ? "rgba(120,200,120,0.10)" : "rgba(255,245,220,0.04)",
-        border: `1px solid ${r.isMine ? "rgba(120,200,120,0.35)" : "rgba(255,245,220,0.15)"}`,
-        borderRadius: "6px",
-      } as Partial<CSSStyleDeclaration>);
-      const title = document.createElement("div");
-      title.innerHTML = `<strong>${escapeHtml(r.name)}</strong> ${r.isMine ? "(yours)" : r.isCoOwner ? "(co-owner)" : ""}`;
-      Object.assign(title.style, { fontSize: "13px" } as Partial<CSSStyleDeclaration>);
-      card.appendChild(title);
-      const meta = document.createElement("div");
-      meta.textContent = `Owner: ${r.ownerName} · ${r.isPublic ? "Public" : "Private"}`;
-      Object.assign(meta.style, { fontSize: "10px", opacity: "0.7", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
-      card.appendChild(meta);
-      if (r.isMine) {
-        // Owner controls: toggle public + invite co-owner.
-        const ctrls = document.createElement("div");
-        Object.assign(ctrls.style, { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } as Partial<CSSStyleDeclaration>);
-        const togglePublic = document.createElement("button");
-        togglePublic.textContent = r.isPublic ? "Make private" : "Make public";
-        Object.assign(togglePublic.style, btnStyle("rgba(180,180,180,0.18)") as Partial<CSSStyleDeclaration>);
-        togglePublic.onclick = () => this.cloud.setRestaurantPublic(r.id, !r.isPublic);
-        ctrls.appendChild(togglePublic);
-
-        const inviteInput = document.createElement("input");
-        inviteInput.type = "text";
-        inviteInput.placeholder = "Co-owner ID hex";
-        Object.assign(inviteInput.style, {
-          flex: "1", minWidth: "150px", padding: "4px 6px",
-          background: "rgba(255,245,220,0.08)", color: "#fff5dc",
-          border: "1px solid rgba(255,245,220,0.25)", borderRadius: "4px",
-          font: "inherit", fontSize: "10px", fontFamily: "monospace",
-        } as Partial<CSSStyleDeclaration>);
-        ctrls.appendChild(inviteInput);
-        const inviteBtn = document.createElement("button");
-        inviteBtn.textContent = "Invite";
-        Object.assign(inviteBtn.style, btnStyle("rgba(120,180,200,0.22)") as Partial<CSSStyleDeclaration>);
-        inviteBtn.onclick = () => {
-          const hex = inviteInput.value.trim();
-          if (!hex) return;
-          this.cloud.inviteCoOwnerByHex(r.id, hex);
-          inviteInput.value = "";
-        };
-        ctrls.appendChild(inviteBtn);
-        card.appendChild(ctrls);
-      }
-      this.body.appendChild(card);
-    }
-  }
 }
 
 // ===== UI helpers =====
