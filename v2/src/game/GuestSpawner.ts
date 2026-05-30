@@ -1912,7 +1912,12 @@ export class GuestSpawner {
     // waypoints take the guest straight through it. Refreshing every
     // ~0.8s while in motion picks up the new obstacle within a second.
     g.replanAccum += dt;
-    if (g.replanAccum >= 0.8 && this.distanceToTarget(g) >= ARRIVAL_THRESHOLD) {
+    // Skip replan while the guest is mid-stair — same reasoning as in
+    // StaffRouter.moveActor: a replan from a mid-stair XZ at the OLD
+    // floor routes the guest BACK to the stair entry before going up,
+    // creating an infinite loop on the steps.
+    const midStair = g.path.length > 0 && g.path[0].fromStair === true;
+    if (!midStair && g.replanAccum >= 0.8 && this.distanceToTarget(g) >= ARRIVAL_THRESHOLD) {
       g.replanAccum = 0;
       this.planPath(g);
     }

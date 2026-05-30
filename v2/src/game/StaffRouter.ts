@@ -1076,7 +1076,15 @@ export class StaffRouter {
     // within one second. Cheap (sub-ms over a 10×10 grid) and only
     // runs while actually walking somewhere.
     a.replanAccum += dt;
-    if (a.replanAccum >= 0.8 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
+    // Don't replan mid-stair — the next waypoint is the stair landing on
+    // the upper floor and currentFloor hasn't promoted yet, so a fresh
+    // findMultiFloorPath from the actor's mid-stair XZ at the OLD floor
+    // would route them BACK to the stair entry and create an endless
+    // south-then-north loop on the steps. Once we cross the fromStair
+    // waypoint and consume it, currentFloor flips and the next replan
+    // works normally.
+    const midStair = a.path.length > 0 && a.path[0].fromStair === true;
+    if (!midStair && a.replanAccum >= 0.8 && this.distance(pos, a.target) >= ARRIVAL_THRESHOLD) {
       a.replanAccum = 0;
       this.planPath(a);
     }
