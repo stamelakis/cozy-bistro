@@ -437,7 +437,12 @@ export class FurnitureRegistry {
     for (const child of children) {
       const cIdx = this.items.findIndex((it) => it.uid === child.uid);
       if (cIdx < 0) continue;
-      this.scene.remove(child.model);
+      // Use removeFromParent so the call works whether the model lives
+      // in the main scene (floor 0) or a storey group (upper floor).
+      // The legacy scene.remove only detaches direct children of the
+      // main scene and was silently no-op'ing for upper-floor items
+      // — sell appeared to work (refund paid) but the mesh stayed.
+      child.model.removeFromParent();
       this.items.splice(cIdx, 1);
       const cDef = getFurnitureDef(child.defId);
       totalChildRefund += cDef?.cost ?? 0;
@@ -445,7 +450,7 @@ export class FurnitureRegistry {
     // Re-find the host's index since the splices above shifted entries.
     const finalIdx = this.items.findIndex((it) => it.uid === uid);
     if (finalIdx >= 0) {
-      this.scene.remove(this.items[finalIdx].model);
+      this.items[finalIdx].model.removeFromParent();
       this.items.splice(finalIdx, 1);
     }
     // Drop the cached surface extent for both the host and any
