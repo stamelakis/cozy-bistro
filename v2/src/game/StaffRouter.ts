@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
-import type { Pathfinding, PathStep } from "./Pathfinding";
+import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 
@@ -122,8 +122,21 @@ interface StaffActor {
   speed: number;
   /** Remaining waypoints (in world coords) from the most recent
    * pathfind to a.target. Empty array = no plan; moveActor falls back
-   * to direct movement so the actor still does SOMETHING. */
-  path: PathStep[];
+   * to direct movement so the actor still does SOMETHING. Each step
+   * carries its floor + fromStair flag so deliveries that cross
+   * storeys drive the smooth Y ride up the staircase. */
+  path: MultiFloorPathStep[];
+  /** Storey the actor's body is currently rendered on. Starts at
+   * homeFloor and updates whenever moveActor consumes a fromStair-
+   * flagged waypoint. Anchors the body Y between stair walks. */
+  currentFloor: number;
+  /** Last consumed waypoint — used to anchor the start of a stair
+   * Y interpolation. */
+  prevWaypoint?: MultiFloorPathStep;
+  /** Storey the actor is currently routing TOWARD (target's floor).
+   * Mirrors a.target's XZ — set by the state machine whenever
+   * a.target is reassigned. Drives the multi-floor pathfind. */
+  targetFloor: number;
   /** Seconds accumulated since the last replan. Drives the periodic
    * re-route in moveActor so a stale path computed before the player
    * placed an obstacle gets refreshed on the next tick — without this,
@@ -403,14 +416,16 @@ export class StaffRouter {
    * pathfinder is missing or returns nothing useful. */
   private planPath(a: StaffActor): void {
     if (!this.pathfind) {
-      a.path = [a.target.clone()];
+      a.path = [{ x: a.target.x, z: a.target.y, floor: a.targetFloor }];
       return;
     }
-    a.path = this.pathfind.findPath(
-      a.character.groundPos.x, a.character.groundPos.y,
-      a.target.x, a.target.y,
+    a.path = this.pathfind.findMultiFloorPath(
+      { x: a.character.groundPos.x, z: a.character.groundPos.y, floor: a.currentFloor },
+      { x: a.target.x, z: a.target.y, floor: a.targetFloor },
     );
-    if (a.path.length === 0) a.path = [a.target.clone()];
+    if (a.path.length === 0) {
+      a.path = [{ x: a.target.x, z: a.target.y, floor: a.targetFloor }];
+    }
   }
 
   /** Append a chef to the pool. Their current ground position becomes home. */
@@ -420,6 +435,8 @@ export class StaffRouter {
       role: "chef",
       memberId,
       homeFloor,
+      currentFloor: homeFloor,
+      targetFloor: homeFloor,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -439,6 +456,8 @@ export class StaffRouter {
       role: "waiter",
       memberId,
       homeFloor,
+      currentFloor: homeFloor,
+      targetFloor: homeFloor,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -505,6 +524,11 @@ export class StaffRouter {
         a.path = [];
         a.replanAccum = 0;
         a.target.copy(a.character.groundPos);
+        // Floor reassignment teleports the body to the new storey via
+        // the caller; sync currentFloor + targetFloor so the next path
+        // anchors the actor's Y to the right slab from the get-go.
+        a.currentFloor = toFloor;
+        a.targetFloor = toFloor;
       }
     }
   }
@@ -789,21 +813,27 @@ export class StaffRouter {
     switch (w.state) {
       case "idle": {
         // Priority 1: deliver a ready ticket. Plates that are already
-        // cooked and waiting on the pass take precedence over wash
-        // work — keep customers fed first. Phase 7d: this waiter only
-        // serves seats on their home floor (multi-floor pathfinding is
-        // still pending, so a Floor-1 waiter can't navigate stairs).
-        const ticket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
+        // cooked and waiting on the pass take precedence over wash work.
+        // Phase 8e: the waiter now handles tickets on ANY floor by
+        // crossing the staircase (P8c findMultiFloorPath). Preference
+        // stays on tickets matching the waiter's homeFloor so a
+        // dedicated Floor-1 waiter still grabs Floor-1 work first,
+        // but if no home-floor ticket is queued they pick up cross-
+        // floor work instead of leaving a customer stranded.
+        const ticket =
+          this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor)
+          ?? this.tickets.find((t) => t.state === "ready");
         if (ticket) {
           ticket.state = "delivering";
           ticket.clock = 0;
           w.ticketId = ticket.id;
           w.target = this.pickupPos.clone();
+          w.targetFloor = w.homeFloor; // pickup is in the home kitchen
           this.planPath(w);
           w.state = "movingToWork";
           w.clock = 0;
           w.character.action = "walk";
-          console.log(`[Router] waiter picked up ${ticket.id} → walking to pickup`);
+          console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}) → walking to pickup`);
           break;
         }
         // Priority 2: bus a dirty plate to the sink.
@@ -811,6 +841,7 @@ export class StaffRouter {
         if (trip) {
           w.washTrip = trip;
           w.target = trip.dirtyPos.clone();
+          w.targetFloor = w.homeFloor; // wash trips stay in the kitchen
           this.planPath(w);
           w.state = "movingToWork";
           w.clock = 0;
@@ -856,6 +887,7 @@ export class StaffRouter {
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (!ticket) {
             w.target = w.home.clone();
+            w.targetFloor = w.homeFloor;
             this.planPath(w);
             w.state = "returningHome";
             w.character.action = "walk";
@@ -873,6 +905,10 @@ export class StaffRouter {
           }
           w.heldPlate.visible = true;
           w.target = ticket.seatPos.clone();
+          // Delivery target floor = seat's storey. The path planner
+          // will walk to the staircase, ride up, and emerge near the
+          // seat on the upper slab when the ticket lives upstairs.
+          w.targetFloor = ticket.seatFloor;
           this.planPath(w);
           w.state = "working";
           w.clock = 0;
@@ -907,6 +943,7 @@ export class StaffRouter {
             if (w.heldPlate) w.heldPlate.visible = false;
             w.washTrip = null;
             w.target = w.home.clone();
+            w.targetFloor = w.homeFloor;
             this.planPath(w);
             w.state = "returningHome";
             w.character.action = "walk";
@@ -921,6 +958,7 @@ export class StaffRouter {
           if (ticket) ticket.state = "delivered";
           if (w.heldPlate) w.heldPlate.visible = false;
           w.target = w.home.clone();
+          w.targetFloor = w.homeFloor;
           this.planPath(w);
           w.state = "returningHome";
           w.character.action = "walk";
@@ -1011,6 +1049,7 @@ export class StaffRouter {
     }
     if (w.heldPlate) w.heldPlate.visible = false;
     w.target = w.home.clone();
+    w.targetFloor = w.homeFloor;
     this.planPath(w);
     w.state = "returningHome";
     w.character.action = "walk";
@@ -1041,14 +1080,25 @@ export class StaffRouter {
       a.replanAccum = 0;
       this.planPath(a);
     }
-    while (a.path.length > 0 && this.distance(pos, a.path[0]) < PATH_ARRIVAL_THRESHOLD) {
-      a.path.shift();
+    // Consume reached waypoints. Stair-end waypoints promote the
+    // actor's currentFloor so the body Y anchors to the new slab.
+    const STOREY = 3;
+    while (a.path.length > 0 && Math.hypot(a.path[0].x - pos.x, a.path[0].z - pos.y) < PATH_ARRIVAL_THRESHOLD) {
+      const consumed = a.path.shift()!;
+      a.prevWaypoint = consumed;
+      if (consumed.fromStair) {
+        a.currentFloor = consumed.floor;
+        a.character.root.position.y = consumed.floor * STOREY + (a.character._baseY ?? 0);
+      }
     }
-    const wp = a.path[0] ?? a.target;
+    const wp = a.path[0] ?? { x: a.target.x, z: a.target.y, floor: a.targetFloor };
     const dx = wp.x - pos.x;
-    const dz = wp.y - pos.y;
+    const dz = wp.z - pos.y;
     const dist = Math.hypot(dx, dz);
-    if (dist < 0.001) return;
+    if (dist < 0.001) {
+      a.character.root.position.y = a.currentFloor * STOREY + (a.character._baseY ?? 0);
+      return;
+    }
     // Apply this MEMBER's training multiplier (waiter serve speed,
     // for now — chef cook speed is applied to ticket.cookSeconds when
     // they pick up). The getSpeedMultiplier callback returns 1.0 for
@@ -1057,6 +1107,22 @@ export class StaffRouter {
     const step = Math.min(dist, a.speed * speedMult * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
+    // Stair walk Y — lerp between the previous waypoint's floor*STOREY
+    // and the next waypoint's floor*STOREY based on XZ progress across
+    // the stair span. Without this the waiter's body teleports its Y
+    // the moment the fromStair waypoint gets consumed.
+    if (wp.fromStair && a.prevWaypoint) {
+      const segStartX = a.prevWaypoint.x;
+      const segStartZ = a.prevWaypoint.z;
+      const segLen = Math.hypot(wp.x - segStartX, wp.z - segStartZ);
+      const trav = Math.hypot(pos.x - segStartX, pos.y - segStartZ);
+      const t = segLen > 0.01 ? Math.max(0, Math.min(1, trav / segLen)) : 0;
+      const startY = a.prevWaypoint.floor * STOREY + (a.character._baseY ?? 0);
+      const endY   = wp.floor * STOREY + (a.character._baseY ?? 0);
+      a.character.root.position.y = startY + (endY - startY) * t;
+    } else {
+      a.character.root.position.y = a.currentFloor * STOREY + (a.character._baseY ?? 0);
+    }
     // GLB default forward is -Z (three.js standard) — confirmed by the
     // seat-slot facing values that demonstrably point customers at the
     // table. For R_y(θ) * (0, 0, -1) to equal the movement vector
