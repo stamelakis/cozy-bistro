@@ -116,7 +116,15 @@ export class CharacterAnimator {
       case "sit": {
         // Drop to seat height and tilt forward slightly to suggest the
         // hip bend. Static — no oscillation while seated.
-        c.root.position.y = (c.seatHeight ?? 0.45);
+        //
+        // Floor-aware: the slab the character is sitting on lives at
+        // _baseY - _feetLift (the multi-floor movers maintain _baseY =
+        // currentFloor * STOREY + _feetLift). Adding seatHeight onto
+        // that puts a Floor 1 seated guest at world y ≈ 3 + 0.45 =
+        // 3.45 instead of the old 0.45 (which dropped them straight
+        // through Floor 1's slab onto the ground floor).
+        const slabY = (c._baseY ?? 0) - (c._feetLift ?? 0);
+        c.root.position.y = slabY + (c.seatHeight ?? 0.45);
         c.root.rotation.x = 0.18;
         // Subtle hand/torso shift over time so they don't look completely
         // frozen (small azimuth wobble).
