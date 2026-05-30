@@ -39,6 +39,7 @@ import { SeatMarkers } from "../scene/SeatMarkers";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
+import { LoginModal } from "../ui/LoginModal";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -147,6 +148,16 @@ export class Engine {
     this.cloud = new SpacetimeClient(this.game, this.saver);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
+
+    // P1 — multiplayer auth gate. The game keeps initialising (so
+    // the world renders behind the modal), but `Game.update` is
+    // suspended via setAuthGated(true) until the player logs in.
+    // Returning players whose existing identity already has an
+    // auth_record auto-dismiss the modal within ~1s (we poll after
+    // the subscription cache lands). New / different-browser
+    // players see the sign-up / login form.
+    this.game.setAuthGated(true);
+    this.installAuthGate(container);
     // SfxPlayer is constructed early — before the HUD — because the
     // HUD's volume slider reads its initial value from
     // `actions.getSfxVolume()` SYNCHRONOUSLY during construction.
@@ -185,8 +196,26 @@ export class Engine {
       openHelp: () => this.helpModal.show(),
       openStats: () => this.statsModal.show(),
       openAchievements: () => this.achievementsModal.show(),
-      openSlots: () => this.slotsModal.show(),
-      openAdmin: () => this.adminModal.show(),
+      // P1.7 — multi-slot picker is a DEV-only convenience now.
+      // Production runs as single-slot multiplayer; the menu button
+      // is hidden in non-dev builds so players can't stumble into
+      // it. Vite injects import.meta.env.DEV based on the build mode.
+      openSlots: () => {
+        if (!import.meta.env.DEV) return;
+        this.slotsModal.show();
+      },
+      isAdmin: () => this.cloud.getCurrentAccount()?.isAdmin ?? false,
+      // Admin panel — only renders for the player whose auth_record
+      // has is_admin = true (the Dunnin bootstrap). Client-side
+      // check is a UX gate; the server-side is_admin flag is the
+      // real gate on the reducers (admin_reset_password, etc.).
+      openAdmin: () => {
+        if (!this.cloud.getCurrentAccount()?.isAdmin) {
+          console.warn("[Engine] openAdmin blocked — not an admin account");
+          return;
+        }
+        this.adminModal.show();
+      },
       openUpgrades: () => this.upgradeModal.show(),
       openDecor: () => this.decorModal.show(),
       openExpand: () => this.expandModal.show(),
@@ -887,6 +916,35 @@ export class Engine {
 
   /** Wipe the active save slot and reload. Asks for confirmation since
    * this is destructive. */
+  /** Spawn the LoginModal AND start polling to see if the connecting
+   * identity is already authenticated (returning player). If so,
+   * skip the modal entirely. Otherwise the modal handles UI and
+   * resolves the gate when the player completes sign-up / login. */
+  private installAuthGate(container: HTMLElement): void {
+    const release = (): void => {
+      this.game.setAuthGated(false);
+    };
+    const modal = new LoginModal(container, this.cloud, release);
+    // Poll for ~3s — if the cache lands with an existing auth_record
+    // claim on this identity, auto-release without showing the form.
+    // (The modal is already DOM-mounted but it's fine to dismiss
+    // it immediately if we never needed it.)
+    let elapsed = 0;
+    const stepMs = 250;
+    const max = 3000;
+    const tick = (): void => {
+      elapsed += stepMs;
+      if (this.cloud.isAuthenticated()) {
+        // Dismiss the modal's DOM and unblock the game.
+        (modal as unknown as { root: HTMLElement }).root.remove();
+        release();
+        return;
+      }
+      if (elapsed < max) window.setTimeout(tick, stepMs);
+    };
+    window.setTimeout(tick, stepMs);
+  }
+
   private resetSave(): void {
     const slot = this.saver.getActiveSlot();
     const ok = window.confirm(`Reset slot ${slot} and start over? This wipes the current save and reloads the page.`);

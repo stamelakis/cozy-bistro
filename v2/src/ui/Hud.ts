@@ -43,6 +43,11 @@ export interface HudActions {
    * Optional because the spawner may not exist for the first few
    * frames; HUD shows "—" when this returns undefined. */
   getSeatStats?: () => { avail: number; total: number } | undefined;
+  /** True when the current account is admin (Dunnin). HUD uses
+   * this to decide whether to render the Dev tools section in
+   * production builds — admin tools are gated to Dunnin OR any
+   * dev build. Returns false / undefined until auth completes. */
+  isAdmin?: () => boolean;
 }
 
 /** A modal-trigger icon for the icon row. */
@@ -371,11 +376,15 @@ export class Hud {
           "Leaderboards (high scores), friends, public restaurants. Requires a cloud account " +
           "(set up under Slots). Offline play continues to work normally if cloud is off.",
         click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
-      { icon: "💾 Slots",      title:
-          "SLOTS — local save slots + cloud sync.\n" +
-          "Three local save slots; switch between them, name them, manually save / load. Same panel " +
-          "controls the optional cloud-save: push your local state up, or pull a cloud save down.",
-        click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.22)" },
+      // Slots button — DEV-only convenience. Hidden in production
+      // (multiplayer single-slot per player, autosaved). The tag
+      // here keeps the button identifiable so the post-construction
+      // visibility pass can hide it.
+      ...(import.meta.env.DEV ? [{ icon: "💾 Slots", title:
+          "SLOTS — local save slots + cloud sync. DEV-ONLY.\n" +
+          "Three local save slots; switch between them, name them, manually save / load. Production " +
+          "is single-slot, autosaved, and ties to the logged-in account.",
+        click: this.actions.openSlots,  tint: "rgba(160, 180, 140, 0.22)" }] : []),
       { icon: "? Help",        title:
           "HELP — how to play.\n" +
           "Quick reference for the build menu, customer loop, staff roles, save system, and " +
@@ -387,6 +396,9 @@ export class Hud {
       display: "grid", gridTemplateColumns: "1fr",
       marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
+    // Dev tools — hidden in production for non-admin players. Admin
+    // (Dunnin) sees it for AdminPanel access; DEV builds always
+    // see it for debugging.
     const buttons3: IconBtn[] = [
       { icon: "⚙ Dev tools",   title:
           "DEV TOOLS — debugging shortcuts.\n" +
@@ -608,6 +620,13 @@ export class Hud {
     }
     if (this.devToggle) {
       this.devToggle.style.background = this.devOpen ? "rgba(255,245,220,0.18)" : "rgba(180, 180, 180, 0.18)";
+      // Show Dev tools only in dev builds OR for the admin account.
+      // For everyone else in production the entire row hides; we
+      // also collapse the open section so a refresh after a player
+      // demotion doesn't leak the dev controls.
+      const shouldShow = import.meta.env.DEV || (this.actions.isAdmin?.() ?? false);
+      this.devToggle.style.display = shouldShow ? "" : "none";
+      if (!shouldShow && this.devSection) this.devSection.style.display = "none";
     }
   }
 }

@@ -336,7 +336,15 @@ export class Game {
   }
 
   /** Per-frame tick. dt is seconds since last call. */
+  /** When true, update() short-circuits — used to pause sim while the
+   * LoginModal blocks the player. Without this the game's day cycle
+   * + customer spawns + payroll keep running behind the login UI and
+   * the player loses time on every reconnect. */
+  private authGated = false;
+  setAuthGated(gated: boolean): void { this.authGated = gated; }
+
   update(dt: number): void {
+    if (this.authGated) return;
     // DayCycleSystem returns whether a day just rolled over so we can
     // trigger end-of-day events (collect rent, reset daily counters, etc).
     const dayTick = this.day.tick(dt);
