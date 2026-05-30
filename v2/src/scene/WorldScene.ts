@@ -1523,10 +1523,17 @@ export class WorldScene {
       if (!storey.group.visible) continue;
       // Slab is solid (it's the floor of THIS storey, the ceiling of
       // the one below). Always solid because we only render at-or-
-      // below focus.
-      storey.slab.material = this.slabMatSolid;
+      // below focus. Use the STOREY's cloned material so the per-floor
+      // theme picked in DecorModal sticks — without this we used to
+      // reassign back to the shared slabMatSolid every frame and the
+      // upper floors stayed off-white regardless of theme selection.
+      storey.slab.material = storey.slabMat;
       for (const [dir, mesh] of storey.walls) {
-        mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : this.wallMat;
+        // Same fix on the perimeter walls: solid walls keep the storey
+        // clone (which carries its theme colour); ghosted (camera-side)
+        // walls fall back to the shared transparent ghost material so
+        // we don't have to clone that per storey too.
+        mesh.material = dirKinds[dir] === "ghost" ? this.wallGhostMat : storey.wallMat;
       }
     }
     // Roof similarly: only renders when focused on the top storey;
