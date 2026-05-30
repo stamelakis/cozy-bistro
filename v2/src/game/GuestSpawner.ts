@@ -978,6 +978,18 @@ export class GuestSpawner {
   }
   private dishwareLogger?: (msg: string) => void;
 
+  /** Remaining patience (seconds) for a guest, or undefined if no
+   * such guest exists right now. StaffRouter calls this to sort
+   * ticket / order-request candidates by urgency so the most-
+   * impatient customer gets served first instead of the oldest
+   * one. Undefined returns sort to the back of the queue (treated
+   * as Infinity) — a vanished guest can't poach work from a real
+   * one. */
+  getGuestPatience(guestId: string): number | undefined {
+    const g = this.guests.find((x) => x.id === guestId);
+    return g?.patience;
+  }
+
   /** Called by StaffRouter when a waiter completes the take-order
    * dwell at a seated guest's table. Builds the recipe list (the
    * old auto-order path used to do this inside the seated state

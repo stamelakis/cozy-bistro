@@ -592,6 +592,10 @@ export class Engine {
         this.router.takeOrderCallback = (guestId) => {
           spawner.onWaiterTookOrder(guestId);
         };
+        // Wire patience lookup so the router sorts work by urgency
+        // (X3 — most-impatient ticket / order request gets picked
+        // first instead of the oldest one).
+        this.router.getGuestPatience = (guestId) => spawner.getGuestPatience(guestId);
         this.router.washCallbacks = {
           getDirtyPickups: () => spawner.getDirtyPickups(),
           claimDirtyPickup: (id, memberId) => spawner.claimDirtyPickup(id, memberId),

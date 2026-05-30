@@ -334,6 +334,14 @@ export class StaffRouter {
    * expected to no-op. */
   takeOrderCallback?: (guestId: string) => void;
 
+  /** Engine wires this to GuestSpawner.getGuestPatience so the staff
+   * router can sort work candidates by remaining customer patience.
+   * Returns seconds-of-patience-left (lower = more urgent); returns
+   * undefined when the guest can't be found (stale ticket, just
+   * despawned). Used by the chef / waiter / barman idle handlers
+   * to pick the most-urgent ticket instead of the oldest one. */
+  getGuestPatience?: (guestId: string) => number | undefined;
+
   private readonly chefs: StaffActor[] = [];
   private readonly waiters: StaffActor[] = [];
   /** Barmen pool. Behave like chefs but only cook drink-category
@@ -479,21 +487,32 @@ export class StaffRouter {
     return null;
   }
 
-  /** Phase C.2 + 7d: reserve the first cook station whose `provides`
-   * matches the recipe's required appliance, isn't already busy, AND
-   * sits on the chef's home floor. Returns null when no matching
-   * station exists or every one of them is busy (the chef stays idle
-   * and the ticket waits). Falls back to the legacy stove pool when
-   * the requested appliance is "stove" but the cook-stations callback
-   * hasn't been wired — keeps the old save-compat path alive. */
-  private claimFreeStation(appliance: string, homeFloor = 0): StationInfo | null {
+  /** Reserve a cook station whose `provides` matches the recipe's
+   * required appliance, isn't already busy, AND sits on the chef's
+   * home floor. When `originPos` is supplied, picks the CLOSEST
+   * matching station to that position instead of the first one in
+   * the array (C4 — chef no longer walks past three free stoves to
+   * claim the northmost). Falls back to the legacy stove pool when
+   * the requested appliance is "stove" but the cook-stations
+   * callback hasn't been wired — keeps old save compat alive. */
+  private claimFreeStation(appliance: string, homeFloor = 0, originPos?: THREE.Vector2): StationInfo | null {
     if (this.getCookStations) {
+      let bestStation: StationInfo | null = null;
+      let bestDist = Infinity;
       for (const s of this.getCookStations()) {
         if (s.provides !== appliance) continue;
         if (s.floor !== homeFloor) continue;
         if (this.busyStoveUids.has(s.uid)) continue;
-        this.busyStoveUids.add(s.uid);
-        return s;
+        // No origin → first-match (preserves legacy behaviour for
+        // callers that don't care about distance).
+        if (!originPos) { bestStation = s; break; }
+        const standPos = this.chefStandPosFor(s);
+        const dist = Math.hypot(standPos.x - originPos.x, standPos.y - originPos.y);
+        if (dist < bestDist) { bestStation = s; bestDist = dist; }
+      }
+      if (bestStation) {
+        this.busyStoveUids.add(bestStation.uid);
+        return bestStation;
       }
     }
     // Last-ditch fallback for "stove" specifically — keeps the chef
@@ -1043,9 +1062,11 @@ export class StaffRouter {
         // Without the appliance filter a chef would call
         // claimFreeStation("bar") and happily cook a drink at a bar
         // counter, defeating the "drinks require a barman" rule.
+        // sortByUrgency reorders the candidate list so the most-
+        // impatient customer gets cooked for first.
         const isChefTicket = (t: Ticket): boolean =>
           t.state === "queued" && t.appliance !== "bar";
-        const homeTickets = this.tickets.filter((t) => isChefTicket(t) && t.seatFloor === c.homeFloor);
+        const homeTickets = this.sortByUrgency(this.tickets.filter((t) => isChefTicket(t) && t.seatFloor === c.homeFloor));
         if (homeTickets.length > 0) {
           c.homeWorkWaitClock = 0;
           if (this.tryClaimCookForChef(c, homeTickets)) break;
@@ -1056,8 +1077,8 @@ export class StaffRouter {
         // Cross-floor pass — skip any candidate where an idle home-
         // floor chef exists. Same anti-poach rule as the waiter pool
         // (see hasIdleHomeWaiter comment for the race).
-        const anyTickets = this.tickets.filter((t) =>
-          isChefTicket(t) && !this.hasIdleHomeChef(t.seatFloor, c));
+        const anyTickets = this.sortByUrgency(this.tickets.filter((t) =>
+          isChefTicket(t) && !this.hasIdleHomeChef(t.seatFloor, c)));
         if (anyTickets.length > 0) {
           this.tryClaimCookForChef(c, anyTickets);
         }
@@ -1074,7 +1095,14 @@ export class StaffRouter {
       }
       case "working": {
         const ticket = this.tickets.find((t) => t.id === c.ticketId);
-        if (!ticket) { // guest left, abandon the cook
+        // C5 — defensive guards for state desync. The ticket can vanish
+        // (cancelTicket from a despawn), get bounced back to "queued"
+        // by recoverStalledTickets, or transition to "ready"/"delivering"
+        // via some external path. In any case where it isn't still
+        // "cooking" for THIS chef, drop the cook and return home.
+        // Another chef (or this one) will re-pick it via the idle
+        // handler next tick if it's still queued.
+        if (!ticket || ticket.state !== "cooking") {
           this.releaseStove(c);
           c.target = this.pickChefIdleSpot(c);
           this.planPath(c);
@@ -1109,8 +1137,8 @@ export class StaffRouter {
         // matches a free station, abort the loiter walk and start
         // cooking from where we are. Bar tickets are excluded here
         // too — chef never picks them up, ever.
-        const interruptTickets = this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance !== "bar" && t.seatFloor === c.homeFloor);
+        const interruptTickets = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance !== "bar" && t.seatFloor === c.homeFloor));
         if (interruptTickets.length > 0 && this.tryClaimCookForChef(c, interruptTickets)) {
           break;
         }
@@ -1155,14 +1183,14 @@ export class StaffRouter {
         //      their stool, dwell, fire callback.
         //   2. Home-floor queued bar ticket → cook at the bar.
         // Nothing else. No cross-floor poach.
-        const homeOrder = this.orderRequests.find((o) =>
-          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor);
+        const homeOrder = this.sortByUrgency(this.orderRequests.filter((o) =>
+          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor))[0];
         if (homeOrder) {
           this.startBarmanTakeOrder(b, homeOrder);
           break;
         }
-        const homeTickets = this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor);
+        const homeTickets = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor));
         if (homeTickets.length > 0) {
           this.tryClaimDrinkForBarman(b, homeTickets);
         }
@@ -1222,8 +1250,11 @@ export class StaffRouter {
           break;
         }
         const ticket = this.tickets.find((t) => t.id === b.ticketId);
-        if (!ticket) {
-          // Customer left mid-mix. Drop the station + walk home.
+        // C5 — same defensive desync guard as the chef. Ticket
+        // vanished OR bounced out of "cooking" → drop the station
+        // and return home; the bar idle handler will re-pick it
+        // next tick if it's still queued.
+        if (!ticket || ticket.state !== "cooking") {
           this.releaseStove(b);
           b.target = this.pickBarmanIdleSpot(b);
           this.planPath(b);
@@ -1273,14 +1304,14 @@ export class StaffRouter {
         // order request (customer just sat down at the bar) so we
         // don't make them wait for the round-trip back to the home
         // spot before flagging us down.
-        const interruptOrder = this.orderRequests.find((o) =>
-          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor);
+        const interruptOrder = this.sortByUrgency(this.orderRequests.filter((o) =>
+          o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor))[0];
         if (interruptOrder) {
           this.startBarmanTakeOrder(b, interruptOrder);
           break;
         }
-        const interruptTickets = this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor);
+        const interruptTickets = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor));
         if (interruptTickets.length > 0 && this.tryClaimDrinkForBarman(b, interruptTickets)) {
           break;
         }
@@ -1317,7 +1348,7 @@ export class StaffRouter {
    * and there's no legacy fallback (no bar counter means no drinks). */
   private tryClaimDrinkForBarman(b: StaffActor, candidates: readonly Ticket[]): boolean {
     for (const ticket of candidates) {
-      const station = this.claimFreeStation("bar", b.homeFloor);
+      const station = this.claimFreeStation("bar", b.homeFloor, b.character.groundPos);
       if (!station) continue;
       b.assignedStoveUid = station.uid;
       const target = this.chefStandPosFor(station);
@@ -1373,7 +1404,7 @@ export class StaffRouter {
   private tryClaimCookForChef(c: StaffActor, candidates: readonly Ticket[]): boolean {
     for (const ticket of candidates) {
       const needed = ticket.appliance || "stove";
-      const station = this.claimFreeStation(needed, c.homeFloor);
+      const station = this.claimFreeStation(needed, c.homeFloor, c.character.groundPos);
       let target: THREE.Vector2;
       if (station) {
         c.assignedStoveUid = station.uid;
@@ -1476,6 +1507,22 @@ export class StaffRouter {
     return false;
   }
 
+  /** Sort an array of guest-bearing work items (tickets, order
+   * requests) by remaining customer PATIENCE ascending — lowest
+   * patience comes first. Used by every "pick the next thing to
+   * work on" call site so a Quick Lunch with 5s of patience left
+   * beats a Foodie with 60s left, regardless of which order was
+   * enqueued first. Items whose guest has vanished (despawn race)
+   * sort to the END so they never starve a real customer. */
+  private sortByUrgency<T extends { guestId: string }>(items: readonly T[]): T[] {
+    if (!this.getGuestPatience) return items.slice();
+    return items.slice().sort((a, b) => {
+      const pa = this.getGuestPatience!(a.guestId) ?? Infinity;
+      const pb = this.getGuestPatience!(b.guestId) ?? Infinity;
+      return pa - pb;
+    });
+  }
+
   /** Pick a "rest spot" for an idle waiter.
    *   - If they're already on their home floor, they STAY IN PLACE
    *     (current ground position) — no pointless trek back to their
@@ -1553,14 +1600,16 @@ export class StaffRouter {
         //      take-order → wash order.
         // Waiter skips bar-seat work — the barman handles the entire
         // round trip for customers sitting at the bar counter.
-        const homeTicket = this.tickets.find((t) =>
-          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar);
+        // Pick the MOST-IMPATIENT eligible ticket / order request
+        // (X3 — lowest remaining patience wins, not oldest enqueued).
+        const homeTicket = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar))[0];
         if (homeTicket) {
           this.startWaiterDelivery(w, homeTicket);
           break;
         }
-        const homeOrderReq = this.orderRequests.find((o) =>
-          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar);
+        const homeOrderReq = this.sortByUrgency(this.orderRequests.filter((o) =>
+          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar))[0];
         if (homeOrderReq) {
           this.startWaiterTakeOrder(w, homeOrderReq);
           break;
@@ -1597,14 +1646,14 @@ export class StaffRouter {
         // order, so whoever was hired first wins races — the poach
         // happens any time the cross-floor waiter ticks BEFORE the
         // home-floor one in the array.
-        const anyTicket = this.tickets.find((t) =>
-          t.state === "ready" && !t.seatAtBar && !this.hasIdleHomeWaiter(t.seatFloor, w));
+        const anyTicket = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "ready" && !t.seatAtBar && !this.hasIdleHomeWaiter(t.seatFloor, w)))[0];
         if (anyTicket) {
           this.startWaiterDelivery(w, anyTicket);
           break;
         }
-        const anyOrderReq = this.orderRequests.find((o) =>
-          o.claimedBy === null && !o.atBar && !this.hasIdleHomeWaiter(o.seatFloor, w));
+        const anyOrderReq = this.sortByUrgency(this.orderRequests.filter((o) =>
+          o.claimedBy === null && !o.atBar && !this.hasIdleHomeWaiter(o.seatFloor, w)))[0];
         if (anyOrderReq) {
           this.startWaiterTakeOrder(w, anyOrderReq);
           break;
@@ -1787,16 +1836,27 @@ export class StaffRouter {
         // delivery NOW. Same idea for a freshly-seated guest waiting
         // to order: starting the take-order now instead of after the
         // home loop saves several seconds of customer wait time.
-        const interruptTicket = this.tickets.find((t) =>
-          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar);
+        const interruptTicket = this.sortByUrgency(this.tickets.filter((t) =>
+          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar))[0];
         if (interruptTicket) {
           this.startWaiterDelivery(w, interruptTicket);
           break;
         }
-        const interruptOrder = this.orderRequests.find((o) =>
-          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar);
+        const interruptOrder = this.sortByUrgency(this.orderRequests.filter((o) =>
+          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar))[0];
         if (interruptOrder) {
           this.startWaiterTakeOrder(w, interruptOrder);
+          break;
+        }
+        // W5 — also interrupt for a nearby home-floor wash trip.
+        // Without this a dirty plate two tiles from the returning
+        // waiter got ignored until they reached home and ticked
+        // idle. Same urgency rank (we use best-pair selection),
+        // just no patience-sort since wash trips aren't guest-
+        // attached.
+        const interruptWash = this.tryStartWashTrip(w, w.homeFloor);
+        if (interruptWash) {
+          this.startWaiterWashTrip(w, interruptWash);
           break;
         }
         this.moveActor(w, dt);
@@ -1810,14 +1870,19 @@ export class StaffRouter {
     }
   }
 
-  /** Try to start a wash trip for this idle waiter. Picks the closest
-   * unclaimed dirty piece + the closest free wash station, claims
-   * both, and returns the trip. Returns null when any prereq is
-   * missing (no callbacks wired, no dirty plates, no free station).
+  /** Try to start a wash trip for this idle waiter. Picks the
+   * (dirty, station) PAIR that minimises TOTAL walking distance
+   * (W6 — old code picked nearest dirty and nearest station
+   * independently, which could miss a much better pair like
+   * "farther dirty next to its own perfect station"). Iterates
+   * pairs in best-first order and retries on claim failure so a
+   * tick-race with another waiter for the same dirty just moves
+   * on to the next-best pair (W4 — old code returned null and
+   * the waiter sat idle).
    *
-   * Distance is straight-line ground distance — good enough for
-   * picking "nearest" since the pathfinder takes over once we hand
-   * off the trip; a slightly-suboptimal pick is fine. */
+   * Returns null when no callbacks are wired, no dirty plates
+   * exist, no free station exists, or every candidate pair lost
+   * the claim race. */
   private tryStartWashTrip(w: StaffActor, restrictToFloor?: number): WashTrip | null {
     if (!this.washCallbacks) return null;
     const allStations = this.washCallbacks.getWashStations();
@@ -1837,50 +1902,51 @@ export class StaffRouter {
       : allStations.filter((s) => s.floor === restrictToFloor);
     if (stations.length === 0) return null;
     const here = w.character.groundPos;
-    // Nearest unclaimed dirty piece.
-    let pickedDirty: DirtyPickupInfo | null = null;
-    let pickedDirtyDist = Infinity;
+    // Build every viable (dirty, station) pair with its total
+    // walking cost = waiter→dirty + dirty→station. Skip pairs
+    // where the station can't accept this dirty's kind (full
+    // dishwasher) or is already locked (busy sink).
+    interface Pair { dirty: DirtyPickupInfo; station: WashStationInfo; total: number; }
+    const pairs: Pair[] = [];
     for (const d of dirties) {
-      const dist = Math.hypot(d.pos.x - here.x, d.pos.y - here.y);
-      if (dist < pickedDirtyDist) { pickedDirty = d; pickedDirtyDist = dist; }
-    }
-    if (!pickedDirty) return null;
-    // Nearest free wash station. Two kinds of "free":
-    //   • sink: only one waiter at a time (busyWashUids gate)
-    //   • dishwasher: many waiters can drop into the same unit, but
-    //     each dishwasher has a per-kind capacity (10 plates / 5
-    //     glasses); reject when this kind's bin is already full.
-    let pickedStation: WashStationInfo | null = null;
-    let pickedStationDist = Infinity;
-    for (const s of stations) {
-      const isDishwasher = s.defId.startsWith("dishwasher");
-      if (isDishwasher) {
-        if (!this.washCallbacks.canDishwasherLoad(s.uid, pickedDirty.kind)) continue;
-      } else {
-        if (this.busyWashUids.has(s.uid)) continue;
+      const waiterToDirty = Math.hypot(d.pos.x - here.x, d.pos.y - here.y);
+      for (const s of stations) {
+        const isDishwasher = s.defId.startsWith("dishwasher");
+        if (isDishwasher) {
+          if (!this.washCallbacks.canDishwasherLoad(s.uid, d.kind)) continue;
+        } else {
+          if (this.busyWashUids.has(s.uid)) continue;
+        }
+        const dirtyToStation = Math.hypot(s.standPos.x - d.pos.x, s.standPos.y - d.pos.y);
+        pairs.push({ dirty: d, station: s, total: waiterToDirty + dirtyToStation });
       }
-      const dist = Math.hypot(s.standPos.x - here.x, s.standPos.y - here.y);
-      if (dist < pickedStationDist) { pickedStation = s; pickedStationDist = dist; }
     }
-    if (!pickedStation) return null;
-    if (!this.washCallbacks.claimDirtyPickup(pickedDirty.id, w.memberId)) return null;
-    // Dishwashers stay unclaimed — capacity already enforces the
-    // limit; sinks get the busy-set claim so a second waiter doesn't
-    // queue up at the same basin.
-    const isSink = !pickedStation.defId.startsWith("dishwasher");
-    if (isSink) this.busyWashUids.add(pickedStation.uid);
-    return {
-      dirtyId: pickedDirty.id,
-      dirtyPos: pickedDirty.pos.clone(),
-      dirtyFloor: pickedDirty.floor,
-      kind: pickedDirty.kind,
-      stationUid: pickedStation.uid,
-      stationDefId: pickedStation.defId,
-      stationPos: pickedStation.standPos.clone(),
-      stationFloor: pickedStation.floor,
-      dwell: pickedStation.dwell,
-      phase: "pickup",
-    };
+    if (pairs.length === 0) return null;
+    // Best-first iteration: try to claim the lowest-total pair
+    // first. On dirty-claim failure (another waiter beat us to it
+    // in the same frame), skip and try the next-lowest pair.
+    pairs.sort((a, b) => a.total - b.total);
+    for (const pair of pairs) {
+      if (!this.washCallbacks.claimDirtyPickup(pair.dirty.id, w.memberId)) continue;
+      // Dishwashers stay unclaimed — capacity already enforces the
+      // limit; sinks get the busy-set claim so a second waiter
+      // doesn't queue up at the same basin.
+      const isSink = !pair.station.defId.startsWith("dishwasher");
+      if (isSink) this.busyWashUids.add(pair.station.uid);
+      return {
+        dirtyId: pair.dirty.id,
+        dirtyPos: pair.dirty.pos.clone(),
+        dirtyFloor: pair.dirty.floor,
+        kind: pair.dirty.kind,
+        stationUid: pair.station.uid,
+        stationDefId: pair.station.defId,
+        stationPos: pair.station.standPos.clone(),
+        stationFloor: pair.station.floor,
+        dwell: pair.station.dwell,
+        phase: "pickup",
+      };
+    }
+    return null;
   }
 
   /** Release any in-flight wash claims and reset the waiter to
