@@ -1053,7 +1053,11 @@ export class StaffRouter {
         }
         c.homeWorkWaitClock += dt;
         if (c.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
-        const anyTickets = this.tickets.filter(isChefTicket);
+        // Cross-floor pass — skip any candidate where an idle home-
+        // floor chef exists. Same anti-poach rule as the waiter pool
+        // (see hasIdleHomeWaiter comment for the race).
+        const anyTickets = this.tickets.filter((t) =>
+          isChefTicket(t) && !this.hasIdleHomeChef(t.seatFloor, c));
         if (anyTickets.length > 0) {
           this.tryClaimCookForChef(c, anyTickets);
         }
@@ -1163,13 +1167,17 @@ export class StaffRouter {
         b.homeWorkWaitClock += dt;
         if (b.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
         // Cross-floor: a barman on Floor 1 can take an unattended
-        // Floor 0 bar order once the local wait expires.
-        const anyOrder = this.orderRequests.find((o) => o.claimedBy === null && o.atBar);
+        // Floor 0 bar order once the local wait expires. Same anti-
+        // poach as waiters / chefs: skip work where an idle home-
+        // floor barman exists.
+        const anyOrder = this.orderRequests.find((o) =>
+          o.claimedBy === null && o.atBar && !this.hasIdleHomeBarman(o.seatFloor, b));
         if (anyOrder) {
           this.startBarmanTakeOrder(b, anyOrder);
           break;
         }
-        const anyTickets = this.tickets.filter((t) => t.state === "queued" && t.appliance === "bar");
+        const anyTickets = this.tickets.filter((t) =>
+          t.state === "queued" && t.appliance === "bar" && !this.hasIdleHomeBarman(t.seatFloor, b));
         if (anyTickets.length > 0) {
           this.tryClaimDrinkForBarman(b, anyTickets);
         }
@@ -1453,6 +1461,49 @@ export class StaffRouter {
     console.log(`[Router] waiter picked up ${ticket.id} (seatFloor=${ticket.seatFloor}, homeFloor=${w.homeFloor}, pickupFloor=${pickupFloor}) → walking to pickup`);
   }
 
+  /** True if any waiter currently in the "idle" state has the given
+   * floor as their homeFloor (and isn't `exclude`). Used in the
+   * cross-floor fallback to STOP a non-home waiter from poaching
+   * work the home-floor waiter is about to claim on their own tick.
+   * Without this, tick order in the for-loop decides who wins the
+   * race, which is exactly the "Floor-1 waiter took the Floor-0
+   * order while a Floor-0 waiter sat idle" bug. */
+  private hasIdleHomeWaiter(floor: number, exclude: StaffActor): boolean {
+    for (const other of this.waiters) {
+      if (other === exclude) continue;
+      if (other.state !== "idle") continue;
+      if (other.homeFloor !== floor) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /** Chef pool variant of hasIdleHomeWaiter. Same race fix — a
+   * Floor-1 chef whose wait clock crossed CROSS_FLOOR_WAIT_SECONDS
+   * shouldn't grab a Floor-0 ticket when a Floor-0 chef is idle. */
+  private hasIdleHomeChef(floor: number, exclude: StaffActor): boolean {
+    for (const other of this.chefs) {
+      if (other === exclude) continue;
+      if (other.state !== "idle") continue;
+      if (other.homeFloor !== floor) continue;
+      return true;
+    }
+    return false;
+  }
+
+  /** Barman pool variant. Barmen usually live on one floor (one bar)
+   * so this rarely fires, but the symmetry guards against a future
+   * setup where a second bar opens on another floor. */
+  private hasIdleHomeBarman(floor: number, exclude: StaffActor): boolean {
+    for (const other of this.barmen) {
+      if (other === exclude) continue;
+      if (other.state !== "idle") continue;
+      if (other.homeFloor !== floor) continue;
+      return true;
+    }
+    return false;
+  }
+
   /** Pick a "rest spot" for an idle waiter.
    *   - If they're already on their home floor, they STAY IN PLACE
    *     (current ground position) — no pointless trek back to their
@@ -1565,12 +1616,23 @@ export class StaffRouter {
         if (w.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
         // Cross-floor fallback — same priority order as home, and same
         // bar-seat exclusion (bar work is barman-only, never waiter).
-        const anyTicket = this.tickets.find((t) => t.state === "ready" && !t.seatAtBar);
+        // NEW: skip any cross-floor candidate where an idle home-floor
+        // waiter exists. Without this, a Floor-1 waiter whose wait
+        // clock crossed 2s while everything was quiet POACHES the
+        // first Floor-0 ticket that lands, even though a Floor-0
+        // waiter standing right next to the customer was about to
+        // claim it on their own idle tick. Tick order is insertion-
+        // order, so whoever was hired first wins races — the poach
+        // happens any time the cross-floor waiter ticks BEFORE the
+        // home-floor one in the array.
+        const anyTicket = this.tickets.find((t) =>
+          t.state === "ready" && !t.seatAtBar && !this.hasIdleHomeWaiter(t.seatFloor, w));
         if (anyTicket) {
           this.startWaiterDelivery(w, anyTicket);
           break;
         }
-        const anyOrderReq = this.orderRequests.find((o) => o.claimedBy === null && !o.atBar);
+        const anyOrderReq = this.orderRequests.find((o) =>
+          o.claimedBy === null && !o.atBar && !this.hasIdleHomeWaiter(o.seatFloor, w));
         if (anyOrderReq) {
           this.startWaiterTakeOrder(w, anyOrderReq);
           break;
