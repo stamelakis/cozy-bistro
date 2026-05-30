@@ -344,6 +344,16 @@ export class SpacetimeClient {
       ctx.db.restaurant.onDelete(ping);
       ctx.db.co_owner.onInsert(ping);
       ctx.db.co_owner.onDelete(ping);
+      // P1+ — auth_record drives sign_up / login completion; without
+      // this listener the LoginModal's reducer-call promise times
+      // out after 10s waiting for a notify that never fires.
+      ctx.db.auth_record.onInsert(ping);
+      ctx.db.auth_record.onUpdate(ping);
+      ctx.db.auth_record.onDelete(ping);
+      // P2+ — building rows feed BuildingPickModal's live refresh
+      // and Engine.refreshCityBuildings.
+      ctx.db.building.onInsert(ping);
+      ctx.db.building.onUpdate(ping);
     } catch (e) {
       // The SDK's onInsert/etc. names occasionally vary by codegen version.
       // Failing to wire just means no live updates — manual refreshes still work.
