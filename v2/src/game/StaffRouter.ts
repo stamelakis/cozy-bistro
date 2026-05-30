@@ -745,7 +745,19 @@ export class StaffRouter {
         // the chef teleports through walls / floors to the stove and
         // back; cleaner to let an idle chef on the right floor pick it
         // up, or leave the ticket queued until one is hired.
-        const ticket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
+        // Chefs cook at stoves on their OWN floor (claimFreeStove gates
+        // that). But the customer the order's for can live on any floor —
+        // the plate goes to the shared kitchen pickup either way. Prefer
+        // home-floor tickets so a dedicated Floor-N chef stays busy with
+        // their floor's orders first, then fall back to cross-floor work
+        // when their floor has nothing queued. Without the fallback, a
+        // Floor 1 customer with no Floor 1 chef present would sit
+        // forever waiting on a ticket no chef would touch — which is
+        // why the Floor 1 waiter then 'ignored' them: their ticket never
+        // reached the 'ready' state for delivery.
+        const ticket =
+          this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor)
+          ?? this.tickets.find((t) => t.state === "queued");
         if (!ticket) break;
         // Pick a station that provides the recipe's required appliance.
         // The chef defers (stays idle) when no matching station is free,
