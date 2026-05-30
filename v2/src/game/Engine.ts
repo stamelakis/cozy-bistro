@@ -246,6 +246,24 @@ export class Engine {
     // so it can read NUM_STOREYS / STOREY_HEIGHT statics. The
     // onFocusChanged callback is wired AFTER BuildMenu exists below.
     this.floorSelector = new FloorSelector(container, this.scene, this.camera);
+    // Classify each floor by what its seats serve so the FloorSelector
+    // can show a sub-label under each button (food / drinks / mix /
+    // empty). Re-evaluated on the selector's own 1.5s timer so the tag
+    // refreshes after table placements without threading furniture
+    // events through here.
+    this.floorSelector.getFloorContent = (floor) => {
+      let hasFood = false;
+      let hasDrink = false;
+      for (const slot of this.registry.getResolvedSeatSlots()) {
+        if (slot.floor !== floor) continue;
+        if (slot.surface === "drink") hasDrink = true;
+        else hasFood = true;
+        if (hasFood && hasDrink) break;
+      }
+      if (!hasFood && !hasDrink) return "nothing";
+      if (hasFood && hasDrink) return "mix";
+      return hasFood ? "food" : "drink";
+    };
     // Update world visibility whenever the tier changes (player bought an expansion).
     this.game.onLuxuryTierChanged = (tier) => {
       this.scene.setLuxuryTier(tier);

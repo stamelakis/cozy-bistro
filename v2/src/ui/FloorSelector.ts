@@ -15,14 +15,23 @@ import type { WorldScene } from "../scene/WorldScene";
  * on the LEFT, upper floors going right — matches the mental model that
  * higher numbers = "further along the progression".
  */
+/** What the FloorSelector should render beneath each floor button. */
+export type FloorContent = "nothing" | "mix" | "food" | "drink";
+
 export class FloorSelector {
   private readonly root: HTMLElement;
   private readonly scene: WorldScene;
   private readonly camera: IsoCamera;
   private readonly buttons: HTMLButtonElement[] = [];
+  private readonly contentLabels: HTMLElement[] = [];
   /** Optional notifier fired after a focus change (BuildMenu uses this
    * to teleport its active placement preview to the new floor). */
   onFocusChanged?: () => void;
+  /** Engine wires this to query the registry's resolved seat slots and
+   * classify each floor by what kind of orders it serves. Without it
+   * the per-floor "food only / drinks only / mix / nothing" sub-labels
+   * stay empty. */
+  getFloorContent?: (floor: number) => FloorContent;
 
   constructor(parent: HTMLElement, scene: WorldScene, camera: IsoCamera) {
     this.scene = scene;
@@ -48,9 +57,19 @@ export class FloorSelector {
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
-    // One button per storey. Index 0 = ground (leftmost), 1..N-1 = upper.
+    // One column per storey. Each column = a button on top and a small
+    // content label below ("food only", "drinks only", "mix", or
+    // "nothing"). Index 0 = ground (leftmost), 1..N-1 = upper.
     const n = (this.scene.constructor as typeof WorldScene).getNumStoreys();
     for (let idx = 0; idx < n; idx += 1) {
+      const col = document.createElement("div");
+      Object.assign(col.style, {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "3px",
+      } as Partial<CSSStyleDeclaration>);
+
       const btn = document.createElement("button");
       Object.assign(btn.style, {
         minWidth: "56px",
@@ -71,11 +90,36 @@ export class FloorSelector {
       btn.textContent = label;
       btn.title = idx === 0 ? "Ground floor" : `Floor ${idx}`;
       btn.onclick = () => this.select(idx);
-      this.root.appendChild(btn);
+      col.appendChild(btn);
+
+      const content = document.createElement("div");
+      Object.assign(content.style, {
+        fontSize: "10px",
+        fontWeight: "600",
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        opacity: "0.7",
+        // Reserve the line height so locked / empty labels don't make
+        // the row jump in height when content changes.
+        minHeight: "12px",
+        whiteSpace: "nowrap",
+        textAlign: "center",
+        pointerEvents: "none",
+      } as Partial<CSSStyleDeclaration>);
+      content.textContent = "";
+      col.appendChild(content);
+
+      this.root.appendChild(col);
       this.buttons.push(btn);
+      this.contentLabels.push(content);
     }
 
     this.update();
+    // The seat catalog changes whenever the player places, sells, or
+    // moves a table — and we'd rather not thread every furniture event
+    // through here. Refreshing the per-floor labels every 1.5s keeps
+    // them current cheaply (just a registry scan + DOM string assign).
+    setInterval(() => this.update(), 1500);
   }
 
   /** Switch focus to the given storey. Safe to call repeatedly with
@@ -122,6 +166,37 @@ export class FloorSelector {
         ? "rgba(255, 220, 150, 0.85)"
         : "rgba(255,245,220,0.22)";
       btn.style.color = isActive ? "#fffff0" : "#fff5dc";
+
+      // Sub-label classifies the floor by what gets served:
+      //   nothing → no seats placed yet
+      //   food    → every seat on this floor is a food seat
+      //   drink   → every seat is drinks-only (coffee tables, bar)
+      //   mix     → both kinds of seats coexist
+      // Locked floors render their requirement instead so the player
+      // sees what tier unlocks them at a glance.
+      const labelEl = this.contentLabels[idx];
+      if (!unlocked) {
+        labelEl.textContent = `tier ${idx + 1}`;
+        labelEl.style.color = "#caa67c";
+        labelEl.style.opacity = "0.55";
+        continue;
+      }
+      const content: FloorContent = this.getFloorContent?.(idx) ?? "nothing";
+      const COPY: Record<FloorContent, string> = {
+        nothing: "empty",
+        food:    "food",
+        drink:   "drinks",
+        mix:     "mixed",
+      };
+      const COLOR: Record<FloorContent, string> = {
+        nothing: "#bca78c",  // muted cream — empty floor reads as "nothing here"
+        food:    "#a8d8a0",  // soft green
+        drink:   "#a8c8e8",  // soft blue
+        mix:     "#e8c878",  // warm amber — both food + drinks
+      };
+      labelEl.textContent = COPY[content];
+      labelEl.style.color = COLOR[content];
+      labelEl.style.opacity = isActive ? "1" : "0.85";
     }
   }
 }
