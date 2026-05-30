@@ -982,15 +982,7 @@ export class BuildMenu {
       // thing. Items on different floors are out of scope for the
       // current interaction.
       const focusedFloor = this.currentFloor();
-      const allItems = this.registry.snapshotItems();
-      const items = allItems.filter((it) => it.floor === focusedFloor);
-      if (items.length === 0 && allItems.length > 0) {
-        // Diagnostic for the "nothing to sell on Floor N" report. Dumps
-        // what floors the registry thinks every item is on, so we can
-        // spot a mismatch between visual Y and stored floor.
-        console.warn(`[sell/move-pickup] No items on focused floor ${focusedFloor}. Floor distribution:`,
-          allItems.reduce((acc, it) => { acc[`f${it.floor}`] = (acc[`f${it.floor}`] ?? 0) + 1; return acc; }, {} as Record<string, number>));
-      }
+      const items = this.registry.snapshotItems().filter((it) => it.floor === focusedFloor);
       if (items.length > 0) {
         const roots = items.map((it) => it.model);
         const hits = this.raycaster.intersectObjects(roots, true);
@@ -1227,19 +1219,6 @@ export class BuildMenu {
       const floor = this.currentFloor();
       for (const cell of previewCells) {
         if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer, floor)) {
-          // Diagnostic: when the block fires on an upper floor, dump the
-          // colliding item so the player + bug reports can see whether
-          // it's an upper-floor item or a leaked ground one. Stripped
-          // back to a single console.warn for now; remove once stable.
-          if (floor > 0) {
-            const all = this.registry.snapshotItems();
-            const culprits = all.filter((it) =>
-              Math.abs(it.x - cell.x) <= 0.6 && Math.abs(it.z - cell.z) <= 0.6
-            );
-            console.warn(`[Build] BLOCKED at cell (${cell.x},${cell.z}) on floor ${floor}. ` +
-              `Cells:`, previewCells.map((c) => `(${c.x},${c.z})`).join(", "),
-              `Nearby items:`, culprits.map((c) => `${c.defId}@floor${c.floor}`).join(", "));
-          }
           return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
         }
       }
@@ -1600,7 +1579,6 @@ export class BuildMenu {
         const fromPose = this.holdingFrom!;
         const movedItem = this.registry.snapshotItems().find((it) => it.uid === this.holdingUid);
         const movedDef = movedItem ? furnitureCatalog.find((d) => d.id === movedItem.defId) : undefined;
-        console.log(`[MoveDrop] uid=${this.holdingUid} from(${fromPose.x},${fromPose.z}) to(${plan.x},${plan.z}) focusedFloor=${this.currentFloor()} oldItemFloor=${movedItem?.floor}`);
         this.registry.setPose(this.holdingUid, plan.x, plan.z, plan.rotY);
         // Cross-floor drop: if the player switched focus while holding
         // the item, re-parent it (and any surface children) into the
