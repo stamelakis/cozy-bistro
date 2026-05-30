@@ -1144,13 +1144,17 @@ export class StaffRouter {
     b.clock += dt;
     switch (b.state) {
       case "idle": {
-        // Priority for the barman, top to bottom:
+        // Barmen are HARD-PINNED to their home floor — they're tied
+        // to their bar counter physically and never cross to another
+        // floor's bar, even if it's unstaffed. (Chefs and waiters
+        // have a CROSS_FLOOR_WAIT_SECONDS fallback that kicks in
+        // when their own floor is quiet; the barman explicitly
+        // doesn't get that fallback so each bar floor needs its own
+        // hire.) Priority for the barman:
         //   1. Home-floor bar customer waiting to order → walk to
-        //      their stool, dwell, fire callback (spawner then
-        //      enqueues the cooking ticket).
-        //   2. Home-floor queued bar ticket → cook at the bar counter.
-        //   3. Cross-floor versions of either after the wait clock
-        //      expires (rare — barman usually owns one floor's bar).
+        //      their stool, dwell, fire callback.
+        //   2. Home-floor queued bar ticket → cook at the bar.
+        // Nothing else. No cross-floor poach.
         const homeOrder = this.orderRequests.find((o) =>
           o.claimedBy === null && o.atBar && o.seatFloor === b.homeFloor);
         if (homeOrder) {
@@ -1160,26 +1164,7 @@ export class StaffRouter {
         const homeTickets = this.tickets.filter((t) =>
           t.state === "queued" && t.appliance === "bar" && t.seatFloor === b.homeFloor);
         if (homeTickets.length > 0) {
-          b.homeWorkWaitClock = 0;
-          if (this.tryClaimDrinkForBarman(b, homeTickets)) break;
-          break;
-        }
-        b.homeWorkWaitClock += dt;
-        if (b.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
-        // Cross-floor: a barman on Floor 1 can take an unattended
-        // Floor 0 bar order once the local wait expires. Same anti-
-        // poach as waiters / chefs: skip work where an idle home-
-        // floor barman exists.
-        const anyOrder = this.orderRequests.find((o) =>
-          o.claimedBy === null && o.atBar && !this.hasIdleHomeBarman(o.seatFloor, b));
-        if (anyOrder) {
-          this.startBarmanTakeOrder(b, anyOrder);
-          break;
-        }
-        const anyTickets = this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance === "bar" && !this.hasIdleHomeBarman(t.seatFloor, b));
-        if (anyTickets.length > 0) {
-          this.tryClaimDrinkForBarman(b, anyTickets);
+          this.tryClaimDrinkForBarman(b, homeTickets);
         }
         break;
       }
@@ -1483,19 +1468,6 @@ export class StaffRouter {
    * shouldn't grab a Floor-0 ticket when a Floor-0 chef is idle. */
   private hasIdleHomeChef(floor: number, exclude: StaffActor): boolean {
     for (const other of this.chefs) {
-      if (other === exclude) continue;
-      if (other.state !== "idle") continue;
-      if (other.homeFloor !== floor) continue;
-      return true;
-    }
-    return false;
-  }
-
-  /** Barman pool variant. Barmen usually live on one floor (one bar)
-   * so this rarely fires, but the symmetry guards against a future
-   * setup where a second bar opens on another floor. */
-  private hasIdleHomeBarman(floor: number, exclude: StaffActor): boolean {
-    for (const other of this.barmen) {
       if (other === exclude) continue;
       if (other.state !== "idle") continue;
       if (other.homeFloor !== floor) continue;
