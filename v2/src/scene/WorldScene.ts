@@ -54,6 +54,20 @@ export const PLAQUE_LABELS: Record<string, string> = {
 };
 
 /** Linearly interpolate between two RGB integers by t in [0,1]. */
+/** Tiny pseudo-RNG used for stable procedural city layout — same
+ * seed → same town across reloads. Algorithm: mulberry32 (one of
+ * the smallest decent 32-bit PRNGs). */
+function mulberry32(seed: number): () => number {
+  let s = seed >>> 0;
+  return (): number => {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function mixColors(a: number, b: number, t: number): number {
   const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
   const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
@@ -1812,58 +1826,172 @@ export class WorldScene {
     tex.wrapT = THREE.RepeatWrapping;
     // Bumped tile repeat 5×5 → 9×9 to match the bigger plane —
     // without this the grass texture stretched to a blurry blob.
-    tex.repeat.set(9, 9);
-    // Plane bumped 90×90 → 160×160 to cover the seeded city span
-    // (plots reach to ±48; we want generous green margin around
-    // them so distant plots aren't sitting on a void edge).
+    tex.repeat.set(16, 16);
+    // Plane bumped to 280×280 so the camera can pan well past
+    // the seeded plots before hitting the void. With ~60 NPC
+    // scenery buildings + the 12 claim plots + the legacy block,
+    // the city now reads as a real Greek Island town rather
+    // than a handful of houses floating on a small lawn.
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(160, 160),
+      new THREE.PlaneGeometry(280, 280),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
     grass.position.y = -0.01;
     grass.receiveShadow = true;
     this.threeScene.add(grass);
-    // City paths — stone-coloured strips between plot rows /
-    // columns, Greek-Island vibe (no asphalt). The seeded plots
-    // sit at x = -48, -24, 0, 24, 48 and z = -48, 0, 48; we want
-    // paths in the GAPS so plots stay on grass and paths connect
-    // their edges.
+    // City roads + scenery houses. Streets come first so the
+    // building placement pass can avoid sitting on top of them.
     this.addCityStreets();
+    this.addCityScenery();
   }
 
-  /** Greek-Island stone paths weaving between the seeded plots.
-   * Three horizontal strips (z = ±36, 0) and four vertical strips
-   * (x = ±36, ±12) form a loose grid so a visitor on any plot can
-   * walk to any other. Same beige stone material as the existing
-   * legacy pavement so the visual reads as one continuous town
-   * surface rather than two clashing road systems. */
+  /** Greek-Island stone path network. Now a full grid covering
+   * the expanded terrain: paths every 24 tiles in both axes from
+   * −120 to +120, so every scenery house has a road-frontage
+   * within walking distance. Two extra "main avenues" along the
+   * center axes (x=0, z=0) are slightly wider so the town has a
+   * spine visible from above. */
   private addCityStreets(): void {
     const stoneMat = new THREE.MeshStandardMaterial({ color: 0xc2b39a, roughness: 0.95, metalness: 0 });
-    const STRIP_LEN = 140; // a touch under the grass span so edges stay green
-    const STRIP_W = 3;
-    const makeStrip = (orientation: "ew" | "ns", offset: number): void => {
-      const w = orientation === "ew" ? STRIP_LEN : STRIP_W;
-      const h = orientation === "ew" ? STRIP_W : STRIP_LEN;
+    const STRIP_LEN = 260;
+    const SIDE_W = 3;
+    const MAIN_W = 5;
+    const makeStrip = (orientation: "ew" | "ns", offset: number, width: number): void => {
+      const w = orientation === "ew" ? STRIP_LEN : width;
+      const h = orientation === "ew" ? width : STRIP_LEN;
       const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), stoneMat);
       m.rotation.x = -Math.PI / 2;
-      // Sits just above the grass plane (which is at y=-0.01) so
-      // there's no z-fighting; still under any building foundation.
       m.position.set(orientation === "ns" ? offset : 0, 0.005, orientation === "ew" ? offset : 0);
       m.receiveShadow = true;
       this.threeScene.add(m);
     };
-    // East-West strips at three rows — between and around the
-    // seeded plot rows at z = -48, 0, 48.
-    makeStrip("ew", -36);
-    makeStrip("ew",  -12);
-    makeStrip("ew",   12);
-    makeStrip("ew",   36);
-    // North-South strips at the gaps.
-    makeStrip("ns", -36);
-    makeStrip("ns", -12);
-    makeStrip("ns",  12);
-    makeStrip("ns",  36);
+    // Main spine — wider beige strip through the centre.
+    makeStrip("ew", 0, MAIN_W);
+    makeStrip("ns", 0, MAIN_W);
+    // Secondary grid — covers ±120 every 24 tiles, gaps at the
+    // main spines we already drew.
+    for (let v = -120; v <= 120; v += 24) {
+      if (v === 0) continue;
+      makeStrip("ew", v, SIDE_W);
+      makeStrip("ns", v, SIDE_W);
+    }
+  }
+
+  /** Procedural NPC scenery — ~60 background houses + shops
+   * filling the empty grass between the 12 claim plots. Each
+   * piece is a small Greek-Island cube with the same vocabulary
+   * as the claim-plot shells (whitewashed walls, terra-cotta or
+   * blue-domed roofs, a coloured door) but smaller, randomised
+   * colours, and never on a street.
+   *
+   * Stable pseudo-RNG (mulberry32 seeded from a fixed constant)
+   * so the city layout is identical across reloads — players can
+   * use neighbouring houses as landmarks. */
+  private addCityScenery(): void {
+    const sceneryGroup = new THREE.Group();
+    this.threeScene.add(sceneryGroup);
+
+    // Centers of the seeded claim plots — kept clear (the city
+    // building loop adds proper shells at these positions).
+    const claimPlots: { x: number; z: number; w: number; h: number }[] = [
+      { x: -48, z: -48, w: 8,  h: 8  }, { x: -24, z: -48, w: 10, h: 10 },
+      { x:   0, z: -48, w: 12, h: 12 }, { x:  24, z: -48, w: 10, h: 10 },
+      { x:  48, z: -48, w: 8,  h: 8  },
+      { x: -48, z:   0, w: 10, h: 10 }, { x: -24, z:   0, w: 12, h: 12 },
+      { x:  24, z:   0, w: 12, h: 12 }, { x:  48, z:   0, w: 10, h: 10 },
+      { x: -24, z:  48, w: 8,  h: 8  }, { x:   0, z:  48, w: 10, h: 10 },
+      { x:  24, z:  48, w: 8,  h: 8  },
+    ];
+    // Legacy single-restaurant block — keep the camera-anchor
+    // area clear so the player's own restaurant + the existing
+    // fence / asphalt don't fight with scenery.
+    claimPlots.push({ x: 0, z: 0, w: 16, h: 30 });
+
+    const overlapsClaim = (x: number, z: number, size: number): boolean => {
+      const halfS = size / 2 + 2; // small breathing room
+      for (const c of claimPlots) {
+        if (Math.abs(x - c.x) < (c.w / 2 + halfS) && Math.abs(z - c.z) < (c.h / 2 + halfS)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    // Streets sit on every multiple of 24 in both axes. Scenery
+    // buildings should occupy the QUADRANTS between streets so
+    // they're not bisected by asphalt-style pathways.
+    const onStreet = (x: number, z: number, size: number): boolean => {
+      const halfS = size / 2 + 1;
+      // x or z falling within 3m (street width) of a 24-multiple
+      // grid line means we're on the road.
+      const distX = Math.abs(x - Math.round(x / 24) * 24);
+      const distZ = Math.abs(z - Math.round(z / 24) * 24);
+      return distX < halfS + 2 || distZ < halfS + 2;
+    };
+
+    // Seeded RNG so the city layout is reproducible.
+    const rng = mulberry32(0xC02FB157);
+    const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)];
+
+    const wallColors = [0xf4ece0, 0xeee5d4, 0xfaf1e2, 0xece1cc, 0xf7e9d0];
+    const roofColors = [0xc97a4a, 0xb86438, 0x3d6b8a, 0xd28b4f, 0x8a5238, 0xf4f0e8];
+    const doorColors = [0x2b6cb0, 0x9b3b3b, 0x4a7c3a, 0x6b4a8a, 0xc4842a];
+
+    // Candidate cell centers — every 6 tiles from −120 to +120.
+    // Filtered by claim-overlap + street + occasional skip.
+    let placed = 0;
+    for (let gx = -120; gx <= 120; gx += 6) {
+      for (let gz = -120; gz <= 120; gz += 6) {
+        // Random skip — keeps the city feeling organic, not a
+        // perfectly tiled grid.
+        if (rng() < 0.65) continue;
+        const size = 3 + Math.floor(rng() * 4); // 3..6 tiles
+        if (overlapsClaim(gx, gz, size)) continue;
+        if (onStreet(gx, gz, size)) continue;
+        sceneryGroup.add(this.makeSceneryHouse(
+          gx, gz, size,
+          1 + Math.floor(rng() * 2), // 1-2 storeys
+          pick(wallColors), pick(roofColors), pick(doorColors),
+          rng() * Math.PI * 2,
+        ));
+        placed += 1;
+        if (placed > 80) return; // hard cap so the city doesn't get absurd
+      }
+    }
+  }
+
+  /** Build one small scenery house. Variants in size, height,
+   * wall/roof/door colour, and orientation give the town visual
+   * variety without authoring per-house meshes. */
+  private makeSceneryHouse(x: number, z: number, size: number, storeys: number,
+                           wallColor: number, roofColor: number, doorColor: number,
+                           rotY: number): THREE.Group {
+    const g = new THREE.Group();
+    const wallH = storeys * 2.6;
+    const walls = new THREE.Mesh(
+      new THREE.BoxGeometry(size, wallH, size),
+      new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9 }),
+    );
+    walls.position.y = wallH / 2;
+    walls.castShadow = true;
+    walls.receiveShadow = true;
+    g.add(walls);
+    const roof = new THREE.Mesh(
+      new THREE.BoxGeometry(size + 0.3, 0.2, size + 0.3),
+      new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85 }),
+    );
+    roof.position.y = wallH + 0.1;
+    roof.castShadow = true;
+    g.add(roof);
+    const door = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 1.8, 0.05),
+      new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.6 }),
+    );
+    door.position.set(0, 1.0, size / 2 + 0.03);
+    g.add(door);
+    g.position.set(x, 0, z);
+    g.rotation.y = rotY;
+    return g;
   }
 
   /** Procedural grass texture — high-resolution layered noise in a
