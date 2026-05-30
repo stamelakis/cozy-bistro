@@ -327,6 +327,16 @@ export class Engine {
     // structurally.
     this.pathfind = new Pathfinding(() => this.registry.snapshotItems());
     this.seatMarkers = new SeatMarkers(this.scene.threeScene, this.registry);
+    // Floor-aware filtering — Phase 5 placements track a `floor` on each
+    // placed item, so seat markers and status bubbles can hide anything
+    // not on the focused storey. Without these wires the ground floor's
+    // seat-slot discs leak through the upper slab and the upstairs
+    // "cooking" / "pickup" labels leak through the camera into the
+    // ground view (and vice versa).
+    this.seatMarkers.getFocusedFloor = () => this.scene.getFocusedStorey();
+    this.seatMarkers.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    this.statusBubbles.getFocusedFloor = () => this.scene.getFocusedStorey();
+    this.statusBubbles.getStoreyHeight = () => WorldScene.getStoreyHeight();
     if (savedState?.furniture && savedState.furniture.length > 0) {
       // SaveGameState.furniture mirrors the 2D PlacedFurniture shape
       // ({position:{x,y}, rotation:degrees}). Re-instantiate each item

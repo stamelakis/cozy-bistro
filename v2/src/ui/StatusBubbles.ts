@@ -33,6 +33,15 @@ export class StatusBubbles {
   private readonly active = new Map<string, PooledBubble>();
   /** Temporary projection scratch. */
   private readonly tmp = new THREE.Vector3();
+  /** Storey the player is focused on. When set, bubbles for characters on
+   * a different storey are hidden — otherwise the ground floor's "cooking" /
+   * "pickup" labels float up through the upper slab and read as belonging
+   * to the floor the player is actually looking at. */
+  getFocusedFloor?: () => number;
+  /** Metres per storey, used both to derive which floor a character is
+   * standing on (root.position.y / storeyHeight) and to offset the bubble
+   * Y so it sits above the head instead of below the ceiling. */
+  getStoreyHeight?: () => number;
 
   constructor(host: HTMLElement, camera: THREE.Camera, canvas: HTMLCanvasElement) {
     this.host = host;
@@ -44,12 +53,26 @@ export class StatusBubbles {
   update(entries: readonly StatusEntry[]): void {
     const rect = this.canvas.getBoundingClientRect();
     const stillActive = new Set<string>();
+    const focused = this.getFocusedFloor?.();
+    const storeyH = this.getStoreyHeight?.() ?? 3;
     for (const entry of entries) {
       if (!entry.label) continue;
+      // Floor filter — derive the character's storey from their world Y
+      // (root.position.y ≈ floor * storeyHeight + feet-lift). Hide the
+      // bubble when the player is focused on a different storey so the
+      // ground floor's "pickup" / "cooking" labels don't leak through
+      // the upper slab.
+      const charY = entry.character.root.position.y;
+      const charFloor = Math.round(charY / storeyH);
+      if (focused !== undefined && charFloor !== focused) continue;
       stillActive.add(entry.key);
       const bubble = this.active.get(entry.key) ?? this.acquire(entry.key);
-      // World pos = character.groundPos + ~1.2 above their head.
-      this.tmp.set(entry.character.groundPos.x, 1.4, entry.character.groundPos.y);
+      // World pos = character.groundPos.x/z + character feet Y + ~1.4 m
+      // above their head. Using root.position.y instead of the old hard-
+      // coded 1.4 keeps the bubble above the character on upper floors
+      // (Floor 1 ≈ y=4.4, Floor 2 ≈ y=7.4, etc.) instead of pinned to
+      // the ground slab.
+      this.tmp.set(entry.character.groundPos.x, charY + 1.4, entry.character.groundPos.y);
       this.tmp.project(this.camera);
       const x = (this.tmp.x * 0.5 + 0.5) * rect.width;
       const y = (-this.tmp.y * 0.5 + 0.5) * rect.height;

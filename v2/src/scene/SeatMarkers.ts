@@ -29,6 +29,15 @@ export class SeatMarkers {
   private readonly seatEmptyMat: THREE.MeshBasicMaterial;
   private readonly seatFilledMat: THREE.MeshBasicMaterial;
   private readonly plateMat: THREE.MeshBasicMaterial;
+  /** Storey the player is currently focused on. Wired from Engine — the
+   * markers only render for tables on this storey. Without the filter,
+   * every floor's seat hints show on the ground slab as the camera tweens
+   * up and they read as "the upper floor's tables exist down here". */
+  getFocusedFloor?: () => number;
+  /** Metres per storey, used to lift the markers up to the focused
+   * floor's slab plane. Falls back to the WorldScene constant if the
+   * caller doesn't wire one. */
+  getStoreyHeight?: () => number;
   /** Off by default — BuildMenu calls setEnabled(true) when entering
    * place/move mode and false again when leaving. */
   private enabled = false;
@@ -86,18 +95,27 @@ export class SeatMarkers {
       const c = this.group.children[0];
       this.group.remove(c);
     }
+    const focused = this.getFocusedFloor?.() ?? 0;
+    const storeyH = this.getStoreyHeight?.() ?? 3;
+    const slabY = focused * storeyH;
     const slots = this.registry.getResolvedSeatSlots();
     for (const slot of slots) {
+      // Filter to the focused storey — Floor 1 markers should not appear
+      // on the ground slab and vice versa. ResolvedSeatSlot.floor carries
+      // the table's storey through from FurnitureRegistry.
+      if (slot.floor !== focused) continue;
       const filled = slot.chairUid != null;
       // Floor disc — flat on ground, rotated to lie on the XZ plane.
+      // Lifted by slabY so the disc sits ON the focused storey's slab
+      // rather than the ground floor at y≈0.
       const seatMesh = new THREE.Mesh(this.seatGeometry, filled ? this.seatFilledMat : this.seatEmptyMat);
       seatMesh.rotation.x = -Math.PI / 2;
-      seatMesh.position.set(slot.x, FLOOR_Y, slot.z);
+      seatMesh.position.set(slot.x, slabY + FLOOR_Y, slot.z);
       this.group.add(seatMesh);
       // Plate disc on the table top — same orientation, lifted Y.
       const plateMesh = new THREE.Mesh(this.plateGeometry, this.plateMat);
       plateMesh.rotation.x = -Math.PI / 2;
-      plateMesh.position.set(slot.platePos.x, PLATE_Y, slot.platePos.z);
+      plateMesh.position.set(slot.platePos.x, slabY + PLATE_Y, slot.platePos.z);
       this.group.add(plateMesh);
     }
   }
