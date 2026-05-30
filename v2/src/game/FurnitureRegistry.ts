@@ -568,7 +568,7 @@ export class FurnitureRegistry {
           z: it.z + world.dz,
           facingY: this.normalizeAngle(slot.facingY + it.rotY),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid),
+          chairUid: this.findChairAtSlot(it.x + world.dx, it.z + world.dz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
         });
@@ -605,11 +605,16 @@ export class FurnitureRegistry {
   }
 
   /** Find the seat slot closest to (x, z) within snap range. Returns null if
-   * nothing in range. Used by BuildMenu's chair auto-snap behaviour. */
-  findNearestSeatSlot(x: number, z: number, range = 1.4, excludeChairUid?: string): ResolvedSeatSlot | null {
+   * nothing in range. Used by BuildMenu's chair auto-snap behaviour.
+   * Optional `floor` filter restricts the search to one storey so a chair
+   * being placed on Floor 1 doesn't snap to a Floor 0 coffee table's seat
+   * (and vice versa) — without it, the (x, z) match happens regardless
+   * of Y and the chair lands at the right XZ for the wrong storey. */
+  findNearestSeatSlot(x: number, z: number, range = 1.4, excludeChairUid?: string, floor?: number): ResolvedSeatSlot | null {
     let best: ResolvedSeatSlot | null = null;
     let bestD2 = range * range;
     for (const s of this.getResolvedSeatSlots(false, excludeChairUid)) {
+      if (typeof floor === "number" && s.floor !== floor) continue;
       const dx = s.x - x;
       const dz = s.z - z;
       const d2 = dx * dx + dz * dz;
@@ -626,12 +631,19 @@ export class FurnitureRegistry {
    * honours the chair's rotation and any explicit footprint mask (e.g.
    * the L-shape corner sofa). Position-only — we deliberately don't
    * gate on chair rotation orientation, see the long comment in
-   * isChairAtAnySlot. */
-  private findChairAtSlot(slotX: number, slotZ: number, _slotFacing: number, excludeUid?: string): string | null {
+   * isChairAtAnySlot.
+   *
+   * `tableFloor` scopes the lookup to chairs on the same storey as the
+   * table whose slot is being resolved — otherwise a Floor 0 chair
+   * sitting directly under a Floor 1 table's seat would mark that
+   * Floor 1 seat as filled, and a customer assigned to it would
+   * silently never get a chair to sit on. */
+  private findChairAtSlot(slotX: number, slotZ: number, _slotFacing: number, excludeUid?: string, tableFloor?: number): string | null {
     const cellX = Math.round(slotX);
     const cellZ = Math.round(slotZ);
     for (const it of this.items) {
       if (excludeUid && it.uid === excludeUid) continue;
+      if (typeof tableFloor === "number" && it.floor !== tableFloor) continue;
       const def = getFurnitureDef(it.defId);
       if (def?.category !== "chair") continue;
       if (footprintCoversCell(it, def, cellX, cellZ)) return it.uid;

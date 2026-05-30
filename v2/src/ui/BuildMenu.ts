@@ -1208,7 +1208,10 @@ export class BuildMenu {
     // overhang into the table. The player drops them on the grid and
     // the footprint-aware slot detection picks up the seats they cover.
     if (def.category === "chair" && def.size.width === 1 && def.size.depth === 1) {
-      const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4, excludeUid);
+      // Scope the seat search to the focused storey so a Floor 0 coffee
+      // table's seat slot doesn't suck in a chair being placed on
+      // Floor 1 (the XZ snap is identical across floors, only Y differs).
+      const slot = this.registry.findNearestSeatSlot(rawPoint.x, rawPoint.z, 1.4, excludeUid, this.currentFloor());
       if (slot && slot.chairUid == null) {
         // chairUid only tracks CHAIRS on the slot's cell — a non-chair
         // item (side-table, decoration, plant) sitting on the same cell
