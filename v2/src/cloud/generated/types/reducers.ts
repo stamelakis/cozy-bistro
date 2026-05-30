@@ -6,28 +6,38 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminResetPasswordReducer from "../admin_reset_password_reducer";
 import CreateRestaurantReducer from "../create_restaurant_reducer";
 import DeleteRestaurantReducer from "../delete_restaurant_reducer";
 import InviteCoOwnerReducer from "../invite_co_owner_reducer";
+import LoginReducer from "../login_reducer";
+import LogoutReducer from "../logout_reducer";
 import RemoveCoOwnerReducer from "../remove_co_owner_reducer";
+import RequestPasswordResetReducer from "../request_password_reset_reducer";
 import RespondFriendRequestReducer from "../respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "../save_restaurant_snapshot_reducer";
 import SendFriendRequestReducer from "../send_friend_request_reducer";
 import SetPlayerNameReducer from "../set_player_name_reducer";
 import SetRestaurantPublicReducer from "../set_restaurant_public_reducer";
+import SignUpReducer from "../sign_up_reducer";
 import SubmitLeaderboardReducer from "../submit_leaderboard_reducer";
 import UnfriendReducer from "../unfriend_reducer";
 import UnlockAchievementReducer from "../unlock_achievement_reducer";
 
+export type AdminResetPasswordParams = __Infer<typeof AdminResetPasswordReducer>;
 export type CreateRestaurantParams = __Infer<typeof CreateRestaurantReducer>;
 export type DeleteRestaurantParams = __Infer<typeof DeleteRestaurantReducer>;
 export type InviteCoOwnerParams = __Infer<typeof InviteCoOwnerReducer>;
+export type LoginParams = __Infer<typeof LoginReducer>;
+export type LogoutParams = __Infer<typeof LogoutReducer>;
 export type RemoveCoOwnerParams = __Infer<typeof RemoveCoOwnerReducer>;
+export type RequestPasswordResetParams = __Infer<typeof RequestPasswordResetReducer>;
 export type RespondFriendRequestParams = __Infer<typeof RespondFriendRequestReducer>;
 export type SaveRestaurantSnapshotParams = __Infer<typeof SaveRestaurantSnapshotReducer>;
 export type SendFriendRequestParams = __Infer<typeof SendFriendRequestReducer>;
 export type SetPlayerNameParams = __Infer<typeof SetPlayerNameReducer>;
 export type SetRestaurantPublicParams = __Infer<typeof SetRestaurantPublicReducer>;
+export type SignUpParams = __Infer<typeof SignUpReducer>;
 export type SubmitLeaderboardParams = __Infer<typeof SubmitLeaderboardReducer>;
 export type UnfriendParams = __Infer<typeof UnfriendReducer>;
 export type UnlockAchievementParams = __Infer<typeof UnlockAchievementReducer>;

@@ -7,7 +7,10 @@
 use spacetimedb::{table, Identity, Timestamp};
 
 /// A signed-in player. One row per Identity. Created automatically by
-/// the `client_connected` lifecycle reducer.
+/// the `client_connected` lifecycle reducer. Auth credentials live
+/// in a SEPARATE `auth_record` table (one row per username) — that
+/// way we can add the multiplayer auth layer without doing a
+/// breaking-schema migration on this existing table.
 #[table(name = player, public)]
 pub struct Player {
     /// SpacetimeDB Identity — stable per browser, used as the primary key.
@@ -20,6 +23,57 @@ pub struct Player {
     pub created_at: Timestamp,
     /// Most recent connection timestamp. Updated on client_connected.
     pub last_seen_at: Timestamp,
+}
+
+/// Account credentials — one row per (lowercased) username. Lookup
+/// by username yields the active Identity claim for the account.
+/// Living separately from `player` so adding multiplayer auth
+/// doesn't require schema-migrating the existing player rows.
+///
+/// On login from a new browser, the row's `identity` field updates
+/// to the new sender; the old identity loses its claim (closing
+/// the tab on the old browser is then effectively a sign-out).
+#[table(name = auth_record, public)]
+pub struct AuthRecord {
+    /// Lowercased username — globally unique because it's the PK.
+    #[primary_key]
+    pub username: String,
+    /// SpacetimeDB Identity currently logged in as this account.
+    /// Btree-indexed so we can answer "what account does identity X
+    /// own?" in O(log n) on each connect.
+    #[index(btree)]
+    pub identity: Identity,
+    /// Original-case display name (matches Player.name).
+    pub display_name: String,
+    /// SHA-256 hex of (salt || password) with "{salt_hex}${hash_hex}".
+    pub password_hash: String,
+    /// True for the admin account ("Dunnin"). Set by sign_up only
+    /// when this is the first ever account with that username.
+    pub is_admin: bool,
+    pub created_at: Timestamp,
+}
+
+/// A "forgot password" ticket — created when a player clicks the
+/// forgot-password link in the login modal. Visible to the admin
+/// (Dunnin) via the AdminPanel; admin can call `admin_reset_password`
+/// to issue a new temporary password and mark the ticket resolved.
+#[table(name = password_reset_request, public)]
+pub struct PasswordResetRequest {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Username the player wants to recover. Indexed for the admin
+    /// list view + dedup-on-issuance.
+    #[index(btree)]
+    pub username: String,
+    /// Free-text message from the player describing what happened
+    /// (e.g. "lost my password", "wrong username typed at signup").
+    /// Capped to a reasonable length by the reducer.
+    pub message: String,
+    /// "pending" | "resolved" | "denied"
+    pub status: String,
+    pub created_at: Timestamp,
+    pub resolved_at: Option<Timestamp>,
 }
 
 /// A restaurant owned by one player. A player can own multiple

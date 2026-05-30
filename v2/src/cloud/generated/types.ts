@@ -18,6 +18,16 @@ export const AchievementUnlock = __t.object("AchievementUnlock", {
 });
 export type AchievementUnlock = __Infer<typeof AchievementUnlock>;
 
+export const AuthRecord = __t.object("AuthRecord", {
+  username: __t.string(),
+  identity: __t.identity(),
+  displayName: __t.string(),
+  passwordHash: __t.string(),
+  isAdmin: __t.bool(),
+  createdAt: __t.timestamp(),
+});
+export type AuthRecord = __Infer<typeof AuthRecord>;
+
 export const CoOwner = __t.object("CoOwner", {
   id: __t.u64(),
   restaurantId: __t.u64(),
@@ -54,6 +64,16 @@ export const LeaderboardEntry = __t.object("LeaderboardEntry", {
   submittedAt: __t.timestamp(),
 });
 export type LeaderboardEntry = __Infer<typeof LeaderboardEntry>;
+
+export const PasswordResetRequest = __t.object("PasswordResetRequest", {
+  id: __t.u64(),
+  username: __t.string(),
+  message: __t.string(),
+  status: __t.string(),
+  createdAt: __t.timestamp(),
+  resolvedAt: __t.option(__t.timestamp()),
+});
+export type PasswordResetRequest = __Infer<typeof PasswordResetRequest>;
 
 export const Player = __t.object("Player", {
   identity: __t.identity(),

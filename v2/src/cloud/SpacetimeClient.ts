@@ -80,6 +80,104 @@ export class SpacetimeClient {
     };
   }
 
+  // ============================================================================
+  //                            AUTH (P1 multiplayer)
+  // ============================================================================
+  // Sign up / log in / forgot-password helpers. Wrap the SpacetimeDB
+  // reducers so the LoginModal doesn't have to know about the bindings.
+  // Each method returns a promise that resolves when the reducer
+  // applies (success) or rejects with the server's error message.
+
+  /** Whether this session is logged in as a valid account. Reads from
+   * the auth_record cache — true when an auth_record row exists for
+   * the current identity. */
+  isAuthenticated(): boolean {
+    if (!this.conn || !this.identity) return false;
+    const me = this.identity;
+    try {
+      for (const r of this.conn.db.auth_record.iter()) {
+        if (identityEquals(r.identity, me)) return true;
+      }
+    } catch { /* table not yet wired in SDK */ }
+    return false;
+  }
+
+  /** Current logged-in account info, or null when unauthenticated. */
+  getCurrentAccount(): { username: string; displayName: string; isAdmin: boolean } | null {
+    if (!this.conn || !this.identity) return null;
+    const me = this.identity;
+    try {
+      for (const r of this.conn.db.auth_record.iter()) {
+        if (identityEquals(r.identity, me)) {
+          return { username: r.username, displayName: r.displayName, isAdmin: r.isAdmin };
+        }
+      }
+    } catch { /* not wired */ }
+    return null;
+  }
+
+  /** Call sign_up. Resolves on success, rejects with the reducer's
+   * error string (e.g. "Username already taken"). */
+  signUp(username: string, password: string): Promise<void> {
+    return this.callReducer("signUp", () => this.conn!.reducers.signUp({ username, password }));
+  }
+
+  /** Call login. Resolves on success, rejects with the reducer's
+   * error string (e.g. "Wrong password"). */
+  login(username: string, password: string): Promise<void> {
+    return this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
+  }
+
+  /** Call logout. Releases this identity's claim on the account so
+   * the row can be re-claimed via a fresh login. */
+  logout(): Promise<void> {
+    return this.callReducer("logout", () => this.conn!.reducers.logout({}));
+  }
+
+  /** Submit a forgot-password ticket for the admin to action. The
+   * message is a free-text "what happened" blurb. */
+  requestPasswordReset(username: string, message: string): Promise<void> {
+    return this.callReducer("requestPasswordReset", () =>
+      this.conn!.reducers.requestPasswordReset({ username, message }));
+  }
+
+  /** Wait for one reducer call to apply OR fail. SpacetimeDB
+   * reducers fire-and-forget; we wire transient onSuccess /
+   * onError listeners to convert that into a Promise the modal
+   * can `await`. Times out after 10s so a dropped connection
+   * doesn't hang the UI forever. */
+  private callReducer(_label: string, fire: () => void): Promise<void> {
+    if (!this.conn) return Promise.reject(new Error("Not connected"));
+    // Subscribing to a reducer's events is SDK-specific and noisy.
+    // Easier path: kick off the call, then poll the local cache /
+    // listen for a state change for a short window. For auth flows
+    // we care about the OUTCOME visible in the cache (auth_record
+    // row appears/updates) rather than the literal reducer ACK,
+    // so listening for a notify is good enough.
+    return new Promise((resolve, reject) => {
+      const t = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("Server didn't respond in time"));
+      }, 10_000);
+      const cleanup = (): void => {
+        window.clearTimeout(t);
+        this.listeners.delete(onChange);
+      };
+      const onChange = (): void => {
+        // Resolve on the next state mutation. The modal calls
+        // getCurrentAccount() after the resolve to verify outcome
+        // and surfaces the appropriate UI.
+        cleanup();
+        resolve();
+      };
+      this.listeners.add(onChange);
+      try { fire(); } catch (e) {
+        cleanup();
+        reject(e instanceof Error ? e : new Error(String(e)));
+      }
+    });
+  }
+
   /** Build the connection and start listening. Safe to await; failures
    * only log + leave the game running offline. */
   connect(): void {

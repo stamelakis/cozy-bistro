@@ -9,6 +9,16 @@ crate-type = ["cdylib"]
 [dependencies]
 spacetimedb = "1.0"
 log = "0.4"
+# Auth (P1) — SHA-256 with per-user salt for password hashing.
+# Pure Rust, no getrandom/OsRng dependency that would break in the
+# wasm32-unknown-unknown sandbox. Salt entropy comes from
+# ReducerContext::rng() which SpacetimeDB seeds per-transaction.
+sha2 = { version = "0.10", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+# Constant-time comparison so a timing attack can't peel off a
+# password hash character-by-character.
+subtle = { version = "2.5", default-features = false }
+rand = { version = "0.8", default-features = false }
 
 [profile.release]
 lto = true

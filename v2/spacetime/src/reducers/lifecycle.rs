@@ -14,7 +14,10 @@ pub fn init(_ctx: &ReducerContext) {
 
 /// Called automatically whenever a client connects (after the WebSocket
 /// handshake but before they send any reducer). We use it to create the
-/// Player row on first sight and bump last_seen_at otherwise.
+/// Player row on first sight and bump last_seen_at otherwise. The new
+/// row is created in the UNAUTHENTICATED state (username + password_hash
+/// = None); the client must call `sign_up` or `login` to populate
+/// credentials.
 #[reducer(client_connected)]
 pub fn on_client_connected(ctx: &ReducerContext) {
     let identity = ctx.sender;

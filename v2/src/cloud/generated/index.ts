@@ -34,15 +34,20 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminResetPasswordReducer from "./admin_reset_password_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
+import LoginReducer from "./login_reducer";
+import LogoutReducer from "./logout_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
+import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
+import SignUpReducer from "./sign_up_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
@@ -51,10 +56,12 @@ import UnlockAchievementReducer from "./unlock_achievement_reducer";
 
 // Import all table schema definitions
 import AchievementUnlockRow from "./achievement_unlock_table";
+import AuthRecordRow from "./auth_record_table";
 import CoOwnerRow from "./co_owner_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
+import PasswordResetRequestRow from "./password_reset_request_table";
 import PlayerRow from "./player_table";
 import RestaurantRow from "./restaurant_table";
 import SaveSnapshotRow from "./save_snapshot_table";
@@ -77,6 +84,20 @@ const tablesSchema = __schema({
       { name: 'achievement_unlock_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AchievementUnlockRow),
+  auth_record: __table({
+    name: 'auth_record',
+    indexes: [
+      { accessor: 'identity', name: 'auth_record_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+      { accessor: 'username', name: 'auth_record_username_idx_btree', algorithm: 'btree', columns: [
+        'username',
+      ] },
+    ],
+    constraints: [
+      { name: 'auth_record_username_key', constraint: 'unique', columns: ['username'] },
+    ],
+  }, AuthRecordRow),
   co_owner: __table({
     name: 'co_owner',
     indexes: [
@@ -145,6 +166,20 @@ const tablesSchema = __schema({
       { name: 'leaderboard_entry_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, LeaderboardEntryRow),
+  password_reset_request: __table({
+    name: 'password_reset_request',
+    indexes: [
+      { accessor: 'id', name: 'password_reset_request_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'username', name: 'password_reset_request_username_idx_btree', algorithm: 'btree', columns: [
+        'username',
+      ] },
+    ],
+    constraints: [
+      { name: 'password_reset_request_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PasswordResetRequestRow),
   player: __table({
     name: 'player',
     indexes: [
@@ -185,15 +220,20 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
+  __reducerSchema("login", LoginReducer),
+  __reducerSchema("logout", LogoutReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
+  __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
+  __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
