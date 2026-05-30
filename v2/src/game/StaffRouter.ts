@@ -869,7 +869,16 @@ export class StaffRouter {
           ticket.clock = 0;
           w.ticketId = ticket.id;
           w.target = this.pickupPos.clone();
-          w.targetFloor = w.homeFloor; // pickup is in the home kitchen
+          // Pickup floor = KITCHEN's floor (not the waiter's home).
+          // pickupPos is a scene-wide constant pinned to the ground-
+          // floor kitchen; if the waiter lives on Floor 1, they have
+          // to descend the stair to actually pick the plate up. Old
+          // code set targetFloor = homeFloor here, which made the
+          // Floor 1 waiter walk to pickupPos XZ on Floor 1 ("through
+          // the ceiling") and pretend to pick up nothing. Multi-
+          // kitchen support (each storey gets its own pickupPos
+          // tied to the cooking chef) is a future pass.
+          w.targetFloor = 0;
           this.planPath(w);
           w.state = "movingToWork";
           w.clock = 0;

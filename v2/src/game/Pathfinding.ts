@@ -187,19 +187,25 @@ export class Pathfinding {
     from: { x: number; z: number; floor: number },
     to: { x: number; z: number; floor: number },
   ): MultiFloorPathStep[] {
-    if (from.floor === to.floor) {
-      const steps = this.findPath(from.x, from.z, to.x, to.z, from.floor);
-      return steps.map((s) => ({ x: s.x, z: s.y, floor: from.floor }));
+    // Defensive: callers occasionally pass `floor: undefined` (legacy
+    // in-memory data, fallback paths, etc.). Coerce to 0 — without this
+    // the loop below tests `curFloor !== undefined` which is always true,
+    // generating an infinite chain of stair flights into negative floors.
+    const fromFloor = Number.isFinite(from.floor) ? from.floor : 0;
+    const toFloor   = Number.isFinite(to.floor)   ? to.floor   : 0;
+    if (fromFloor === toFloor) {
+      const steps = this.findPath(from.x, from.z, to.x, to.z, fromFloor);
+      return steps.map((s) => ({ x: s.x, z: s.y, floor: fromFloor }));
     }
 
     const result: MultiFloorPathStep[] = [];
-    const ascending = to.floor > from.floor;
-    let curX = from.x, curZ = from.z, curFloor = from.floor;
+    const ascending = toFloor > fromFloor;
+    let curX = from.x, curZ = from.z, curFloor = fromFloor;
 
     // Walk one storey at a time so a Floor 0 → Floor 2 trip lands the
     // actor cleanly at the back-left corner on each intermediate slab
     // before climbing the next flight.
-    while (curFloor !== to.floor) {
+    while (curFloor !== toFloor) {
       const nextFloor = ascending ? curFloor + 1 : curFloor - 1;
       // Stair "entry" on the current floor depends on direction:
       // ascending → south bottom step; descending → north top step.
@@ -218,9 +224,9 @@ export class Pathfinding {
     }
 
     // Final leg on the destination floor.
-    const finalWalk = this.findPath(curX, curZ, to.x, to.z, to.floor);
+    const finalWalk = this.findPath(curX, curZ, to.x, to.z, toFloor);
     for (const s of finalWalk) {
-      result.push({ x: s.x, z: s.y, floor: to.floor });
+      result.push({ x: s.x, z: s.y, floor: toFloor });
     }
     return result;
   }
