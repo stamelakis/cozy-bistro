@@ -44,10 +44,12 @@ export interface DayEndSummary {
   rating: number;
 }
 
-/** Base money charged automatically per in-game day. Scales with luxury tier:
- *  tier 1 → $40, tier 2 → $70, tier 3 → $100, tier 4 → $130, tier 5 → $160 */
-const BASE_DAILY_RENT = 40;
-const RENT_PER_TIER = 30;
+/** Daily rent indexed by luxury tier (1..5). Doubles per tier so the
+ * fixed cost of operating the bigger spaces forces real economic
+ * planning, not just "buy the upgrade and the same trickle covers it":
+ *  T1=$40, T2=$80, T3=$160, T4=$320, T5=$640.
+ * Index 0 is unused (tiers are 1-indexed). */
+const RENT_BY_TIER = [0, 40, 80, 160, 320, 640];
 /** Default money charged per staff member per real minute. */
 const DEFAULT_PAYROLL_PER_STAFF_PER_MINUTE = 6;
 /** Default cost per unit of ingredient when auto-shopping. */
@@ -858,7 +860,8 @@ export class Game {
   /** Daily rent owed this in-game day. Scales with luxury tier and the
    * admin.rentMultiplier knob. */
   getDailyRent(): number {
-    const raw = BASE_DAILY_RENT + (this.luxuryTier - 1) * RENT_PER_TIER;
+    const tier = Math.max(1, Math.min(5, this.luxuryTier));
+    const raw = RENT_BY_TIER[tier] ?? RENT_BY_TIER[1];
     return Math.max(0, Math.round(raw * this.admin.rentMultiplier));
   }
 
