@@ -2034,7 +2034,7 @@ export class GuestSpawner {
     const primaryAppliance = apps[0] ?? recipe.stationNeeded ?? "stove";
     g.ticketId = this.router.enqueueOrder(
       g.id, recipe.id, g.seatPos, this.game.getBaseCookSeconds(recipe),
-      primaryAppliance,
+      primaryAppliance, g.seatFloor,
     );
     g.state = "waitingForFood";
     g.stateClock = 0;

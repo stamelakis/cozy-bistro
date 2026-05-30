@@ -949,12 +949,12 @@ export class FurnitureRegistry {
     return out;
   }
 
-  getStoves(): { uid: string; x: number; z: number; rotY: number }[] {
-    const out: { uid: string; x: number; z: number; rotY: number }[] = [];
+  getStoves(): { uid: string; x: number; z: number; rotY: number; floor: number }[] {
+    const out: { uid: string; x: number; z: number; rotY: number; floor: number }[] = [];
     for (const it of this.items) {
       if (it.defId !== "stove" && it.defId !== "stove-electric") continue;
       if (!this.isVisibleInScene(it.model)) continue;
-      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY });
+      out.push({ uid: it.uid, x: it.x, z: it.z, rotY: it.rotY, floor: it.floor });
     }
     return out;
   }
@@ -994,13 +994,13 @@ export class FurnitureRegistry {
    * latte, etc. The defId + model fields let WorldScene pin a
    * per-variant visual effect (flame, toaster glow, coffee steam, etc.)
    * to each station model. */
-  getCookStations(): { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number }[] {
-    const out: { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number }[] = [];
+  getCookStations(): { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number; floor: number }[] {
+    const out: { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number; floor: number }[] = [];
     for (const it of this.items) {
       const def = getFurnitureDef(it.defId);
       if (!def?.provides) continue;
       if (!this.isVisibleInScene(it.model)) continue;
-      out.push({ uid: it.uid, defId: it.defId, model: it.model, provides: def.provides, x: it.x, z: it.z, rotY: it.rotY });
+      out.push({ uid: it.uid, defId: it.defId, model: it.model, provides: def.provides, x: it.x, z: it.z, rotY: it.rotY, floor: it.floor });
     }
     return out;
   }

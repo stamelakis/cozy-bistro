@@ -859,8 +859,8 @@ export class Engine {
         console.log(`[syncStaff] ${role} extra #${i} (${member.name}) spawned at (${char.groundPos.x.toFixed(2)}, ${char.groundPos.y.toFixed(2)})`);
         this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
           `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
-        if (role === "chef") this.router.addChef(char, member.id);
-        else if (role === "waiter") this.router.addWaiter(char, member.id);
+        if (role === "chef") this.router.addChef(char, member.id, member.homeFloor ?? 0);
+        else if (role === "waiter") this.router.addWaiter(char, member.id, member.homeFloor ?? 0);
         else this.errand!.addHelper(char, member.id);
       }
     }
@@ -896,8 +896,8 @@ export class Engine {
     }
     this.floatingText?.pop(char.groundPos.x, char.groundPos.y - 0.4,
       `+1 ${this.labelForRole(role)}: ${member.name}`, "#a8e2a8");
-    if (role === "chef") this.router?.addChef(char, member.id);
-    else if (role === "waiter") this.router?.addWaiter(char, member.id);
+    if (role === "chef") this.router?.addChef(char, member.id, member.homeFloor ?? 0);
+    else if (role === "waiter") this.router?.addWaiter(char, member.id, member.homeFloor ?? 0);
     else this.errand?.addHelper(char, member.id);
   }
 

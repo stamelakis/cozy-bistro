@@ -45,6 +45,12 @@ export interface Ticket {
    * from stationNeeded. claimFreeStation walks the cook-station list
    * looking for a match. */
   appliance: string;
+  /** Storey the seated guest is on. Phase 7d: chefs and waiters only
+   * claim tickets whose seat floor matches their home floor — keeps a
+   * Floor-1 chef from trying to cook for a ground-floor guest while
+   * multi-floor pathfinding is still pending. Defaults to 0 for
+   * tickets created before this field existed. */
+  seatFloor: number;
 }
 
 /** Snapshot of a dirty piece's id + world position + kind (plate vs
@@ -95,6 +101,10 @@ interface StaffActor {
    * character in the world to the trainable record in StaffSystem.
    * Multiplier callbacks key off this. */
   memberId: string;
+  /** Storey the actor is assigned to. Chefs only claim stations on
+   * this floor; waiters only deliver to seats on this floor. Defaults
+   * to 0 (ground) which matches every actor's pre-multi-storey home. */
+  homeFloor: number;
   home: THREE.Vector2; // where they return to when idle
   state: "idle" | "movingToWork" | "working" | "returningHome";
   /** What they're working on (a ticket id). */
@@ -142,6 +152,9 @@ export interface StoveInfo {
   x: number;
   z: number;
   rotY: number;
+  /** Storey the stove sits on. Phase 7d uses this so a Floor-1 chef
+   * only claims Floor-1 stoves. */
+  floor: number;
 }
 
 /** Snapshot of any cook station — stove, counter, toaster, etc.
@@ -153,6 +166,8 @@ export interface StationInfo {
   x: number;
   z: number;
   rotY: number;
+  /** Storey the station sits on. Same floor filter as StoveInfo. */
+  floor: number;
 }
 
 // Chef stays slow so the visible "shuffle to the stove" reads at the
@@ -311,11 +326,14 @@ export class StaffRouter {
   /** Reserve the first stove that isn't already in {@link busyStoveUids}.
    * Returns null when every stove is busy. Callers should defer the
    * cook (stay idle) when this returns null so a second chef doesn't
-   * walk to a stove already in use. */
-  private claimFreeStove(): StoveInfo | null {
+   * walk to a stove already in use. `homeFloor` restricts the claim
+   * to stoves on the chef's assigned storey — a Floor-1 chef won't
+   * snatch a ground-floor stove (and vice versa). */
+  private claimFreeStove(homeFloor = 0): StoveInfo | null {
     if (!this.getStoves) return null;
     const stoves = this.getStoves();
     for (const s of stoves) {
+      if (s.floor !== homeFloor) continue;
       if (!this.busyStoveUids.has(s.uid)) {
         this.busyStoveUids.add(s.uid);
         return s;
@@ -324,17 +342,18 @@ export class StaffRouter {
     return null;
   }
 
-  /** Phase C.2: reserve the first cook station whose `provides` matches
-   * the recipe's required appliance and isn't already busy. Returns
-   * null when no matching station exists or every one of them is busy
-   * (the chef stays idle and the ticket waits). Falls back to the
-   * legacy stove pool when the requested appliance is "stove" but the
-   * cook-stations callback hasn't been wired — keeps the old save-
-   * compat path alive. */
-  private claimFreeStation(appliance: string): StationInfo | null {
+  /** Phase C.2 + 7d: reserve the first cook station whose `provides`
+   * matches the recipe's required appliance, isn't already busy, AND
+   * sits on the chef's home floor. Returns null when no matching
+   * station exists or every one of them is busy (the chef stays idle
+   * and the ticket waits). Falls back to the legacy stove pool when
+   * the requested appliance is "stove" but the cook-stations callback
+   * hasn't been wired — keeps the old save-compat path alive. */
+  private claimFreeStation(appliance: string, homeFloor = 0): StationInfo | null {
     if (this.getCookStations) {
       for (const s of this.getCookStations()) {
         if (s.provides !== appliance) continue;
+        if (s.floor !== homeFloor) continue;
         if (this.busyStoveUids.has(s.uid)) continue;
         this.busyStoveUids.add(s.uid);
         return s;
@@ -343,7 +362,7 @@ export class StaffRouter {
     // Last-ditch fallback for "stove" specifically — keeps the chef
     // working when an old save only wired the stove callback.
     if (appliance === "stove") {
-      const s = this.claimFreeStove();
+      const s = this.claimFreeStove(homeFloor);
       if (s) return { ...s, provides: "stove" };
     }
     return null;
@@ -395,11 +414,12 @@ export class StaffRouter {
   }
 
   /** Append a chef to the pool. Their current ground position becomes home. */
-  addChef(char: AnimatedCharacter, memberId: string): void {
+  addChef(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.chefs.push({
       character: char,
       role: "chef",
       memberId,
+      homeFloor,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -413,11 +433,12 @@ export class StaffRouter {
     });
   }
 
-  addWaiter(char: AnimatedCharacter, memberId: string): void {
+  addWaiter(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.waiters.push({
       character: char,
       role: "waiter",
       memberId,
+      homeFloor,
       home: char.groundPos.clone(),
       state: "idle",
       ticketId: null,
@@ -460,19 +481,30 @@ export class StaffRouter {
    * the router stops trying to walk back to a now-stale Y. (X/Z stay
    * the same — only the world frame's parent changes.) */
   updateActorHomeFloor(memberId: string, fromFloor: number, toFloor: number, storeyHeight: number): void {
+    void fromFloor; void storeyHeight;
     for (const pool of [this.chefs, this.waiters]) {
       for (const a of pool) {
         if (a.memberId !== memberId) continue;
-        const dy = (toFloor - fromFloor) * storeyHeight;
-        // groundPos is XZ — Y isn't tracked here. We only need to nudge
-        // any cached path so the actor doesn't keep walking toward the
-        // old storey's pickup/work spot.
+        a.homeFloor = toFloor;
+        // Drop any active assignment so the chef doesn't continue
+        // cooking on / waiting on a station from the old floor that
+        // is no longer reachable for them under the floor filter.
+        if (a.ticketId !== null) {
+          const t = this.tickets.find((tk) => tk.id === a.ticketId);
+          if (t) {
+            if (t.state === "cooking") t.state = "queued";
+            else if (t.state === "delivering") t.state = "ready";
+          }
+          a.ticketId = null;
+        }
+        if (a.assignedStoveUid) {
+          this.busyStoveUids.delete(a.assignedStoveUid);
+          a.assignedStoveUid = null;
+        }
+        a.state = "idle";
         a.path = [];
         a.replanAccum = 0;
         a.target.copy(a.character.groundPos);
-        // Surface API for future floor-aware routing; signature lives
-        // here so phase 7d can branch on a.character.root.position.y.
-        void dy;
       }
     }
   }
@@ -567,11 +599,12 @@ export class StaffRouter {
   enqueueOrder(
     guestId: string, recipeId: string, seatPos: THREE.Vector2, cookSeconds: number,
     appliance: string = "stove",
+    seatFloor: number = 0,
   ): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     this.tickets.push({
       id, guestId, recipeId, state: "queued",
-      seatPos: seatPos.clone(), clock: 0, cookSeconds, appliance,
+      seatPos: seatPos.clone(), clock: 0, cookSeconds, appliance, seatFloor,
     });
     console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
     return id;
@@ -641,7 +674,13 @@ export class StaffRouter {
 
     switch (c.state) {
       case "idle": {
-        const ticket = this.tickets.find((t) => t.state === "queued");
+        // Phase 7d: a chef only cooks for tickets where the guest sits
+        // on this chef's home floor. Until multi-floor pathfinding
+        // ships, cooking for a guest on a different storey would mean
+        // the chef teleports through walls / floors to the stove and
+        // back; cleaner to let an idle chef on the right floor pick it
+        // up, or leave the ticket queued until one is hired.
+        const ticket = this.tickets.find((t) => t.state === "queued" && t.seatFloor === c.homeFloor);
         if (!ticket) break;
         // Pick a station that provides the recipe's required appliance.
         // The chef defers (stays idle) when no matching station is free,
@@ -650,7 +689,7 @@ export class StaffRouter {
         // tickets without an appliance default to "stove" — keeps old
         // saves alive while we migrate.
         const needed = ticket.appliance || "stove";
-        const station = this.claimFreeStation(needed);
+        const station = this.claimFreeStation(needed, c.homeFloor);
         let target: THREE.Vector2;
         if (station) {
           c.assignedStoveUid = station.uid;
@@ -751,8 +790,10 @@ export class StaffRouter {
       case "idle": {
         // Priority 1: deliver a ready ticket. Plates that are already
         // cooked and waiting on the pass take precedence over wash
-        // work — keep customers fed first.
-        const ticket = this.tickets.find((t) => t.state === "ready");
+        // work — keep customers fed first. Phase 7d: this waiter only
+        // serves seats on their home floor (multi-floor pathfinding is
+        // still pending, so a Floor-1 waiter can't navigate stairs).
+        const ticket = this.tickets.find((t) => t.state === "ready" && t.seatFloor === w.homeFloor);
         if (ticket) {
           ticket.state = "delivering";
           ticket.clock = 0;
