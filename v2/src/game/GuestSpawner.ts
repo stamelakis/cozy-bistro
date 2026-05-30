@@ -12,7 +12,7 @@ import type { DishKind } from "../data/dishwareCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, rollArchetype } from "../data/customerArchetypes";
-import type { Pathfinding, PathStep } from "./Pathfinding";
+import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
 /** A dirty plate or glass left on a table by a departed customer. The
@@ -290,8 +290,20 @@ interface ActiveGuest {
    * floor, a food-only guest prefers a non-drink-only floor. */
   wantsDrinks: "drink" | "food" | "any";
   /** Remaining waypoints from the most recent pathfind. Re-planned each
-   * time the guest's target changes. */
-  path: PathStep[];
+   * time the guest's target changes. Each step carries its floor so
+   * the mover can drive the smooth Y ride across stair transitions
+   * (`fromStair: true` flags the step where the actor lands on the
+   * new floor after walking the stair). */
+  path: MultiFloorPathStep[];
+  /** Storey the guest's body is currently rendered on. Starts at 0
+   * (they spawn outside, walk through the ground-floor door), updates
+   * to wp.floor whenever the mover consumes a `fromStair`-flagged
+   * waypoint. Used to anchor the character's Y when not actively
+   * crossing a stair span. */
+  currentFloor: number;
+  /** Last waypoint the mover consumed — needed when interpolating the
+   * Y across a stair segment so we know where the climb started. */
+  prevWaypoint?: MultiFloorPathStep;
   /** Seconds since the last replan. moveToward refreshes the path every
    * ~0.8s while moving so an obstacle placed mid-walk (a fresh wall,
    * table, etc.) gets routed around within a second instead of being
@@ -564,14 +576,51 @@ export class GuestSpawner {
   }
 
   /** Plan a guest's walking path from current pos to current target.
+   * Uses the multi-floor pathfinder so a Floor 1 seat triggers a route
+   * down the building → up the staircase → across the upper slab. The
+   * target floor is the guest's seatFloor for state transitions that
+   * move them toward their seat (walkingIn, returningFromToilet, etc).
+   * For exit / bathroom trips the target stays on the guest's current
+   * floor — we don't drag them across stairs to leave through a
+   * ground-floor door yet (Phase 8d MVP: guests come back DOWN the
+   * stair when leaving, but that path is planned naturally from
+   * currentFloor → 0 when their state targets the door).
+   *
    * Falls back to a direct waypoint when no pathfinder is wired. */
   private planPath(g: ActiveGuest): void {
-    if (!this.pathfind) { g.path = [g.target.clone()]; return; }
-    g.path = this.pathfind.findPath(
-      g.character.groundPos.x, g.character.groundPos.y,
-      g.target.x, g.target.y,
+    if (!this.pathfind) {
+      g.path = [{ x: g.target.x, z: g.target.y, floor: g.currentFloor }];
+      return;
+    }
+    const targetFloor = this.pickPathTargetFloor(g);
+    g.path = this.pathfind.findMultiFloorPath(
+      { x: g.character.groundPos.x, z: g.character.groundPos.y, floor: g.currentFloor },
+      { x: g.target.x, z: g.target.y, floor: targetFloor },
     );
-    if (g.path.length === 0) g.path = [g.target.clone()];
+    if (g.path.length === 0) {
+      g.path = [{ x: g.target.x, z: g.target.y, floor: targetFloor }];
+    }
+  }
+
+  /** Decide which storey the guest's `target` lives on. Walk-in /
+   * return-from-toilet paths aim at the guest's seat, which carries
+   * its own floor (seatFloor). Door / exit / bathroom side-trips stay
+   * on the guest's currentFloor — those targets are floor-agnostic
+   * positions (the door is always on floor 0, but if the guest is on
+   * a higher floor heading home the chain naturally crosses back
+   * down through the seat-floor → 0 pathfinding). */
+  private pickPathTargetFloor(g: ActiveGuest): number {
+    switch (g.state) {
+      case "walkingIn":
+      case "returningFromToilet":
+        return g.seatFloor;
+      case "walkingToDoor":
+      case "walkingOut":
+      case "exitingDoor":
+        return 0;
+      default:
+        return g.currentFloor;
+    }
   }
 
   /** Per-frame tick. Spawns guests, advances their state machines, moves
@@ -1245,6 +1294,7 @@ export class GuestSpawner {
         archetype,
         wantsDrinks: seatPref,
         path: [],
+        currentFloor: 0,
         replanAccum: 0,
         willUseToilet: false,           // assigned just below
         willWashOnly: false,             // assigned just below
@@ -1509,17 +1559,12 @@ export class GuestSpawner {
             g.character.action = "sit";
             g.state = "seated";
             g.stateClock = 0;
-            // Multi-storey: lift the guest onto their seat's slab so
-            // an upper-floor seat shows them on the right floor. The
-            // CharacterAnimator caches _baseY off root.position.y, so
-            // updating it before the next animator tick makes the
-            // sit / idle pose stick at the right height. Stair-walking
-            // pathfinding (P8c) replaces this snap with a smooth Y
-            // ride up the staircase.
-            if (g.seatFloor > 0) {
-              g.character.root.position.y = g.seatFloor * 3;
-              g.character._baseY = g.character.root.position.y;
-            }
+            // Stair walk (P8d) has already brought the guest up to the
+            // right slab via moveToward's smooth Y interpolation; just
+            // make sure currentFloor reflects the seat's storey in case
+            // the path's last fromStair waypoint was already consumed
+            // by an earlier tick.
+            g.currentFloor = g.seatFloor;
           }
         }
         break;
@@ -1871,18 +1916,52 @@ export class GuestSpawner {
       g.replanAccum = 0;
       this.planPath(g);
     }
-    // Consume waypoints we're already within range of.
-    while (g.path.length > 0 && Math.hypot(g.path[0].x - pos.x, g.path[0].y - pos.y) < PATH_ARRIVAL_THRESHOLD) {
-      g.path.shift();
+    // Consume waypoints we're already within range of. When a consumed
+    // step is fromStair-flagged, the guest has just landed on the upper
+    // (or lower) floor — promote currentFloor so the next walk leg
+    // anchors the body's Y to the new slab.
+    const STOREY = 3;
+    while (g.path.length > 0 && Math.hypot(g.path[0].x - pos.x, g.path[0].z - pos.y) < PATH_ARRIVAL_THRESHOLD) {
+      const consumed = g.path.shift()!;
+      g.prevWaypoint = consumed;
+      if (consumed.fromStair) {
+        g.currentFloor = consumed.floor;
+        // _baseY caches the feet-lift offset; the stair Y interpolation
+        // below stops setting position.y once we leave the stair span,
+        // so anchor it explicitly at the new slab here too.
+        g.character.root.position.y = consumed.floor * STOREY + (g.character._baseY ?? 0);
+      }
     }
-    const wp = g.path[0] ?? g.target;
+    const wp = g.path[0] ?? { x: g.target.x, z: g.target.y, floor: g.currentFloor };
     const dx = wp.x - pos.x;
-    const dz = wp.y - pos.y;
+    const dz = wp.z - pos.y;
     const dist = Math.hypot(dx, dz);
-    if (dist < 0.001) return;
+    if (dist < 0.001) {
+      // Even at-rest, keep the Y locked to the current floor's slab so
+      // a guest who sat down doesn't drift off of it.
+      g.character.root.position.y = g.currentFloor * STOREY + (g.character._baseY ?? 0);
+      return;
+    }
     const step = Math.min(dist, WALK_SPEED * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
+    // Stair walk — interpolate Y between the previous waypoint's floor
+    // and this waypoint's floor as the guest traverses the stair span
+    // (X stays at the stair's column, Z runs from the bottom endpoint
+    // to the top endpoint). Without this the guest would teleport their
+    // Y when the fromStair step gets consumed.
+    if (wp.fromStair && g.prevWaypoint) {
+      const segStartX = g.prevWaypoint.x;
+      const segStartZ = g.prevWaypoint.z;
+      const segLen = Math.hypot(wp.x - segStartX, wp.z - segStartZ);
+      const trav = Math.hypot(pos.x - segStartX, pos.y - segStartZ);
+      const t = segLen > 0.01 ? Math.max(0, Math.min(1, trav / segLen)) : 0;
+      const startY = g.prevWaypoint.floor * STOREY + (g.character._baseY ?? 0);
+      const endY   = wp.floor * STOREY + (g.character._baseY ?? 0);
+      g.character.root.position.y = startY + (endY - startY) * t;
+    } else {
+      g.character.root.position.y = g.currentFloor * STOREY + (g.character._baseY ?? 0);
+    }
     // GLB forward = -Z (three.js standard) → atan2(-dx, -dz). See
     // StaffRouter.moveActor for the derivation.
     g.character.facingY = Math.atan2(-dx, -dz);
