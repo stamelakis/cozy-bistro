@@ -10,98 +10,95 @@ import * as THREE from "three";
  * accent. All lifted to wall-mount height (y ≈ 1.5).
  */
 
-const WALL_HEIGHT = 1.5; // y offset so it floats at chest height
-
-/** Tiny stand at the base so the decoration doesn't appear to hover
- * when placed in open space. */
-function makeBaseStand(width: number): THREE.Mesh {
-  const m = new THREE.Mesh(
-    new THREE.BoxGeometry(width, 0.04, 0.08),
-    new THREE.MeshStandardMaterial({ color: 0x2a201a, roughness: 0.8 }),
-  );
-  m.position.y = 0.02;
-  m.castShadow = true;
-  return m;
-}
+// Wall items used to author their meshes at local y = 1.5 to "float at
+// chest height" assuming the model anchor stayed at the floor — but the
+// placement path independently sets model.position.y = placementY('wall')
+// = 1.5, so the offsets compounded and the frame sat at world y = 3 (the
+// wall top). Authors are now at local y ≈ 0 so the single chest-height
+// offset comes from placementY, not from inside the builder.
+//
+// makeBaseStand removed: these defs are placement: "wall" only, so the
+// floor-level stand was both invisible (covered by the wall mount) and,
+// for wall placement, ended up floating at chest height as a stray
+// dark slab.
 
 /** A framed picture — dark wood frame around a colored canvas. */
 function framedArt(canvasColor: number, label = ""): THREE.Group {
   void label; // reserved for future label-painting via canvas texture
   const g = new THREE.Group();
   const w = 0.7, h = 0.5;
-  // Frame
+  // Frame — centred at local y=0 so placementY=1.5 lands the centre at
+  // world chest height.
   const frame = new THREE.Mesh(
     new THREE.BoxGeometry(w + 0.08, h + 0.08, 0.06),
     new THREE.MeshStandardMaterial({ color: 0x3a2418, roughness: 0.7 }),
   );
-  frame.position.y = WALL_HEIGHT;
   frame.castShadow = true;
   frame.receiveShadow = true;
   g.add(frame);
-  // Canvas (the colored bit)
+  // Canvas (the colored bit), inset 4 cm in front of the frame.
   const canvas = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, 0.02),
     new THREE.MeshStandardMaterial({ color: canvasColor, roughness: 0.5, emissive: canvasColor, emissiveIntensity: 0.15 }),
   );
-  canvas.position.set(0, WALL_HEIGHT, 0.04);
+  canvas.position.set(0, 0, 0.04);
   g.add(canvas);
-  g.add(makeBaseStand(w + 0.1));
   return g;
 }
 
 /** A chalk-board specials sign. */
 function menuBoard(): THREE.Group {
   const g = new THREE.Group();
-  // Frame
+  // Slightly dipped (−0.1) so the board reads as hung a touch below
+  // chest height — feels more natural for a menu you read at eye level
+  // from a counter than a frame painting at exact chest.
+  const yOff = -0.1;
   const frame = new THREE.Mesh(
     new THREE.BoxGeometry(0.9, 1.1, 0.06),
     new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.75 }),
   );
-  frame.position.y = WALL_HEIGHT - 0.1;
+  frame.position.y = yOff;
   frame.castShadow = true;
   g.add(frame);
-  // Chalkboard interior
   const board = new THREE.Mesh(
     new THREE.BoxGeometry(0.78, 0.98, 0.02),
     new THREE.MeshStandardMaterial({ color: 0x1d2820, roughness: 0.9 }),
   );
-  board.position.set(0, WALL_HEIGHT - 0.1, 0.04);
+  board.position.set(0, yOff, 0.04);
   g.add(board);
-  // A few thin "chalk line" highlights so it reads as a menu, not a void.
   const lineMat = new THREE.MeshStandardMaterial({ color: 0xf2ead8, emissive: 0xf2ead8, emissiveIntensity: 0.4 });
   for (let i = 0; i < 5; i += 1) {
     const len = 0.4 + Math.random() * 0.25;
     const line = new THREE.Mesh(new THREE.BoxGeometry(len, 0.025, 0.005), lineMat);
-    line.position.set(-0.1, WALL_HEIGHT - 0.1 + 0.35 - i * 0.16, 0.06);
+    line.position.set(-0.1, yOff + 0.35 - i * 0.16, 0.06);
     g.add(line);
   }
-  g.add(makeBaseStand(1.0));
   return g;
 }
 
 /** A neon "OPEN" sign. */
 function neonSign(): THREE.Group {
   const g = new THREE.Group();
+  // Lifted (+0.1) above chest so the neon reads as "above the door /
+  // above eye-level" rather than dead-centre on the wall.
+  const yOff = 0.1;
   const tube = new THREE.Mesh(
     new THREE.BoxGeometry(0.6, 0.25, 0.05),
     new THREE.MeshStandardMaterial({
       color: 0xff3a8a, emissive: 0xff3a8a, emissiveIntensity: 1.8, roughness: 0.3,
     }),
   );
-  tube.position.y = WALL_HEIGHT + 0.1;
+  tube.position.y = yOff;
   g.add(tube);
-  // A subtle backboard
   const back = new THREE.Mesh(
     new THREE.BoxGeometry(0.7, 0.35, 0.03),
     new THREE.MeshStandardMaterial({ color: 0x111418, roughness: 0.8 }),
   );
-  back.position.set(0, WALL_HEIGHT + 0.1, -0.02);
+  back.position.set(0, yOff, -0.02);
   g.add(back);
-  // Pinkish glow
   const light = new THREE.PointLight(0xff3a8a, 0.6, 3, 2);
-  light.position.set(0, WALL_HEIGHT + 0.1, 0.15);
+  light.position.set(0, yOff, 0.15);
   g.add(light);
-  g.add(makeBaseStand(0.7));
   return g;
 }
 
