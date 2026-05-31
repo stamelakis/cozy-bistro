@@ -6,8 +6,11 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminBanPlayerReducer from "../admin_ban_player_reducer";
+import AdminDeleteRestaurantReducer from "../admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "../admin_release_building_reducer";
 import AdminResetPasswordReducer from "../admin_reset_password_reducer";
+import AdminUnbanPlayerReducer from "../admin_unban_player_reducer";
 import BootstrapCityReducer from "../bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "../bootstrap_pedestrian_schedule_reducer";
 import ClaimBuildingReducer from "../claim_building_reducer";
@@ -31,8 +34,11 @@ import SubmitLeaderboardReducer from "../submit_leaderboard_reducer";
 import UnfriendReducer from "../unfriend_reducer";
 import UnlockAchievementReducer from "../unlock_achievement_reducer";
 
+export type AdminBanPlayerParams = __Infer<typeof AdminBanPlayerReducer>;
+export type AdminDeleteRestaurantParams = __Infer<typeof AdminDeleteRestaurantReducer>;
 export type AdminReleaseBuildingParams = __Infer<typeof AdminReleaseBuildingReducer>;
 export type AdminResetPasswordParams = __Infer<typeof AdminResetPasswordReducer>;
+export type AdminUnbanPlayerParams = __Infer<typeof AdminUnbanPlayerReducer>;
 export type BootstrapCityParams = __Infer<typeof BootstrapCityReducer>;
 export type BootstrapPedestrianScheduleParams = __Infer<typeof BootstrapPedestrianScheduleReducer>;
 export type ClaimBuildingParams = __Infer<typeof ClaimBuildingReducer>;

@@ -330,6 +330,83 @@ export class SpacetimeClient {
       this.conn!.reducers.requestPasswordReset({ username, message }));
   }
 
+  // ============================================================================
+  //                          P7 — ADMIN ACTIONS
+  // ============================================================================
+
+  /** Admin-only — list all pending password-reset requests. Returns
+   * empty if there are none or the caller isn't connected. The UI
+   * filters server-side enforcement is the actual gate (reducer
+   * rejects non-admin callers); this helper just reads the public
+   * table. */
+  listResetRequests(): { id: bigint; username: string; message: string; status: string; createdAtMs: number }[] {
+    if (!this.conn) return [];
+    const out: { id: bigint; username: string; message: string; status: string; createdAtMs: number }[] = [];
+    try {
+      for (const r of this.conn.db.password_reset_request.iter()) {
+        out.push({
+          id: r.id,
+          username: r.username,
+          message: r.message,
+          status: r.status,
+          createdAtMs: Number((r.createdAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
+        });
+      }
+    } catch { /* table not wired */ }
+    return out;
+  }
+
+  /** Admin-only — set a new password for the target account and mark
+   * the reset request resolved (pass requestId=0n for ad-hoc resets
+   * not tied to a ticket). */
+  adminResetPassword(targetUsername: string, newPassword: string, requestId: bigint = 0n): Promise<void> {
+    return this.callReducer("adminResetPassword", () =>
+      this.conn!.reducers.adminResetPassword({ targetUsername, newPassword, requestId }));
+  }
+
+  /** Every account currently banned. Reads the ban_record table. */
+  listBans(): { username: string; reason: string; bannedAtMs: number }[] {
+    if (!this.conn) return [];
+    const out: { username: string; reason: string; bannedAtMs: number }[] = [];
+    try {
+      for (const b of this.conn.db.ban_record.iter()) {
+        out.push({
+          username: b.username,
+          reason: b.reason,
+          bannedAtMs: Number((b.bannedAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
+        });
+      }
+    } catch { /* not wired */ }
+    return out;
+  }
+
+  /** True iff there's a ban_record row for the given username. */
+  isBanned(username: string): boolean {
+    if (!this.conn) return false;
+    const lc = username.trim().toLowerCase();
+    try {
+      return this.conn.db.ban_record.username.find(lc) !== undefined;
+    } catch { return false; }
+  }
+
+  /** Admin-only — ban a player by username, releasing their building. */
+  adminBanPlayer(targetUsername: string, reason: string): Promise<void> {
+    return this.callReducer("adminBanPlayer", () =>
+      this.conn!.reducers.adminBanPlayer({ targetUsername, reason }));
+  }
+
+  /** Admin-only — lift a ban (auth_record + save data untouched). */
+  adminUnbanPlayer(targetUsername: string): Promise<void> {
+    return this.callReducer("adminUnbanPlayer", () =>
+      this.conn!.reducers.adminUnbanPlayer({ targetUsername }));
+  }
+
+  /** Admin-only — wipe a player's save + release their building. */
+  adminDeleteRestaurant(targetUsername: string): Promise<void> {
+    return this.callReducer("adminDeleteRestaurant", () =>
+      this.conn!.reducers.adminDeleteRestaurant({ targetUsername }));
+  }
+
   /** Wait for one reducer call to apply OR fail. SpacetimeDB
    * reducers fire-and-forget; we wire transient onSuccess /
    * onError listeners to convert that into a Promise the modal
@@ -480,6 +557,16 @@ export class SpacetimeClient {
       ctx.db.auth_record.onInsert(ping);
       ctx.db.auth_record.onUpdate(ping);
       ctx.db.auth_record.onDelete(ping);
+      // P7 admin panel — ban_record + password_reset_request feed the
+      // admin's "pending tickets" and "banned players" lists. Without
+      // these listeners those sections wouldn't refresh after the
+      // admin issues a ban / unban / reset.
+      ctx.db.ban_record.onInsert(ping);
+      ctx.db.ban_record.onUpdate(ping);
+      ctx.db.ban_record.onDelete(ping);
+      ctx.db.password_reset_request.onInsert(ping);
+      ctx.db.password_reset_request.onUpdate(ping);
+      ctx.db.password_reset_request.onDelete(ping);
       // P2+ — building rows feed BuildingPickModal's live refresh
       // and Engine.refreshCityBuildings.
       ctx.db.building.onInsert(ping);

@@ -2,6 +2,7 @@ import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { STAFF_UPGRADE_MAX } from "../systems/StaffSystem";
 import type { SfxPlayer } from "./SfxPlayer";
+import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 
 /** Every appliance loop the SfxPlayer can drive, plus a couple of
  * one-shots, exposed in the admin "Audio test" section so the dev can
@@ -123,8 +124,18 @@ const MONEY_DELTAS = [100, 1000, 10000, 100000] as const;
 export class AdminModal {
   private readonly game: Game;
   private readonly sfx: SfxPlayer;
+  private readonly cloud: SpacetimeClient | null;
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
+  /** Cloud-admin sections live here so we can re-render the lists
+   * (pending reset tickets, banned players) without rebuilding the
+   * rest of the modal each time the server state changes. Null until
+   * the cloud is wired AND the current account is admin. */
+  private cloudAdminBody: HTMLElement | null = null;
+  /** Unsubscribe from the cloud's state-change pings. Set when we
+   * subscribe in show() and cleared in hide() so the listener
+   * doesn't run when nobody's looking. */
+  private cloudUnsub: (() => void) | null = null;
 
   // === Section refs the show() refresh path reads back ===
   private readonly controls: { input: HTMLInputElement; valueEl: HTMLElement; key: string }[] = [];
@@ -140,9 +151,10 @@ export class AdminModal {
    * off when the modal closes so a hidden loop doesn't keep playing. */
   private audioTestActive = new Set<string>();
 
-  constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer) {
+  constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer, cloud: SpacetimeClient | null = null) {
     this.game = game;
     this.sfx = sfx;
+    this.cloud = cloud;
     // Audio-test CSS animations (shimmer / progress bar) are static —
     // one stylesheet shared across all AdminModal lifetimes.
     ensureAudioTestStyles();
@@ -234,6 +246,15 @@ export class AdminModal {
 
     // === Upgrades (recipes + staff) ===
     body.appendChild(this.buildUpgradesSection());
+
+    // === Cloud admin (visible only when the account is admin) ===
+    // The container is always present so we can swap content in /
+    // out without rebuilding the modal; renderCloudAdmin() decides
+    // whether to populate it based on getCurrentAccount().isAdmin.
+    if (this.cloud) {
+      this.cloudAdminBody = document.createElement("div");
+      body.appendChild(this.cloudAdminBody);
+    }
   }
 
   // ============================================================
@@ -691,6 +712,228 @@ export class AdminModal {
   }
 
   // ============================================================
+  //                       CLOUD ADMIN (Dunnin-only)
+  // ============================================================
+
+  /** Repopulate the cloud-admin container — pending reset tickets,
+   * banned-players list, and a player-action panel for ban / delete-
+   * restaurant. Re-runs whenever the cloud's state changes (new
+   * ticket, account banned, etc.) so the lists stay live without
+   * the admin needing to close + reopen the modal.
+   *
+   * Bails silently when the cloud isn't connected or the current
+   * account isn't admin — the container stays empty and invisible. */
+  private renderCloudAdmin(): void {
+    if (!this.cloudAdminBody || !this.cloud) return;
+    this.cloudAdminBody.innerHTML = "";
+    const account = this.cloud.getCurrentAccount();
+    if (!account || !account.isAdmin) return;
+    this.cloudAdminBody.appendChild(this.buildResetRequestsSection());
+    this.cloudAdminBody.appendChild(this.buildBansSection());
+    this.cloudAdminBody.appendChild(this.buildPlayerActionsSection());
+  }
+
+  private buildResetRequestsSection(): HTMLElement {
+    const section = this.sectionShell("📨 PASSWORD RESET REQUESTS");
+    if (!this.cloud) return section;
+    const pending = this.cloud.listResetRequests().filter((r) => r.status === "pending");
+    if (pending.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No pending requests.";
+      Object.assign(empty.style, {
+        opacity: "0.55", fontSize: "11px", padding: "4px 0",
+      } as Partial<CSSStyleDeclaration>);
+      section.appendChild(empty);
+      return section;
+    }
+    // Sort newest first so the freshest ask is at the top.
+    pending.sort((a, b) => b.createdAtMs - a.createdAtMs);
+    for (const req of pending) {
+      section.appendChild(this.buildResetRequestRow(req));
+    }
+    return section;
+  }
+
+  private buildResetRequestRow(req: { id: bigint; username: string; message: string; createdAtMs: number }): HTMLElement {
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", flexDirection: "column", gap: "4px",
+      padding: "6px 8px",
+      background: "rgba(255,245,220,0.06)",
+      border: "1px solid rgba(255,245,220,0.18)",
+      borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const head = document.createElement("div");
+    Object.assign(head.style, {
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      gap: "8px",
+    } as Partial<CSSStyleDeclaration>);
+    const name = document.createElement("span");
+    name.textContent = `@${req.username}`;
+    Object.assign(name.style, {
+      fontSize: "12px", fontWeight: "700", color: "#ffd986",
+    } as Partial<CSSStyleDeclaration>);
+    head.appendChild(name);
+    const when = document.createElement("span");
+    when.textContent = formatRelative(req.createdAtMs);
+    Object.assign(when.style, { fontSize: "10px", opacity: "0.55" } as Partial<CSSStyleDeclaration>);
+    head.appendChild(when);
+    row.appendChild(head);
+    const msg = document.createElement("div");
+    msg.textContent = req.message || "(no message)";
+    Object.assign(msg.style, {
+      fontSize: "11px", opacity: "0.85",
+      whiteSpace: "pre-wrap", wordBreak: "break-word",
+    } as Partial<CSSStyleDeclaration>);
+    row.appendChild(msg);
+    const actions = document.createElement("div");
+    Object.assign(actions.style, {
+      display: "grid", gridTemplateColumns: "1fr 70px", gap: "4px",
+      marginTop: "2px",
+    } as Partial<CSSStyleDeclaration>);
+    const newPwInput = document.createElement("input");
+    newPwInput.type = "text";
+    newPwInput.placeholder = "Temporary password (6+ chars)";
+    Object.assign(newPwInput.style, {
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.22)",
+      borderRadius: "3px",
+      padding: "4px 6px", font: "inherit", fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    actions.appendChild(newPwInput);
+    const resolveBtn = this.actionButton("Reset", "good", async () => {
+      const pw = newPwInput.value;
+      if (pw.length < 6) {
+        flashMsg(row, "Password must be 6+ chars", "error");
+        return;
+      }
+      try {
+        await this.cloud!.adminResetPassword(req.username, pw, req.id);
+        flashMsg(row, `Reset OK — tell @${req.username}: ${pw}`, "good");
+      } catch (e) {
+        flashMsg(row, errorString(e), "error");
+      }
+    });
+    actions.appendChild(resolveBtn);
+    row.appendChild(actions);
+    return row;
+  }
+
+  private buildBansSection(): HTMLElement {
+    const section = this.sectionShell("🚫 BANNED PLAYERS");
+    if (!this.cloud) return section;
+    const bans = this.cloud.listBans();
+    if (bans.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No banned accounts.";
+      Object.assign(empty.style, {
+        opacity: "0.55", fontSize: "11px", padding: "4px 0",
+      } as Partial<CSSStyleDeclaration>);
+      section.appendChild(empty);
+      return section;
+    }
+    bans.sort((a, b) => b.bannedAtMs - a.bannedAtMs);
+    for (const b of bans) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "grid", gridTemplateColumns: "1fr 64px",
+        gap: "6px", alignItems: "center",
+        padding: "5px 8px",
+        background: "rgba(200,120,120,0.08)",
+        border: "1px solid rgba(200,120,120,0.30)",
+        borderRadius: "4px",
+      } as Partial<CSSStyleDeclaration>);
+      const info = document.createElement("div");
+      const reasonText = b.reason ? ` — ${b.reason}` : "";
+      info.innerHTML = `<b style="color:#ffd986">@${escapeHtml(b.username)}</b>` +
+        `<span style="opacity:0.75; font-size:11px">${escapeHtml(reasonText)}</span>`;
+      row.appendChild(info);
+      const unbanBtn = this.actionButton("Unban", "neutral", async () => {
+        try {
+          await this.cloud!.adminUnbanPlayer(b.username);
+        } catch (e) {
+          flashMsg(row, errorString(e), "error");
+        }
+      });
+      row.appendChild(unbanBtn);
+      section.appendChild(row);
+    }
+    return section;
+  }
+
+  private buildPlayerActionsSection(): HTMLElement {
+    const section = this.sectionShell("🛠 PLAYER ACTIONS");
+    const desc = document.createElement("div");
+    desc.textContent = "Enter a username. Ban locks them out and frees their plot. Delete restaurant wipes their save + frees their plot, but lets them log back in.";
+    Object.assign(desc.style, {
+      fontSize: "10px", opacity: "0.65", marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(desc);
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid", gridTemplateColumns: "1fr", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const userInput = document.createElement("input");
+    userInput.type = "text";
+    userInput.placeholder = "Username (e.g. alice)";
+    Object.assign(userInput.style, {
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.22)",
+      borderRadius: "3px",
+      padding: "5px 8px", font: "inherit", fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    grid.appendChild(userInput);
+    const reasonInput = document.createElement("input");
+    reasonInput.type = "text";
+    reasonInput.placeholder = "Ban reason (optional — shown to the player)";
+    Object.assign(reasonInput.style, {
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.22)",
+      borderRadius: "3px",
+      padding: "5px 8px", font: "inherit", fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    grid.appendChild(reasonInput);
+    const buttonRow = document.createElement("div");
+    Object.assign(buttonRow.style, {
+      display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const banBtn = this.actionButton("🚫 Ban player", "danger", async () => {
+      const u = userInput.value.trim();
+      if (!u) { flashMsg(section, "Enter a username", "error"); return; }
+      // Belt-and-braces confirm so a stray click doesn't nuke
+      // an active player — server enforces the same gate.
+      if (!window.confirm(`Ban @${u}? This frees their plot and prevents login.`)) return;
+      try {
+        await this.cloud!.adminBanPlayer(u, reasonInput.value);
+        userInput.value = ""; reasonInput.value = "";
+        flashMsg(section, `Banned @${u}`, "good");
+      } catch (e) {
+        flashMsg(section, errorString(e), "error");
+      }
+    });
+    buttonRow.appendChild(banBtn);
+    const deleteBtn = this.actionButton("🗑 Delete restaurant", "danger", async () => {
+      const u = userInput.value.trim();
+      if (!u) { flashMsg(section, "Enter a username", "error"); return; }
+      if (!window.confirm(`Wipe @${u}'s restaurant save and free their plot? They can log in again and pick a new plot.`)) return;
+      try {
+        await this.cloud!.adminDeleteRestaurant(u);
+        userInput.value = ""; reasonInput.value = "";
+        flashMsg(section, `Wiped @${u}'s restaurant`, "good");
+      } catch (e) {
+        flashMsg(section, errorString(e), "error");
+      }
+    });
+    buttonRow.appendChild(deleteBtn);
+    grid.appendChild(buttonRow);
+    section.appendChild(grid);
+    return section;
+  }
+
+  // ============================================================
   //                       UI helpers
   // ============================================================
 
@@ -794,6 +1037,17 @@ export class AdminModal {
     this.refreshControls();
     this.refreshStats();
     this.renderUpgradesPanel();
+    this.renderCloudAdmin();
+    // Live-refresh the cloud admin panel when reset tickets / bans
+    // mutate so a freshly resolved ticket disappears without the
+    // admin having to close and reopen the modal.
+    if (this.cloud && !this.cloudUnsub) {
+      this.cloudUnsub = this.cloud.subscribe(() => {
+        // Cheap: only the cloud-admin container repaints; the rest
+        // of the modal is static between shows.
+        this.renderCloudAdmin();
+      });
+    }
     this.root.style.display = "flex";
   }
   hide(): void {
@@ -806,6 +1060,65 @@ export class AdminModal {
       this.refreshAudioLoopBtn(id, false);
     }
     this.audioTestActive.clear();
+    // Release the cloud subscription so we're not re-rendering an
+    // invisible panel every time something changes on the server.
+    if (this.cloudUnsub) { this.cloudUnsub(); this.cloudUnsub = null; }
     this.root.style.display = "none";
   }
+}
+
+// ============================================================
+//                       MODULE HELPERS
+// ============================================================
+
+/** Render a short relative-time label ("2 min ago", "1 h ago"). */
+function formatRelative(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} min ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} h ago`;
+  return `${Math.floor(diff / 86_400_000)} d ago`;
+}
+
+/** Pop an inline message INSIDE a section / row that auto-fades.
+ * Used for ban / reset / delete confirmations + errors so the admin
+ * gets feedback in-context without a separate toast system. */
+function flashMsg(parent: HTMLElement, text: string, kind: "good" | "error"): void {
+  // Remove a prior message so they don't stack on a rapid-fire click.
+  const prior = parent.querySelector(".admin-flash");
+  if (prior) prior.remove();
+  const el = document.createElement("div");
+  el.className = "admin-flash";
+  el.textContent = text;
+  const palette = kind === "good"
+    ? { bg: "rgba(120, 200, 120, 0.20)", color: "rgba(200, 250, 200, 0.95)" }
+    : { bg: "rgba(200, 120, 120, 0.20)", color: "rgba(255, 200, 200, 0.95)" };
+  Object.assign(el.style, {
+    marginTop: "4px",
+    padding: "4px 6px",
+    background: palette.bg,
+    color: palette.color,
+    border: `1px solid ${palette.color}`,
+    borderRadius: "3px",
+    fontSize: "11px",
+    fontWeight: "600",
+    wordBreak: "break-word",
+  } as Partial<CSSStyleDeclaration>);
+  parent.appendChild(el);
+  window.setTimeout(() => {
+    try { el.remove(); } catch { /* already gone */ }
+  }, 4500);
+}
+
+function errorString(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Action failed";
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#39;",
+  } as Record<string, string>)[c] ?? c);
 }

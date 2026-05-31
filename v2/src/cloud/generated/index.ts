@@ -34,8 +34,11 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AdminBanPlayerReducer from "./admin_ban_player_reducer";
+import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
@@ -64,6 +67,7 @@ import UnlockAchievementReducer from "./unlock_achievement_reducer";
 // Import all table schema definitions
 import AchievementUnlockRow from "./achievement_unlock_table";
 import AuthRecordRow from "./auth_record_table";
+import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
 import CoOwnerRow from "./co_owner_table";
 import FriendRequestRow from "./friend_request_table";
@@ -109,6 +113,17 @@ const tablesSchema = __schema({
       { name: 'auth_record_username_key', constraint: 'unique', columns: ['username'] },
     ],
   }, AuthRecordRow),
+  ban_record: __table({
+    name: 'ban_record',
+    indexes: [
+      { accessor: 'username', name: 'ban_record_username_idx_btree', algorithm: 'btree', columns: [
+        'username',
+      ] },
+    ],
+    constraints: [
+      { name: 'ban_record_username_key', constraint: 'unique', columns: ['username'] },
+    ],
+  }, BanRecordRow),
   building: __table({
     name: 'building',
     indexes: [
@@ -284,8 +299,11 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
+  __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),

@@ -28,6 +28,14 @@ export const AuthRecord = __t.object("AuthRecord", {
 });
 export type AuthRecord = __Infer<typeof AuthRecord>;
 
+export const BanRecord = __t.object("BanRecord", {
+  username: __t.string(),
+  reason: __t.string(),
+  bannedAt: __t.timestamp(),
+  bannedBy: __t.identity(),
+});
+export type BanRecord = __Infer<typeof BanRecord>;
+
 export const Building = __t.object("Building", {
   id: __t.u64(),
   kind: __t.string(),

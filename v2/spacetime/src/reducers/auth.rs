@@ -21,7 +21,11 @@ use spacetimedb::{reducer, ReducerContext, Table};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use rand::RngCore;
-use crate::tables::{auth_record, password_reset_request, AuthRecord, PasswordResetRequest};
+use crate::tables::{
+    auth_record, ban_record, building, password_reset_request, player_save,
+    restaurant, save_snapshot, co_owner, leaderboard_entry, achievement_unlock,
+    AuthRecord, BanRecord, PasswordResetRequest,
+};
 
 const ADMIN_USERNAME: &str = "dunnin"; // lowercased — usernames are stored lowercased
 
@@ -87,6 +91,17 @@ pub fn login(ctx: &ReducerContext, username: String, password: String) -> Result
         .ok_or_else(|| "No account with that username".to_string())?;
     if !verify_password(&password, &account.password_hash) {
         return Err("Wrong password".into());
+    }
+
+    // Banned-account check — same shape as the password verify path
+    // (clear error string, no side effects) so a banned player gets
+    // told once and the auth_record.identity is NOT moved over. Reason
+    // is included if the admin left one so the player has something
+    // concrete to ask about when they email the admin.
+    if let Some(ban) = ctx.db.ban_record().username().find(&username_lc) {
+        let reason_part = if ban.reason.is_empty() { String::new() }
+            else { format!(" — reason: {}", ban.reason) };
+        return Err(format!("This account has been banned{reason_part}"));
     }
 
     // Already logged in as the SAME account on this identity → no-op.
@@ -193,6 +208,173 @@ pub fn admin_reset_password(ctx: &ReducerContext, target_username: String, new_p
         }
     }
     log::info!("Admin reset password for: {}", target_username.trim());
+    Ok(())
+}
+
+// ============================================================================
+//                              ADMIN ACTIONS
+// ============================================================================
+
+/// Admin-only — ban a player by username. Inserts a `ban_record` row;
+/// `login` consults this table and rejects banned accounts with a
+/// reason-bearing error. Also drops the banned account's claim on
+/// any building (so the plot returns to the unowned pool and another
+/// player can take it) — that's safer than leaving a "haunted" plot
+/// behind that nobody can use.
+///
+/// Does NOT delete the auth_record (so unban is non-destructive) and
+/// does NOT delete the player_save (so the admin can review what was
+/// there before deciding to wipe via `admin_delete_restaurant`).
+///
+/// `reason` is shown to the player on login + listed in the admin
+/// panel. Empty string is fine; the login message just omits the
+/// " — reason: ..." tail.
+#[reducer]
+pub fn admin_ban_player(ctx: &ReducerContext, target_username: String, reason: String) -> Result<(), String> {
+    let caller_is_admin = ctx.db.auth_record().identity().filter(ctx.sender)
+        .any(|a| a.is_admin);
+    if !caller_is_admin {
+        return Err("Admin only".into());
+    }
+    let username_lc = target_username.trim().to_lowercase();
+    if username_lc.is_empty() {
+        return Err("Target username required".into());
+    }
+    let account = ctx.db.auth_record().username().find(&username_lc)
+        .ok_or_else(|| "No account with that username".to_string())?;
+    if account.is_admin {
+        return Err("Cannot ban an admin account".into());
+    }
+    let trimmed_reason = reason.trim();
+    let reason_str = if trimmed_reason.len() > 500 {
+        trimmed_reason[..500].to_string()
+    } else {
+        trimmed_reason.to_string()
+    };
+
+    // Upsert — banning a second time updates the reason.
+    if let Some(existing) = ctx.db.ban_record().username().find(&username_lc) {
+        ctx.db.ban_record().username().update(BanRecord {
+            reason: reason_str,
+            banned_at: ctx.timestamp,
+            banned_by: ctx.sender,
+            ..existing
+        });
+    } else {
+        ctx.db.ban_record().insert(BanRecord {
+            username: username_lc.clone(),
+            reason: reason_str,
+            banned_at: ctx.timestamp,
+            banned_by: ctx.sender,
+        });
+    }
+
+    // Release any building the banned player owned so the plot goes
+    // back to the unowned pool. We can't easily evict their current
+    // session (SpacetimeDB doesn't expose a force-disconnect), but
+    // by clearing the building claim we ensure they can't continue
+    // playing on their plot — and the next login attempt will be
+    // rejected by the ban_record check anyway.
+    let owner_id = account.identity;
+    let zero = spacetimedb::Identity::__dummy();
+    if owner_id != zero {
+        for b in ctx.db.building().owner_identity().filter(owner_id) {
+            ctx.db.building().id().update(crate::tables::Building {
+                owner_identity: zero,
+                claimed_at: None,
+                ..b
+            });
+        }
+    }
+
+    log::info!("Admin banned: {} (reason: {})", target_username.trim(),
+        if reason.trim().is_empty() { "<none>" } else { reason.trim() });
+    Ok(())
+}
+
+/// Admin-only — lift a ban by deleting the ban_record row. The
+/// player's auth_record + saved data is untouched, so they can log
+/// back in with their old password. Their building is NOT
+/// auto-reclaimed (it was released into the pool when they were
+/// banned and may have been taken by someone else in the meantime);
+/// they'll go through the building picker on next login.
+#[reducer]
+pub fn admin_unban_player(ctx: &ReducerContext, target_username: String) -> Result<(), String> {
+    let caller_is_admin = ctx.db.auth_record().identity().filter(ctx.sender)
+        .any(|a| a.is_admin);
+    if !caller_is_admin {
+        return Err("Admin only".into());
+    }
+    let username_lc = target_username.trim().to_lowercase();
+    if ctx.db.ban_record().username().find(&username_lc).is_none() {
+        return Err("Account is not banned".into());
+    }
+    ctx.db.ban_record().username().delete(&username_lc);
+    log::info!("Admin unbanned: {}", target_username.trim());
+    Ok(())
+}
+
+/// Admin-only — wipe a player's restaurant save and release their
+/// building back to the unowned pool. Leaves the auth_record intact
+/// so the player can log in again and re-pick a plot (start fresh)
+/// — that's the difference between this and admin_ban_player.
+///
+/// Cascades: deletes the player_save row, releases any owned
+/// building, and clears achievement_unlock + leaderboard_entry rows
+/// for the player (so a wiped account doesn't keep ghost scores).
+/// The friend_request / friendship rows are LEFT — friendships are
+/// a social signal that should survive a restaurant reset.
+#[reducer]
+pub fn admin_delete_restaurant(ctx: &ReducerContext, target_username: String) -> Result<(), String> {
+    let caller_is_admin = ctx.db.auth_record().identity().filter(ctx.sender)
+        .any(|a| a.is_admin);
+    if !caller_is_admin {
+        return Err("Admin only".into());
+    }
+    let username_lc = target_username.trim().to_lowercase();
+    let account = ctx.db.auth_record().username().find(&username_lc)
+        .ok_or_else(|| "No account with that username".to_string())?;
+    let owner_id = account.identity;
+    let zero = spacetimedb::Identity::__dummy();
+    if owner_id == zero {
+        return Err("Account is not currently linked to an identity (nothing to delete)".into());
+    }
+
+    // Release any building they own.
+    for b in ctx.db.building().owner_identity().filter(owner_id) {
+        ctx.db.building().id().update(crate::tables::Building {
+            owner_identity: zero,
+            claimed_at: None,
+            ..b
+        });
+    }
+    // Wipe their player_save.
+    if ctx.db.player_save().identity().find(owner_id).is_some() {
+        ctx.db.player_save().identity().delete(owner_id);
+    }
+    // Cascade legacy restaurant rows (table predates player_save).
+    let owned_restaurants: Vec<u64> = ctx.db.restaurant().owner().filter(owner_id)
+        .map(|r| r.id).collect();
+    for rid in &owned_restaurants {
+        if ctx.db.save_snapshot().restaurant_id().find(*rid).is_some() {
+            ctx.db.save_snapshot().restaurant_id().delete(*rid);
+        }
+        for c in ctx.db.co_owner().restaurant_id().filter(*rid) {
+            ctx.db.co_owner().id().delete(c.id);
+        }
+        ctx.db.restaurant().id().delete(*rid);
+    }
+    // Clear leaderboard + achievement rows so the wiped account
+    // doesn't keep ghost scores.
+    let stale_lb: Vec<u64> = ctx.db.leaderboard_entry().player().filter(owner_id)
+        .map(|e| e.id).collect();
+    for id in stale_lb { ctx.db.leaderboard_entry().id().delete(id); }
+    let stale_ach: Vec<u64> = ctx.db.achievement_unlock().player().filter(owner_id)
+        .map(|a| a.id).collect();
+    for id in stale_ach { ctx.db.achievement_unlock().id().delete(id); }
+
+    log::info!("Admin deleted restaurant for: {} (released {} buildings, {} restaurants)",
+        target_username.trim(), 0, owned_restaurants.len());
     Ok(())
 }
 

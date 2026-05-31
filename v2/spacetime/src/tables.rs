@@ -53,6 +53,32 @@ pub struct AuthRecord {
     pub created_at: Timestamp,
 }
 
+/// A ban applied to an account. One row per banned username; presence
+/// of a row means the account is banned. Stored in a separate table
+/// (instead of a `banned` flag on auth_record) because String columns
+/// can't take a `#[default(...)]` migration value, and using a side
+/// table avoids the destructive re-publish needed to add new columns
+/// without defaults.
+///
+/// Login looks up by username via the primary-key index; a hit causes
+/// the login to reject with a message that includes the reason. The
+/// admin panel lists every row in this table for the "banned players"
+/// section + offers an unban button which deletes the row.
+#[table(name = ban_record, public)]
+pub struct BanRecord {
+    /// Lowercased username — same key shape as auth_record.username
+    /// so the join is trivial. Primary key.
+    #[primary_key]
+    pub username: String,
+    /// Free-text reason the admin gave when banning. Surfaced in the
+    /// rejected-login error message and in the admin panel.
+    pub reason: String,
+    pub banned_at: Timestamp,
+    /// Identity of the admin who issued the ban. Logged for audit
+    /// purposes; not currently shown in the UI.
+    pub banned_by: Identity,
+}
+
 /// A physical plot on the shared city map. Seeded at module init
 /// with N unowned buildings of mixed sizes; players claim one on
 /// first login via the `claim_building` reducer. Once claimed,

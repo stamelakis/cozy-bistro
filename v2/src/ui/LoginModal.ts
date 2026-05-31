@@ -26,7 +26,14 @@ export class LoginModal {
   private message = "";
   private messageKind: "info" | "error" | "success" = "info";
 
-  constructor(parent: HTMLElement, cloud: SpacetimeClient, onAuthenticated: () => void) {
+  /** When `startHidden` is true the modal mounts off-screen and stays
+   * out of the layout until `show()` is called. Engine uses this to
+   * pre-build the modal but only reveal it AFTER a short polling
+   * window confirms the player isn't already authenticated — that
+   * eliminates the "login screen flashes for 1 second on reload"
+   * visual that otherwise happens because the auth_record cache
+   * takes a moment to land after connect. */
+  constructor(parent: HTMLElement, cloud: SpacetimeClient, onAuthenticated: () => void, startHidden = false) {
     this.cloud = cloud;
     this.onAuthenticated = onAuthenticated;
 
@@ -34,7 +41,7 @@ export class LoginModal {
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
       width: "100vw", height: "100vh",
-      display: "flex",
+      display: startHidden ? "none" : "flex",
       alignItems: "center", justifyContent: "center",
       // Cozy bistro mood: warm dark amber wash so the login screen
       // doesn't feel like a sterile auth page in a different game.
@@ -369,6 +376,21 @@ export class LoginModal {
       try { this.root.remove(); } catch { /* ignore */ }
       this.onAuthenticated();
     }, 600);
+  }
+
+  /** Reveal a modal that was constructed with `startHidden = true`.
+   * Idempotent — calling it on an already-visible modal is a no-op. */
+  show(): void {
+    if (this.root.style.display !== "none") return;
+    this.root.style.display = "flex";
+  }
+
+  /** Detach the modal from the DOM without firing onAuthenticated.
+   * Used by the engine's auth-gate when an existing identity is
+   * detected during the silent polling window — the modal was a
+   * placeholder, nothing to dismiss visually. */
+  destroy(): void {
+    try { this.root.remove(); } catch { /* already gone */ }
   }
 }
 

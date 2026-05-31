@@ -421,7 +421,7 @@ export class Engine {
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
-    this.adminModal = new AdminModal(container, this.game, this.sfx);
+    this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud);
     this.cloudModal = new CloudModal(container, this.cloud);
     // Door-plaque editor: click the plaque on the door lintel to edit
     // the restaurant name + sign style. Wire the scene-update callback
@@ -1153,23 +1153,46 @@ export class Engine {
       window.setTimeout(wait, 200);
     };
 
-    const modal = new LoginModal(container, this.cloud, afterAuth);
-    // Poll for ~3s — if the cache lands with an existing auth_record
-    // claim on this identity, auto-dismiss the login modal and run
-    // the same post-auth flow (which then checks building ownership).
-    let elapsed = 0;
-    const stepMs = 250;
-    const max = 3000;
-    const tick = (): void => {
-      elapsed += stepMs;
-      if (this.cloud.isAuthenticated()) {
-        (modal as unknown as { root: HTMLElement }).root.remove();
+    // Pre-build the modal HIDDEN so the silent detection window below
+    // can decide whether the player is already authenticated. If
+    // they are, the modal is destroyed without ever being shown —
+    // no "login screen flashes on reload" anymore. If they're not,
+    // we reveal it after the timeout.
+    const modal = new LoginModal(container, this.cloud, afterAuth, /* startHidden */ true);
+
+    // Already authenticated synchronously (cache hot, common path
+    // when the page reloads and the token deserializes immediately).
+    if (this.cloud.isAuthenticated()) {
+      modal.destroy();
+      afterAuth();
+      return;
+    }
+
+    // Otherwise wait for the auth_record cache to land. Subscribe to
+    // the cloud's table-change notifications + race a 3s timeout.
+    // First side to fire wins: a notification firing isAuthenticated
+    // before the timeout silently dismisses the modal; a timeout
+    // before notification means there's really no account for this
+    // identity → reveal the modal so the player can log in / sign up.
+    let resolved = false;
+    let timer = 0;
+    let unsub: (() => void) | null = null;
+    const finish = (authed: boolean): void => {
+      if (resolved) return;
+      resolved = true;
+      window.clearTimeout(timer);
+      unsub?.();
+      if (authed) {
+        modal.destroy();
         afterAuth();
-        return;
+      } else {
+        modal.show();
       }
-      if (elapsed < max) window.setTimeout(tick, stepMs);
     };
-    window.setTimeout(tick, stepMs);
+    unsub = this.cloud.subscribe(() => {
+      if (this.cloud.isAuthenticated()) finish(true);
+    });
+    timer = window.setTimeout(() => finish(false), 3000);
   }
 
   /** Read the current building list from SpacetimeDB and have
