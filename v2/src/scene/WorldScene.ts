@@ -204,6 +204,15 @@ export class WorldScene {
    * so the player sees the city around them. P2.4 stops here;
    * full per-other-player restaurant interiors come later. */
   private cityBuildings = new THREE.Group();
+  /** Parent group for all SHARED city content (grass, avenues,
+   * scenery houses, other plots' shells, pedestrians). The player's
+   * own restaurant + characters stay at the threeScene root in their
+   * legacy origin-centred coordinates. setOwnedPlotOffset(x, z)
+   * positions this group at (-x, 0, -z) so the player's plot lines
+   * up with the local-origin restaurant — visually, the player IS
+   * standing on the plot they claimed, with everyone else arrayed
+   * around them at their absolute world coordinates. */
+  worldRoot = new THREE.Group();
   /** Camera anchor for the player's own plot — used by IsoCamera
    * to point at the correct spot when the legacy hardcoded (0,0)
    * doesn't match the claimed building's coordinates. */
@@ -227,12 +236,17 @@ export class WorldScene {
     // and only kicks in for the void past the terrain edge.
     this.threeScene.fog = new THREE.Fog(0xd8c4a3, 100, 250);
     this.addLighting();
+    // World root: shared city geometry parented here so a single
+    // position assignment can shift the whole map relative to the
+    // restaurant's local-origin coordinate system.
+    this.threeScene.add(this.worldRoot);
     this.weatherEffects = new WeatherEffects(this.threeScene);
     this.addBuilding();
     // City buildings (other players' plots) live in their own group so
     // they can be re-populated when SpacetimeClient pushes updates
-    // without disturbing the player's own restaurant.
-    this.threeScene.add(this.cityBuildings);
+    // without disturbing the player's own restaurant. Parented to
+    // worldRoot so they shift with the rest of the shared city.
+    this.worldRoot.add(this.cityBuildings);
     // Per-station effects (flames, toaster glow, coffee steam, etc.)
     // are created lazily by syncStationEffects() once each station
     // is placed — no global state to set up here.
@@ -1893,7 +1907,7 @@ export class WorldScene {
     grass.rotation.x = -Math.PI / 2;
     grass.position.y = -0.01;
     grass.receiveShadow = true;
-    this.threeScene.add(grass);
+    this.worldRoot.add(grass);
     // City roads + scenery houses. Streets come first so the
     // building placement pass can avoid sitting on top of them.
     this.addCityStreets();
@@ -2014,7 +2028,7 @@ export class WorldScene {
       const p = new THREE.Mesh(geo, pavementMat);
       place(p, 0, perp);
       p.receiveShadow = true;
-      this.threeScene.add(p);
+      this.worldRoot.add(p);
     };
     const makeCurb = (perp: number): void => {
       const geo = orientation === "ew"
@@ -2025,7 +2039,7 @@ export class WorldScene {
       else                       c.position.set(offset + perp, 0.06, 0);
       c.castShadow = true;
       c.receiveShadow = true;
-      this.threeScene.add(c);
+      this.worldRoot.add(c);
     };
 
     makePavement(-5.5);
@@ -2036,7 +2050,7 @@ export class WorldScene {
     const road = new THREE.Mesh(roadGeo, roadMat);
     place(road, 0, 0);
     road.receiveShadow = true;
-    this.threeScene.add(road);
+    this.worldRoot.add(road);
     makeCurb(3);
     makePavement(5.5);
 
@@ -2049,7 +2063,7 @@ export class WorldScene {
       dash.rotation.x = -Math.PI / 2;
       if (orientation === "ew") dash.position.set(t, 0.005, offset);
       else                       dash.position.set(offset, 0.005, t);
-      this.threeScene.add(dash);
+      this.worldRoot.add(dash);
     }
   }
 
@@ -2065,7 +2079,7 @@ export class WorldScene {
    * use neighbouring houses as landmarks. */
   private addCityScenery(): void {
     const sceneryGroup = new THREE.Group();
-    this.threeScene.add(sceneryGroup);
+    this.worldRoot.add(sceneryGroup);
 
     // Plots + garden zones the scenery must NOT overlap. Same data
     // the populateCityBuildings + fence code uses, so the keep-outs
@@ -3397,6 +3411,19 @@ export class WorldScene {
    * interior sounds are muted while exterior mode is active. */
   isExteriorMode(): boolean {
     return this.exteriorMode;
+  }
+
+  /** Position the shared city so the player's claimed plot lines up
+   * with the restaurant's local origin. The player's tower stays at
+   * (0, 0) in local coordinates; worldRoot is offset by (-plotX,
+   * -plotZ) so neighbouring plot shells, avenues, and scenery sit at
+   * their correct positions RELATIVE to the player. From a shared-
+   * map perspective each player IS at their claimed coordinates;
+   * each client renders the same absolute layout with a different
+   * origin under the camera. */
+  setOwnedPlotOffset(plotX: number, plotZ: number): void {
+    this.worldRoot.position.set(-plotX, 0, -plotZ);
+    this.ownedPlotAnchor.set(plotX, plotZ);
   }
 
   /** Current applied tier (used by the door animator). */

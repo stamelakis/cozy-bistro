@@ -679,7 +679,10 @@ export class Engine {
       if (this.router) {
         this.router.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       }
-      this.pedestrians = new PedestrianSpawner(this.scene.threeScene, this.scene.characterLoader, this.scene.animator);
+      // Pedestrians live under worldRoot so they shift with the
+      // shared city when setOwnedPlotOffset moves it relative to the
+      // local-origin restaurant.
+      this.pedestrians = new PedestrianSpawner(this.scene.worldRoot, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.
       // The frozen list is delivered to the pantry the moment they're home.
@@ -1045,7 +1048,15 @@ export class Engine {
       this.cityBuildingCount = list.length;
       this.scene.populateCityBuildings(list);
       const mine = this.cloud.getMyBuilding();
-      if (mine) this.scene.ownedPlotAnchor.set(mine.plotX, mine.plotZ);
+      if (mine) {
+        // Shift the shared city so the player's claimed plot
+        // appears at the camera's local origin. From a shared-map
+        // perspective the player IS at (mine.plotX, mine.plotZ) —
+        // every other client renders the same absolute layout, just
+        // with a different worldRoot offset under their own
+        // restaurant.
+        this.scene.setOwnedPlotOffset(mine.plotX, mine.plotZ);
+      }
     };
     apply();
     // Poll for 5s to catch a late cache fill.

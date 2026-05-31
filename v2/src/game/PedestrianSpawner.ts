@@ -4,6 +4,11 @@ import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAni
 import { pick } from "../data/util";
 import { WorldScene } from "../scene/WorldScene";
 
+/** Where pedestrians get parented. Either the THREE.Scene (legacy
+ * single-player coords) or the WorldScene.worldRoot Group (so peds
+ * shift with the shared city when the player's plot offset is set). */
+type SceneParent = THREE.Scene | THREE.Group;
+
 /**
  * Outdoor pedestrians — characters that walk along every street in
  * the city, in either direction, with no gameplay interaction.
@@ -60,7 +65,7 @@ interface Pedestrian {
 }
 
 export class PedestrianSpawner {
-  private readonly scene: THREE.Scene;
+  private readonly parent: SceneParent;
   private readonly loader: CharacterLoader;
   private readonly animator: CharacterAnimator;
   private readonly people: Pedestrian[] = [];
@@ -69,8 +74,8 @@ export class PedestrianSpawner {
    * (avenue × side), built once at construction time. */
   private readonly routes: PavementRoute[];
 
-  constructor(scene: THREE.Scene, loader: CharacterLoader, animator: CharacterAnimator) {
-    this.scene = scene;
+  constructor(parent: SceneParent, loader: CharacterLoader, animator: CharacterAnimator) {
+    this.parent = parent;
     this.loader = loader;
     this.animator = animator;
     // Two pavements per avenue (north + south for EW, east + west
@@ -122,7 +127,7 @@ export class PedestrianSpawner {
 
   private despawn(idx: number): void {
     const p = this.people[idx];
-    this.scene.remove(p.character.root);
+    this.parent.remove(p.character.root);
     this.animator.remove(p.character.root);
     this.people.splice(idx, 1);
   }
@@ -152,7 +157,7 @@ export class PedestrianSpawner {
     const variant = pick(VARIANT_IDS);
     try {
       const model = await this.loader.load(variant);
-      this.scene.add(model);
+      this.parent.add(model);
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(startX, startZ),
