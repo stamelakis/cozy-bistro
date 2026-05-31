@@ -191,10 +191,11 @@ export class Hud {
         tint: "rgba(180, 160, 220, 0.14)", accent: "#c8b5e8",
         tooltip: "Day counter. Each day ends when the in-game clock hits closing time " +
                  "and rolls a day-end summary (paying rent, wages, etc)." },
-      { key: "daytime", icon: "⏰", label: "TIME LEFT",
+      { key: "daytime", icon: "⏰", label: "IN GAME TIME",
         tint: "rgba(220, 180, 130, 0.14)", accent: "#e8c89a",
-        tooltip: "Real seconds left in the in-game day. When it hits 0:00 the day ends, " +
-                 "rent and wages are deducted, and a new day starts." },
+        tooltip: "Current in-game clock (24h). One full day cycle is ~12 real " +
+                 "minutes; the day rolls over at 06:00 with rent + wages deducted. " +
+                 "Tile turns orange after dusk so you know to close out orders." },
       // Customers in vs seats available — paired so the player sees
       // "we have 8 IN and 4 SEATS left = filling up" at a glance.
       { key: "guests", icon: "👥", label: "IN",
@@ -510,9 +511,18 @@ export class Hud {
     const guests = this.spawner.getCount();
     const served = this.game.customers.getDailyServed();
     const lost = this.game.customers.getDailyLost();
-    const remaining = Math.max(0, Math.ceil(this.game.day.getTimeRemainingSeconds()));
-    const mins = Math.floor(remaining / 60);
-    const secs = String(remaining % 60).padStart(2, "0");
+    // In-game clock — derive from day progress. The applyDayNight
+    // schedule assigns dawn to progress 0 and the next dawn to 1,
+    // so anchoring 06:00 to progress 0 puts noon at 0.5 and dusk at
+    // ~0.583, which matches the lighting transitions a player sees
+    // out the window. Wraps via modulo so the display never shows
+    // "24:00".
+    const DAWN_HOUR = 6;
+    const progress = this.game.day.getDayProgress();
+    const totalMinutesInDay = (DAWN_HOUR + progress * 24) * 60;
+    const wrappedMinutes = ((totalMinutesInDay % (24 * 60)) + 24 * 60) % (24 * 60);
+    const clockH = String(Math.floor(wrappedMinutes / 60)).padStart(2, "0");
+    const clockM = String(Math.floor(wrappedMinutes % 60)).padStart(2, "0");
     const dishes = this.game.getDirtyDishCount();
     const rent = this.game.getDailyRent();
     const w = this.game.weather.getCurrent();
@@ -545,10 +555,11 @@ export class Hud {
     this.fields.guests.textContent = `${guests}`;
     this.fields.served.textContent = `${served}`;
     this.fields.lost.textContent = `${lost}`;
-    // Time left — orange tint when the day is in its last 60 seconds so
-    // the player knows to close out remaining orders.
-    this.fields.daytime.textContent = `${mins}:${secs}`;
-    this.fields.daytime.style.color = remaining < 60 ? "#ff9a9a" : "#e8c89a";
+    // In-game clock — orange tint past dusk (progress > 0.583, i.e.
+    // ~20:00) so the player knows the day's winding down and they
+    // should close out remaining orders.
+    this.fields.daytime.textContent = `${clockH}:${clockM}`;
+    this.fields.daytime.style.color = progress > 0.583 ? "#ff9a9a" : "#e8c89a";
     // Dirty count / true total owned (clean + dirty + in-flight).
     // Without the in-flight term the denominator dropped by 1 each
     // time a customer started eating — the user (rightly) read that
