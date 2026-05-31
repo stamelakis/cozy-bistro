@@ -2097,20 +2097,25 @@ export class WorldScene {
    * (see addCityScenery — street-following placement, not a random
    * grid scan). */
   private addCityStreets(): void {
-    // THREE EW avenues, one in front of each plot row — owner's
-    // explicit spec. Plot rows at z=-48, z=0, z=+48; gardens extend
-    // ±5 m in Z. Roads on the SOUTH side of each row so buildings
-    // face south toward the street, classic Main-Street layout.
+    // THREE EW avenues, one DIRECTLY in front of each plot row.
+    // Plot rows centered at z=-48, 0, +48; plot height 12 m so the
+    // south wall of each row sits at row_z + 6.  Pavement outer
+    // edge is 8 m from the avenue centerline (5 m strip starting at
+    // perp ±3), so placing the avenue at `row_z + 6 + 8 = row_z + 14`
+    // makes the north pavement edge land EXACTLY on the plot's
+    // south wall — restaurants step straight onto the curb instead
+    // of crossing a 24 m grass strip first.
     //
-    //   z=-24 — in front of row 1 (24 m south of row 1 centerline,
-    //           18 m south of row 1's garden south edge)
-    //   z=+24 — in front of row 2 (between row 2 and row 3)
-    //   z=+62 — in front of row 3 (14 m south of row 3 centerline)
+    //   z=-34 — front curb of row 1 (north pavement at z=-42 = row1 south wall)
+    //   z=+14 — front curb of row 2 (north pavement at z=+6  = row2 south wall)
+    //   z=+62 — front curb of row 3 (north pavement at z=+54 = row3 south wall)
     //
-    // Scenery houses line both sides of every avenue and touch the
-    // pavement directly (no grass strip), per spec.
-    this.makeCityAvenue("ew", -24);
-    this.makeCityAvenue("ew",  24);
+    // Scenery is auto-suppressed on the NORTH side of each avenue
+    // by the overlapsClaim check (it would land inside the plot
+    // there), and placed normally on the SOUTH side facing the
+    // next row's gardens.
+    this.makeCityAvenue("ew", -34);
+    this.makeCityAvenue("ew",  14);
     this.makeCityAvenue("ew",  62);
     // NS outer ring — keeps the city visually bounded on the east /
     // west edges and gives the corner / NS-aligned scenery houses
@@ -2124,7 +2129,7 @@ export class WorldScene {
    * future road-aware system (pedestrian spawner, sign placement)
    * all agree on what counts as a street. Public so PedestrianSpawner
    * can route walkers down them. */
-  static readonly EW_AVENUES: readonly number[] = [-24, 24, 62];
+  static readonly EW_AVENUES: readonly number[] = [-34, 14, 62];
   static readonly NS_AVENUES: readonly number[] = [-70, 70];
   /** Half-length of each avenue strip the pedestrian spawner is
    * allowed to walk on. The avenues themselves are drawn 260 m long
