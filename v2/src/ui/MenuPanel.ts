@@ -29,7 +29,11 @@ const SUMMARY_SECTIONS: { key: RecipeDefinition["category"]; label: string }[] =
  */
 export class MenuPanel {
   private readonly game: Game;
-  private readonly root: HTMLElement;
+  /** Root panel element — exposed so the engine can make it
+   * draggable + resizable after construction. */
+  readonly root: HTMLElement;
+  /** Title bar — used as the drag handle by PanelDragResize. */
+  readonly titleEl: HTMLElement;
   private readonly body: HTMLElement;
   private readonly tabsRow: HTMLElement;
   private readonly content: HTMLElement;
@@ -94,6 +98,7 @@ export class MenuPanel {
       this.body.style.display = this.collapsed ? "none" : "block";
       title.textContent = this.collapsed ? "MENU ▾  (click to expand)" : "MENU ▴  (click to collapse)";
     };
+    this.titleEl = title;
     this.root.appendChild(title);
     attachTooltip(title,
       "MENU — the dishes your restaurant serves.\n" +

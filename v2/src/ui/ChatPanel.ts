@@ -17,7 +17,11 @@ import { SpacetimeClient } from "../cloud/SpacetimeClient";
  */
 export class ChatPanel {
   private readonly cloud: SpacetimeClient;
-  private readonly root: HTMLElement;
+  /** Root panel element — exposed so the engine can make it
+   * draggable + resizable. */
+  readonly root: HTMLElement;
+  /** Title bar — used as the drag handle by PanelDragResize. */
+  readonly titleBar: HTMLElement;
   private readonly tabsRow: HTMLElement;
   private readonly body: HTMLElement;
   private readonly logArea: HTMLElement;
@@ -95,6 +99,7 @@ export class ChatPanel {
 
     // === Title bar (always visible — drives minimize toggle) ===
     const titleBar = document.createElement("div");
+    this.titleBar = titleBar;
     Object.assign(titleBar.style, {
       display: "flex", alignItems: "center", gap: "6px",
       padding: "5px 8px 5px 10px",

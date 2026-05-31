@@ -45,6 +45,7 @@ import { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { LoginModal } from "../ui/LoginModal";
 import { BuildingPickModal } from "../ui/BuildingPickModal";
 import { ChatPanel } from "../ui/ChatPanel";
+import { makeDraggableResizable } from "../ui/PanelDragResize";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -297,6 +298,13 @@ export class Engine {
     // (SfxPlayer + kickAudio listeners constructed earlier — see above.)
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
+    makeDraggableResizable({
+      storageKey: "cozy-bistro.panel.menu",
+      root: this.menuPanel.root,
+      handle: this.menuPanel.titleEl,
+      minWidth: 320,
+      minHeight: 60,
+    });
     this.upgradeModal = new UpgradeModal(container, this.game);
     this.expandModal = new ExpandModal(container, this.game);
     // Floor-focus selector. Lives on the page container as a fixed
@@ -601,6 +609,15 @@ export class Engine {
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     this.buildMenu = buildMenu;
+    if (buildMenu.rootEl && buildMenu.titleEl) {
+      makeDraggableResizable({
+        storageKey: "cozy-bistro.panel.build",
+        root: buildMenu.rootEl,
+        handle: buildMenu.titleEl,
+        minWidth: 220,
+        minHeight: 60,
+      });
+    }
     buildMenu.seatMarkers = this.seatMarkers;
     // Multi-storey hooks: BuildMenu uses these to raycast against the
     // focused floor's slab, mount new placements under the right storey
@@ -1125,6 +1142,13 @@ export class Engine {
     }
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
+      makeDraggableResizable({
+        storageKey: "cozy-bistro.panel.chat",
+        root: this.chatPanel.root,
+        handle: this.chatPanel.titleBar,
+        minWidth: 200,
+        minHeight: 32,
+      });
     } catch (e) {
       console.warn("[Engine] failed to mount chat panel:", e);
     }

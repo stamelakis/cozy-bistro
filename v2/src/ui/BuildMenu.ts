@@ -171,10 +171,14 @@ export class BuildMenu {
   private collapsed = false;
   /** Which tier tab is currently active. */
   private selectedTier: LuxuryTier = 1;
-  /** Title bar DOM element — text + arrow updated on collapse toggle. */
-  private titleEl?: HTMLDivElement;
+  /** Title bar DOM element — text + arrow updated on collapse toggle.
+   * Also exposed as the drag-handle for PanelDragResize. */
+  titleEl?: HTMLDivElement;
   /** Body wrapper holding the tier tabs + content. Hidden when collapsed. */
   private bodyEl?: HTMLDivElement;
+  /** Root panel element — exposed so the engine can attach the
+   * draggable/resizable behaviour after construction. */
+  rootEl?: HTMLDivElement;
   /** Tier tab row — rebuilt on tier change to update the active highlight. */
   private tierTabsEl?: HTMLDivElement;
   /** Content area — rebuilt each time the selected tier changes. */
@@ -199,8 +203,9 @@ export class BuildMenu {
     this.attachInput();
   }
 
-  private buildPanel(parent: HTMLElement): HTMLElement {
+  private buildPanel(parent: HTMLElement): HTMLDivElement {
     const root = document.createElement("div");
+    this.rootEl = root;
     Object.assign(root.style, {
       position: "fixed",
       top: "12px",
