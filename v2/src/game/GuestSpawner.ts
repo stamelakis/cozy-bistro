@@ -1526,16 +1526,16 @@ export class GuestSpawner {
    * door. Bypasses spawnCooldown (the pedestrian's 30+ second walk
    * already served as the cool-off) but still defers to spawnGuest's
    * seat availability check — no seat = customer turned away by the
-   * existing waiting-chair / silent-decline logic. */
-  triggerExternalArrival(_variantHint?: string): void {
-    // variantHint is currently unused — spawnGuest still picks its
-    // own variant from GUEST_VARIANT_IDS to keep the existing visual
-    // diversity. Threading the hint through would require an extra
-    // param on spawnGuest; saved for a future polish pass where the
-    // walker's variant carries inside.
+   * existing waiting-chair / silent-decline logic.
+   *
+   * variantHint is the GLB id of the walker that just arrived so the
+   * customer that materialises inside matches the character the
+   * player watched approach the door (visual continuity). When
+   * absent or unknown, spawnGuest falls back to its random pick. */
+  triggerExternalArrival(variantHint?: string): void {
     if (!this.restaurantOpen) return;
     if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
-    void this.spawnGuest();
+    void this.spawnGuest(variantHint);
     // Pause the local cooldown briefly so the external arrival
     // "counts" against the upcoming auto-spawn. Without this the
     // local timer keeps firing on its usual interval AND the
@@ -1544,7 +1544,7 @@ export class GuestSpawner {
     this.spawnCooldown = Math.max(this.spawnCooldown, 8.0);
   }
 
-  private async spawnGuest(): Promise<void> {
+  private async spawnGuest(variantHint?: string): Promise<void> {
     // Roll archetype + full taste BEFORE picking a seat — the
     // scorer needs every field. Diet is the only hard filter; the
     // rest of the taste shapes seat scoring (theme, decor, window,
@@ -1577,7 +1577,14 @@ export class GuestSpawner {
       this.inFlightSpawnChairs.add(waitingChair.uid);
     }
 
-    const variantId = pick(GUEST_VARIANT_IDS);
+    // Variant — prefer the walker's variant when this spawn was
+    // triggered by an external pedestrian arrival (visual continuity);
+    // otherwise pick at random from the catalog. variantHint is
+    // validated against the known list so a bad hint doesn't crash
+    // the loader.
+    const variantId = (variantHint && GUEST_VARIANT_IDS.includes(variantHint))
+      ? variantHint
+      : pick(GUEST_VARIANT_IDS);
     const id = `guest-${this.nextGuestNum++}`;
     try {
       const model = await this.characterLoader.load(variantId);

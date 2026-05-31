@@ -13,7 +13,7 @@
 //! enough density without overloading the table.
 
 use spacetimedb::{rand::Rng, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
-use crate::tables::{building, pedestrian, pedestrian_tick_schedule, Building, Pedestrian, PedestrianTickSchedule};
+use crate::tables::{building, pedestrian, pedestrian_tick_schedule, player_save, Building, Pedestrian, PedestrianTickSchedule};
 
 /// Cap on simultaneously active pedestrians. Each is one row in the
 /// pedestrian table; client renders one character model per row.
@@ -122,7 +122,7 @@ fn spawn_one(ctx: &ReducerContext) {
     // point — biases the picks toward plots the walker would
     // realistically reach, instead of cross-city marathons.
     let mut target_plot_id: u64 = 0;
-    let (mut end_x, mut end_z);
+    let (end_x, end_z);
     if rng.gen_bool(0.35) {
         if let Some(plot) = pick_target_plot(ctx, &mut rng, start_x, start_z) {
             // Door sits on the +Z (south) face of the building's
@@ -176,17 +176,42 @@ fn spawn_one(ctx: &ReducerContext) {
     });
 }
 
-/// Pick a uniformly-random claimed plot to target. Filters to
-/// CLAIMED buildings (owner != zero identity). Returns None when
-/// there are no claimed plots yet — caller falls back to an ambient
-/// avenue-to-avenue walker. Uniform pick gives each restaurant the
-/// same baseline traffic regardless of where the walker spawned.
+/// Pick a claimed plot to target, weighted by the owner's published
+/// rating. Higher-rated restaurants attract more walkers (rating² is
+/// the weight, so a 4.5★ place is ~3× as attractive as a 2.5★ one).
+/// Plots without a published rating yet (never autosaved) fall back
+/// to a baseline weight so they still receive some traffic on day 1.
+/// Returns None when there are no claimed plots — caller falls back
+/// to an ambient avenue-to-avenue walker.
 fn pick_target_plot(ctx: &ReducerContext, rng: &mut impl Rng, _from_x: f32, _from_z: f32) -> Option<Building> {
     let zero = spacetimedb::Identity::__dummy();
-    let claimed: Vec<Building> = ctx.db.building().iter()
-        .filter(|b| b.owner_identity != zero)
-        .collect();
-    if claimed.is_empty() { return None; }
-    let idx = rng.gen_range(0..claimed.len());
-    claimed.into_iter().nth(idx)
+    // Materialise the claim list with each plot's attraction weight.
+    let mut weighted: Vec<(Building, f32)> = Vec::new();
+    let mut total_weight: f32 = 0.0;
+    for b in ctx.db.building().iter() {
+        if b.owner_identity == zero { continue; }
+        // Look up the owner's published rating. Default baseline = 3.0
+        // (a "neutral" star count) when the owner hasn't published
+        // a save yet — keeps fresh accounts from being shut out
+        // entirely while they're still setting up.
+        let rating = ctx.db.player_save().identity().find(b.owner_identity)
+            .map(|s| s.rating_avg.max(0.0))
+            .unwrap_or(3.0);
+        // Weight = rating² + 1 so even a 0★ restaurant gets a small
+        // chance and a 5★ blows the competition away.
+        let weight = rating * rating + 1.0;
+        weighted.push((b, weight));
+        total_weight += weight;
+    }
+    if weighted.is_empty() || total_weight <= 0.0 { return None; }
+    // Reservoir-style weighted pick — single pass, no allocations
+    // beyond the Vec already built.
+    let mut target = rng.gen::<f32>() * total_weight;
+    for (b, w) in weighted {
+        target -= w;
+        if target <= 0.0 {
+            return Some(b);
+        }
+    }
+    None
 }
