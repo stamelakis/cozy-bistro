@@ -378,6 +378,56 @@ pub fn admin_delete_restaurant(ctx: &ReducerContext, target_username: String) ->
     Ok(())
 }
 
+/// Self-service character wipe — releases the caller's building,
+/// nukes their player_save, and clears their leaderboard /
+/// achievement rows. Same cascade as admin_delete_restaurant but
+/// keyed to ctx.sender so any player can wipe their OWN account
+/// without admin privileges. Surfaced in the HUD's "Reset save"
+/// button (visible to all players). Auth_record is preserved so
+/// the player can keep their username + password after the wipe;
+/// they just go back through the plot picker fresh.
+#[reducer]
+pub fn wipe_my_restaurant(ctx: &ReducerContext) -> Result<(), String> {
+    let owner_id = ctx.sender;
+    let zero = spacetimedb::Identity::__dummy();
+    if owner_id == zero {
+        return Err("No identity to wipe".into());
+    }
+    // Release any building they own.
+    for b in ctx.db.building().owner_identity().filter(owner_id) {
+        ctx.db.building().id().update(crate::tables::Building {
+            owner_identity: zero,
+            claimed_at: None,
+            ..b
+        });
+    }
+    // Wipe their player_save.
+    if ctx.db.player_save().identity().find(owner_id).is_some() {
+        ctx.db.player_save().identity().delete(owner_id);
+    }
+    // Cascade legacy restaurant rows.
+    let owned_restaurants: Vec<u64> = ctx.db.restaurant().owner().filter(owner_id)
+        .map(|r| r.id).collect();
+    for rid in &owned_restaurants {
+        if ctx.db.save_snapshot().restaurant_id().find(*rid).is_some() {
+            ctx.db.save_snapshot().restaurant_id().delete(*rid);
+        }
+        for c in ctx.db.co_owner().restaurant_id().filter(*rid) {
+            ctx.db.co_owner().id().delete(c.id);
+        }
+        ctx.db.restaurant().id().delete(*rid);
+    }
+    // Clear leaderboard + achievement rows.
+    let stale_lb: Vec<u64> = ctx.db.leaderboard_entry().player().filter(owner_id)
+        .map(|e| e.id).collect();
+    for id in stale_lb { ctx.db.leaderboard_entry().id().delete(id); }
+    let stale_ach: Vec<u64> = ctx.db.achievement_unlock().player().filter(owner_id)
+        .map(|a| a.id).collect();
+    for id in stale_ach { ctx.db.achievement_unlock().id().delete(id); }
+    log::info!("Self-wipe by identity {}: released {} restaurants", owner_id, owned_restaurants.len());
+    Ok(())
+}
+
 // ============================================================================
 //                                HELPERS
 // ============================================================================

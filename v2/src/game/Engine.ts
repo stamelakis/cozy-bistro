@@ -436,7 +436,12 @@ export class Engine {
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
-    this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud);
+    this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud, {
+      isPaused: () => this.paused,
+      setPaused: (p) => this.setPaused(p),
+      getTimeScale: () => this.timeScale,
+      setTimeScale: (s) => this.setTimeScale(s),
+    });
     this.cloudModal = new CloudModal(container, this.cloud);
     // Door-plaque editor: click the plaque on the door lintel to edit
     // the restaurant name + sign style. Wire the scene-update callback
@@ -1360,11 +1365,58 @@ export class Engine {
     }, 5000);
   }
 
-  private resetSave(): void {
+  /** Character wipe. Releases the player's plot, deletes their
+   * server save + leaderboard + achievements, then nukes local
+   * save slots and reloads — the engine's auth gate sees no
+   * building owned and pops the plot picker. Username + password
+   * are preserved.
+   *
+   * Strong confirmation dialog so a stray click doesn't trash the
+   * account; double-confirms by requiring the player to type the
+   * word RESET (matches industry-standard "delete account"
+   * affordance). */
+  private async resetSave(): Promise<void> {
     const slot = this.saver.getActiveSlot();
-    const ok = window.confirm(`Reset slot ${slot} and start over? This wipes the current save and reloads the page.`);
+    const ok = window.confirm(
+      "⚠ RESET SAVE — this will permanently:\n" +
+      "  • Release your current plot (anyone can take it)\n" +
+      "  • Delete your restaurant, decor, money, tier, achievements,\n" +
+      "    leaderboard scores, and active menu\n" +
+      "  • Send you back to the plot picker to start fresh\n\n" +
+      "Your USERNAME and PASSWORD will be kept so you can log in\n" +
+      "again to the new restaurant.\n\n" +
+      "Continue?"
+    );
     if (!ok) return;
+    const typed = window.prompt("Type RESET (in caps) to confirm:");
+    if (typed !== "RESET") {
+      // eslint-disable-next-line no-alert
+      window.alert("Cancelled — nothing was wiped.");
+      return;
+    }
+    // Server-side wipe first (releases building + clears player_save
+    // + leaderboard + achievements). If this fails we bail BEFORE
+    // touching the local save so the player can retry without
+    // losing local state.
+    try {
+      await this.cloud.wipeMyRestaurant();
+    } catch (e) {
+      console.warn("[Engine] wipeMyRestaurant failed:", e);
+      // eslint-disable-next-line no-alert
+      window.alert("Couldn't reach the server to wipe — try again in a moment.");
+      return;
+    }
+    // Wipe local save + the panel-position localStorage entries
+    // (otherwise the new restaurant inherits the old layout) +
+    // reload. The reload hits the auth gate which sees no owned
+    // building → spawns BuildingPickModal → fresh start.
     SaveSystem.deleteSlot(slot);
+    try {
+      localStorage.removeItem("cozy-bistro.panel.build");
+      localStorage.removeItem("cozy-bistro.panel.menu");
+      localStorage.removeItem("cozy-bistro.panel.chat");
+      // Don't wipe the auth token — keep them logged in for the new pick.
+    } catch { /* ignore */ }
     window.location.reload();
   }
 

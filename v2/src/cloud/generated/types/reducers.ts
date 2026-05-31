@@ -36,6 +36,7 @@ import SignUpReducer from "../sign_up_reducer";
 import SubmitLeaderboardReducer from "../submit_leaderboard_reducer";
 import UnfriendReducer from "../unfriend_reducer";
 import UnlockAchievementReducer from "../unlock_achievement_reducer";
+import WipeMyRestaurantReducer from "../wipe_my_restaurant_reducer";
 
 export type AdminBanPlayerParams = __Infer<typeof AdminBanPlayerReducer>;
 export type AdminDeleteRestaurantParams = __Infer<typeof AdminDeleteRestaurantReducer>;
@@ -67,4 +68,5 @@ export type SignUpParams = __Infer<typeof SignUpReducer>;
 export type SubmitLeaderboardParams = __Infer<typeof SubmitLeaderboardReducer>;
 export type UnfriendParams = __Infer<typeof UnfriendReducer>;
 export type UnlockAchievementParams = __Infer<typeof UnlockAchievementReducer>;
+export type WipeMyRestaurantParams = __Infer<typeof WipeMyRestaurantReducer>;
 

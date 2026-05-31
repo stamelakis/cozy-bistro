@@ -85,9 +85,13 @@ export class Hud {
   /** Span next to the online count showing 🚶 N incoming — walkers
    * currently heading for the player's plot from the shared city. */
   private incomingCountEl?: HTMLSpanElement;
-  private devOpen = false;
-  private devSection?: HTMLDivElement;
-  private devToggle?: HTMLButtonElement;
+  // P12: removed devOpen / devSection / toggleDev — the old expandable
+  //      dev sub-menu was split into AdminModal (admin-only) + the
+  //      always-visible player-actions row.
+  /** Reference to the "Dev tools" button so update() can hide it for
+   * non-admin accounts. The button now opens AdminModal directly
+   * instead of toggling a sub-menu. */
+  private devToolsBtn?: HTMLButtonElement;
 
   constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl, actions: HudActions) {
     this.game = game;
@@ -103,7 +107,13 @@ export class Hud {
     this.buildOpenCloseRow();
     this.buildSpeedRow();
     this.buildModalIconRow();
-    this.buildDevSection();
+    this.buildPlayerActionsRow();
+    // buildDevSection removed in P12 — the old "Dev tools" sub-menu
+    // (game-speed + tuning sliders + reset save + starter grant) was
+    // split apart: the Dev tools button now opens AdminModal directly,
+    // Game speed moved INTO AdminModal, Starter grant moved to
+    // ExpandWidget (visible to all players, conditional), and Reset
+    // save lives in buildPlayerActionsRow (visible to all).
   }
 
   private buildTitle(): void {
@@ -426,16 +436,15 @@ export class Hud {
       display: "grid", gridTemplateColumns: "1fr",
       marginTop: "4px",
     } as Partial<CSSStyleDeclaration>);
-    // Dev tools — hidden in production for non-admin players. Admin
-    // (Dunnin) sees it for AdminPanel access; DEV builds always
-    // see it for debugging.
+    // Dev tools — admin-only. Opens AdminModal directly (used to
+    // expand a small sub-menu in the sidebar; now it's a one-click
+    // gateway to the same tuning panel the admin already manages).
     const buttons3: IconBtn[] = [
       { icon: "⚙ Dev tools",   title:
-          "DEV TOOLS — debugging shortcuts.\n" +
-          "Expands a small section under the icons with a $500 starter grant, the admin tuning " +
-          "sliders (money / tier / upgrades / etc.), and a reset-save button. For experimenting " +
-          "or recovering from a stuck state — not part of normal play.",
-        click: () => this.toggleDev(),    tint: "rgba(180, 180, 180, 0.18)" },
+          "DEV TOOLS — opens the admin tuning panel.\n" +
+          "Money / tier / upgrades / weather / game speed sliders, plus moderation actions " +
+          "(password resets, bans, restaurant deletes). Admin-only.",
+        click: () => this.actions.openAdmin(),  tint: "rgba(180, 180, 180, 0.18)" },
     ];
     const mkBtn = (b: IconBtn, size: "big" | "med" | "small"): HTMLButtonElement => {
       const btn = document.createElement("button");
@@ -464,70 +473,52 @@ export class Hud {
     // user wanted Awards/Ledger/Cloud/Slots/Help at the same size as the
     // first row of Upgrades/Pantry/Decor/Trends.
     for (const b of buttons2) row2.appendChild(mkBtn(b, "big"));
-    for (const b of buttons3) row3.appendChild(mkBtn(b, "small"));
+    // Stash a ref to the dev tools button (only entry in buttons3)
+    // so update() can hide it for non-admin players.
+    for (const b of buttons3) {
+      const btn = mkBtn(b, "small");
+      row3.appendChild(btn);
+      this.devToolsBtn = btn;
+    }
     this.root.appendChild(row);
     this.root.appendChild(row2);
     this.root.appendChild(row3);
   }
 
-  private buildDevSection(): void {
+  /** Player-actions row appended at the bottom of the HUD section
+   * inside the sidebar. Currently holds the Reset Save (character
+   * wipe) button. Visible to ALL players (not gated to admins) —
+   * it's the standard "delete account" affordance, not a dev tool.
+   * Confirmation dialog + server-side wipe + reload happen inside
+   * Engine via `actions.resetSave`. */
+  private buildPlayerActionsRow(): void {
     const section = document.createElement("div");
-    section.style.display = "none";
-    section.style.marginTop = "6px";
-    section.style.borderTop = "1px solid rgba(255,245,220,0.15)";
-    section.style.paddingTop = "6px";
-    this.devSection = section;
-    // Speed / pause controls — moved here so the always-visible HUD row
-    // can host the more frequently-touched volume slider instead.
-    const speedHeader = document.createElement("div");
-    speedHeader.textContent = "Game speed";
-    Object.assign(speedHeader.style, {
-      fontSize: "9px", opacity: "0.65",
-      letterSpacing: "0.06em", textTransform: "uppercase",
-      marginBottom: "3px",
+    Object.assign(section.style, {
+      marginTop: "8px",
+      paddingTop: "6px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
     } as Partial<CSSStyleDeclaration>);
-    section.appendChild(speedHeader);
-    const speedRow = document.createElement("div");
-    Object.assign(speedRow.style, {
-      display: "flex", gap: "3px", marginBottom: "6px",
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "🗑 Reset save (start over)";
+    Object.assign(resetBtn.style, {
+      display: "block", width: "100%",
+      padding: "5px 6px",
+      background: "rgba(200, 80, 80, 0.20)",
+      color: "#fff5dc",
+      border: "1px solid rgba(200, 80, 80, 0.40)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
-    const choices: { label: string; action: () => void; key: string }[] = [
-      { label: "‖",  action: () => this.time.setPaused(true),                                                  key: "pause" },
-      { label: "1×", action: () => { this.time.setPaused(false); this.time.setTimeScale(1); },                 key: "1" },
-      { label: "2×", action: () => { this.time.setPaused(false); this.time.setTimeScale(2); },                 key: "2" },
-      { label: "4×", action: () => { this.time.setPaused(false); this.time.setTimeScale(4); },                 key: "4" },
-    ];
-    for (const c of choices) {
-      const btn = document.createElement("button");
-      btn.textContent = c.label;
-      Object.assign(btn.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
-      btn.style.flex = "1";
-      btn.onclick = () => { c.action(); this.update(); };
-      speedRow.appendChild(btn);
-      this.speedBtns[c.key] = btn;
-    }
-    section.appendChild(speedRow);
-    const mkRow = (label: string, action: () => void, tint: string) => {
-      const b = document.createElement("button");
-      b.textContent = label;
-      Object.assign(b.style, {
-        display: "block", width: "100%", marginBottom: "3px",
-        padding: "4px 6px", background: tint, color: "#fff5dc",
-        border: "1px solid rgba(255,245,220,0.18)",
-        borderRadius: "4px", cursor: "pointer", font: "inherit", fontSize: "10px",
-      } as Partial<CSSStyleDeclaration>);
-      b.onclick = action;
-      section.appendChild(b);
-    };
-    mkRow("+$500 starter grant", () => { this.game.economy.earnMoney(500, "grant"); this.update(); }, "rgba(120, 140, 200, 0.18)");
-    mkRow("Tuning sliders",      () => this.actions.openAdmin(), "rgba(120, 140, 200, 0.18)");
-    mkRow("Reset save",          () => this.actions.resetSave(), "rgba(200, 80, 80, 0.18)");
+    attachTooltip(resetBtn,
+      "RESET SAVE — character wipe.\n" +
+      "Releases your current plot, deletes your restaurant, achievements, " +
+      "and leaderboard scores. Your username and password are kept; you go " +
+      "back to the plot picker as if starting fresh. There's a confirmation " +
+      "dialog — no surprise wipes."
+    );
+    resetBtn.onclick = () => this.actions.resetSave();
+    section.appendChild(resetBtn);
     this.root.appendChild(section);
-  }
-
-  private toggleDev(): void {
-    this.devOpen = !this.devOpen;
-    if (this.devSection) this.devSection.style.display = this.devOpen ? "block" : "none";
   }
 
   private tinyBtnStyle(): Record<string, string> {
@@ -663,16 +654,13 @@ export class Hud {
       this.musicBtn.style.opacity = muted ? "0.45" : "1";
       this.musicBtn.title = muted ? "Music off — click to enable" : "Music on — click to mute";
     }
-    if (this.devToggle) {
-      this.devToggle.style.background = this.devOpen ? "rgba(255,245,220,0.18)" : "rgba(180, 180, 180, 0.18)";
-      // Show Dev tools ONLY for the admin account (Dunnin). Even in
-      // dev builds, non-admin test accounts (Alice, etc.) shouldn't
-      // see the cheats — the owner specifically asked for this gate
-      // to be strict so their dev-mode test users can't accidentally
-      // (or intentionally) wander into the admin panel.
+    if (this.devToolsBtn) {
+      // Show Dev tools ONLY for the admin account. Non-admin test
+      // accounts shouldn't see the cheats — strict gate, no DEV-mode
+      // escape hatch. Clicking the button (when visible) opens
+      // AdminModal directly.
       const shouldShow = this.actions.isAdmin?.() ?? false;
-      this.devToggle.style.display = shouldShow ? "" : "none";
-      if (!shouldShow && this.devSection) this.devSection.style.display = "none";
+      this.devToolsBtn.style.display = shouldShow ? "" : "none";
     }
   }
 }

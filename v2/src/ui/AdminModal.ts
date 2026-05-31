@@ -4,6 +4,16 @@ import { STAFF_UPGRADE_MAX } from "../systems/StaffSystem";
 import type { SfxPlayer } from "./SfxPlayer";
 import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 
+/** Same shape as the HUD's TimeControl — passed in by Engine so
+ * the admin panel can host the speed buttons (moved here from the
+ * old in-sidebar dev section). */
+export interface AdminTimeControl {
+  isPaused(): boolean;
+  setPaused(p: boolean): void;
+  getTimeScale(): number;
+  setTimeScale(s: number): void;
+}
+
 /** Every appliance loop the SfxPlayer can drive, plus a couple of
  * one-shots, exposed in the admin "Audio test" section so the dev can
  * audition them in isolation. Each loop entry maps to the LoopId in
@@ -125,6 +135,7 @@ export class AdminModal {
   private readonly game: Game;
   private readonly sfx: SfxPlayer;
   private readonly cloud: SpacetimeClient | null;
+  private readonly time: AdminTimeControl | null;
   private readonly root: HTMLElement;
   private readonly body: HTMLElement;
   /** Cloud-admin sections live here so we can re-render the lists
@@ -151,10 +162,11 @@ export class AdminModal {
    * off when the modal closes so a hidden loop doesn't keep playing. */
   private audioTestActive = new Set<string>();
 
-  constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer, cloud: SpacetimeClient | null = null) {
+  constructor(parent: HTMLElement, game: Game, sfx: SfxPlayer, cloud: SpacetimeClient | null = null, time: AdminTimeControl | null = null) {
     this.game = game;
     this.sfx = sfx;
     this.cloud = cloud;
+    this.time = time;
     // Audio-test CSS animations (shimmer / progress bar) are static —
     // one stylesheet shared across all AdminModal lifetimes.
     ensureAudioTestStyles();
@@ -224,6 +236,12 @@ export class AdminModal {
     resetBtn.style.marginTop = "4px";
     this.body.appendChild(resetBtn);
 
+    // === Game speed section (only if a TimeControl was wired) ===
+    // Migrated from the in-sidebar dev section (P12). Sits between
+    // the sliders and Money so the most-used dev controls (speed +
+    // money) are grouped near the top.
+    if (this.time) body.appendChild(this.buildSpeedSection(this.time));
+
     // === Money section ===
     body.appendChild(this.buildMoneySection());
 
@@ -260,6 +278,42 @@ export class AdminModal {
   // ============================================================
   //                          SECTIONS
   // ============================================================
+
+  private buildSpeedSection(time: AdminTimeControl): HTMLElement {
+    const section = this.sectionShell("⏱ GAME SPEED");
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const speedBtns: { btn: HTMLButtonElement; key: string }[] = [];
+    const choices: { label: string; tone: "good" | "neutral"; apply: () => void; isActive: () => boolean; key: string }[] = [
+      { label: "‖ Pause", tone: "neutral", apply: () => time.setPaused(true),
+        isActive: () => time.isPaused(), key: "pause" },
+      { label: "1×",      tone: "neutral", apply: () => { time.setPaused(false); time.setTimeScale(1); },
+        isActive: () => !time.isPaused() && time.getTimeScale() === 1, key: "1" },
+      { label: "2×",      tone: "neutral", apply: () => { time.setPaused(false); time.setTimeScale(2); },
+        isActive: () => !time.isPaused() && time.getTimeScale() === 2, key: "2" },
+      { label: "4×",      tone: "neutral", apply: () => { time.setPaused(false); time.setTimeScale(4); },
+        isActive: () => !time.isPaused() && time.getTimeScale() === 4, key: "4" },
+    ];
+    const refreshActive = (): void => {
+      for (const c of speedBtns) {
+        const choice = choices.find((x) => x.key === c.key);
+        const active = choice?.isActive() ?? false;
+        c.btn.style.background = active ? "rgba(120, 200, 120, 0.32)" : "rgba(255,245,220,0.10)";
+        c.btn.style.borderColor = active ? "rgba(120, 200, 120, 0.60)" : "rgba(255,245,220,0.25)";
+        c.btn.style.fontWeight = active ? "700" : "600";
+      }
+    };
+    for (const c of choices) {
+      const btn = this.actionButton(c.label, c.tone, () => { c.apply(); refreshActive(); });
+      row.appendChild(btn);
+      speedBtns.push({ btn, key: c.key });
+    }
+    refreshActive();
+    section.appendChild(row);
+    return section;
+  }
 
   private buildMoneySection(): HTMLElement {
     const section = this.sectionShell("💰 MONEY");

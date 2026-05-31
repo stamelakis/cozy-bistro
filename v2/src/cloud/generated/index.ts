@@ -64,6 +64,7 @@ import SignUpReducer from "./sign_up_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
+import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 
 // Import all procedure arg schemas
 
@@ -350,6 +351,7 @@ const reducersSchema = __reducers(
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
+  __reducerSchema("wipe_my_restaurant", WipeMyRestaurantReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

@@ -420,6 +420,17 @@ export class SpacetimeClient {
       this.conn!.reducers.adminDeleteRestaurant({ targetUsername }));
   }
 
+  /** Self-service character wipe — releases THIS player's building
+   * and nukes their player_save / leaderboard / achievement rows.
+   * Username + password are preserved so they can log back in and
+   * pick a new plot. Wraps the wipe_my_restaurant reducer. Called
+   * from the HUD's "Reset save" button after the player confirms
+   * the warning dialog. */
+  wipeMyRestaurant(): Promise<void> {
+    return this.callReducer("wipeMyRestaurant", () =>
+      this.conn!.reducers.wipeMyRestaurant({}));
+  }
+
   // ============================================================================
   //                           P8 — CHAT
   // ============================================================================
