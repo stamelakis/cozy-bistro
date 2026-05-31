@@ -1223,6 +1223,14 @@ export class WorldScene {
     // Upper storeys (tier expansions). Hidden by default; setLuxuryTier
     // toggles them as the player buys each expansion.
     this.addUpperStoreys();
+    // Paris-style exterior decoration — cornice bands between floors,
+    // iron balconies on upper storeys, mansard roof on top. Matches the
+    // city's other Paris shells so the player's building reads as part
+    // of the same neighbourhood. Per-storey decor parents into each
+    // upper-storey group so it inherits the existing tier / focus
+    // visibility (no extra wiring needed). The mansard is managed
+    // separately because its Y depends on the current luxury tier.
+    this.addParisExteriorDecor();
   }
 
   /** Build the 10×10 slab geometry with a rectangular stairwell hole
@@ -1351,9 +1359,10 @@ export class WorldScene {
         lowerGroup.add(stairGroup);
       }
     }
-    // Roof at the top of the topmost storey. Lives outside the per-
-    // storey groups because its visibility tracks "any upper storey
-    // visible" rather than a specific storey's group toggle.
+    // Roof at the top of the topmost storey. Replaced in
+    // addParisExteriorDecor by a mansard whose Y tracks the player's
+    // current luxury tier. This flat plane is kept invisible as a
+    // legacy fallback; the mansard takes over visually.
     const roof = new THREE.Mesh(new THREE.PlaneGeometry(W, W), this.roofMatSolid);
     roof.rotation.x = -Math.PI / 2;
     roof.position.set(0.5, WorldScene.NUM_STOREYS * H, 0.5);
@@ -1361,6 +1370,142 @@ export class WorldScene {
     roof.visible = false;
     this.threeScene.add(roof);
     this.buildingRoof = roof;
+  }
+
+  /** Slate-grey mansard roof that replaces the legacy flat cap.
+   * Re-positioned in applyStoreyVisibility so it always sits on top
+   * of the topmost UNLOCKED storey (tier 1 → on top of ground,
+   * tier 5 → on top of floor 4). Visible only in exterior mode so
+   * interior views can still look down through an open top. */
+  private parisMansard?: THREE.Mesh;
+  private parisMansardCap?: THREE.Mesh;
+  private parisMansardChimney?: THREE.Mesh;
+
+  /** Add cornice bands between floors + iron balconies on upper
+   * storeys + a tier-tracking mansard roof. Mirrors the makeBuildingShell
+   * vocabulary so the player's restaurant reads as the same Paris
+   * Haussmann style as the city's other plot shells. */
+  private addParisExteriorDecor(): void {
+    const W = 10;
+    const H = WorldScene.STOREY_HEIGHT;
+    // Building footprint: walls run from -4.5 to +5.5 (W=10 wide,
+    // centred on x = 0.5). The +Z (south) face is the front.
+    const cornerOffsetCx = 0.5;
+    const cornerOffsetCz = 0.5;
+    const corniceMat = new THREE.MeshStandardMaterial({
+      color: 0xc8b888, roughness: 0.8,
+    });
+    const balconyMat = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1a, roughness: 0.4, metalness: 0.7,
+    });
+
+    // ── Cornice bands ─────────────────────────────────────────────
+    // One band at the top of each storey (y = (idx+1)*H). Storey 0's
+    // cornice sits at y=H and lives at threeScene root because ground
+    // floor is always visible. Storey N's cornice (for N >= 1) is
+    // parented INSIDE storey N's group so it inherits the tier +
+    // focus visibility logic — exact same hide-when-hidden behaviour
+    // every upper-floor mesh already has.
+    for (let idx = 0; idx < WorldScene.NUM_STOREYS; idx += 1) {
+      const cornice = new THREE.Mesh(
+        new THREE.BoxGeometry(W + 0.3, 0.14, W + 0.3),
+        corniceMat,
+      );
+      cornice.position.set(cornerOffsetCx, (idx + 1) * H - 0.04, cornerOffsetCz);
+      cornice.castShadow = true;
+      cornice.receiveShadow = true;
+      if (idx === 0) {
+        // Ground floor's top cornice is always visible — parent it
+        // to the main scene so it doesn't get yanked when the upper
+        // groups hide.
+        this.threeScene.add(cornice);
+      } else {
+        // Storey N >= 1's top cornice rides with that storey's group.
+        // The cornice geometry is at world Y = (N+1)*H but the storey
+        // group has no Y translation (its meshes use absolute Y),
+        // so we just add it directly.
+        const storey = this.upperStoreys.get(idx);
+        if (storey) storey.group.add(cornice);
+      }
+    }
+
+    // ── Iron balconies on upper storey south walls ───────────────
+    // For each upper storey, drop one balcony rail + balusters on
+    // the +Z (front) face just below the mid-floor window line.
+    // Mirrors makeBuildingShell's balcony for the city shells.
+    for (let idx = 1; idx < WorldScene.NUM_STOREYS; idx += 1) {
+      const storey = this.upperStoreys.get(idx);
+      if (!storey) continue;
+      const winY = idx * H + 1.5;             // window centre on upper floor
+      const railY = winY - 0.85;              // rail sits ~85 cm below window
+      const balusterTopY = winY - 0.4;        // baluster top reaches mid-window
+      const southZ = cornerOffsetCz + W / 2 + 0.12; // outside front face
+      // Horizontal rail.
+      const rail = new THREE.Mesh(
+        new THREE.BoxGeometry(W - 0.3, 0.06, 0.10),
+        balconyMat,
+      );
+      rail.position.set(cornerOffsetCx, railY, southZ);
+      storey.group.add(rail);
+      // Vertical balusters every ~0.5 m.
+      const balusters = Math.floor(W / 0.5);
+      const baluster = new THREE.BoxGeometry(0.04, 0.9, 0.04);
+      for (let bi = 0; bi <= balusters; bi += 1) {
+        const bx = (cornerOffsetCx - W / 2 + 0.2) + bi * ((W - 0.4) / balusters);
+        const bar = new THREE.Mesh(baluster, balconyMat);
+        bar.position.set(bx, balusterTopY, southZ);
+        storey.group.add(bar);
+      }
+    }
+
+    // ── Mansard roof ──────────────────────────────────────────────
+    // Two pieces — slate-grey body + slightly inset darker cap — same
+    // recipe as makeBuildingShell. Position.y is recomputed every
+    // time setLuxuryTier / setExteriorMode runs so it always sits on
+    // the topmost unlocked storey. Visibility is exterior-only.
+    const mansardH = 1.2;
+    const mansard = new THREE.Mesh(
+      new THREE.BoxGeometry(W + 0.2, mansardH, W + 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.5, metalness: 0.05 }),
+    );
+    mansard.position.set(cornerOffsetCx, H + mansardH / 2, cornerOffsetCz);
+    mansard.castShadow = true;
+    mansard.visible = false;
+    this.threeScene.add(mansard);
+    this.parisMansard = mansard;
+    const cap = new THREE.Mesh(
+      new THREE.BoxGeometry(W - 0.6, 0.1, W - 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
+    );
+    cap.position.set(cornerOffsetCx, H + mansardH + 0.05, cornerOffsetCz);
+    cap.visible = false;
+    this.threeScene.add(cap);
+    this.parisMansardCap = cap;
+    // Brick chimney on the back-right corner.
+    const chimney = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 1.1, 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 }),
+    );
+    chimney.position.set(
+      cornerOffsetCx + W / 2 - 0.8,
+      H + mansardH + 0.55,
+      cornerOffsetCz - W / 2 + 0.8,
+    );
+    chimney.castShadow = true;
+    chimney.visible = false;
+    this.threeScene.add(chimney);
+    this.parisMansardChimney = chimney;
+
+    // Also paint the wall material more limestone-cream so it matches
+    // the shells' wallColors palette. Per-floor theming clones the
+    // material so existing themed saves are unaffected; this only
+    // updates the base default.
+    if (this.wallMat) {
+      this.wallMat.color.setHex(0xe6d5b5);
+    }
+    if (this.wallExteriorMat) {
+      this.wallExteriorMat.color.setHex(0xe6d5b5);
+    }
   }
 
   /** Build a single flight of stairs running from one storey UP TO the
@@ -3399,17 +3544,29 @@ export class WorldScene {
     for (const [stairIdx, stairGroup] of this.stairFlights) {
       stairGroup.visible = tier >= stairIdx + 1;
     }
-    // Roof: visible only in exterior mode, positioned on top of the
-    // tallest unlocked storey. Hidden in interior mode so the player
-    // can look down into the focused floor (any floor, including the
-    // top one — which lower-floor focus already covers via
-    // atOrBelow, but the roof would otherwise float above an empty
-    // stack at lower focuses).
+    // Legacy flat roof — kept hidden; the Paris mansard below takes
+    // over the visual role.
     if (this.buildingRoof) {
-      this.buildingRoof.visible = this.exteriorMode && tier > 0;
-      // Roof sits on TOP of the topmost unlocked storey. For tier=N
-      // the topmost storey is index N-1, whose top is at N * H.
-      this.buildingRoof.position.y = tier * WorldScene.STOREY_HEIGHT;
+      this.buildingRoof.visible = false;
+    }
+    // Mansard roof + cap + chimney sit on top of the topmost UNLOCKED
+    // storey so the building visibly grows as the player buys
+    // expansions. Exterior-only — in interior view the camera looks
+    // down into the focused floor, so no roof should occlude it.
+    const mansardBaseY = tier * WorldScene.STOREY_HEIGHT;
+    const mansardH = 1.2;
+    const showMansard = this.exteriorMode && tier > 0;
+    if (this.parisMansard) {
+      this.parisMansard.visible = showMansard;
+      this.parisMansard.position.y = mansardBaseY + mansardH / 2;
+    }
+    if (this.parisMansardCap) {
+      this.parisMansardCap.visible = showMansard;
+      this.parisMansardCap.position.y = mansardBaseY + mansardH + 0.05;
+    }
+    if (this.parisMansardChimney) {
+      this.parisMansardChimney.visible = showMansard;
+      this.parisMansardChimney.position.y = mansardBaseY + mansardH + 0.55;
     }
   }
 
