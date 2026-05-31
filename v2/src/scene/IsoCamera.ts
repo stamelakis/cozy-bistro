@@ -40,11 +40,28 @@ export class IsoCamera {
   private tweenElapsed = 0;
   private tweenDur = 0;
 
+  /** Vertical asymmetry on the orthographic frustum. Top and bottom
+   * extend (zoom × TOP_FRAC) and (zoom × BOT_FRAC) above/below the
+   * look-at target, respectively. With a symmetric (1, 1) frustum at
+   * iso angle, half the viewport's rays project to BELOW Y=0 — the
+   * camera "wastes" the entire bottom half of the screen on void
+   * because there's no geometry below the ground. Biasing the
+   * frustum upward (TOP > BOT) puts the target near the bottom of
+   * the screen and frees the bulk of the viewport for world content
+   * above the ground.  The 1.7/0.3 split positions the target 15%
+   * from the bottom of the screen, which reads as a natural "looking
+   * across the city toward the player" composition.  Total vertical
+   * span (TOP + BOT) is still 2.0 so the wheel/zoom math doesn't
+   * need to change. */
+  private static readonly FRUSTUM_TOP_FRAC = 1.7;
+  private static readonly FRUSTUM_BOT_FRAC = 0.3;
+
   constructor(viewW: number, viewH: number) {
     const aspect = viewW / viewH;
     this.threeCamera = new THREE.OrthographicCamera(
       -this.zoom * aspect, this.zoom * aspect,
-      this.zoom, -this.zoom,
+      this.zoom * IsoCamera.FRUSTUM_TOP_FRAC,
+      -this.zoom * IsoCamera.FRUSTUM_BOT_FRAC,
       0.1, 1000,
     );
     this.updatePose();
@@ -64,8 +81,8 @@ export class IsoCamera {
     const aspect = w / h;
     this.threeCamera.left = -this.zoom * aspect;
     this.threeCamera.right = this.zoom * aspect;
-    this.threeCamera.top = this.zoom;
-    this.threeCamera.bottom = -this.zoom;
+    this.threeCamera.top = this.zoom * IsoCamera.FRUSTUM_TOP_FRAC;
+    this.threeCamera.bottom = -this.zoom * IsoCamera.FRUSTUM_BOT_FRAC;
     this.threeCamera.updateProjectionMatrix();
   }
 
