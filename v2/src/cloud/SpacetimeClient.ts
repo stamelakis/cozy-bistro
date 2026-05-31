@@ -148,6 +148,48 @@ export class SpacetimeClient {
     return this.callReducer("claimBuilding", () => this.conn!.reducers.claimBuilding({ buildingId }));
   }
 
+  /** Publish this player's save snapshot to the server. Called by
+   * SaveSystem on every autosave so visitors can subscribe to the
+   * latest restaurant state. Fire-and-forget — failures (offline,
+   * blob too big) log to console but don't surface to the player. */
+  publishPlayerSave(blob: string, dayNumber: number, money: number, ratingAvg: number, luxuryTier: number): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.publishPlayerSave({
+        data: blob,
+        dayNumber,
+        money: BigInt(Math.trunc(money)),
+        ratingAvg,
+        luxuryTier,
+      });
+    } catch (e) {
+      console.warn("[Cloud] publishPlayerSave failed:", e);
+    }
+  }
+
+  /** Fetch the cached save snapshot for the given identity (returns
+   * null if the player hasn't published yet). Used by P4 visit mode
+   * to load another player's restaurant state. */
+  getPlayerSave(identity: Identity): { data: string; dayNumber: number; money: number; ratingAvg: number; luxuryTier: number; updatedAt: bigint } | null {
+    if (!this.conn) return null;
+    try {
+      for (const row of this.conn.db.player_save.iter()) {
+        if (!identityEquals(row.identity, identity)) continue;
+        return {
+          data: row.data,
+          dayNumber: row.dayNumber,
+          money: Number(row.money),
+          ratingAvg: row.ratingAvg,
+          luxuryTier: row.luxuryTier,
+          // microsTimestamp comes back as { __timestamp_micros_since_unix_epoch__: bigint }
+          // Just return a bigint of the micros value for simplicity.
+          updatedAt: (row.updatedAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0),
+        };
+      }
+    } catch { /* table not yet wired */ }
+    return null;
+  }
+
   /** Every known account on this server (auth_record snapshot).
    * SocialModal's username search drives off this. Includes self
    * unless the caller filters. */
@@ -354,6 +396,10 @@ export class SpacetimeClient {
       // and Engine.refreshCityBuildings.
       ctx.db.building.onInsert(ping);
       ctx.db.building.onUpdate(ping);
+      // P4 visit mode — when another player publishes a save, any
+      // open visit overlay needs to refresh.
+      ctx.db.player_save.onInsert(ping);
+      ctx.db.player_save.onUpdate(ping);
     } catch (e) {
       // The SDK's onInsert/etc. names occasionally vary by codegen version.
       // Failing to wire just means no live updates — manual refreshes still work.
@@ -402,24 +448,45 @@ export class SpacetimeClient {
   }
 
   /** Push the current game state to the save_snapshot table. Skips if
-   * we don't have an authoritative restaurantId yet. */
+   * we don't have an authoritative restaurantId yet.
+   *
+   * Also publishes to the per-identity `player_save` table so P4 visit
+   * mode has a single canonical save per account that other players
+   * can subscribe to without going through Restaurant.id indirection.
+   * The legacy save_snapshot upsert stays for the multi-restaurant
+   * future; player_save is the one the visit code reads from. */
   cloudSaveNow(): void {
-    if (!this.conn || this.restaurantId == null) return;
+    if (!this.conn) return;
+    let json: string | undefined;
     try {
       const state = this.saver.snapshotForCloud();
-      const json = JSON.stringify(state);
+      json = JSON.stringify(state);
       if (json.length > 256 * 1024) {
         console.warn(`[SpacetimeDB] save too large to upload (${json.length} bytes)`);
         return;
       }
-      this.conn.reducers.saveRestaurantSnapshot({
-        restaurantId: this.restaurantId,
-        data: json,
-        dayNumber: this.game.day.getDayNumber(),
-        money: BigInt(Math.round(this.game.economy.getMoney())),
-        ratingAvg: this.game.reputation.getAverageRating(),
-        luxuryTier: this.game.getLuxuryTier(),
-      });
+      // Legacy restaurant-keyed upsert (only when we have a restaurantId).
+      if (this.restaurantId != null) {
+        this.conn.reducers.saveRestaurantSnapshot({
+          restaurantId: this.restaurantId,
+          data: json,
+          dayNumber: this.game.day.getDayNumber(),
+          money: BigInt(Math.round(this.game.economy.getMoney())),
+          ratingAvg: this.game.reputation.getAverageRating(),
+          luxuryTier: this.game.getLuxuryTier(),
+        });
+      }
+      // P4 — per-identity publish that visit mode subscribes to.
+      // Independent of restaurantId so even pre-restaurant accounts
+      // (e.g. mid signup) get their state synced as soon as they
+      // start autosaving.
+      this.publishPlayerSave(
+        json,
+        this.game.day.getDayNumber(),
+        this.game.economy.getMoney(),
+        this.game.reputation.getAverageRating(),
+        this.game.getLuxuryTier(),
+      );
     } catch (e) {
       console.warn("[SpacetimeDB] cloud save failed", e);
     }

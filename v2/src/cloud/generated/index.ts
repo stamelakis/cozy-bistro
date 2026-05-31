@@ -43,6 +43,7 @@ import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
@@ -67,6 +68,7 @@ import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
 import PlayerRow from "./player_table";
+import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
 import SaveSnapshotRow from "./save_snapshot_table";
 
@@ -209,6 +211,17 @@ const tablesSchema = __schema({
       { name: 'player_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, PlayerRow),
+  player_save: __table({
+    name: 'player_save',
+    indexes: [
+      { accessor: 'identity', name: 'player_save_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'player_save_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, PlayerSaveRow),
   restaurant: __table({
     name: 'restaurant',
     indexes: [
@@ -247,6 +260,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),

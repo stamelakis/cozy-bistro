@@ -1,7 +1,7 @@
 //! Restaurant CRUD + save snapshots.
 
 use spacetimedb::{reducer, ReducerContext, Table};
-use crate::tables::{restaurant, save_snapshot, co_owner, Restaurant, SaveSnapshot};
+use crate::tables::{restaurant, save_snapshot, co_owner, player_save, Restaurant, SaveSnapshot, PlayerSave};
 
 /// Create a new restaurant owned by the caller.
 #[reducer]
@@ -91,6 +91,40 @@ pub fn save_restaurant_snapshot(
         ctx.db.save_snapshot().restaurant_id().update(row);
     } else {
         ctx.db.save_snapshot().insert(row);
+    }
+    Ok(())
+}
+
+/// Upsert THIS player's save snapshot. Called by the client every
+/// autosave so the latest restaurant state is on the server and any
+/// other client can subscribe to see it (used by P4 visit mode).
+/// Owner is always ctx.sender; the public `player_save` table holds
+/// at most one row per Identity.
+#[reducer]
+pub fn publish_player_save(
+    ctx: &ReducerContext,
+    data: String,
+    day_number: u32,
+    money: i64,
+    rating_avg: f32,
+    luxury_tier: u32,
+) -> Result<(), String> {
+    if data.len() > 512 * 1024 {
+        return Err("Save blob too large (>512 KB)".into());
+    }
+    let row = PlayerSave {
+        identity: ctx.sender,
+        data,
+        day_number,
+        money,
+        rating_avg,
+        luxury_tier,
+        updated_at: ctx.timestamp,
+    };
+    if ctx.db.player_save().identity().find(ctx.sender).is_some() {
+        ctx.db.player_save().identity().update(row);
+    } else {
+        ctx.db.player_save().insert(row);
     }
     Ok(())
 }

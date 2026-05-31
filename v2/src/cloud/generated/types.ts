@@ -95,6 +95,17 @@ export const Player = __t.object("Player", {
 });
 export type Player = __Infer<typeof Player>;
 
+export const PlayerSave = __t.object("PlayerSave", {
+  identity: __t.identity(),
+  data: __t.string(),
+  dayNumber: __t.u32(),
+  money: __t.i64(),
+  ratingAvg: __t.f32(),
+  luxuryTier: __t.u32(),
+  updatedAt: __t.timestamp(),
+});
+export type PlayerSave = __Infer<typeof PlayerSave>;
+
 export const Restaurant = __t.object("Restaurant", {
   id: __t.u64(),
   owner: __t.identity(),

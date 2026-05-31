@@ -156,6 +156,34 @@ pub struct SaveSnapshot {
     pub saved_at: Timestamp,
 }
 
+/// Per-player save snapshot, keyed directly by Identity (one save per
+/// account, which matches today's "everyone has one restaurant"
+/// model). This is distinct from the older `save_snapshot` table that
+/// keys by Restaurant.id and goes through a Restaurant row — when P4
+/// visitor mode landed we needed a single canonical save per player
+/// to fetch by identity, and threading every save through a created
+/// Restaurant row added needless ceremony. The legacy table stays
+/// for the multi-restaurant future; this one drives visit mode.
+///
+/// Public so any client can subscribe + render another player's
+/// restaurant. Capped at 512 KB by the reducer (today's saves are
+/// ~20-50 KB so there's plenty of headroom).
+#[table(name = player_save, public)]
+pub struct PlayerSave {
+    /// Owning player. One row per identity.
+    #[primary_key]
+    pub identity: Identity,
+    /// JSON-serialized SaveGameState.
+    pub data: String,
+    /// Denormalized stats so the visit UI can show "$12k · Day 5 ·
+    /// 4.3 stars" without parsing the blob.
+    pub day_number: u32,
+    pub money: i64,
+    pub rating_avg: f32,
+    pub luxury_tier: u32,
+    pub updated_at: Timestamp,
+}
+
 /// Achievement unlocks per player. One row per (player, achievement_id)
 /// pair. Used both for "did this player unlock X" lookups and for global
 /// "what % of players have X" stats via the table size.
