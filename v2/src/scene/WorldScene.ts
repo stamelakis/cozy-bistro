@@ -1130,6 +1130,12 @@ export class WorldScene {
    * can see down into the focused floor. Phase 4 will let the player
    * change this from the HUD; for now it stays at 0. */
   private focusedStorey = 0;
+  /** Exterior mode — when true (player has zoomed out past 40%), the
+   * building reads as a closed structure: every wall solid, every
+   * unlocked storey + roof visible regardless of focus, and the
+   * camera-relative ghost rule in updateWallVisibility is bypassed.
+   * Engine.tick toggles this based on the camera's zoom percent. */
+  private exteriorMode = false;
 
   private addBuilding(): void {
     // === Exterior ground + props ===
@@ -1619,7 +1625,11 @@ export class WorldScene {
    * camera is on the wall's outer face. */
   updateWallVisibility(cameraPos: THREE.Vector3): void {
     if (!this.wallMat || !this.wallGhostMat) return;
+    // In exterior mode (player zoomed out past 40%), every wall is
+    // solid — the building reads as a closed box, no see-through to
+    // the interior. Skip the camera-relative ghost calculation.
     const kindFor = (normalX: number, normalZ: number): "solid" | "ghost" => {
+      if (this.exteriorMode) return "solid";
       const dot = normalX * cameraPos.x + normalZ * cameraPos.z;
       return dot > 0 ? "ghost" : "solid";
     };
@@ -3330,15 +3340,20 @@ export class WorldScene {
   }
 
   /** Recompute which upper storeys + roof render based on the current
-   * tier (which ones are UNLOCKED) and the focused storey (anything
-   * above is HIDDEN so it can't obscure the focused floor). Called
-   * from setLuxuryTier and setFocusedStorey. */
+   * tier (which ones are UNLOCKED), the focused storey (anything
+   * above is HIDDEN so it can't obscure the focused floor), and
+   * whether the player is in exterior mode (zoomed out past 40%,
+   * in which case we show every UNLOCKED storey + the roof so the
+   * building reads as a closed structure). Called from
+   * setLuxuryTier, setFocusedStorey, and setExteriorMode. */
   private applyStoreyVisibility(): void {
     const tier = this.currentTierVisible;
     for (const [storeyIdx, storey] of this.upperStoreys) {
       const unlocked = tier >= storeyIdx + 1;
       const atOrBelow = storeyIdx <= this.focusedStorey;
-      storey.group.visible = unlocked && atOrBelow;
+      // Exterior: every unlocked storey visible.
+      // Interior: only at-or-below the focused storey.
+      storey.group.visible = unlocked && (this.exteriorMode || atOrBelow);
     }
     // Staircases: each flight is parented to the storey it LEAVES
     // FROM, so the lower storey's group visibility already gates focus
@@ -3349,16 +3364,39 @@ export class WorldScene {
     for (const [stairIdx, stairGroup] of this.stairFlights) {
       stairGroup.visible = tier >= stairIdx + 1;
     }
-    // Roof: hide whenever the player is focused on the topmost UNLOCKED
-    // storey, so the view from above isn't blocked by the building's
-    // ceiling. (Lower-floor focus already hides every upper storey via
-    // the atOrBelow check above, so a roof sitting at NUM_STOREYS*H
-    // would just float in the air with nothing under it — also hide
-    // it there.) Net effect: the building never shows a hard roof
-    // when the camera is supposed to see inside the top floor.
+    // Roof: visible only in exterior mode, positioned on top of the
+    // tallest unlocked storey. Hidden in interior mode so the player
+    // can look down into the focused floor (any floor, including the
+    // top one — which lower-floor focus already covers via
+    // atOrBelow, but the roof would otherwise float above an empty
+    // stack at lower focuses).
     if (this.buildingRoof) {
-      this.buildingRoof.visible = false;
+      this.buildingRoof.visible = this.exteriorMode && tier > 0;
+      // Roof sits on TOP of the topmost unlocked storey. For tier=N
+      // the topmost storey is index N-1, whose top is at N * H.
+      this.buildingRoof.position.y = tier * WorldScene.STOREY_HEIGHT;
     }
+  }
+
+  /** Switch the world between interior view (default; see-through walls,
+   * focus-only storey visibility, hidden roof) and exterior view
+   * (closed walls on every side, all unlocked storeys + roof visible
+   * regardless of focus). Engine.tick toggles this based on the
+   * camera's current zoom percentage. */
+  setExteriorMode(on: boolean): void {
+    if (this.exteriorMode === on) return;
+    this.exteriorMode = on;
+    // Re-apply storey/roof visibility immediately. Walls update on the
+    // next frame via updateWallVisibility, which already reads the
+    // mode flag.
+    this.applyStoreyVisibility();
+  }
+
+  /** Whether the world is currently in exterior-only view (see
+   * setExteriorMode). Used by Engine to keep the SFX bus in sync —
+   * interior sounds are muted while exterior mode is active. */
+  isExteriorMode(): boolean {
+    return this.exteriorMode;
   }
 
   /** Current applied tier (used by the door animator). */

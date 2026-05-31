@@ -22,6 +22,11 @@ import type { IsoCamera } from "../scene/IsoCamera";
  */
 export class CameraControls {
   private readonly camera: IsoCamera;
+  /** Callback returning the world (x, z) the Home button should snap
+   * to. Engine wires this to scene.ownedPlotAnchor so the button
+   * always points at the player's claimed building, even if they
+   * later move to a different plot. */
+  private readonly getHomePos: () => { x: number; z: number };
   private readonly zoomPct: HTMLDivElement;
   private readonly dirLabel: HTMLDivElement;
   private readonly dirArrow: HTMLDivElement;
@@ -31,8 +36,9 @@ export class CameraControls {
   /** Rotation step per rotate-button click, in radians (22.5° = π/8). */
   private static readonly ROT_STEP = Math.PI / 8;
 
-  constructor(parent: HTMLElement, camera: IsoCamera) {
+  constructor(parent: HTMLElement, camera: IsoCamera, getHomePos: () => { x: number; z: number }) {
     this.camera = camera;
+    this.getHomePos = getHomePos;
 
     const root = document.createElement("div");
     Object.assign(root.style, {
@@ -103,6 +109,44 @@ export class CameraControls {
     root.appendChild(rotCol);
     this.dirLabel = dirHolder;
     this.dirArrow = dirArrow;
+
+    // ── Home column ────────────────────────────────────────────────
+    // Single tall button that snaps the camera back to the player's
+    // claimed plot at default zoom + default rotation. The current
+    // floor selection (target.y) is preserved so a player who's
+    // building on Floor 2 doesn't get dumped back to ground level.
+    const homeCol = this.makeColumn();
+    const homeBtn = document.createElement("button");
+    homeBtn.textContent = "🏠";
+    homeBtn.title = "Recenter on my restaurant (default zoom + rotation, keep current floor)";
+    Object.assign(homeBtn.style, {
+      height: "100%",
+      minHeight: "98px",
+      padding: "0 8px",
+      background: "rgba(220, 180, 130, 0.22)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255, 220, 150, 0.45)",
+      borderRadius: "6px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "22px",
+      fontWeight: "700",
+      lineHeight: "1",
+      textAlign: "center",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    } as Partial<CSSStyleDeclaration>);
+    homeBtn.onmouseenter = () => { homeBtn.style.background = "rgba(255, 210, 160, 0.40)"; };
+    homeBtn.onmouseleave = () => { homeBtn.style.background = "rgba(220, 180, 130, 0.22)"; };
+    homeBtn.onclick = (e) => {
+      e.preventDefault();
+      const home = this.getHomePos();
+      this.camera.goHome(home.x, home.z);
+      this.update();
+    };
+    homeCol.appendChild(homeBtn);
+    root.appendChild(homeCol);
 
     this.update();
   }

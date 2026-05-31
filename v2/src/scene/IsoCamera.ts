@@ -227,6 +227,29 @@ export class IsoCamera {
     this.updatePose();
   }
 
+  /** Instantly set the look-at target's X / Z (preserves Y so the
+   * player's current floor focus survives the move). */
+  setTargetXZ(x: number, z: number): void {
+    this.target.x = x;
+    this.target.z = z;
+    this.updatePose();
+  }
+
+  /** Reset target X/Z to (x, z), restore default zoom, restore default
+   * azimuth + iso elevation. Target.y is left untouched so whatever
+   * floor the player picked in the FloorSelector survives. Used by
+   * the CameraControls Home button. */
+  goHome(x: number, z: number): void {
+    this.target.x = x;
+    this.target.z = z;
+    this.zoom = IsoCamera.DEFAULT_ZOOM;
+    this.azimuth = IsoCamera.DEFAULT_AZIMUTH;
+    this.elevation = Math.atan(1 / Math.SQRT2); // ~35.26°, the constructor default
+    // Cancel any in-flight floor tween so the snap actually sticks.
+    this.tweenDur = 0;
+    this.resize(window.innerWidth, window.innerHeight);
+  }
+
   private dragButton = 0; // which mouse button started the drag
   private dragMoved = 0;  // total px moved during this drag
 

@@ -282,7 +282,11 @@ export class Engine {
     // Pinned top-left so it doesn't clash with the top-center FloorSelector.
     // Polled from the same 5 Hz HUD tick below so the zoom % and compass
     // arrow track wheel-zoom and right-drag-rotate as well as button clicks.
-    this.cameraControls = new CameraControls(container, this.camera);
+    // The Home button reads the player's plot anchor from the scene so
+    // it always snaps back to the current claimed building, even if the
+    // player later moves to a different plot.
+    this.cameraControls = new CameraControls(container, this.camera,
+      () => ({ x: this.scene.ownedPlotAnchor.x, z: this.scene.ownedPlotAnchor.y }));
     // Classify each floor by what its seats serve so the FloorSelector
     // can show a sub-label under each button (food / drinks / mix /
     // empty). Re-evaluated on the selector's own 1.5s timer so the tag
@@ -1328,6 +1332,14 @@ export class Engine {
     // to the console along with the recent action history.
     this.dishwareLeakWatcher?.tick(rawDt);
     this.scene.update(dt);
+    // Exterior-only view kicks in below the 40% zoom-percent mark:
+    // walls close, all unlocked storeys + roof show regardless of
+    // focus, and the SFX bus mutes. Above the threshold the normal
+    // see-through interior view returns. Driven from the same frame
+    // tick as the wall ghost rule so they always agree.
+    const exterior = this.camera.getZoomPercent() < 0.40;
+    this.scene.setExteriorMode(exterior);
+    this.sfx.setExteriorMuted(exterior);
     // Swap which two exterior walls render as transparent glass based
     // on which side the camera is currently on. Cheap enough to run
     // every frame, and we want it to track right through a camera drag.

@@ -68,6 +68,11 @@ export class SfxPlayer {
   private musicBus: GainNode | null = null;
   private sfxMuted = false;
   private musicMuted = false;
+  /** Independent "the camera zoomed out past the interior threshold"
+   * mute on the SFX bus only — driven by Engine.tick. Doesn't touch
+   * the user's master mute, doesn't persist. Music keeps playing
+   * (it's not an interior sound). */
+  private exteriorMuted = false;
   /** Master volume slider value, 0..1. Drives both the SFX bus gain
    * (×SFX_BUS_MAX_GAIN) and the music audio element volume
    * (×MUSIC_MAX_VOLUME). Persisted across sessions. */
@@ -146,6 +151,17 @@ export class SfxPlayer {
     this.applyBusGain();
   }
 
+  /** Engine.tick calls this when the camera crosses the 40%-zoom
+   * threshold. When `on=true` the SFX bus is silenced and any active
+   * appliance loops stop so the restaurant goes quiet — even though
+   * the user's master mute and the music keep their state. */
+  setExteriorMuted(on: boolean): void {
+    if (this.exteriorMuted === on) return;
+    this.exteriorMuted = on;
+    if (on) this.stopAllLoops();
+    this.applyBusGain();
+  }
+
   /** Volume slider value, 0..1. Drives the SFX bus gain when not muted.
    * Persisted across sessions. */
   getVolume(): number { return this.sfxVolume; }
@@ -162,9 +178,11 @@ export class SfxPlayer {
    * obviously immediate). */
   private applyBusGain(): void {
     // SFX bus — only exists after the AudioContext is created on the
-    // first user gesture.
+    // first user gesture. Silenced when EITHER the user master mute
+    // or the exterior-mode mute is active.
     if (this.sfxBus) {
-      this.sfxBus.gain.value = this.sfxMuted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
+      const muted = this.sfxMuted || this.exteriorMuted;
+      this.sfxBus.gain.value = muted ? 0 : this.sfxVolume * SFX_BUS_MAX_GAIN;
     }
     // Music — applyBusGain is for "user toggled mute or moved the
     // master slider" type events; we don't know the live dusk/dawn
