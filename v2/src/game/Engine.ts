@@ -304,7 +304,7 @@ export class Engine {
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     makeDraggableResizable({
-      storageKey: "cozy-bistro.panel.menu",
+      storageKey: "cozy-bistro.panel.menu.v2",
       root: this.menuPanel.root,
       handle: this.menuPanel.titleEl,
       collapseSentinel: this.menuPanel.body,
@@ -630,7 +630,7 @@ export class Engine {
     this.buildMenu = buildMenu;
     if (buildMenu.rootEl && buildMenu.titleEl) {
       makeDraggableResizable({
-        storageKey: "cozy-bistro.panel.build",
+        storageKey: "cozy-bistro.panel.build.v2",
         root: buildMenu.rootEl,
         handle: buildMenu.titleEl,
         collapseSentinel: buildMenu.bodyEl,
@@ -1164,7 +1164,7 @@ export class Engine {
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
       makeDraggableResizable({
-        storageKey: "cozy-bistro.panel.chat",
+        storageKey: "cozy-bistro.panel.chat.v2",
         root: this.chatPanel.root,
         handle: this.chatPanel.titleBar,
         collapseSentinel: this.chatPanel.body,
@@ -1469,6 +1469,9 @@ export class Engine {
       localStorage.removeItem("cozy-bistro.panel.build");
       localStorage.removeItem("cozy-bistro.panel.menu");
       localStorage.removeItem("cozy-bistro.panel.chat");
+      localStorage.removeItem("cozy-bistro.panel.build.v2");
+      localStorage.removeItem("cozy-bistro.panel.menu.v2");
+      localStorage.removeItem("cozy-bistro.panel.chat.v2");
       // Don't wipe the auth token — keep them logged in for the new pick.
     } catch { /* ignore */ }
     window.location.reload();

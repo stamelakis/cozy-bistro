@@ -69,6 +69,20 @@ const INIT_MARKER = "data-drag-resize-wired";
 /** Padding from viewport edges when clamping drag / resize. */
 const VIEWPORT_PADDING = 4;
 
+/** One-time migration: wipe legacy v1 panel layouts left behind by
+ * the P11/P11.5 bug where dragging a collapsed panel saved its
+ * tiny ~32 px height as the "expanded" size, then later expansions
+ * clipped the body content to that height. The v2 storage keys
+ * use proper save-only-when-expanded logic. Runs at module load
+ * before any panel attaches. */
+(() => {
+  try {
+    for (const k of ["cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat"]) {
+      localStorage.removeItem(k);
+    }
+  } catch { /* private mode / quota — fine to skip */ }
+})();
+
 export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   const { root, handle, storageKey, onChange } = opts;
   const minW = opts.minWidth ?? 180;
@@ -177,7 +191,12 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     activePointerId = -1;
     if (committed) {
       try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-      saveCurrentLayout(storageKey, root);
+      // Pass isExpanded so saveCurrentLayout preserves the
+      // last-known EXPANDED height even when the user drags a
+      // collapsed panel — otherwise the collapsed title-only
+      // height (~32 px) gets stored as the "expanded" size and
+      // the panel clips its body to 32 px the next time it opens.
+      saveCurrentLayout(storageKey, root, isExpanded);
       onChange?.();
     }
     if (didDrag) {
@@ -369,7 +388,9 @@ function wireResize(
     active = false;
     pid = -1;
     try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
-    saveCurrentLayout(storageKey, root);
+    // Resize is gated to expanded-only by onDown (expandedGate),
+    // so always treat this save as an expanded-state save.
+    saveCurrentLayout(storageKey, root, true);
     onChange?.();
   };
   handle.addEventListener("pointerdown", onDown);
@@ -399,35 +420,53 @@ function applyLayout(root: HTMLElement, left: number, top: number, width?: numbe
   }
 }
 
-function saveCurrentLayout(key: string, root: HTMLElement): void {
+/** Persist current rect to localStorage. `isExpanded` controls
+ * whether the CURRENT height is written:
+ *   • true  → write left/top/width/height as measured.
+ *   • false → write left/top/width but preserve the previously
+ *     saved height. Writing the collapsed title-only height
+ *     (~32 px) would clip the body the next time the panel
+ *     opens — that was the root cause of the "no content" bug
+ *     in chat after dragging while minimized. */
+function saveCurrentLayout(key: string, root: HTMLElement, isExpanded: boolean): void {
   try {
     const rect = root.getBoundingClientRect();
+    let height = rect.height;
+    if (!isExpanded) {
+      const existing = readState(key);
+      if (existing) height = existing.height;
+    }
     const state: SavedState = {
       left: rect.left,
       top: rect.top,
       width: rect.width,
-      height: rect.height,
+      height,
     };
     localStorage.setItem(key, JSON.stringify(state));
   } catch { /* ignore quota / privacy mode */ }
 }
 
 interface SavedState { left: number; top: number; width: number; height: number }
-function loadState(key: string): SavedState | null {
+function readState(key: string): SavedState | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<SavedState>;
     if (typeof parsed.left !== "number" || typeof parsed.top !== "number") return null;
     if (typeof parsed.width !== "number" || typeof parsed.height !== "number") return null;
-    // Sanity-clamp against the current viewport so a saved layout from
-    // a wider monitor doesn't strand the panel offscreen.
-    const left = clamp(parsed.left, VIEWPORT_PADDING, Math.max(VIEWPORT_PADDING, window.innerWidth - 80));
-    const top = clamp(parsed.top, VIEWPORT_PADDING, Math.max(VIEWPORT_PADDING, window.innerHeight - 40));
-    return { left, top, width: parsed.width, height: parsed.height };
+    return parsed as SavedState;
   } catch {
     return null;
   }
+}
+function loadState(key: string): SavedState | null {
+  const parsed = readState(key);
+  if (!parsed) return null;
+  // Sanity-clamp against the current viewport so a saved layout from
+  // a wider monitor doesn't strand the panel offscreen.
+  const left = clamp(parsed.left, VIEWPORT_PADDING, Math.max(VIEWPORT_PADDING, window.innerWidth - 80));
+  const top = clamp(parsed.top, VIEWPORT_PADDING, Math.max(VIEWPORT_PADDING, window.innerHeight - 40));
+  return { left, top, width: parsed.width, height: parsed.height };
 }
 
 function clamp(v: number, lo: number, hi: number): number {
