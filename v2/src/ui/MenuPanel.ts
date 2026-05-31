@@ -64,18 +64,18 @@ export class MenuPanel {
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
     this.root = document.createElement("div");
-    // Widened from 720 → 900 max to accommodate the right-side
-    // summary panel (~180 px) without squishing the recipe rows.
-    // The vw-clamp keeps it from crashing into the sidebar / build
-    // menu on narrower viewports — at 100vw=1280, width caps at
-    // min(900, 800) = 800, so the panel auto-shrinks gracefully.
+    // 760 max (was 900) — narrower so the panel fits comfortably
+    // alongside the sidebar + build menu + chat. The recipe rows
+    // pack tighter now (price chip sits right next to the
+    // ingredients line, no big gap) so the recipe column is happy
+    // with the smaller footprint. Summary panel still 180 px.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "50%",
       transform: "translateX(-50%)",
       bottom: "12px",
-      maxWidth: "900px",
-      width: "min(900px, calc(100vw - 480px))",
+      maxWidth: "760px",
+      width: "min(760px, calc(100vw - 480px))",
       padding: "8px 12px",
       background: "rgba(20, 14, 10, 0.78)",
       color: "#fff5dc",
@@ -349,7 +349,16 @@ export class MenuPanel {
     Object.assign(row.style, {
       display: "flex",
       alignItems: "center",
-      gap: "8px",
+      // Tighter inter-column gap (was 8) — keeps the price chip
+      // visually close to the ingredient line instead of floating
+      // off in the right margin.
+      gap: "10px",
+      // justify-content default (flex-start) + left's `flex: 0 1
+      // auto` means the row packs everything from the left with
+      // only the configured gap between elements. Any leftover
+      // horizontal space sits at the row's far right, not BETWEEN
+      // the description and the price.
+      justifyContent: "flex-start",
       padding: "4px 6px",
       borderBottom: "1px solid rgba(255,245,220,0.06)",
       opacity: usable ? "1" : "0.45",
@@ -391,7 +400,12 @@ export class MenuPanel {
     row.appendChild(cb);
 
     const left = document.createElement("div");
-    Object.assign(left.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
+    // flex: 0 1 auto (shrink to content, no grow) — was flex: 1 which
+    // expanded the description column to fill ALL remaining row
+    // width, pushing the price chip to the far-right edge with a
+    // huge empty gap between. Now the price sits ~10 px from the
+    // ingredient line.
+    Object.assign(left.style, { flex: "0 1 auto", minWidth: "0" } as Partial<CSSStyleDeclaration>);
     const nameRow = document.createElement("div");
     Object.assign(nameRow.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
     // Plate icon — gives the player an immediate visual cue for what

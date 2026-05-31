@@ -69,9 +69,15 @@ export class ChatPanel {
       position: "fixed",
       left: "280px",
       bottom: "12px",
-      width: "min(300px, calc(100vw - 880px))",
-      minWidth: "240px",
-      maxWidth: "320px",
+      // Slimmer than before — 260 px target with 220 floor / 280 cap.
+      // Some overlap with the centered MenuPanel is unavoidable at
+      // 1280-px viewports (menu_left = chat_left = 280 there), but a
+      // narrower chat keeps that overlap to a bearable strip on
+      // expand, and the panel no longer needs to fly up the screen
+      // to find space.
+      width: "min(260px, calc(100vw - 920px))",
+      minWidth: "220px",
+      maxWidth: "280px",
       maxHeight: "32px", // minimized by default
       display: "flex",
       flexDirection: "column",
@@ -494,22 +500,16 @@ export class ChatPanel {
    * setMinimized so the constructor can call it once everything is
    * mounted without going through the full toggle path.
    *
-   * When expanded the panel LIFTS above the MenuPanel's max possible
-   * expanded height (~30vh body + 50 px chrome) so the chat body
-   * doesn't visually crash into the menu's recipe rows. When
-   * minimized it drops back to bottom: 12 px as a slim title bar
-   * that only overlaps the menu's bottom-most strip. */
+   * Stays anchored at bottom: 12 px in BOTH states — the owner
+   * preferred a stable position over the previous fly-up behaviour.
+   * Expanded just grows the panel upward in place; some overlap with
+   * the centered MenuPanel is accepted as a normal trade-off. */
   private applyMinimizedStyles(): void {
     const min = this.minimized;
     this.body.style.display = min ? "none" : "flex";
     this.tabsRow.style.display = min ? "none" : "flex";
     this.toggleBtn.textContent = min ? "▴" : "▾";
     this.root.style.maxHeight = min ? "32px" : "280px";
-    // Lift the panel above the MenuPanel's expanded body when open.
-    // MenuPanel's content area maxHeight is 30vh; plus tier tabs (~30
-    // px) + title (~22 px) + body padding = ~60 px of chrome. Adding
-    // 24 px breathing room puts our chat-bottom well clear.
-    this.root.style.bottom = min ? "12px" : "calc(30vh + 84px)";
   }
 
   destroy(): void {
