@@ -2109,14 +2109,18 @@ export class WorldScene {
     this.makeCityAvenue("ns", -70);
     // East outer-ring boundary — mirror on x=+70.
     this.makeCityAvenue("ns",  70);
-    // Middle NS link road at x=0. There's no plot at (0, 0) so this
-    // strip fits in the clear corridor between the north plot row
-    // (z=-48) and the south plot row (z=+48). Plots at (0, ±48)
-    // sit ON the x=0 line so the strip stops 6 m short of each to
-    // avoid the building footprints. Length 84 m centred at z=0
-    // covers z=-42..+42, crossing the north service avenue and
-    // the legacy main road on the way.
-    this.makeCityAvenue("ns", 0, 84, 0);
+    // Two intermediate EW avenues filling the gap between the rows.
+    // - z=-22: between the north service (z=-36) and the middle
+    //   plot row (z=0). Avenue extent z=-27.5..-16.5 — clears the
+    //   middle row's north edge (z=-5.5) with an 11 m grass strip
+    //   and the north row's south edge (z=-42.5) with a 15 m
+    //   strip. Scenery street-follow houses naturally line it.
+    // - z=+30: between the legacy main (z=13.5) and the south
+    //   plot row (z=+48). Avenue extent z=+24.5..+35.5 — clears
+    //   the middle row south edge (z=+5.5) with 19 m and the
+    //   south row north edge (z=+43) with 7.5 m.
+    this.makeCityAvenue("ew", -22);
+    this.makeCityAvenue("ew",  30);
   }
 
   /** Centerlines of every avenue in the city — kept in one place so
@@ -2124,7 +2128,7 @@ export class WorldScene {
    * future road-aware system (pedestrian spawner, sign placement)
    * all agree on what counts as a street. Public so PedestrianSpawner
    * can route walkers down them. */
-  static readonly EW_AVENUES: readonly number[] = [-36, 13.5, 62];
+  static readonly EW_AVENUES: readonly number[] = [-36, -22, 13.5, 30, 62];
   static readonly NS_AVENUES: readonly number[] = [-70, 70];
   /** Half-length of each avenue strip the pedestrian spawner is
    * allowed to walk on. The avenues themselves are drawn 260 m long
