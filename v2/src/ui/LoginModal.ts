@@ -41,13 +41,19 @@ export class LoginModal {
     // Background = the COZY BISTRO scene artwork (in v2/public/login-bg.png).
     // Vite serves files from `public/` at the project's base URL —
     // BASE_URL is "/cozy-bistro/cozy-bistro-3d/" in prod and
-    // "/cozy-bistro-3d/" in dev. Layering a soft radial-vignette on top
-    // of the image gives the form card enough contrast against the
-    // brighter parts of the scene (kitchen lights, sign) without
-    // washing out the painterly look.
+    // "/cozy-bistro-3d/" in dev.
     //
-    // Fallback color sits under the image so a CDN miss still shows a
-    // warm amber backdrop instead of plain white.
+    // background-size: contain (NOT cover) — `cover` scaled the
+    // image up to fill the viewport which on wide displays meant
+    // 28%+ zoom-in plus 300+ px cropped off the top/bottom. `contain`
+    // shows the WHOLE artwork at the largest size that fits without
+    // cropping; the warm-amber fallback color fills any letterboxed
+    // space at the sides (or top/bottom on a narrow viewport). Same
+    // framing on every screen, no surprise crops.
+    //
+    // The radial vignette over the top adds a subtle darkening so
+    // the form card still has contrast against the bright kitchen
+    // and the sign in the center of the painting.
     const bgUrl = `${import.meta.env.BASE_URL}login-bg.png`;
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
@@ -56,7 +62,7 @@ export class LoginModal {
       alignItems: "center", justifyContent: "center",
       background:
         `radial-gradient(ellipse at center, rgba(20, 12, 8, 0.15) 0%, rgba(20, 12, 8, 0.55) 100%), ` +
-        `url('${bgUrl}') center / cover no-repeat, ` +
+        `url('${bgUrl}') center / contain no-repeat, ` +
         `rgba(40, 24, 14, 0.96)`,
       zIndex: "2000",
       pointerEvents: "auto",

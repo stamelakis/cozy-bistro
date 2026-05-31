@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cozy Bistro 3D</title>
+    <!-- Preload the login background so it starts downloading in
+         parallel with the JS bundle instead of waiting for the
+         LoginModal to construct + paint its style. Cuts the perceived
+         "blank background" gap when the modal first appears. -->
+    <link rel="preload" as="image" href="./login-bg.png" />
     <style>
       html, body {
         margin: 0;
