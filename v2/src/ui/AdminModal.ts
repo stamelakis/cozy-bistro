@@ -446,7 +446,20 @@ export class AdminModal {
     ];
     for (const w of weathers) {
       row.appendChild(this.actionButton(`${w.emoji} ${w.label}`, w.kind, () => {
-        this.game.weather.setById(w.id);
+        // Weather is now GLOBAL — route the admin pick through the
+        // server reducer so every connected client switches at the
+        // same wallclock moment. Falls back to the local-only
+        // setter if no cloud is wired (offline play).
+        if (this.cloud) {
+          this.cloud.adminSetWeather(w.id).catch((err) => {
+            console.warn("[Admin] adminSetWeather failed:", err);
+            // Local fallback so the admin still sees their pick
+            // even when the reducer round-trip fails for any reason.
+            this.game.weather.setById(w.id);
+          });
+        } else {
+          this.game.weather.setById(w.id);
+        }
       }));
     }
     section.appendChild(row);

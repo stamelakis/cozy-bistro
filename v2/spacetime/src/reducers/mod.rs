@@ -12,6 +12,7 @@ mod leaderboard;
 mod friends;
 mod pedestrians;
 mod chat;
+mod weather;
 
 pub use lifecycle::*;
 pub use auth::*;
@@ -22,3 +23,4 @@ pub use leaderboard::*;
 pub use friends::*;
 pub use pedestrians::*;
 pub use chat::*;
+pub use weather::*;

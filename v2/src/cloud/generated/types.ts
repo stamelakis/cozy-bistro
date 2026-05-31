@@ -178,3 +178,16 @@ export const VisitEvent = __t.object("VisitEvent", {
 });
 export type VisitEvent = __Infer<typeof VisitEvent>;
 
+export const WeatherSchedule = __t.object("WeatherSchedule", {
+  id: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type WeatherSchedule = __Infer<typeof WeatherSchedule>;
+
+export const WeatherState = __t.object("WeatherState", {
+  id: __t.u32(),
+  kind: __t.string(),
+  since: __t.timestamp(),
+});
+export type WeatherState = __Infer<typeof WeatherState>;
+

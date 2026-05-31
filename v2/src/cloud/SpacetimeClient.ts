@@ -775,6 +775,11 @@ export class SpacetimeClient {
       ctx.db.password_reset_request.onInsert(ping);
       ctx.db.password_reset_request.onUpdate(ping);
       ctx.db.password_reset_request.onDelete(ping);
+      // Global weather — server's periodic weather_roll updates the
+      // single weather_state row; clients re-render the rain / snow
+      // / festival visuals + the HUD weather chip in response.
+      ctx.db.weather_state.onInsert(ping);
+      ctx.db.weather_state.onUpdate(ping);
       // P8 chat — drive ChatPanel live re-render on every new
       // message. Insert fires for both sent and received messages;
       // the panel filters by active channel and tracks unread
@@ -1124,6 +1129,29 @@ export class SpacetimeClient {
     }
     this.conn?.disconnect();
     this.conn = null;
+  }
+
+  /** Current global weather kind ("sunny", "cloudy", "rainy",
+   * "heavy-rain", "festival", "cold", "snowy"). Reads from the
+   * server-side weather_state row maintained by the periodic
+   * weather_roll reducer. Returns null when the cache hasn't
+   * landed yet — callers fall back to "sunny" or whatever local
+   * default makes sense. */
+  getCurrentWeatherKind(): string | null {
+    if (!this.conn) return null;
+    try {
+      const row = this.conn.db.weather_state.id.find(1);
+      return row?.kind ?? null;
+    } catch { return null; }
+  }
+
+  /** Admin-only — force the global weather to the given kind. The
+   * AdminModal weather preview buttons call this so the admin can
+   * try rain / snow / festival without waiting for the next
+   * 8-minute roll. Non-admins get rejected by the reducer. */
+  adminSetWeather(kind: string): Promise<void> {
+    return this.callReducer("adminSetWeather", () =>
+      this.conn!.reducers.adminSetWeather({ kind }));
   }
 
   /** Count players whose last_seen_at falls within the online window

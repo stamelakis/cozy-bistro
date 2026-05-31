@@ -31,34 +31,63 @@ export const WEATHER_TYPES: readonly WeatherType[] = [
 ];
 
 export class WeatherSystem {
-  private current: WeatherType;
+  /** Local fallback used when no cloud provider is wired or the
+   * cloud cache hasn't landed yet. Once the cloud provider is set
+   * AND returns a known kind, getCurrent() reads from there and
+   * this field is ignored. */
+  private localFallback: WeatherType;
+  /** Optional source of truth — when set, getCurrent() consults
+   * this callback. Engine wires it to SpacetimeClient.getCurrentWeatherKind
+   * so weather is GLOBAL across every connected client (rolled
+   * server-side by the weather_roll reducer). When the callback
+   * returns null/unknown, we fall back to localFallback so offline
+   * play still shows a sky. */
+  private cloudProvider?: () => string | null;
 
   constructor() {
     // Sunny on day 1 so the player isn't immediately confused by rain.
-    this.current = WEATHER_TYPES[0];
+    this.localFallback = WEATHER_TYPES[0];
+  }
+
+  /** Engine calls this once after the cloud connects so weather
+   * reads route through the server. Pass undefined to detach. */
+  setCloudProvider(fn: (() => string | null) | undefined): void {
+    this.cloudProvider = fn;
   }
 
   getCurrent(): WeatherType {
-    return this.current;
+    if (this.cloudProvider) {
+      const id = this.cloudProvider();
+      if (id) {
+        const match = WEATHER_TYPES.find((w) => w.id === id);
+        if (match) return match;
+      }
+    }
+    return this.localFallback;
   }
 
-  /** Pick a fresh weather for the next day. */
+  /** Pick a fresh weather for the next day — OFFLINE PATH ONLY.
+   * When a cloud provider is wired this is a no-op: weather is
+   * rolled server-side every ~8 real minutes and synced to every
+   * client. */
   rollForNewDay(): void {
+    if (this.cloudProvider) return;
     const total = WEATHER_TYPES.reduce((sum, w) => sum + w.weight, 0);
     let pick = Math.random() * total;
     for (const w of WEATHER_TYPES) {
       pick -= w.weight;
-      if (pick <= 0) { this.current = w; return; }
+      if (pick <= 0) { this.localFallback = w; return; }
     }
-    this.current = WEATHER_TYPES[0];
+    this.localFallback = WEATHER_TYPES[0];
   }
 
-  /** Admin / dev tool: force a specific weather for the current day,
-   * skipping the next roll. Used by the AdminModal weather buttons to
-   * preview rain / snow / festival visuals without waiting for the
-   * day-end roll. Silently no-ops if the id isn't in WEATHER_TYPES. */
+  /** Admin / dev tool: force a specific weather kind. With a cloud
+   * provider wired this is a NO-OP — the admin should use
+   * SpacetimeClient.adminSetWeather instead so the change syncs
+   * to everyone. Kept for the offline-only code path. */
   setById(id: string): void {
+    if (this.cloudProvider) return;
     const next = WEATHER_TYPES.find((w) => w.id === id);
-    if (next) this.current = next;
+    if (next) this.localFallback = next;
   }
 }

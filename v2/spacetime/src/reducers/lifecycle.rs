@@ -38,6 +38,13 @@ pub fn init(ctx: &ReducerContext) {
         });
         log::info!("Chat cleanup schedule installed (every 5 min)");
     }
+    // Global weather schedule + seed the initial weather_state row.
+    // bootstrap_weather is idempotent (skips if either already
+    // exists) so it's safe to call from both init AND as a
+    // standalone manual reducer after a deploy.
+    if let Err(e) = crate::reducers::weather::bootstrap_weather(ctx) {
+        log::warn!("bootstrap_weather failed during init: {}", e);
+    }
 }
 
 /// Called automatically whenever a client connects (after the WebSocket

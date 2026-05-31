@@ -355,6 +355,38 @@ pub struct Pedestrian {
     pub target_plot_id: u64,
 }
 
+/// Global weather state shared by every connected client. Exactly
+/// one row (id=1) maintained by the periodic weather_roll reducer;
+/// clients subscribe and render whichever `kind` is currently set.
+/// Making this server-side means rain in player A's town is rain
+/// in player B's town at the same moment — same wallclock weather
+/// across the whole map, instead of each client rolling its own.
+///
+/// `kind` is the same id the client's WeatherSystem already uses
+/// ("sunny", "cloudy", "rainy", "heavy-rain", "festival", "cold",
+/// "snowy"). The client falls back to "sunny" if the value is
+/// missing or unknown.
+#[table(name = weather_state, public)]
+pub struct WeatherState {
+    #[primary_key]
+    pub id: u32,
+    pub kind: String,
+    /// When this weather started — clients can show a "since X
+    /// minutes ago" hint if they want. Mostly diagnostic.
+    pub since: Timestamp,
+}
+
+/// Scheduled-tick row that drives weather_roll. Single Interval
+/// scheduled row inserted in init / bootstrap_weather_schedule
+/// so the server picks a new weather every ~8 real minutes.
+#[table(name = weather_schedule, scheduled(crate::reducers::weather_roll))]
+pub struct WeatherSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 /// Periodic schedule row that triggers the pedestrian_tick reducer.
 /// The init lifecycle reducer inserts ONE row with an Interval
 /// schedule (every ~2 seconds); the SDK then fires pedestrian_tick on

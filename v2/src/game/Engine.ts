@@ -1224,6 +1224,13 @@ export class Engine {
         }
       }
       this.game.setAuthGated(false);
+      // Global weather — route the local WeatherSystem to the
+      // server's weather_state table. Other clients see the same
+      // rain / snow / festival at the same wallclock time. The
+      // provider returns null when the cache hasn't landed yet;
+      // WeatherSystem falls back to its local default in that
+      // case (a brief sunny flash before the first sync).
+      this.game.weather.setCloudProvider(() => this.cloud.getCurrentWeatherKind());
       // P8 — spawn the persistent chat panel now that we know the
       // player is authenticated AND the cloud is wired (the panel
       // subscribes to the chat_message table during construction).

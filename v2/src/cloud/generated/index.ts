@@ -38,10 +38,12 @@ import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import AdminSetWeatherReducer from "./admin_set_weather_reducer";
 import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
+import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
@@ -85,6 +87,7 @@ import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
 import SaveSnapshotRow from "./save_snapshot_table";
 import VisitEventRow from "./visit_event_table";
+import WeatherStateRow from "./weather_state_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -317,6 +320,17 @@ const tablesSchema = __schema({
       { name: 'visit_event_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, VisitEventRow),
+  weather_state: __table({
+    name: 'weather_state',
+    indexes: [
+      { accessor: 'id', name: 'weather_state_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'weather_state_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, WeatherStateRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -325,10 +339,12 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("admin_set_weather", AdminSetWeatherReducer),
   __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
+  __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
