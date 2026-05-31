@@ -91,6 +91,10 @@ export class VisitMode {
    * placements. Returns the raw JSON blob (the same string the
    * publish_player_save reducer received). */
   fetchVisitedSaveBlob?: (ownerHex: string) => string | null;
+  /** Engine wires this to SpacetimeClient.recordVisit so the
+   * visited player's client can pick up the event and surface a
+   * "X is visiting your restaurant" toast. Fire-and-forget. */
+  recordVisit?: (hostHex: string) => void;
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -244,6 +248,9 @@ export class VisitMode {
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
+    // P5.8 — let the host's client know they have a visitor. The
+    // host then surfaces a toast via its visit_event subscription.
+    this.recordVisit?.(plot.ownerHex);
     this.onEnter?.(plot);
   }
 

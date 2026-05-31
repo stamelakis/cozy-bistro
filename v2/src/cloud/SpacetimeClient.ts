@@ -158,6 +158,28 @@ export class SpacetimeClient {
     return this.callReducer("claimBuilding", () => this.conn!.reducers.claimBuilding({ buildingId }));
   }
 
+  /** P5.8 — record that this player just entered visit mode on
+   * `host`'s plot. The host's client subscribes to visit_event and
+   * surfaces a "👀 X is visiting" toast. Fire-and-forget. */
+  recordVisit(host: Identity): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.recordVisit({ host });
+    } catch (e) {
+      console.warn("[Cloud] recordVisit failed:", e);
+    }
+  }
+
+  /** Listener hook the Engine sets to receive new visit_event rows
+   * where host == this player. Engine wraps the callback in a toast.
+   * Returns an unsubscribe fn so Engine can detach cleanly. */
+  onVisitedByOther(cb: (visitorHex: string) => void): () => void {
+    this.visitListeners.add(cb);
+    return () => { this.visitListeners.delete(cb); };
+  }
+
+  private readonly visitListeners = new Set<(visitorHex: string) => void>();
+
   /** Publish this player's save snapshot to the server. Called by
    * SaveSystem on every autosave so visitors can subscribe to the
    * latest restaurant state. Fire-and-forget — failures (offline,
@@ -456,6 +478,19 @@ export class SpacetimeClient {
       // happen client-side via lerp; the server only spawns + despawns.
       ctx.db.pedestrian.onInsert(ping);
       ctx.db.pedestrian.onDelete(ping);
+      // P5.8 — visit-event inserts trigger the host's toast. We
+      // filter to events where host == self inside the listener so
+      // other players' visit activity stays quiet (and we don't
+      // spam Bob's screen with "Alice visited Carol").
+      ctx.db.visit_event.onInsert((_evCtx, row) => {
+        ping();
+        const me = this.identity;
+        if (!me) return;
+        if (row.host.toHexString() !== me.toHexString()) return;
+        for (const cb of this.visitListeners) {
+          try { cb(row.visitor.toHexString()); } catch { /* ignore */ }
+        }
+      });
     } catch (e) {
       // The SDK's onInsert/etc. names occasionally vary by codegen version.
       // Failing to wire just means no live updates — manual refreshes still work.

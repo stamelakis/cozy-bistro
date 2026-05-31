@@ -147,3 +147,11 @@ export const SaveSnapshot = __t.object("SaveSnapshot", {
 });
 export type SaveSnapshot = __Infer<typeof SaveSnapshot>;
 
+export const VisitEvent = __t.object("VisitEvent", {
+  id: __t.u64(),
+  visitor: __t.identity(),
+  host: __t.identity(),
+  visitedAt: __t.timestamp(),
+});
+export type VisitEvent = __Infer<typeof VisitEvent>;
+

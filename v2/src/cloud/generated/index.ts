@@ -46,6 +46,7 @@ import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
+import RecordVisitReducer from "./record_visit_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
@@ -74,6 +75,7 @@ import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
 import SaveSnapshotRow from "./save_snapshot_table";
+import VisitEventRow from "./visit_event_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -261,6 +263,23 @@ const tablesSchema = __schema({
       { name: 'save_snapshot_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
     ],
   }, SaveSnapshotRow),
+  visit_event: __table({
+    name: 'visit_event',
+    indexes: [
+      { accessor: 'host', name: 'visit_event_host_idx_btree', algorithm: 'btree', columns: [
+        'host',
+      ] },
+      { accessor: 'id', name: 'visit_event_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'visitor', name: 'visit_event_visitor_idx_btree', algorithm: 'btree', columns: [
+        'visitor',
+      ] },
+    ],
+    constraints: [
+      { name: 'visit_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, VisitEventRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -277,6 +296,7 @@ const reducersSchema = __reducers(
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
+  __reducerSchema("record_visit", RecordVisitReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),

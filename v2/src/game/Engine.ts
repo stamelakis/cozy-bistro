@@ -336,6 +336,21 @@ export class Engine {
       const save = this.cloud.getPlayerSave(acct.identity);
       return save?.data ?? null;
     };
+    // P5.8 — let the host's client know we're visiting so they can
+    // toast "👀 X is visiting your restaurant".
+    this.visitMode.recordVisit = (hostHex: string) => {
+      const accounts = this.cloud.listAccounts();
+      const acct = accounts.find((a) => a.identity.toHexString() === hostHex);
+      if (!acct) return;
+      this.cloud.recordVisit(acct.identity);
+    };
+    // Inbound side: subscribe to visit_event inserts targeting this
+    // identity. Show a small bottom-right toast that auto-fades.
+    this.cloud.onVisitedByOther((visitorHex: string) => {
+      const accounts = this.cloud.listAccounts();
+      const visitor = accounts.find((a) => a.identity.toHexString() === visitorHex);
+      this.showVisitToast(visitor?.displayName ?? "Someone");
+    });
     // Home button while visiting should exit visit mode first so the
     // player goes back to their own restaurant cleanly.
     const originalGoHome = this.camera.goHome.bind(this.camera);
@@ -1151,6 +1166,41 @@ export class Engine {
     window.setTimeout(tick, stepMs);
   }
 
+  /** P5.8 — bottom-right toast: "👀 [Name] is visiting your restaurant".
+   * Auto-fades after 5 s. Stacks if multiple land in quick succession
+   * (each toast pushes the previous one upward via DOM flow).
+   * Container is the same #app the rest of the UI lives in so the
+   * toast doesn't survive a page navigation. */
+  private showVisitToast(visitorName: string): void {
+    const toast = document.createElement("div");
+    Object.assign(toast.style, {
+      position: "fixed",
+      right: "20px",
+      bottom: "20px",
+      background: "rgba(20, 14, 10, 0.94)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255, 220, 150, 0.55)",
+      borderRadius: "10px",
+      padding: "10px 14px",
+      font: "13px/1.3 system-ui, sans-serif",
+      boxShadow: "0 4px 18px rgba(0, 0, 0, 0.45)",
+      zIndex: "30",
+      pointerEvents: "auto",
+      maxWidth: "280px",
+      opacity: "0",
+      transition: "opacity 200ms ease-out",
+    } as Partial<CSSStyleDeclaration>);
+    toast.innerHTML = `👀 <b>${escapeHtmlForToast(visitorName)}</b> is visiting your restaurant`;
+    this.container.appendChild(toast);
+    // Fade-in next frame so the transition fires.
+    requestAnimationFrame(() => { toast.style.opacity = "1"; });
+    // Fade-out + remove after 5 s.
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      setTimeout(() => toast.remove(), 250);
+    }, 5000);
+  }
+
   private resetSave(): void {
     const slot = this.saver.getActiveSlot();
     const ok = window.confirm(`Reset slot ${slot} and start over? This wipes the current save and reloads the page.`);
@@ -1508,4 +1558,15 @@ export class Engine {
 
     this.renderer.render(this.scene.threeScene, this.camera.threeCamera);
   };
+}
+
+/** Local helper for the visit-toast text — keeps a stray apostrophe
+ * or angle bracket in a display name from breaking the toast's
+ * innerHTML. Tiny enough to live in this file rather than its own. */
+function escapeHtmlForToast(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

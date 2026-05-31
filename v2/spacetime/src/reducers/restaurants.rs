@@ -1,7 +1,7 @@
 //! Restaurant CRUD + save snapshots.
 
-use spacetimedb::{reducer, ReducerContext, Table};
-use crate::tables::{restaurant, save_snapshot, co_owner, player_save, Restaurant, SaveSnapshot, PlayerSave};
+use spacetimedb::{reducer, ReducerContext, Identity, Table};
+use crate::tables::{restaurant, save_snapshot, co_owner, player_save, visit_event, Restaurant, SaveSnapshot, PlayerSave, VisitEvent};
 
 /// Create a new restaurant owned by the caller.
 #[reducer]
@@ -131,5 +131,27 @@ pub fn publish_player_save(
     } else {
         ctx.db.player_save().insert(row);
     }
+    Ok(())
+}
+
+/// P5.8 — record that ctx.sender just entered visit mode on `host`'s
+/// plot. Inserts a single visit_event row; the host's client picks it
+/// up via subscription and toasts a "👀 X is visiting" notification.
+///
+/// Self-visits are silently ignored (the visitor IS the host — no
+/// notification needed). Visits to non-existent identities also
+/// no-op rather than erroring so a stale shell click doesn't surface
+/// a confusing message.
+#[reducer]
+pub fn record_visit(ctx: &ReducerContext, host: Identity) -> Result<(), String> {
+    if host == ctx.sender { return Ok(()); }
+    let zero = Identity::__dummy();
+    if host == zero { return Ok(()); }
+    ctx.db.visit_event().insert(VisitEvent {
+        id: 0, // auto_inc
+        visitor: ctx.sender,
+        host,
+        visited_at: ctx.timestamp,
+    });
     Ok(())
 }

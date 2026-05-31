@@ -265,6 +265,27 @@ pub struct Friendship {
     pub since: Timestamp,
 }
 
+/// P5.8 — a single visit event. The visitor's client inserts a row
+/// via record_visit when entering VisitMode; the host's client picks
+/// the row up via subscription and renders a toast. Rows are
+/// append-only — periodic cleanup is future work, but each row is
+/// tiny and the table won't grow fast in practice.
+#[table(name = visit_event, public)]
+pub struct VisitEvent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Identity of the player who entered visit mode. Used to look
+    /// up the display name for the host's toast.
+    #[index(btree)]
+    pub visitor: Identity,
+    /// Identity of the visited plot's owner. The host's client
+    /// filters incoming events to ones where host == self.
+    #[index(btree)]
+    pub host: Identity,
+    pub visited_at: Timestamp,
+}
+
 /// P5 — a single shared pedestrian walking one of the city's avenues.
 /// Stored as a "trajectory" (start, end, spawn time, duration) so the
 /// client computes the current position by lerping with the elapsed
