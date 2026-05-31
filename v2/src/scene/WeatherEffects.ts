@@ -37,47 +37,52 @@ export class WeatherEffects {
   // === Rain ===
   private rain?: THREE.Points;
   private rainVelocities!: Float32Array;
-  private static readonly RAIN_COUNT = 1700;
+  private static readonly RAIN_COUNT = 4500;
 
-  // === Heavy rain (≈ 4× density + faster fall) ===
+  // === Heavy rain (≈ 2× density + faster fall) ===
   private heavyRain?: THREE.Points;
   private heavyRainVelocities!: Float32Array;
-  private static readonly HEAVY_RAIN_COUNT = 3500;
+  private static readonly HEAVY_RAIN_COUNT = 9000;
 
   // === Snow (light dusting) ===
   private snow?: THREE.Points;
   private snowPhases!: Float32Array;
-  private static readonly SNOW_COUNT = 600;
+  private static readonly SNOW_COUNT = 1800;
 
   // === Heavy snow (thick snowfall) ===
   private heavySnow?: THREE.Points;
   private heavySnowPhases!: Float32Array;
-  private static readonly HEAVY_SNOW_COUNT = 1600;
+  private static readonly HEAVY_SNOW_COUNT = 5000;
 
   // === Festival confetti ===
   private confetti?: THREE.Points;
   private confettiPhases!: Float32Array;
-  private static readonly CONFETTI_COUNT = 240;
+  private static readonly CONFETTI_COUNT = 700;
 
   // === Cloud shadows ===
-  // 12 dark soft-edged blobs drifting across the ground. Each is a
+  // Dark soft-edged blobs drifting across the ground. Each is a
   // ProceduralCanvas texture (irregular Gaussian-blob silhouette) so
   // the shadows read as organic clouds rather than tidy squares.
   // Visible for cloudy / rainy / heavy-rain / cold / snowy weather;
   // opacity scales with how overcast the weather is.
   private cloudShadows: THREE.Mesh[] = [];
   private cloudShadowDrifts!: { vx: number; vz: number; phaseY: number }[];
-  private static readonly CLOUD_SHADOW_COUNT = 22;
-  /** Larger spread for cloud shadows so they cover the whole visible
-   * yard, not pile up over the building. */
-  private static readonly CLOUD_AREA_HALF = 32;
+  private static readonly CLOUD_SHADOW_COUNT = 90;
+  /** Wide spread so cloud shadows cover the whole visible map (not
+   * just the 30 m around the player). Iso camera at full zoom-out
+   * sees ~400 m across, so ±150 m gives shadows that stretch past
+   * the visible city edge into the fog. */
+  private static readonly CLOUD_AREA_HALF = 150;
 
-  /** Shared horizontal/vertical extents. The play area is 10×10 m
-   * (perimeter -4.5..5.5); 36×36 covers the building plus a generous
-   * lawn margin so particles entering at the volume edge still appear
-   * to fall WITHIN the visible frame. */
-  private static readonly AREA_HALF = 18;
-  private static readonly CEILING_Y = 14;
+  /** Shared horizontal/vertical extents around the CAMERA. Particles
+   * outside this box wrap back to the opposite side, so the storm
+   * stays visually centred on the player. 220 m (±110) covers the
+   * full visible city at any reasonable zoom — used to be 18 m which
+   * made the rain / snow look like a tiny patch following the camera.
+   * Particle COUNTS were bumped proportionally so the volume still
+   * reads as a real storm at the larger area. */
+  private static readonly AREA_HALF = 110;
+  private static readonly CEILING_Y = 16;
 
   /** Time accumulator for sine-wave sways. */
   private clock = 0;
