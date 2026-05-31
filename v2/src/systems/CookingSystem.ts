@@ -190,10 +190,21 @@ export class CookingSystem {
     return "removed";
   }
 
-  /** Returns `false` if already on menu, `true` after adding. Per-category caps are the caller's responsibility. */
+  /** Returns `false` if already on menu or if the recipe's category
+   * is already at the per-category cap (maxActiveRecipesPerCategory).
+   * Returns `true` after a successful add. */
   addToMenu(recipeId: string): boolean {
     if (this.menuRecipeIds.includes(recipeId)) {
       return false;
+    }
+    const recipe = recipes.find((r) => r.id === recipeId);
+    if (recipe) {
+      const cat = recipe.category;
+      const inCat = this.menuRecipeIds.reduce((n, id) => {
+        const r = recipes.find((rr) => rr.id === id);
+        return n + (r?.category === cat ? 1 : 0);
+      }, 0);
+      if (inCat >= maxActiveRecipesPerCategory) return false;
     }
     this.menuRecipeIds = [...this.menuRecipeIds, recipeId];
     return true;

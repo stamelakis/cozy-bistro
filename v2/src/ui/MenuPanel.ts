@@ -1,11 +1,23 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
-import { getRecipeLuxuryTier } from "../systems/CookingSystem";
+import { getRecipeLuxuryTier, maxActiveRecipesPerCategory } from "../systems/CookingSystem";
 import { getIngredientCost } from "../data/ingredients";
 import { APPLIANCE_LABELS } from "../data/types";
 import type { ApplianceId, LuxuryTier, RecipeDefinition } from "../data/types";
 import { attachTooltip } from "./tooltip";
 import { recipeIcon, ingredientIcon } from "./foodIcons";
+
+/** Section order for the right-side summary panel — owner asked for
+ * Appetizers, Main, Side, Drinks, Dessert in that order. Internally
+ * the data uses singular "appetizer"/"main"/"side"/"drink"/"dessert"
+ * keys; this maps them to plural display headers. */
+const SUMMARY_SECTIONS: { key: RecipeDefinition["category"]; label: string }[] = [
+  { key: "appetizer", label: "Appetizers" },
+  { key: "main",      label: "Main"       },
+  { key: "side",      label: "Side"       },
+  { key: "drink",     label: "Drinks"     },
+  { key: "dessert",   label: "Dessert"    },
+];
 
 /**
  * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
@@ -21,6 +33,18 @@ export class MenuPanel {
   private readonly body: HTMLElement;
   private readonly tabsRow: HTMLElement;
   private readonly content: HTMLElement;
+  /** Right-side summary panel — sits next to the recipe list when
+   * the menu is expanded, showing which recipes the player has on
+   * the active menu grouped by category with x/3 counts. Always
+   * rendered into the same body container so collapsing the menu
+   * also hides the summary. */
+  private readonly summaryPanel: HTMLElement;
+  /** Cached section bodies keyed by category — re-populated each
+   * render but the section container itself is built once. */
+  private readonly summarySections = new Map<RecipeDefinition["category"], { header: HTMLElement; list: HTMLElement }>();
+  /** Signature of the last-rendered summary so we skip rebuilds
+   * when nothing visible to that panel has changed. */
+  private lastSummarySig = "";
   private collapsed = true;
   private selectedTier: LuxuryTier = 1;
   /** Persistent tab buttons — built once in the constructor and only
@@ -40,13 +64,18 @@ export class MenuPanel {
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
     this.root = document.createElement("div");
+    // Widened from 720 → 900 max to accommodate the right-side
+    // summary panel (~180 px) without squishing the recipe rows.
+    // The vw-clamp keeps it from crashing into the sidebar / build
+    // menu on narrower viewports — at 100vw=1280, width caps at
+    // min(900, 800) = 800, so the panel auto-shrinks gracefully.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "50%",
       transform: "translateX(-50%)",
       bottom: "12px",
-      maxWidth: "720px",
-      width: "min(720px, calc(100vw - 480px))",
+      maxWidth: "900px",
+      width: "min(900px, calc(100vw - 480px))",
       padding: "8px 12px",
       background: "rgba(20, 14, 10, 0.78)",
       color: "#fff5dc",
@@ -83,13 +112,121 @@ export class MenuPanel {
     Object.assign(this.tabsRow.style, { display: "flex", gap: "4px", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
     this.body.appendChild(this.tabsRow);
 
+    // Two-column flex inside the body: recipe list (flex:1) + summary
+    // panel (fixed 180px). Tabs row stays above both, full width.
+    const splitRow = document.createElement("div");
+    Object.assign(splitRow.style, {
+      display: "flex", gap: "10px", alignItems: "stretch",
+    } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(splitRow);
+
     this.content = document.createElement("div");
-    Object.assign(this.content.style, { maxHeight: "30vh", overflowY: "auto", paddingRight: "4px" } as Partial<CSSStyleDeclaration>);
-    this.body.appendChild(this.content);
+    Object.assign(this.content.style, {
+      flex: "1 1 auto",
+      minWidth: "0",
+      maxHeight: "30vh", overflowY: "auto", paddingRight: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    splitRow.appendChild(this.content);
+
+    this.summaryPanel = document.createElement("div");
+    Object.assign(this.summaryPanel.style, {
+      flex: "0 0 180px",
+      maxHeight: "30vh", overflowY: "auto",
+      paddingLeft: "10px",
+      borderLeft: "1px solid rgba(255,245,220,0.15)",
+      display: "flex", flexDirection: "column", gap: "6px",
+      fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    splitRow.appendChild(this.summaryPanel);
+    this.buildSummarySections();
 
     // Build the tier-tab buttons ONCE — `update()` later only restyles
     // them. See `tabBtns` doc for why we don't rebuild every 200 ms.
     this.buildTabs();
+  }
+
+  /** Build the persistent header + list container for each category
+   * section in the summary panel. Built once; renderSummary() then
+   * mutates header text + list children each tick. */
+  private buildSummarySections(): void {
+    for (const sec of SUMMARY_SECTIONS) {
+      const wrap = document.createElement("div");
+      Object.assign(wrap.style, {
+        display: "flex", flexDirection: "column", gap: "2px",
+      } as Partial<CSSStyleDeclaration>);
+      const header = document.createElement("div");
+      Object.assign(header.style, {
+        fontSize: "10px", fontWeight: "700", letterSpacing: "0.04em",
+        textTransform: "uppercase", opacity: "0.85",
+      } as Partial<CSSStyleDeclaration>);
+      wrap.appendChild(header);
+      const list = document.createElement("div");
+      Object.assign(list.style, {
+        display: "flex", flexDirection: "column", gap: "1px",
+        paddingLeft: "8px",
+      } as Partial<CSSStyleDeclaration>);
+      wrap.appendChild(list);
+      this.summaryPanel.appendChild(wrap);
+      this.summarySections.set(sec.key, { header, list });
+    }
+  }
+
+  /** Briefly flash the matching summary section header red to
+   * surface the "category is full" feedback. The header's color
+   * gets restored on the next renderSummary tick. */
+  private flashCapWarning(category: RecipeDefinition["category"]): void {
+    const refs = this.summarySections.get(category);
+    if (!refs) return;
+    refs.header.style.color = "#ff9a9a";
+    refs.header.style.transition = "color 0.5s ease";
+    window.setTimeout(() => {
+      // Force the next renderSummary to recompute the header color.
+      this.lastSummarySig = "";
+      this.renderSummary();
+    }, 600);
+  }
+
+  /** Mutate the existing summary sections to reflect the current
+   * menu. Uses a signature check so the DOM is only touched when
+   * something visibly changed — same defensive pattern as
+   * renderContent. */
+  private renderSummary(): void {
+    const onMenu = this.game.cooking.getMenuRecipeIds();
+    const sig = onMenu.slice().sort().join(",");
+    if (sig === this.lastSummarySig) return;
+    this.lastSummarySig = sig;
+    const onMenuSet = new Set(onMenu);
+    for (const sec of SUMMARY_SECTIONS) {
+      const refs = this.summarySections.get(sec.key);
+      if (!refs) continue;
+      const items = recipes.filter((r) => r.category === sec.key && onMenuSet.has(r.id));
+      const count = items.length;
+      const max = maxActiveRecipesPerCategory;
+      const headerColor = count >= max ? "#ffd986" : count === 0 ? "rgba(255,245,220,0.55)" : "#fff5dc";
+      refs.header.style.color = headerColor;
+      refs.header.textContent = `${sec.label} (${count}/${max}):`;
+      // Rebuild list contents — small enough that diffing isn't worth it.
+      refs.list.innerHTML = "";
+      if (items.length === 0) {
+        const empty = document.createElement("div");
+        empty.textContent = "—";
+        Object.assign(empty.style, {
+          opacity: "0.4", fontStyle: "italic",
+        } as Partial<CSSStyleDeclaration>);
+        refs.list.appendChild(empty);
+      } else {
+        for (const r of items) {
+          const line = document.createElement("div");
+          // Bullet + name. Use a real character bullet so the
+          // monospace alignment carries through.
+          line.textContent = `• ${r.name}`;
+          Object.assign(line.style, {
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+          } as Partial<CSSStyleDeclaration>);
+          refs.list.appendChild(line);
+        }
+      }
+    }
   }
 
   /** Build the 5 tier-tab buttons one time. Each button's click handler
@@ -129,6 +266,7 @@ export class MenuPanel {
     if (this.collapsed) return; // skip work when hidden
     this.refreshTabs();
     this.renderContent();
+    this.renderSummary();
   }
 
   /** Mutate the existing tab buttons' styles + labels to match the
@@ -228,8 +366,27 @@ export class MenuPanel {
       cb.title = `Needs: ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
     }
     cb.onchange = () => {
-      if (cb.checked) this.game.cooking.addToMenu(recipe.id);
-      else this.game.cooking.removeFromMenu(recipe.id);
+      if (cb.checked) {
+        const added = this.game.cooking.addToMenu(recipe.id);
+        if (!added) {
+          // addToMenu refuses when the per-category cap of 3 is
+          // already met OR the recipe is somehow already on. Roll
+          // the checkbox state back so the UI stays truthful, and
+          // ping the title with a brief tooltip so the player knows
+          // why nothing happened.
+          cb.checked = false;
+          const onCount = this.game.cooking.getActiveRecipeCountForCategory(recipe.category);
+          if (onCount >= maxActiveRecipesPerCategory) {
+            this.flashCapWarning(recipe.category);
+          }
+        }
+      } else {
+        this.game.cooking.removeFromMenu(recipe.id);
+      }
+      // Force the summary panel to redraw immediately so the new
+      // count + bullet shows without waiting for the 200 ms tick.
+      this.lastSummarySig = "";
+      this.renderSummary();
     };
     row.appendChild(cb);
 
