@@ -281,6 +281,11 @@ export class Engine {
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
+    // Character-wipe button at the very bottom of every section.
+    // Visible to ALL players (not gated to admin) — this is the
+    // standard "delete account" affordance. Lives down here so it
+    // can't be misclicked from the busy modal-icon row at the top.
+    this.installResetSaveSection();
     // Hook the floor-reassign UI: when the player switches a member's
     // home storey, move their 3D character to the new floor's slab
     // and clear any cached path on the router so they don't try to
@@ -1363,6 +1368,36 @@ export class Engine {
       toast.style.opacity = "0";
       setTimeout(() => toast.remove(), 250);
     }, 5000);
+  }
+
+  /** Build the always-bottom Reset-Save section. Lives in its own
+   * sidebar-bottom slot (after StaffPanel) so it's visually
+   * separated from gameplay actions and can't be misclicked from
+   * the busier modal-icon row at the top of the HUD. */
+  private installResetSaveSection(): void {
+    this.sidebar.addSeparator();
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, { marginBottom: "4px" } as Partial<CSSStyleDeclaration>);
+    const btn = document.createElement("button");
+    btn.textContent = "🗑 Reset save (start over)";
+    Object.assign(btn.style, {
+      display: "block", width: "100%",
+      padding: "6px 8px",
+      background: "rgba(200, 80, 80, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(200, 80, 80, 0.45)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    btn.title =
+      "Reset save — character wipe.\n" +
+      "Releases your plot, deletes your restaurant + achievements + " +
+      "leaderboard scores, and sends you back to the plot picker. " +
+      "Username + password are kept. There's a confirmation prompt — " +
+      "you need to type RESET to proceed.";
+    btn.onclick = () => this.resetSave();
+    wrap.appendChild(btn);
+    this.sidebar.body.appendChild(wrap);
   }
 
   /** Character wipe. Releases the player's plot, deletes their

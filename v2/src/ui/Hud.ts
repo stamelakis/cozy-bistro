@@ -107,13 +107,13 @@ export class Hud {
     this.buildOpenCloseRow();
     this.buildSpeedRow();
     this.buildModalIconRow();
-    this.buildPlayerActionsRow();
     // buildDevSection removed in P12 — the old "Dev tools" sub-menu
     // (game-speed + tuning sliders + reset save + starter grant) was
     // split apart: the Dev tools button now opens AdminModal directly,
     // Game speed moved INTO AdminModal, Starter grant moved to
     // ExpandWidget (visible to all players, conditional), and Reset
-    // save lives in buildPlayerActionsRow (visible to all).
+    // save was moved by Engine to the very bottom of the sidebar
+    // (after StaffPanel) — see Engine.installResetSaveSection.
   }
 
   private buildTitle(): void {
@@ -485,41 +485,10 @@ export class Hud {
     this.root.appendChild(row3);
   }
 
-  /** Player-actions row appended at the bottom of the HUD section
-   * inside the sidebar. Currently holds the Reset Save (character
-   * wipe) button. Visible to ALL players (not gated to admins) —
-   * it's the standard "delete account" affordance, not a dev tool.
-   * Confirmation dialog + server-side wipe + reload happen inside
-   * Engine via `actions.resetSave`. */
-  private buildPlayerActionsRow(): void {
-    const section = document.createElement("div");
-    Object.assign(section.style, {
-      marginTop: "8px",
-      paddingTop: "6px",
-      borderTop: "1px solid rgba(255,245,220,0.15)",
-    } as Partial<CSSStyleDeclaration>);
-    const resetBtn = document.createElement("button");
-    resetBtn.textContent = "🗑 Reset save (start over)";
-    Object.assign(resetBtn.style, {
-      display: "block", width: "100%",
-      padding: "5px 6px",
-      background: "rgba(200, 80, 80, 0.20)",
-      color: "#fff5dc",
-      border: "1px solid rgba(200, 80, 80, 0.40)",
-      borderRadius: "4px", cursor: "pointer",
-      font: "inherit", fontSize: "11px", fontWeight: "600",
-    } as Partial<CSSStyleDeclaration>);
-    attachTooltip(resetBtn,
-      "RESET SAVE — character wipe.\n" +
-      "Releases your current plot, deletes your restaurant, achievements, " +
-      "and leaderboard scores. Your username and password are kept; you go " +
-      "back to the plot picker as if starting fresh. There's a confirmation " +
-      "dialog — no surprise wipes."
-    );
-    resetBtn.onclick = () => this.actions.resetSave();
-    section.appendChild(resetBtn);
-    this.root.appendChild(section);
-  }
+  // buildPlayerActionsRow removed — Reset save moved to the very
+  // bottom of the sidebar via Engine.installResetSaveSection so it
+  // sits below every other section (HUD, expand, stock, staff)
+  // instead of crowding the modal-icon row.
 
   private tinyBtnStyle(): Record<string, string> {
     return {

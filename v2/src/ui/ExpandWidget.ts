@@ -89,10 +89,11 @@ export class ExpandWidget {
       border: "1px solid rgba(255,245,220,0.3)",
       borderRadius: "4px", cursor: "pointer", font: "inherit",
       fontSize: "11px", fontWeight: "600",
-      display: "none",
     } as Partial<CSSStyleDeclaration>);
-    this.grantBtn.textContent = `💸 Starter grant — +$${STARTER_GRANT_AMOUNT}`;
-    this.grantBtn.title = "If you're broke (under $500), one free starter grant per real day.";
+    // Button is always rendered so the player can see the feature
+    // exists and read its requirements. update() flips it
+    // enabled/disabled based on the two conditions (balance < $500
+    // and not already claimed today).
     this.grantBtn.onclick = () => {
       // Re-verify both conditions on click (UI might be stale).
       if (this.game.economy.getMoney() >= STARTER_GRANT_THRESHOLD) return;
@@ -164,10 +165,32 @@ export class ExpandWidget {
       }
     }
 
-    // Starter grant visibility — broke + not yet claimed today.
+    // Starter grant — ALWAYS visible so the player knows it exists.
+    // Enabled only when broke + not yet claimed today; otherwise
+    // the label explains which condition fails so they know what
+    // to wait for.
     const broke = this.game.economy.getMoney() < STARTER_GRANT_THRESHOLD;
     const claimed = this.hasClaimedGrantToday();
-    this.grantBtn.style.display = (broke && !claimed) ? "block" : "none";
+    if (broke && !claimed) {
+      this.grantBtn.textContent = `💸 Starter grant — +$${STARTER_GRANT_AMOUNT}`;
+      this.grantBtn.disabled = false;
+      this.grantBtn.style.opacity = "1";
+      this.grantBtn.style.cursor = "pointer";
+      this.grantBtn.title = "Free starter grant — one per real day, only while broke.";
+    } else if (claimed) {
+      this.grantBtn.textContent = `💸 Starter grant — claimed today`;
+      this.grantBtn.disabled = true;
+      this.grantBtn.style.opacity = "0.5";
+      this.grantBtn.style.cursor = "not-allowed";
+      this.grantBtn.title = "Already claimed today. Try again tomorrow.";
+    } else {
+      // Not broke. Show the threshold so the player knows the rule.
+      this.grantBtn.textContent = `💸 Starter grant — need < $${STARTER_GRANT_THRESHOLD}`;
+      this.grantBtn.disabled = true;
+      this.grantBtn.style.opacity = "0.5";
+      this.grantBtn.style.cursor = "not-allowed";
+      this.grantBtn.title = `Free grant kicks in when your balance drops below $${STARTER_GRANT_THRESHOLD}. Once per real day.`;
+    }
   }
 }
 
