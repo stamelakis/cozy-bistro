@@ -240,12 +240,16 @@ export class IsoCamera {
     this.updatePose();
   }
 
-  /** Reset target X/Z to (x, z), restore default zoom, restore default
-   * azimuth + iso elevation. Target.y is left untouched so whatever
-   * floor the player picked in the FloorSelector survives. Used by
-   * the CameraControls Home button. */
-  goHome(x: number, z: number): void {
+  /** Reset target to (x, floorY, z), restore default zoom, restore
+   * default azimuth + iso elevation. The caller passes floorY so the
+   * floor selection is respected explicitly — previously we just left
+   * target.y untouched, but the left-drag pan bug could push y to
+   * weird values, and "preserve current y" then carried that garbage
+   * forward. Now Home always snaps y to a known floor height. Used
+   * by the CameraControls Home button. */
+  goHome(x: number, z: number, floorY: number): void {
     this.target.x = x;
+    this.target.y = floorY;
     this.target.z = z;
     this.zoom = IsoCamera.DEFAULT_ZOOM;
     this.azimuth = IsoCamera.DEFAULT_AZIMUTH;
@@ -290,12 +294,23 @@ export class IsoCamera {
       // minimum keeps the iso look consistent.
       this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 5, Math.PI / 2 - 0.05);
     } else {
-      // Plain left-drag = pan.
+      // Plain left-drag = pan. The camera's local +Y axis has a non-
+      // zero world-Y component at iso angle, so naively panning along
+      // it drifts target.y every vertical drag — over a couple of pans
+      // the camera ends up looking up at sky or down at void. Pan in
+      // the GROUND plane (XZ) only: project camera-right and camera-up
+      // onto Y=0, renormalise, and use those as the screen-right /
+      // screen-up directions for the pan delta. target.y stays put,
+      // so the floor selection survives any amount of dragging.
       const panScale = this.zoom * 0.0025;
       const right = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 0);
-      const up = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 1);
+      right.y = 0;
+      if (right.lengthSq() > 1e-6) right.normalize();
+      const screenUp = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 1);
+      screenUp.y = 0;
+      if (screenUp.lengthSq() > 1e-6) screenUp.normalize();
       this.target.addScaledVector(right, -dx * panScale);
-      this.target.addScaledVector(up, dy * panScale);
+      this.target.addScaledVector(screenUp, dy * panScale);
     }
     this.updatePose();
   };

@@ -286,7 +286,14 @@ export class Engine {
     // it always snaps back to the current claimed building, even if the
     // player later moves to a different plot.
     this.cameraControls = new CameraControls(container, this.camera,
-      () => ({ x: this.scene.ownedPlotAnchor.x, z: this.scene.ownedPlotAnchor.y }));
+      () => ({
+        x: this.scene.ownedPlotAnchor.x,
+        // Y = currently-focused floor's height so Home preserves the
+        // floor the player picked from the FloorSelector (not whatever
+        // garbage target.y might have collected over a session).
+        y: this.scene.getFocusedStorey() * WorldScene.getStoreyHeight(),
+        z: this.scene.ownedPlotAnchor.y,
+      }));
     // Classify each floor by what its seats serve so the FloorSelector
     // can show a sub-label under each button (food / drinks / mix /
     // empty). Re-evaluated on the selector's own 1.5s timer so the tag

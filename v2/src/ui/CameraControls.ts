@@ -22,11 +22,12 @@ import type { IsoCamera } from "../scene/IsoCamera";
  */
 export class CameraControls {
   private readonly camera: IsoCamera;
-  /** Callback returning the world (x, z) the Home button should snap
-   * to. Engine wires this to scene.ownedPlotAnchor so the button
-   * always points at the player's claimed building, even if they
-   * later move to a different plot. */
-  private readonly getHomePos: () => { x: number; z: number };
+  /** Callback returning the world (x, y, z) the Home button should snap
+   * to. Engine wires this to scene.ownedPlotAnchor + the FloorSelector's
+   * focused storey × STOREY_HEIGHT so the button always points at the
+   * player's claimed building AT their currently-focused floor — even
+   * if they later move to a different plot or floor. */
+  private readonly getHomePos: () => { x: number; y: number; z: number };
   private readonly zoomPct: HTMLDivElement;
   private readonly dirLabel: HTMLDivElement;
   private readonly dirArrow: HTMLDivElement;
@@ -36,7 +37,7 @@ export class CameraControls {
   /** Rotation step per rotate-button click, in radians (22.5° = π/8). */
   private static readonly ROT_STEP = Math.PI / 8;
 
-  constructor(parent: HTMLElement, camera: IsoCamera, getHomePos: () => { x: number; z: number }) {
+  constructor(parent: HTMLElement, camera: IsoCamera, getHomePos: () => { x: number; y: number; z: number }) {
     this.camera = camera;
     this.getHomePos = getHomePos;
 
@@ -142,7 +143,7 @@ export class CameraControls {
     homeBtn.onclick = (e) => {
       e.preventDefault();
       const home = this.getHomePos();
-      this.camera.goHome(home.x, home.z);
+      this.camera.goHome(home.x, home.z, home.y);
       this.update();
     };
     homeCol.appendChild(homeBtn);
