@@ -1829,17 +1829,14 @@ export class WorldScene {
     const tex = WorldScene.makeGrassTexture();
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    // Tile repeat 16 → 36 to match the bigger plane — without this the
-    // grass texture stretches to a blurry blob across the whole map.
-    tex.repeat.set(36, 36);
-    // Plane bumped to 600×600 so the camera (zoom now reaches a half-
-    // view of 200 units = ~400m wide) never sees the void edge of the
-    // grass — at max zoom-out the lawn fills the entire view AND the
-    // fog kicks in long before the player would see the plane's
-    // boundary. Fog color matches Engine's clear color so any sliver
-    // past the lawn dissolves into the same warm haze.
+    // Tile repeat tuned for the new plane size.
+    tex.repeat.set(22, 22);
+    // 360×360 grass — big enough to back-stop the new wider zoom
+    // range without leaving giant empty quadrants outside the lined
+    // streets. The fog colour matches the renderer's clear colour so
+    // anything past the lawn fades into the same warm haze.
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(600, 600),
+      new THREE.PlaneGeometry(360, 360),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
@@ -1852,28 +1849,38 @@ export class WorldScene {
     this.addCityScenery();
   }
 
-  /** City avenues laid out so each plot has road access without
-   * crowding gardens. Three avenues only (one was dropped to give
-   * the legacy main road room to breathe):
-   *   - east-west at z=-36 (back lane north of the restaurant)
+  /** City avenue grid laid out so every plot row lines a street:
+   *   - east-west at z=-36  (north service — z=-48 plots line it from north)
+   *   - east-west at z=+13.5 (legacy main — player's restaurant lines it)
+   *   - east-west at z=+62  (south service — z=+48 plots line it from north)
    *   - north-south at x=-70 (outer-ring west boundary)
    *   - north-south at x=+70 (outer-ring east boundary)
-   * Plus the legacy main road at z=13.5 (extended to 260 m elsewhere).
-   * The previous south avenue at z=+36 was too close to the legacy
-   * main road (~22 m gap) and made the south side of the city look
-   * like one giant parking lot — that one's gone. East+West moved
-   * out to ±70 so they sit BEYOND every plot's east-side garden
-   * (gardens extend up to ~x±63 in the worst case) and never slice
-   * through a fenced lot. */
+   * Three east-west "boulevards" feed the three plot rows; two
+   * outer-ring N-S avenues bracket the city. Scenery houses line
+   * the remaining street frontage on both sides of every avenue
+   * (see addCityScenery — street-following placement, not a random
+   * grid scan). */
   private addCityStreets(): void {
     // North-side service road serving the z=-48 plot row.
     this.makeCityAvenue("ew", -36);
+    // South service road serving the z=+48 plot row. The plots are
+    // 10 m wide → their south edge is z=+53, leaving a ~3.5 m gap
+    // to this avenue's north pavement — same tight-curb feel as the
+    // north service road's relationship to the z=-48 row.
+    this.makeCityAvenue("ew", 62);
     // West outer-ring boundary — pushed out to x=-70 so it clears
     // the gardens of the x=-48 plot column.
     this.makeCityAvenue("ns", -70);
     // East outer-ring boundary — mirror on x=+70.
     this.makeCityAvenue("ns",  70);
   }
+
+  /** Centerlines of every avenue in the city — kept in one place so
+   * the scenery street-follow loop, the exclusion check, and any
+   * future road-aware system (pedestrian spawner, sign placement)
+   * all agree on what counts as a street. */
+  private static readonly EW_AVENUES: readonly number[] = [-36, 13.5, 62];
+  private static readonly NS_AVENUES: readonly number[] = [-70, 70];
 
   /** Static reference layout of the 12 seeded plots — kept in one
    * place so the scenery loop, the avenue exclusion check, and the
@@ -2003,21 +2010,19 @@ export class WorldScene {
     const sceneryGroup = new THREE.Group();
     this.threeScene.add(sceneryGroup);
 
-    // Centers of the seeded claim plots — kept clear (the city
-    // building loop adds proper Paris-style shells at these positions).
+    // Plots + garden zones the scenery must NOT overlap. Same data
+    // the populateCityBuildings + fence code uses, so the keep-outs
+    // exactly match what the player will see on the ground.
     const claimPlots: { x: number; z: number; w: number; h: number }[] = WorldScene.CITY_PLOTS.slice();
-    // Each plot has a fenced garden too — scenery must avoid those
-    // (they're built later in populateCityBuildings).
     const gardenZones = claimPlots.map((p) => WorldScene.gardenBoundsForPlot(p));
-    // Legacy single-restaurant block — bigger keep-out so scenery
-    // doesn't crowd the player's fence + pavement + main road.
-    // Footprint covers x ∈ [-12, 12] and z ∈ [-12, 22] (the
-    // restaurant + its garden + the legacy pavement strip just
-    // south of it, ending past the legacy road).
-    claimPlots.push({ x: 0, z: 5, w: 24, h: 34 });
+    // Legacy player block keep-out — tighter than before so the
+    // street-follow loop can drop houses on the south side of the
+    // legacy main road (z=13.5 + 12 = z=25.5) without false overlap.
+    // Covers restaurant + garden + pavement strip ~16 m tall, 24 m wide.
+    claimPlots.push({ x: 0, z: 7, w: 24, h: 24 });
 
     const overlapsClaim = (x: number, z: number, size: number): boolean => {
-      const halfS = size / 2 + 2;
+      const halfS = size / 2 + 1.5;
       for (const c of claimPlots) {
         if (Math.abs(x - c.x) < (c.w / 2 + halfS) && Math.abs(z - c.z) < (c.h / 2 + halfS)) {
           return true;
@@ -2026,27 +2031,23 @@ export class WorldScene {
       return false;
     };
     const overlapsGarden = (x: number, z: number, size: number): boolean => {
-      const halfS = size / 2 + 1;
+      const halfS = size / 2 + 0.8;
       for (const g of gardenZones) {
         if (x > g.minX - halfS && x < g.maxX + halfS &&
             z > g.minZ - halfS && z < g.maxZ + halfS) return true;
       }
       return false;
     };
-    // Avoid the actual asphalt avenues. Each avenue is 11 m total
-    // (centre 6 m road + 2.5 m pavements either side). A scenery
-    // house within (halfS + 6) of an avenue's centre would land on
-    // the pavement / road and look broken.
-    //   - Legacy main road: z = 13.5
-    //   - North service:    z = -36
-    //   - West outer-ring:  x = -70
-    //   - East outer-ring:  x = +70
+    // Avenue keep-out — uses the canonical EW/NS_AVENUES lists so
+    // adding a future road doesn't need a second edit here.
     const onAvenue = (x: number, z: number, size: number): boolean => {
-      const buf = size / 2 + 7;
-      if (Math.abs(z - 13.5) < buf) return true;
-      if (Math.abs(z - (-36)) < buf) return true;
-      if (Math.abs(x - (-70)) < buf) return true;
-      if (Math.abs(x - 70) < buf) return true;
+      const buf = size / 2 + 6.5;
+      for (const az of WorldScene.EW_AVENUES) {
+        if (Math.abs(z - az) < buf) return true;
+      }
+      for (const ax of WorldScene.NS_AVENUES) {
+        if (Math.abs(x - ax) < buf) return true;
+      }
       return false;
     };
 
@@ -2069,31 +2070,76 @@ export class WorldScene {
       "Fromagerie", "Boucherie", "Chocolaterie", "Bar",
     ];
 
-    // Candidate cell centers — every 6 tiles from −180 to +180 so
-    // the bigger grass plane fills with houses out to where the fog
-    // visibly takes over.
+    // ── Street-following placement ────────────────────────────────
+    // Walk along each avenue and drop houses on BOTH sides, set back
+    // ~11 m from the centerline so the building face sits a few
+    // metres behind the pavement. Step 7.5 m along the street so
+    // every avenue has ~16 houses per side along its visible span
+    // (±60 m of street travel ≈ 16 candidates). Plot rows naturally
+    // gap the scenery — overlapsClaim skips houses on top of plots
+    // and onAvenue skips houses where two streets cross.
+    const HOUSE_SETBACK = 11;      // distance from avenue centerline to house centre
+    const HOUSE_STEP = 7.5;        // spacing along the street
+    const STREET_EXTENT = 110;     // walk ±this along each avenue
     let placed = 0;
-    for (let gx = -180; gx <= 180; gx += 6) {
-      for (let gz = -180; gz <= 180; gz += 6) {
-        // Random skip — keeps the city feeling organic, not a
-        // perfectly tiled grid.
-        if (rng() < 0.62) continue;
-        const size = 3 + Math.floor(rng() * 4); // 3..6 tiles
-        if (overlapsClaim(gx, gz, size)) continue;
-        if (overlapsGarden(gx, gz, size)) continue;
-        if (onAvenue(gx, gz, size)) continue;
-        // ~22% chance this scenery house is a shop with a sign.
-        const isShop = rng() < 0.22;
-        const shopName = isShop ? pick(shopNames) : undefined;
-        sceneryGroup.add(this.makeSceneryHouse(
-          gx, gz, size,
-          1 + Math.floor(rng() * 2), // 1-2 storeys
-          pick(wallColors), pick(roofColors), pick(doorColors),
-          rng() * Math.PI * 2,
-          shopName,
-        ));
-        placed += 1;
-        if (placed > 220) return; // hard cap so the city doesn't get absurd
+    const HARD_CAP = 300;
+
+    const tryPlace = (x: number, z: number, size: number, storeys: number, rotY: number, shopName?: string): boolean => {
+      if (overlapsClaim(x, z, size)) return false;
+      if (overlapsGarden(x, z, size)) return false;
+      if (onAvenue(x, z, size)) return false;
+      sceneryGroup.add(this.makeSceneryHouse(
+        x, z, size, storeys,
+        pick(wallColors), pick(roofColors), pick(doorColors),
+        rotY, shopName,
+      ));
+      placed += 1;
+      return true;
+    };
+
+    // East-west avenues — houses face north or south depending on
+    // which side they sit on. House front (with the door + windows)
+    // is at +Z by default, so rotY=0 faces +Z (the street, when the
+    // house is NORTH of the avenue).
+    for (const az of WorldScene.EW_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const baseZ = az + side * HOUSE_SETBACK;
+        const rotY = side > 0 ? Math.PI : 0; // south-side houses spin 180° so the door faces north
+        for (let x = -STREET_EXTENT; x <= STREET_EXTENT; x += HOUSE_STEP) {
+          if (placed >= HARD_CAP) break;
+          // Mild random skip so the row isn't a perfect concrete wall.
+          if (rng() < 0.18) continue;
+          const size = 4 + Math.floor(rng() * 3); // 4..6 tiles wide
+          const storeys = 1 + Math.floor(rng() * 2); // 1..2
+          // Slight jitter on both axes so houses don't line up like
+          // a barcode.
+          const jx = x + (rng() - 0.5) * 1.6;
+          const jz = baseZ + (rng() - 0.5) * 1.2;
+          const isShop = rng() < 0.25;
+          const shopName = isShop ? pick(shopNames) : undefined;
+          tryPlace(jx, jz, size, storeys, rotY, shopName);
+        }
+      }
+    }
+    // North-south avenues — houses face east or west.
+    // House front at +Z by default; rotate -π/2 to point +X (the
+    // street, when the house is WEST of the avenue) and +π/2 for
+    // east-side houses.
+    for (const ax of WorldScene.NS_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const baseX = ax + side * HOUSE_SETBACK;
+        const rotY = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        for (let z = -STREET_EXTENT; z <= STREET_EXTENT; z += HOUSE_STEP) {
+          if (placed >= HARD_CAP) break;
+          if (rng() < 0.18) continue;
+          const size = 4 + Math.floor(rng() * 3);
+          const storeys = 1 + Math.floor(rng() * 2);
+          const jx = baseX + (rng() - 0.5) * 1.2;
+          const jz = z + (rng() - 0.5) * 1.6;
+          const isShop = rng() < 0.25;
+          const shopName = isShop ? pick(shopNames) : undefined;
+          tryPlace(jx, jz, size, storeys, rotY, shopName);
+        }
       }
     }
   }
