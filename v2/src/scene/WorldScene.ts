@@ -1829,14 +1829,17 @@ export class WorldScene {
     const tex = WorldScene.makeGrassTexture();
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    // Tile repeat tuned for the new plane size.
-    tex.repeat.set(22, 22);
-    // 360×360 grass — big enough to back-stop the new wider zoom
-    // range without leaving giant empty quadrants outside the lined
-    // streets. The fog colour matches the renderer's clear colour so
-    // anything past the lawn fades into the same warm haze.
+    // Tile density matches what 360 m looked good at (22 tiles).
+    // Scale to the bigger plane so each tile is still ~16 m square.
+    tex.repeat.set(96, 96);
+    // 1500×1500 grass — big enough that the camera's max zoom-out
+    // (half-view 200, so a 16:9 viewport is ~712×400 m) PLUS any
+    // pan + rotation can't see a hard plane edge. Visually the city
+    // still ends around ±110 m (no scenery beyond that) and fog
+    // takes over by ~250 m from the camera, so the player just sees
+    // warm haze where the lawn would otherwise show its boundary.
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(360, 360),
+      new THREE.PlaneGeometry(1500, 1500),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
