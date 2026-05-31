@@ -13,6 +13,17 @@ export interface VisitablePlot {
   ownerName: string;
 }
 
+/** Snapshot of the visited player's save, returned by
+ * SpacetimeClient.getPlayerSave — VisitMode reads this to populate
+ * the overlay with their day / money / rating / tier. Identity is
+ * passed back in by the lookup function. */
+export interface VisitedSaveStats {
+  dayNumber: number;
+  money: number;
+  ratingAvg: number;
+  luxuryTier: number;
+}
+
 /** Per-frame snapshot of camera state we restore on exit. */
 interface CameraSnapshot {
   targetX: number;
@@ -55,6 +66,11 @@ export class VisitMode {
    * is active (e.g. suppress build-menu placement, hide bubbles). */
   onEnter?: (plot: VisitablePlot) => void;
   onExit?: () => void;
+  /** Engine wires this to SpacetimeClient.getPlayerSave so the
+   * overlay can show the visited player's actual stats (day, money,
+   * rating, tier) read from their published save. Returns null if
+   * the visited player hasn't synced a save yet. */
+  fetchVisitedStats?: (ownerHex: string) => VisitedSaveStats | null;
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -243,6 +259,33 @@ export class VisitMode {
     const label = document.createElement("span");
     label.innerHTML = `🏃 Visiting <b>${escapeHtml(plot.ownerName)}'s</b> restaurant`;
     wrap.appendChild(label);
+    // Read published save stats from the cloud, if Engine wired the
+    // fetcher. Shows "Day 12 · $4,820 · 4.3⭐ · Tier 3" so the player
+    // can see what state the visited restaurant is in even before the
+    // full interior render (P4.3, future).
+    const stats = this.fetchVisitedStats?.(plot.ownerHex) ?? null;
+    if (stats) {
+      const statsLine = document.createElement("span");
+      Object.assign(statsLine.style, {
+        fontSize: "12px",
+        opacity: "0.85",
+        borderLeft: "1px solid rgba(255, 220, 150, 0.3)",
+        paddingLeft: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      const money = `$${stats.money.toLocaleString("en-US")}`;
+      const rating = stats.ratingAvg.toFixed(1);
+      statsLine.textContent = `Day ${stats.dayNumber} · ${money} · ${rating}⭐ · Tier ${stats.luxuryTier}`;
+      wrap.appendChild(statsLine);
+    } else {
+      const note = document.createElement("span");
+      Object.assign(note.style, {
+        fontSize: "12px",
+        opacity: "0.55",
+        fontStyle: "italic",
+      } as Partial<CSSStyleDeclaration>);
+      note.textContent = "(save not synced yet)";
+      wrap.appendChild(note);
+    }
     const exit = document.createElement("button");
     exit.textContent = "Exit Visit";
     Object.assign(exit.style, {

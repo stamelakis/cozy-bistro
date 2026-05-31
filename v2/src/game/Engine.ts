@@ -306,6 +306,21 @@ export class Engine {
     // ground plane, not city shells, so the two click handlers don't
     // collide.
     this.visitMode = new VisitMode(container, this.renderer.domElement, this.camera, this.scene);
+    // Bridge VisitMode → SpacetimeClient so the overlay can read the
+    // visited player's published save (day / money / rating / tier).
+    this.visitMode.fetchVisitedStats = (ownerHex: string) => {
+      const accounts = this.cloud.listAccounts();
+      const acct = accounts.find((a) => a.identity.toHexString() === ownerHex);
+      if (!acct) return null;
+      const save = this.cloud.getPlayerSave(acct.identity);
+      if (!save) return null;
+      return {
+        dayNumber: save.dayNumber,
+        money: save.money,
+        ratingAvg: save.ratingAvg,
+        luxuryTier: save.luxuryTier,
+      };
+    };
     // Home button while visiting should exit visit mode first so the
     // player goes back to their own restaurant cleanly.
     const originalGoHome = this.camera.goHome.bind(this.camera);
