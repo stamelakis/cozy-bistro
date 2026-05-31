@@ -1878,9 +1878,15 @@ export class WorldScene {
   /** Centerlines of every avenue in the city — kept in one place so
    * the scenery street-follow loop, the exclusion check, and any
    * future road-aware system (pedestrian spawner, sign placement)
-   * all agree on what counts as a street. */
-  private static readonly EW_AVENUES: readonly number[] = [-36, 13.5, 62];
-  private static readonly NS_AVENUES: readonly number[] = [-70, 70];
+   * all agree on what counts as a street. Public so PedestrianSpawner
+   * can route walkers down them. */
+  static readonly EW_AVENUES: readonly number[] = [-36, 13.5, 62];
+  static readonly NS_AVENUES: readonly number[] = [-70, 70];
+  /** Half-length of each avenue strip the pedestrian spawner is
+   * allowed to walk on. The avenues themselves are drawn 260 m long
+   * but the visible city only fills ±110 m before fog takes over —
+   * walking outside that range just burns CPU on invisible peds. */
+  static readonly AVENUE_WALK_HALF_LEN = 110;
 
   /** Static reference layout of the 12 seeded plots — kept in one
    * place so the scenery loop, the avenue exclusion check, and the
@@ -2072,39 +2078,49 @@ export class WorldScene {
 
     // ── Street-following placement ────────────────────────────────
     // Walk along each avenue and drop houses on BOTH sides, set back
-    // ~11 m from the centerline so the building face sits a few
-    // metres behind the pavement. Step 7.5 m along the street so
-    // every avenue has ~16 houses per side along its visible span
-    // (±60 m of street travel ≈ 16 candidates). Plot rows naturally
-    // gap the scenery — overlapsClaim skips houses on top of plots
-    // and onAvenue skips houses where two streets cross.
-    const HOUSE_SETBACK = 11;      // distance from avenue centerline to house centre
+    // ~13 m from the centerline so the building face sits ~5 m behind
+    // the pavement curb even with random jitter. Step 7.5 m along the
+    // street → ~16 houses per side along each avenue's visible span.
+    // Plot rows naturally gap the scenery — overlapsClaim skips
+    // houses on top of plots and onAvenue skips houses where two
+    // streets cross.
+    const HOUSE_SETBACK = 13;      // distance from avenue centerline to house centre
     const HOUSE_STEP = 7.5;        // spacing along the street
     const STREET_EXTENT = 110;     // walk ±this along each avenue
     let placed = 0;
-    const HARD_CAP = 300;
+    const HARD_CAP = 320;
+
+    // Track placed shops so the "every plot has a shop within 30 m"
+    // post-pass can decide whether to force-convert a nearby house.
+    const placedShops: { x: number; z: number }[] = [];
+    const placedHouses: { x: number; z: number; group: THREE.Group; isShop: boolean }[] = [];
 
     const tryPlace = (x: number, z: number, size: number, storeys: number, rotY: number, shopName?: string): boolean => {
       if (overlapsClaim(x, z, size)) return false;
       if (overlapsGarden(x, z, size)) return false;
       if (onAvenue(x, z, size)) return false;
-      sceneryGroup.add(this.makeSceneryHouse(
+      const house = this.makeSceneryHouse(
         x, z, size, storeys,
         pick(wallColors), pick(roofColors), pick(doorColors),
         rotY, shopName,
-      ));
+      );
+      sceneryGroup.add(house);
+      placedHouses.push({ x, z, group: house, isShop: !!shopName });
+      if (shopName) placedShops.push({ x, z });
       placed += 1;
       return true;
     };
 
-    // East-west avenues — houses face north or south depending on
-    // which side they sit on. House front (with the door + windows)
-    // is at +Z by default, so rotY=0 faces +Z (the street, when the
-    // house is NORTH of the avenue).
+    // House front (door + windows) sits on +Z by default. To face an
+    // avenue you rotate so that the +Z local axis ends up pointing
+    // toward the avenue's centreline.
+    //
+    // East-west avenues — north-side houses face south (rotY=0, +Z=+Z),
+    // south-side houses face north (rotY=π, +Z→-Z).
     for (const az of WorldScene.EW_AVENUES) {
       for (const side of [-1, +1] as const) {
         const baseZ = az + side * HOUSE_SETBACK;
-        const rotY = side > 0 ? Math.PI : 0; // south-side houses spin 180° so the door faces north
+        const rotY = side > 0 ? Math.PI : 0;
         for (let x = -STREET_EXTENT; x <= STREET_EXTENT; x += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
           // Mild random skip so the row isn't a perfect concrete wall.
@@ -2115,20 +2131,21 @@ export class WorldScene {
           // a barcode.
           const jx = x + (rng() - 0.5) * 1.6;
           const jz = baseZ + (rng() - 0.5) * 1.2;
-          const isShop = rng() < 0.25;
+          const isShop = rng() < 0.32;
           const shopName = isShop ? pick(shopNames) : undefined;
           tryPlace(jx, jz, size, storeys, rotY, shopName);
         }
       }
     }
-    // North-south avenues — houses face east or west.
-    // House front at +Z by default; rotate -π/2 to point +X (the
-    // street, when the house is WEST of the avenue) and +π/2 for
-    // east-side houses.
+    // North-south avenues — west-side houses (x < ax) should face
+    // east (+X). Right-hand rule for Y-rotation: rotY=+π/2 rotates
+    // +Z (default front) → +X. Mirror for east side.
     for (const ax of WorldScene.NS_AVENUES) {
       for (const side of [-1, +1] as const) {
         const baseX = ax + side * HOUSE_SETBACK;
-        const rotY = side > 0 ? Math.PI / 2 : -Math.PI / 2;
+        // side > 0 = EAST of avenue → face WEST → rotate +Z to -X → rotY=-π/2
+        // side < 0 = WEST of avenue → face EAST → rotate +Z to +X → rotY=+π/2
+        const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         for (let z = -STREET_EXTENT; z <= STREET_EXTENT; z += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
           if (rng() < 0.18) continue;
@@ -2136,11 +2153,62 @@ export class WorldScene {
           const storeys = 1 + Math.floor(rng() * 2);
           const jx = baseX + (rng() - 0.5) * 1.2;
           const jz = z + (rng() - 0.5) * 1.6;
-          const isShop = rng() < 0.25;
+          const isShop = rng() < 0.32;
           const shopName = isShop ? pick(shopNames) : undefined;
           tryPlace(jx, jz, size, storeys, rotY, shopName);
         }
       }
+    }
+
+    // ── Post-pass: ensure every plot has a shop nearby ─────────────
+    // For each claim plot (skipping the legacy player block), pick the
+    // nearest scenery house within 30 m. If none of the houses in
+    // that radius are shops, convert the closest house to one.
+    const SHOP_NEAR_RADIUS = 30;
+    for (const plot of WorldScene.CITY_PLOTS) {
+      let hasShop = false;
+      let closest: { house: typeof placedHouses[number]; dSq: number } | undefined;
+      for (const h of placedHouses) {
+        const dx = h.x - plot.x, dz = h.z - plot.z;
+        const dSq = dx * dx + dz * dz;
+        if (dSq > SHOP_NEAR_RADIUS * SHOP_NEAR_RADIUS) continue;
+        if (h.isShop) { hasShop = true; break; }
+        if (!closest || dSq < closest.dSq) closest = { house: h, dSq };
+      }
+      if (hasShop || !closest) continue;
+      // Rebuild the closest house as a shop. Cheaper than mutating
+      // the existing group's children — the original size/storeys
+      // aren't stored, so we re-pick a small variant.
+      sceneryGroup.remove(closest.house.group);
+      const size = 5;
+      const storeys = 2;
+      // Re-derive a rotation that still faces the nearest avenue so
+      // the shop's sign points at the street, not into the plot.
+      let bestAv = WorldScene.EW_AVENUES[0];
+      let bestAxis: "ew" | "ns" = "ew";
+      let bestDist = Infinity;
+      for (const az of WorldScene.EW_AVENUES) {
+        if (Math.abs(closest.house.z - az) < bestDist) { bestDist = Math.abs(closest.house.z - az); bestAv = az; bestAxis = "ew"; }
+      }
+      for (const ax of WorldScene.NS_AVENUES) {
+        if (Math.abs(closest.house.x - ax) < bestDist) { bestDist = Math.abs(closest.house.x - ax); bestAv = ax; bestAxis = "ns"; }
+      }
+      let rotY = 0;
+      if (bestAxis === "ew") {
+        rotY = closest.house.z > bestAv ? Math.PI : 0;
+      } else {
+        rotY = closest.house.x > bestAv ? -Math.PI / 2 : Math.PI / 2;
+      }
+      const shopName = pick(shopNames);
+      const newHouse = this.makeSceneryHouse(
+        closest.house.x, closest.house.z, size, storeys,
+        pick(wallColors), pick(roofColors), pick(doorColors),
+        rotY, shopName,
+      );
+      sceneryGroup.add(newHouse);
+      closest.house.group = newHouse;
+      closest.house.isShop = true;
+      placedShops.push({ x: closest.house.x, z: closest.house.z });
     }
   }
 

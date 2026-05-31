@@ -429,10 +429,11 @@ const DOOR_EXTERIOR_POSITION = new THREE.Vector2(0, 6);
 const ENTRY_SPAWN = new THREE.Vector2(0, 8);
 /** Half-range of the X jitter for the entry spawn (so guests appear
  * anywhere from x = -ENTRY_SPAWN_X_RANGE to +ENTRY_SPAWN_X_RANGE on
- * the pavement). 25 m gives roughly 2 seconds of pedestrian walking
- * at WALK_SPEED before they reach the door — long enough to register
- * as "they walked up the street" without feeling like a chore. */
-const ENTRY_SPAWN_X_RANGE = 25;
+ * the pavement). Wide enough to overlap the city's pedestrian flow
+ * so the player reads each customer as "that pedestrian peeled off
+ * the sidewalk and headed for my door" rather than spawning at the
+ * doorstep. 60 m ≈ half the visible street length. */
+const ENTRY_SPAWN_X_RANGE = 60;
 /** Off-frame target for departing guests after they've cleared the door.
  * walkingToDoor → DOOR_POSITION → exitingDoor → DOOR_EXTERIOR_POSITION →
  * walkingOut → EXIT_POSITION → despawn. */
