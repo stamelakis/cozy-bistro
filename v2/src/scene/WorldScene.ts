@@ -2105,6 +2105,14 @@ export class WorldScene {
     this.makeCityAvenue("ns", -70);
     // East outer-ring boundary — mirror on x=+70.
     this.makeCityAvenue("ns",  70);
+    // Middle NS link road at x=0. There's no plot at (0, 0) so this
+    // strip fits in the clear corridor between the north plot row
+    // (z=-48) and the south plot row (z=+48). Plots at (0, ±48)
+    // sit ON the x=0 line so the strip stops 6 m short of each to
+    // avoid the building footprints. Length 84 m centred at z=0
+    // covers z=-42..+42, crossing the north service avenue and
+    // the legacy main road on the way.
+    this.makeCityAvenue("ns", 0, 84, 0);
   }
 
   /** Centerlines of every avenue in the city — kept in one place so
@@ -2165,8 +2173,8 @@ export class WorldScene {
    * curbs + lane dashes, matching the legacy main road. `orientation`
    * = "ew" means the strip runs along X (constant Z); "ns" means
    * along Z (constant X). */
-  private makeCityAvenue(orientation: "ew" | "ns", offset: number): void {
-    const STRIP_LEN = 260;
+  private makeCityAvenue(orientation: "ew" | "ns", offset: number, length = 260, alongCenter = 0): void {
+    const STRIP_LEN = length;
     const pavementMat = new THREE.MeshStandardMaterial({ color: 0xb2a692, roughness: 0.9 });
     const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.95 });
     const curbMat = new THREE.MeshStandardMaterial({ color: 0x807468, roughness: 0.9 });
@@ -2178,14 +2186,13 @@ export class WorldScene {
     //   inner pavements at ±4.5 from the centre line
     //   curbs at ±3
     //   asphalt road spans ±3 (6 m wide, same as legacy)
-    // For "ns" we just swap which axis is which.
-    const place = (mesh: THREE.Mesh, along: number, perp: number): void => {
+    // For "ns" we just swap which axis is which. alongCenter shifts
+    // the strip along its long axis so shorter avenues (e.g. a
+    // middle-block NS link) can sit between two plot clusters.
+    const place = (mesh: THREE.Mesh, perp: number): void => {
       mesh.rotation.x = -Math.PI / 2;
-      if (orientation === "ew") mesh.position.set(0, 0, offset + perp);
-      else                       mesh.position.set(offset + perp, 0, 0);
-      // Note: along is unused for full-length strips; reserved for
-      // future shorter spans.
-      void along;
+      if (orientation === "ew") mesh.position.set(alongCenter, 0, offset + perp);
+      else                       mesh.position.set(offset + perp, 0, alongCenter);
     };
 
     const makePavement = (perp: number): void => {
@@ -2193,7 +2200,7 @@ export class WorldScene {
         ? new THREE.PlaneGeometry(STRIP_LEN, 5)
         : new THREE.PlaneGeometry(5, STRIP_LEN);
       const p = new THREE.Mesh(geo, pavementMat);
-      place(p, 0, perp);
+      place(p, perp);
       p.receiveShadow = true;
       this.worldRoot.add(p);
     };
@@ -2202,8 +2209,8 @@ export class WorldScene {
         ? new THREE.BoxGeometry(STRIP_LEN, 0.12, 0.18)
         : new THREE.BoxGeometry(0.18, 0.12, STRIP_LEN);
       const c = new THREE.Mesh(geo, curbMat);
-      if (orientation === "ew") c.position.set(0, 0.06, offset + perp);
-      else                       c.position.set(offset + perp, 0.06, 0);
+      if (orientation === "ew") c.position.set(alongCenter, 0.06, offset + perp);
+      else                       c.position.set(offset + perp, 0.06, alongCenter);
       c.castShadow = true;
       c.receiveShadow = true;
       this.worldRoot.add(c);
@@ -2215,21 +2222,23 @@ export class WorldScene {
       ? new THREE.PlaneGeometry(STRIP_LEN, 6)
       : new THREE.PlaneGeometry(6, STRIP_LEN);
     const road = new THREE.Mesh(roadGeo, roadMat);
-    place(road, 0, 0);
+    place(road, 0);
     road.receiveShadow = true;
     this.worldRoot.add(road);
     makeCurb(3);
     makePavement(5.5);
 
-    // Lane dashes down the middle.
+    // Lane dashes down the middle — t walks along the strip's free
+    // axis, shifted by alongCenter so a short segment's dashes are
+    // anchored at the same centre as its road / pavements.
     for (let t = -STRIP_LEN / 2 + 2; t <= STRIP_LEN / 2 - 2; t += 4) {
       const dashGeo = orientation === "ew"
         ? new THREE.PlaneGeometry(1.2, 0.18)
         : new THREE.PlaneGeometry(0.18, 1.2);
       const dash = new THREE.Mesh(dashGeo, laneMat);
       dash.rotation.x = -Math.PI / 2;
-      if (orientation === "ew") dash.position.set(t, 0.005, offset);
-      else                       dash.position.set(offset, 0.005, t);
+      if (orientation === "ew") dash.position.set(alongCenter + t, 0.005, offset);
+      else                       dash.position.set(offset, 0.005, alongCenter + t);
       this.worldRoot.add(dash);
     }
   }
