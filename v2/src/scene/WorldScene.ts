@@ -1829,16 +1829,17 @@ export class WorldScene {
     const tex = WorldScene.makeGrassTexture();
     tex.wrapS = THREE.RepeatWrapping;
     tex.wrapT = THREE.RepeatWrapping;
-    // Bumped tile repeat 5×5 → 9×9 to match the bigger plane —
-    // without this the grass texture stretched to a blurry blob.
-    tex.repeat.set(16, 16);
-    // Plane bumped to 280×280 so the camera can pan well past
-    // the seeded plots before hitting the void. With ~60 NPC
-    // scenery buildings + the 12 claim plots + the legacy block,
-    // the city now reads as a real Greek Island town rather
-    // than a handful of houses floating on a small lawn.
+    // Tile repeat 16 → 36 to match the bigger plane — without this the
+    // grass texture stretches to a blurry blob across the whole map.
+    tex.repeat.set(36, 36);
+    // Plane bumped to 600×600 so the camera (zoom now reaches a half-
+    // view of 200 units = ~400m wide) never sees the void edge of the
+    // grass — at max zoom-out the lawn fills the entire view AND the
+    // fog kicks in long before the player would see the plane's
+    // boundary. Fog color matches Engine's clear color so any sliver
+    // past the lawn dissolves into the same warm haze.
     const grass = new THREE.Mesh(
-      new THREE.PlaneGeometry(280, 280),
+      new THREE.PlaneGeometry(600, 600),
       new THREE.MeshStandardMaterial({ map: tex, roughness: 1.0, metalness: 0 }),
     );
     grass.rotation.x = -Math.PI / 2;
@@ -1851,29 +1852,67 @@ export class WorldScene {
     this.addCityScenery();
   }
 
-  /** Four asphalt avenues laid out so they don't cut through the
-   * player's restaurant block or any of the 12 claim plots:
-   *   - east-west at z=-36 (between restaurant and north plot row)
-   *   - east-west at z=+36 (between south plot row and legacy road)
-   *   - north-south at x=-36 (between west plot columns)
-   *   - north-south at x=+36 (between east plot columns)
-   * Each avenue is built the same way as the legacy addPavementAndRoad
-   * (pavement strips + curbs + asphalt road + lane dashes) so the
-   * whole city's road system reads as one consistent style — not the
-   * earlier mismatched stone-strip grid.
-   * The legacy main east-west road at z=13.5 was already extended to
-   * 260 m elsewhere in this file; together the five avenues form a
-   * cross-shaped main network around the player's block. */
+  /** City avenues laid out so each plot has road access without
+   * crowding gardens. Three avenues only (one was dropped to give
+   * the legacy main road room to breathe):
+   *   - east-west at z=-36 (back lane north of the restaurant)
+   *   - north-south at x=-70 (outer-ring west boundary)
+   *   - north-south at x=+70 (outer-ring east boundary)
+   * Plus the legacy main road at z=13.5 (extended to 260 m elsewhere).
+   * The previous south avenue at z=+36 was too close to the legacy
+   * main road (~22 m gap) and made the south side of the city look
+   * like one giant parking lot — that one's gone. East+West moved
+   * out to ±70 so they sit BEYOND every plot's east-side garden
+   * (gardens extend up to ~x±63 in the worst case) and never slice
+   * through a fenced lot. */
   private addCityStreets(): void {
     // North-side service road serving the z=-48 plot row.
     this.makeCityAvenue("ew", -36);
-    // South-side service road serving the z=48 plot row (note: the
-    // legacy main road at z=13.5 is between this and the restaurant).
-    this.makeCityAvenue("ew",  36);
-    // West-side service road serving the x=-48 column.
-    this.makeCityAvenue("ns", -36);
-    // East-side service road serving the x=+48 column.
-    this.makeCityAvenue("ns",  36);
+    // West outer-ring boundary — pushed out to x=-70 so it clears
+    // the gardens of the x=-48 plot column.
+    this.makeCityAvenue("ns", -70);
+    // East outer-ring boundary — mirror on x=+70.
+    this.makeCityAvenue("ns",  70);
+  }
+
+  /** Static reference layout of the 12 seeded plots — kept in one
+   * place so the scenery loop, the avenue exclusion check, and the
+   * garden generator all agree on where the plots sit. The 13th
+   * entry is the legacy player block (centered on the origin) +
+   * its existing east-side garden, which is added separately. */
+  private static readonly CITY_PLOTS: { x: number; z: number; w: number; h: number }[] = [
+    { x: -48, z: -48, w: 8,  h: 8  }, { x: -24, z: -48, w: 10, h: 10 },
+    { x:   0, z: -48, w: 12, h: 12 }, { x:  24, z: -48, w: 10, h: 10 },
+    { x:  48, z: -48, w: 8,  h: 8  },
+    { x: -48, z:   0, w: 10, h: 10 }, { x: -24, z:   0, w: 12, h: 12 },
+    { x:  24, z:   0, w: 12, h: 12 }, { x:  48, z:   0, w: 10, h: 10 },
+    { x: -24, z:  48, w: 8,  h: 8  }, { x:   0, z:  48, w: 10, h: 10 },
+    { x:  24, z:  48, w: 8,  h: 8  },
+  ];
+
+  /** Compute the garden bounds for a plot. By default, the garden
+   * sits to the EAST of the building (mirrors the legacy player's
+   * fenced garden). For plots where the east-side garden would
+   * overlap an avenue, the garden is moved to the WEST instead.
+   * Garden footprint is 8×10 m (matches the legacy GARDEN_BOUNDS). */
+  private static gardenBoundsForPlot(p: { x: number; z: number; w: number; h: number }): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    const GW = 8, GD = 10;
+    const GAP = 1;
+    // Default: east of the building.
+    let minX = p.x + p.w / 2 + GAP;
+    let maxX = minX + GW;
+    let minZ = p.z - GD / 2;
+    let maxZ = p.z + GD / 2;
+    // If the east garden would hit the east outer-ring avenue (x=+70 ±5.5)
+    // OR overlap the next plot to the east, mirror to the west side.
+    const eastAvenueZone = minX < 75.5 && maxX > 64.5;
+    if (eastAvenueZone) {
+      const wMinX = p.x - p.w / 2 - GAP - GW;
+      const wMaxX = p.x - p.w / 2 - GAP;
+      minX = wMinX;
+      maxX = wMaxX;
+    }
+    return { minX, maxX, minZ, maxZ };
   }
 
   /** Build one full asphalt avenue at the given axis offset. The
@@ -1965,16 +2004,11 @@ export class WorldScene {
     this.threeScene.add(sceneryGroup);
 
     // Centers of the seeded claim plots — kept clear (the city
-    // building loop adds proper shells at these positions).
-    const claimPlots: { x: number; z: number; w: number; h: number }[] = [
-      { x: -48, z: -48, w: 8,  h: 8  }, { x: -24, z: -48, w: 10, h: 10 },
-      { x:   0, z: -48, w: 12, h: 12 }, { x:  24, z: -48, w: 10, h: 10 },
-      { x:  48, z: -48, w: 8,  h: 8  },
-      { x: -48, z:   0, w: 10, h: 10 }, { x: -24, z:   0, w: 12, h: 12 },
-      { x:  24, z:   0, w: 12, h: 12 }, { x:  48, z:   0, w: 10, h: 10 },
-      { x: -24, z:  48, w: 8,  h: 8  }, { x:   0, z:  48, w: 10, h: 10 },
-      { x:  24, z:  48, w: 8,  h: 8  },
-    ];
+    // building loop adds proper Paris-style shells at these positions).
+    const claimPlots: { x: number; z: number; w: number; h: number }[] = WorldScene.CITY_PLOTS.slice();
+    // Each plot has a fenced garden too — scenery must avoid those
+    // (they're built later in populateCityBuildings).
+    const gardenZones = claimPlots.map((p) => WorldScene.gardenBoundsForPlot(p));
     // Legacy single-restaurant block — bigger keep-out so scenery
     // doesn't crowd the player's fence + pavement + main road.
     // Footprint covers x ∈ [-12, 12] and z ∈ [-12, 22] (the
@@ -1991,22 +2025,28 @@ export class WorldScene {
       }
       return false;
     };
+    const overlapsGarden = (x: number, z: number, size: number): boolean => {
+      const halfS = size / 2 + 1;
+      for (const g of gardenZones) {
+        if (x > g.minX - halfS && x < g.maxX + halfS &&
+            z > g.minZ - halfS && z < g.maxZ + halfS) return true;
+      }
+      return false;
+    };
     // Avoid the actual asphalt avenues. Each avenue is 11 m total
     // (centre 6 m road + 2.5 m pavements either side). A scenery
     // house within (halfS + 6) of an avenue's centre would land on
     // the pavement / road and look broken.
     //   - Legacy main road: z = 13.5
     //   - North service:    z = -36
-    //   - South service:    z = +36
-    //   - West  service:    x = -36
-    //   - East  service:    x = +36
+    //   - West outer-ring:  x = -70
+    //   - East outer-ring:  x = +70
     const onAvenue = (x: number, z: number, size: number): boolean => {
       const buf = size / 2 + 7;
       if (Math.abs(z - 13.5) < buf) return true;
       if (Math.abs(z - (-36)) < buf) return true;
-      if (Math.abs(z - 36) < buf) return true;
-      if (Math.abs(x - (-36)) < buf) return true;
-      if (Math.abs(x - 36) < buf) return true;
+      if (Math.abs(x - (-70)) < buf) return true;
+      if (Math.abs(x - 70) < buf) return true;
       return false;
     };
 
@@ -2014,65 +2054,214 @@ export class WorldScene {
     const rng = mulberry32(0xC02FB157);
     const pick = <T,>(arr: readonly T[]): T => arr[Math.floor(rng() * arr.length)];
 
-    const wallColors = [0xf4ece0, 0xeee5d4, 0xfaf1e2, 0xece1cc, 0xf7e9d0];
-    const roofColors = [0xc97a4a, 0xb86438, 0x3d6b8a, 0xd28b4f, 0x8a5238, 0xf4f0e8];
-    const doorColors = [0x2b6cb0, 0x9b3b3b, 0x4a7c3a, 0x6b4a8a, 0xc4842a];
+    // Paris palette — warm cream-limestone walls (subtle hue shifts so
+    // the rue doesn't read as a uniform paint store), slate-grey
+    // mansard roofs (3 variants for visual rhythm), dark wood doors.
+    const wallColors = [0xe6d5b5, 0xddc9a8, 0xe8d8b8, 0xd6c2a0, 0xefe0c0, 0xddc9b0];
+    const roofColors = [0x3a4048, 0x2e343c, 0x444a52, 0x363c44];
+    const doorColors = [0x3a261a, 0x4a3020, 0x2a1a10, 0x5a4030, 0x301c0e];
 
-    // Candidate cell centers — every 6 tiles from −120 to +120.
-    // Filtered by claim-overlap + street + occasional skip.
+    // Shop names — small fraction of buildings on the street get a
+    // storefront sign. Mixed traditional Paris commerce vocabulary.
+    const shopNames = [
+      "Boulangerie", "Café", "Tabac", "Pâtisserie", "Épicerie",
+      "Brasserie", "Fleuriste", "Librairie", "Pharmacie", "Charcuterie",
+      "Fromagerie", "Boucherie", "Chocolaterie", "Bar",
+    ];
+
+    // Candidate cell centers — every 6 tiles from −180 to +180 so
+    // the bigger grass plane fills with houses out to where the fog
+    // visibly takes over.
     let placed = 0;
-    for (let gx = -120; gx <= 120; gx += 6) {
-      for (let gz = -120; gz <= 120; gz += 6) {
+    for (let gx = -180; gx <= 180; gx += 6) {
+      for (let gz = -180; gz <= 180; gz += 6) {
         // Random skip — keeps the city feeling organic, not a
         // perfectly tiled grid.
-        if (rng() < 0.65) continue;
+        if (rng() < 0.62) continue;
         const size = 3 + Math.floor(rng() * 4); // 3..6 tiles
         if (overlapsClaim(gx, gz, size)) continue;
+        if (overlapsGarden(gx, gz, size)) continue;
         if (onAvenue(gx, gz, size)) continue;
+        // ~22% chance this scenery house is a shop with a sign.
+        const isShop = rng() < 0.22;
+        const shopName = isShop ? pick(shopNames) : undefined;
         sceneryGroup.add(this.makeSceneryHouse(
           gx, gz, size,
           1 + Math.floor(rng() * 2), // 1-2 storeys
           pick(wallColors), pick(roofColors), pick(doorColors),
           rng() * Math.PI * 2,
+          shopName,
         ));
         placed += 1;
-        if (placed > 80) return; // hard cap so the city doesn't get absurd
+        if (placed > 220) return; // hard cap so the city doesn't get absurd
       }
     }
   }
 
-  /** Build one small scenery house. Variants in size, height,
-   * wall/roof/door colour, and orientation give the town visual
-   * variety without authoring per-house meshes. */
+  /** Build one small Parisian scenery house. Cream limestone walls,
+   * tall narrow windows, slate mansard roof, dark-wood door. Variants
+   * in size, height, wall/roof/door colour, and orientation give the
+   * street visual variety without authoring per-house meshes. If
+   * `shopName` is provided, a small storefront sign hangs above the
+   * door — turns ~22% of scenery into named shops (boulangerie,
+   * café, etc.) so the player can read the city as a real
+   * neighbourhood instead of an undifferentiated row of houses. */
   private makeSceneryHouse(x: number, z: number, size: number, storeys: number,
                            wallColor: number, roofColor: number, doorColor: number,
-                           rotY: number): THREE.Group {
+                           rotY: number, shopName?: string): THREE.Group {
     const g = new THREE.Group();
-    const wallH = storeys * 2.6;
+    const wallH = storeys * 2.8;
+    // ── Walls (cream limestone) ─────────────────────────────────────
     const walls = new THREE.Mesh(
       new THREE.BoxGeometry(size, wallH, size),
-      new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.85 }),
     );
     walls.position.y = wallH / 2;
     walls.castShadow = true;
     walls.receiveShadow = true;
     g.add(walls);
-    const roof = new THREE.Mesh(
-      new THREE.BoxGeometry(size + 0.3, 0.2, size + 0.3),
-      new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.85 }),
+    // ── Horizontal cornices between floors (subtle warm band) ──────
+    const corniceMat = new THREE.MeshStandardMaterial({ color: 0xc8b888, roughness: 0.8 });
+    for (let s = 1; s < storeys; s += 1) {
+      const cornice = new THREE.Mesh(
+        new THREE.BoxGeometry(size + 0.15, 0.12, size + 0.15),
+        corniceMat,
+      );
+      cornice.position.y = s * 2.8;
+      cornice.castShadow = true;
+      g.add(cornice);
+    }
+    // ── Tall narrow windows on the FRONT face (+Z) ─────────────────
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0x223040, roughness: 0.35, metalness: 0.3,
+      emissive: 0x1a2538, emissiveIntensity: 0.05,
+    });
+    const numWin = Math.max(2, Math.floor(size / 1.4));
+    const winSpacing = size / (numWin + 1);
+    for (let s = 0; s < storeys; s += 1) {
+      const winY = s * 2.8 + 1.55;
+      for (let i = 0; i < numWin; i += 1) {
+        const wx = -size / 2 + (i + 1) * winSpacing;
+        // Skip the centre window on the ground floor — that's where the door goes.
+        if (s === 0 && Math.abs(wx) < 0.5) continue;
+        const win = new THREE.Mesh(
+          new THREE.BoxGeometry(0.55, 1.25, 0.04),
+          windowMat,
+        );
+        win.position.set(wx, winY, size / 2 + 0.025);
+        g.add(win);
+      }
+      // ── Thin iron balcony rail on upper floors ───────────────────
+      if (s > 0) {
+        const balconyMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.7 });
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(size - 0.2, 0.05, 0.08),
+          balconyMat,
+        );
+        rail.position.set(0, winY - 0.7, size / 2 + 0.10);
+        g.add(rail);
+      }
+    }
+    // ── Mansard roof (slate grey) ──────────────────────────────────
+    // Two-piece silhouette: thin warm cornice band right at the top
+    // of the wall, then a slate-grey body that's slightly bigger than
+    // the wall (so it overhangs like a real mansard).
+    const topCornice = new THREE.Mesh(
+      new THREE.BoxGeometry(size + 0.25, 0.12, size + 0.25),
+      corniceMat,
     );
-    roof.position.y = wallH + 0.1;
-    roof.castShadow = true;
-    g.add(roof);
+    topCornice.position.y = wallH + 0.06;
+    topCornice.castShadow = true;
+    g.add(topCornice);
+    const mansard = new THREE.Mesh(
+      new THREE.BoxGeometry(size + 0.15, 0.7, size + 0.15),
+      new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.5, metalness: 0.05 }),
+    );
+    mansard.position.y = wallH + 0.12 + 0.35;
+    mansard.castShadow = true;
+    g.add(mansard);
+    // Flat slate cap on top, slightly inset (suggests the roof's
+    // upper "deck" without authoring real slopes).
+    const cap = new THREE.Mesh(
+      new THREE.BoxGeometry(size - 0.4, 0.08, size - 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
+    );
+    cap.position.y = wallH + 0.12 + 0.7 + 0.04;
+    g.add(cap);
+    // ── Chimney(s) ────────────────────────────────────────────────
+    const chimneyMat = new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 });
+    const chimney = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.8, 0.32),
+      chimneyMat,
+    );
+    chimney.position.set(size / 2 - 0.6, wallH + 0.12 + 0.7 + 0.4, -size / 2 + 0.6);
+    chimney.castShadow = true;
+    g.add(chimney);
+    // ── Door ──────────────────────────────────────────────────────
     const door = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 1.8, 0.05),
-      new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.6 }),
+      new THREE.BoxGeometry(0.85, 1.95, 0.05),
+      new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.55 }),
     );
-    door.position.set(0, 1.0, size / 2 + 0.03);
+    door.position.set(0, 0.975, size / 2 + 0.03);
     g.add(door);
+    // ── Shop sign over the door ───────────────────────────────────
+    if (shopName) {
+      const tex = WorldScene.makeShopSignTexture(shopName);
+      const signMat = new THREE.MeshStandardMaterial({
+        map: tex, roughness: 0.55, transparent: false,
+        emissive: 0x222018, emissiveMap: tex, emissiveIntensity: 0.18,
+      });
+      const sign = new THREE.Mesh(
+        new THREE.PlaneGeometry(Math.min(size - 0.4, 2.4), 0.55),
+        signMat,
+      );
+      sign.position.set(0, 2.25, size / 2 + 0.04);
+      g.add(sign);
+      // Tiny iron frame under the sign for a hint of street-level depth.
+      const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5, metalness: 0.5 });
+      const frame = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.min(size - 0.3, 2.5), 0.06, 0.04),
+        frameMat,
+      );
+      frame.position.set(0, 2.55, size / 2 + 0.05);
+      g.add(frame);
+    }
     g.position.set(x, 0, z);
     g.rotation.y = rotY;
     return g;
+  }
+
+  /** Canvas-painted storefront sign. Cream background with a thin
+   * dark border + deep red script-style hand-painted name centered
+   * inside. Compact enough to read at iso distance. */
+  private static makeShopSignTexture(name: string): THREE.CanvasTexture {
+    const w = 512, h = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    // Background — warm cream, lightly aged.
+    ctx.fillStyle = "#f4ead2";
+    ctx.fillRect(0, 0, w, h);
+    // Inner dark border for that traditional sign look.
+    ctx.strokeStyle = "#3a261a";
+    ctx.lineWidth = 5;
+    ctx.strokeRect(8, 8, w - 16, h - 16);
+    // Lettering — deep maroon, serif, slightly italic to read as
+    // hand-painted commerce. Size scales down for long names so the
+    // text never spills off the sign.
+    const targetFs = name.length > 9 ? 56 : 72;
+    ctx.fillStyle = "#5a2018";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 italic ${targetFs}px "Georgia", "Times New Roman", serif`;
+    ctx.fillText(name, w / 2, h / 2 + 4);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = 8;
+    return tex;
   }
 
   /** Procedural grass texture — high-resolution layered noise in a
@@ -2642,13 +2831,25 @@ export class WorldScene {
       this.cityBuildings.remove(c);
     }
     for (const b of buildings) {
+      // Always add the garden fence, even for the player's own plot
+      // (the legacy player block at origin has its own fence built
+      // by addGardenArea(); this group adds fences for the OTHER 11
+      // plots regardless of ownership).
       if (skipMine && b.isMine) continue;
       this.cityBuildings.add(this.makeBuildingShell(b));
+      this.cityBuildings.add(this.makePlotGardenFence({
+        x: b.plotX, z: b.plotZ, w: b.plotW, h: b.plotH,
+      }));
     }
   }
 
-  /** Build one Greek-Island-style placeholder shell. */
-  private makeBuildingShell(b: { kind: string; plotX: number; plotZ: number; plotW: number; plotH: number }): THREE.Group {
+  /** Build one Parisian Haussmann-style placeholder shell — cream
+   * limestone walls with horizontal cornices between floors, tall
+   * narrow shuttered windows on the street face, slim iron balconies
+   * on upper storeys, a slate-grey mansard roof + chimney, and a
+   * heavy dark-wood door. Same procedural box-and-band toolkit as
+   * makeSceneryHouse just at plot scale. */
+  private makeBuildingShell(b: { id?: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number }): THREE.Group {
     const g = new THREE.Group();
     // Heights derived from kind — small = 1 storey, medium = 2,
     // large = 3. Each "storey" is 3 m (matches the player's own
@@ -2658,43 +2859,194 @@ export class WorldScene {
     const wallH = storeys * 3.0;
     const w = b.plotW;
     const h = b.plotH;
-    // Stone foundation — slightly larger than the building, just a
-    // thin slab to read as "the lot".
+    // Deterministic per-plot colour variation — use the plot id as
+    // a seed so the same building always wears the same coat across
+    // reloads / clients.
+    const seed = Number((b.id ?? BigInt(Math.floor(b.plotX * 73 + b.plotZ * 41))) & BigInt(0xFFFFFFFF));
+    const r = mulberry32(seed || 1);
+    const wallShades = [0xe6d5b5, 0xddc9a8, 0xe8d8b8, 0xd6c2a0, 0xefe0c0, 0xddc9b0];
+    const roofShades = [0x3a4048, 0x2e343c, 0x444a52, 0x363c44];
+    const doorShades = [0x3a261a, 0x4a3020, 0x2a1a10, 0x5a4030];
+    const pickFrom = <T,>(arr: readonly T[]): T => arr[Math.floor(r() * arr.length)];
+    const wallColor = pickFrom(wallShades);
+    const roofColor = pickFrom(roofShades);
+    const doorColor = pickFrom(doorShades);
+    // ── Cobblestone foundation (slightly larger than the building) ──
     const foundation = new THREE.Mesh(
       new THREE.BoxGeometry(w + 1, 0.2, h + 1),
-      new THREE.MeshStandardMaterial({ color: 0xa89882, roughness: 0.95, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: 0x9a9088, roughness: 0.95, metalness: 0 }),
     );
     foundation.position.y = 0.1;
     foundation.receiveShadow = true;
     g.add(foundation);
-    // Whitewashed walls — single block. Subtle warm undertone so it
-    // catches the sunset lighting rather than reading as flat grey.
+    // ── Cream limestone walls ───────────────────────────────────────
     const walls = new THREE.Mesh(
       new THREE.BoxGeometry(w, wallH, h),
-      new THREE.MeshStandardMaterial({ color: 0xf4ece0, roughness: 0.85, metalness: 0 }),
+      new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.85, metalness: 0 }),
     );
     walls.position.y = 0.2 + wallH / 2;
     walls.castShadow = true;
     walls.receiveShadow = true;
     g.add(walls);
-    // Blue door — Greek Island staple. Centered on the +Z face,
-    // half-height. Just visual flair; not interactive in P2.4.
+    // ── Horizontal cornices between floors ─────────────────────────
+    const corniceMat = new THREE.MeshStandardMaterial({ color: 0xc8b888, roughness: 0.8 });
+    for (let s = 1; s < storeys; s += 1) {
+      const cornice = new THREE.Mesh(
+        new THREE.BoxGeometry(w + 0.2, 0.14, h + 0.2),
+        corniceMat,
+      );
+      cornice.position.y = 0.2 + s * 3.0;
+      cornice.castShadow = true;
+      g.add(cornice);
+    }
+    // ── Windows on the +Z (street) face ────────────────────────────
+    const windowMat = new THREE.MeshStandardMaterial({
+      color: 0x223040, roughness: 0.35, metalness: 0.3,
+      emissive: 0x1a2538, emissiveIntensity: 0.05,
+    });
+    const numWin = Math.max(3, Math.floor(w / 1.6));
+    const winSpacing = w / (numWin + 1);
+    for (let s = 0; s < storeys; s += 1) {
+      const winY = 0.2 + s * 3.0 + 1.7;
+      for (let i = 0; i < numWin; i += 1) {
+        const wx = -w / 2 + (i + 1) * winSpacing;
+        // Centre window on the ground floor is the door slot.
+        if (s === 0 && Math.abs(wx) < 0.55) continue;
+        const win = new THREE.Mesh(
+          new THREE.BoxGeometry(0.7, 1.45, 0.05),
+          windowMat,
+        );
+        win.position.set(wx, winY, h / 2 + 0.028);
+        g.add(win);
+      }
+      // ── Wrought-iron balcony rail on upper floors ────────────────
+      if (s > 0) {
+        const balconyMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.7 });
+        const rail = new THREE.Mesh(
+          new THREE.BoxGeometry(w - 0.3, 0.06, 0.10),
+          balconyMat,
+        );
+        rail.position.set(0, winY - 0.85, h / 2 + 0.12);
+        g.add(rail);
+        // Tiny vertical balusters every ~0.5m so it reads as a real
+        // wrought-iron rail rather than a single floating bar.
+        const baluster = new THREE.BoxGeometry(0.04, 0.9, 0.04);
+        const balusters = Math.floor(w / 0.5);
+        for (let bi = 0; bi <= balusters; bi += 1) {
+          const bx = -w / 2 + 0.2 + bi * ((w - 0.4) / balusters);
+          const bar = new THREE.Mesh(baluster, balconyMat);
+          bar.position.set(bx, winY - 0.4, h / 2 + 0.12);
+          g.add(bar);
+        }
+      }
+    }
+    // ── Heavy dark-wood double door, centre-bottom of +Z face ──────
     const door = new THREE.Mesh(
-      new THREE.BoxGeometry(0.8, 2.0, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0x2b6cb0, roughness: 0.6, metalness: 0.1 }),
+      new THREE.BoxGeometry(1.05, 2.25, 0.06),
+      new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.55, metalness: 0.05 }),
     );
-    door.position.set(0, 1.2, h / 2 + 0.03);
+    door.position.set(0, 0.2 + 1.125, h / 2 + 0.035);
     g.add(door);
-    // Terracotta roof — a thin slab capping the walls. Slight
-    // overhang for that authentic eave look.
-    const roof = new THREE.Mesh(
-      new THREE.BoxGeometry(w + 0.4, 0.25, h + 0.4),
-      new THREE.MeshStandardMaterial({ color: 0xc97a4a, roughness: 0.85, metalness: 0 }),
+    // Two small brass knockers (just decor cylinders) — a Parisian
+    // signature on doors of this size.
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a248, roughness: 0.4, metalness: 0.75 });
+    for (const dx of [-0.2, 0.2]) {
+      const knocker = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.04, 8), brassMat);
+      knocker.position.set(dx, 0.2 + 1.4, h / 2 + 0.07);
+      knocker.rotation.x = Math.PI / 2;
+      g.add(knocker);
+    }
+    // ── Top cornice + mansard roof ─────────────────────────────────
+    const topCornice = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.3, 0.14, h + 0.3),
+      corniceMat,
     );
-    roof.position.y = 0.2 + wallH + 0.125;
-    roof.castShadow = true;
-    g.add(roof);
+    topCornice.position.y = 0.2 + wallH + 0.07;
+    topCornice.castShadow = true;
+    g.add(topCornice);
+    const mansardH = 1.1;
+    const mansard = new THREE.Mesh(
+      new THREE.BoxGeometry(w + 0.2, mansardH, h + 0.2),
+      new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.5, metalness: 0.05 }),
+    );
+    mansard.position.y = 0.2 + wallH + 0.14 + mansardH / 2;
+    mansard.castShadow = true;
+    g.add(mansard);
+    const cap = new THREE.Mesh(
+      new THREE.BoxGeometry(w - 0.6, 0.1, h - 0.6),
+      new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
+    );
+    cap.position.y = 0.2 + wallH + 0.14 + mansardH + 0.05;
+    g.add(cap);
+    // ── Chimney (terracotta brick) ─────────────────────────────────
+    const chimneyMat = new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 });
+    const chimney = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 1.1, 0.4),
+      chimneyMat,
+    );
+    chimney.position.set(w / 2 - 0.8, 0.2 + wallH + 0.14 + mansardH + 0.55, -h / 2 + 0.8);
+    chimney.castShadow = true;
+    g.add(chimney);
+    // ── Tiny "address number" plate just left of the door ──────────
     g.position.set(b.plotX, 0, b.plotZ);
+    return g;
+  }
+
+  /** Build a wooden picket fence around the plot's adjacent garden
+   * (computed by gardenBoundsForPlot). Mirrors the player's legacy
+   * garden style so every plot in the city reads as "house + fenced
+   * garden" rather than the player being uniquely privileged. Pure
+   * decor — no gameplay interaction yet. */
+  private makePlotGardenFence(plot: { x: number; z: number; w: number; h: number }): THREE.Group {
+    const g = new THREE.Group();
+    const b = WorldScene.gardenBoundsForPlot(plot);
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x8a5a30, roughness: 0.9 });
+    const railMat = new THREE.MeshStandardMaterial({ color: 0xa07042, roughness: 0.9 });
+    const capMat  = new THREE.MeshStandardMaterial({ color: 0x6a4220, roughness: 0.85 });
+    const postH = 1.0, postW = 0.09;
+    const railH = 0.05, railD = 0.05;
+    const upperY = 0.74, lowerY = 0.28;
+    const spacing = 1.0;
+    const addPost = (x: number, z: number): void => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(postW, postH, postW), postMat);
+      post.position.set(x, postH / 2, z);
+      post.castShadow = true;
+      g.add(post);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(postW * 1.4, 0.06, postW * 1.4), capMat);
+      cap.position.set(x, postH + 0.03, z);
+      g.add(cap);
+    };
+    for (let x = b.minX; x <= b.maxX; x += spacing) {
+      addPost(x, b.minZ);
+      addPost(x, b.maxZ);
+    }
+    for (let z = b.minZ + spacing; z < b.maxZ; z += spacing) {
+      addPost(b.minX, z);
+      addPost(b.maxX, z);
+    }
+    const addRail = (x: number, z: number, length: number, axis: "x" | "z", y: number): void => {
+      const geom = axis === "x"
+        ? new THREE.BoxGeometry(length, railH, railD)
+        : new THREE.BoxGeometry(railD, railH, length);
+      const rail = new THREE.Mesh(geom, railMat);
+      rail.position.set(x, y, z);
+      rail.castShadow = true;
+      g.add(rail);
+    };
+    const cx = (b.minX + b.maxX) / 2;
+    const cz = (b.minZ + b.maxZ) / 2;
+    const width = b.maxX - b.minX;
+    const depth = b.maxZ - b.minZ;
+    addRail(cx, b.minZ, width, "x", upperY);
+    addRail(cx, b.minZ, width, "x", lowerY);
+    addRail(cx, b.maxZ, width, "x", upperY);
+    addRail(cx, b.maxZ, width, "x", lowerY);
+    addRail(b.minX, cz, depth, "z", upperY);
+    addRail(b.minX, cz, depth, "z", lowerY);
+    addRail(b.maxX, cz, depth, "z", upperY);
+    addRail(b.maxX, cz, depth, "z", lowerY);
+    // A subtle grass-only patch sits inside the fence — the lawn plane
+    // already provides the green, so no need to overlay another plane.
     return g;
   }
 
@@ -2842,13 +3194,15 @@ export class WorldScene {
     for (const [stairIdx, stairGroup] of this.stairFlights) {
       stairGroup.visible = tier >= stairIdx + 1;
     }
-    // Roof: only when focused on the TOP storey (and that storey is
-    // unlocked) — anywhere else it would sit above the focus and
-    // obscure the view.
+    // Roof: hide whenever the player is focused on the topmost UNLOCKED
+    // storey, so the view from above isn't blocked by the building's
+    // ceiling. (Lower-floor focus already hides every upper storey via
+    // the atOrBelow check above, so a roof sitting at NUM_STOREYS*H
+    // would just float in the air with nothing under it — also hide
+    // it there.) Net effect: the building never shows a hard roof
+    // when the camera is supposed to see inside the top floor.
     if (this.buildingRoof) {
-      const topIdx = WorldScene.NUM_STOREYS - 1;
-      this.buildingRoof.visible =
-        this.focusedStorey === topIdx && tier >= topIdx + 1;
+      this.buildingRoof.visible = false;
     }
   }
 

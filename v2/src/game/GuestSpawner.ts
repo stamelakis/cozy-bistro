@@ -419,8 +419,20 @@ const DOOR_POSITION = new THREE.Vector2(0, 5);
 const DOOR_EXTERIOR_POSITION = new THREE.Vector2(0, 6);
 /** Outside the building where new arrivals spawn. They first walk to
  * DOOR_EXTERIOR_POSITION, then straight through to DOOR_POSITION, then
- * on to their seat. */
+ * on to their seat.
+ *
+ * The X coordinate is randomised at spawn time within
+ * ENTRY_SPAWN_X_RANGE so guests appear up the street and walk along
+ * the pavement before peeling off to the door — instead of popping
+ * into existence at the doorstep. The Z is fixed at 8 (the south
+ * pavement strip, between the building and the asphalt road). */
 const ENTRY_SPAWN = new THREE.Vector2(0, 8);
+/** Half-range of the X jitter for the entry spawn (so guests appear
+ * anywhere from x = -ENTRY_SPAWN_X_RANGE to +ENTRY_SPAWN_X_RANGE on
+ * the pavement). 25 m gives roughly 2 seconds of pedestrian walking
+ * at WALK_SPEED before they reach the door — long enough to register
+ * as "they walked up the street" without feeling like a chore. */
+const ENTRY_SPAWN_X_RANGE = 25;
 /** Off-frame target for departing guests after they've cleared the door.
  * walkingToDoor → DOOR_POSITION → exitingDoor → DOOR_EXTERIOR_POSITION →
  * walkingOut → EXIT_POSITION → despawn. */
@@ -1546,11 +1558,18 @@ export class GuestSpawner {
     try {
       const model = await this.characterLoader.load(variantId);
       this.scene.add(model);
+      // Pick a random X along the pavement so they appear to arrive
+      // from up the street rather than popping into existence right
+      // outside the door. The pathfinder then walks them from this
+      // pavement position to DOOR_EXTERIOR_POSITION (still the first
+      // waypoint below) before the existing door dance kicks in —
+      // visually they read as a passing pedestrian who turned in.
+      const spawnX = (Math.random() - 0.5) * 2 * ENTRY_SPAWN_X_RANGE;
       const character: AnimatedCharacter = {
         root: model,
         // Spawn outside the building; the walkingIn handler will route us
         // via the door before continuing on to the seat.
-        groundPos: new THREE.Vector2(ENTRY_SPAWN.x, ENTRY_SPAWN.y),
+        groundPos: new THREE.Vector2(spawnX, ENTRY_SPAWN.y),
         facingY: Math.PI, // into the room — reverted to original value
         action: "walk",
         phase: Math.random() * 5,
