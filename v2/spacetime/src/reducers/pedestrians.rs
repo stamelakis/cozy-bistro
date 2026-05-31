@@ -34,7 +34,7 @@ const STREET_HALF: f32 = 112.0;
 /// Matches AVENUE_PAVEMENT_OFFSET in PedestrianSpawner.ts.
 const PAVEMENT_OFFSET: f32 = 8.0;
 
-const EW_AVENUES: &[f32] = &[-66.0, -24.0, 24.0, 66.0]; // matches WorldScene.EW_AVENUES
+const EW_AVENUES: &[f32] = &[-24.0, 24.0, 62.0]; // matches WorldScene.EW_AVENUES
 const NS_AVENUES: &[f32] = &[-70.0, 70.0];
 
 const VARIANTS: &[&str] = &[

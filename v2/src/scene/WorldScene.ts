@@ -2097,22 +2097,24 @@ export class WorldScene {
    * (see addCityScenery — street-following placement, not a random
    * grid scan). */
   private addCityStreets(): void {
-    // Road layout DERIVED from the plot rows so every plot has a
-    // road on both its north and south sides. Plot rows sit at
-    // z=-48, z=0, z=+48; gardens extend ±5 m in Z; the natural
-    // EW grid is therefore:
-    //   z=-66 (north of row 1, 13 m clear of row 1's garden north edge)
-    //   z=-24 (between rows 1 and 2, 14 m clear of either row's garden)
-    //   z=+24 (between rows 2 and 3, mirror of z=-24)
-    //   z=+66 (south of row 3, mirror of z=-66)
-    // Every plot now has road frontage on both its north and south
-    // sides, with a generous garden buffer to either pavement.
-    this.makeCityAvenue("ew", -66);
+    // THREE EW avenues, one in front of each plot row — owner's
+    // explicit spec. Plot rows at z=-48, z=0, z=+48; gardens extend
+    // ±5 m in Z. Roads on the SOUTH side of each row so buildings
+    // face south toward the street, classic Main-Street layout.
+    //
+    //   z=-24 — in front of row 1 (24 m south of row 1 centerline,
+    //           18 m south of row 1's garden south edge)
+    //   z=+24 — in front of row 2 (between row 2 and row 3)
+    //   z=+62 — in front of row 3 (14 m south of row 3 centerline)
+    //
+    // Scenery houses line both sides of every avenue and touch the
+    // pavement directly (no grass strip), per spec.
     this.makeCityAvenue("ew", -24);
     this.makeCityAvenue("ew",  24);
-    this.makeCityAvenue("ew",  66);
-    // NS outer ring unchanged — x=±70 clears the easternmost /
-    // westernmost plot columns and their gardens.
+    this.makeCityAvenue("ew",  62);
+    // NS outer ring — keeps the city visually bounded on the east /
+    // west edges and gives the corner / NS-aligned scenery houses
+    // a road to follow.
     this.makeCityAvenue("ns", -70);
     this.makeCityAvenue("ns",  70);
   }
@@ -2122,7 +2124,7 @@ export class WorldScene {
    * future road-aware system (pedestrian spawner, sign placement)
    * all agree on what counts as a street. Public so PedestrianSpawner
    * can route walkers down them. */
-  static readonly EW_AVENUES: readonly number[] = [-66, -24, 24, 66];
+  static readonly EW_AVENUES: readonly number[] = [-24, 24, 62];
   static readonly NS_AVENUES: readonly number[] = [-70, 70];
   /** Half-length of each avenue strip the pedestrian spawner is
    * allowed to walk on. The avenues themselves are drawn 260 m long
@@ -2324,29 +2326,30 @@ export class WorldScene {
     ];
 
     // ── Street-following placement ────────────────────────────────
-    // Walk along each avenue and drop houses on BOTH sides, set back
-    // ~13 m from the centerline so the building face sits ~5 m behind
-    // the pavement curb even with random jitter. Step 7.5 m along the
-    // street → ~16 houses per side along each avenue's visible span.
-    // Plot rows naturally gap the scenery — overlapsClaim skips
-    // houses on top of plots and onAvenue skips houses where two
-    // streets cross.
-    // Distance from avenue centerline to house centre. Pavement
-    // extends ±5.5 m from centerline; a typical 5-tile house has
-    // 2.5 m half-width. Setting setback = 8 puts the house's
-    // street-facing edge at exactly 5.5 m — flush against the
-    // pavement curb, no grass strip between. Larger 6-tile houses
-    // (half-width 3) get a tiny 0.5 m visual overlap with the curb
-    // line which reads as natural building-to-curb contact.
-    const HOUSE_SETBACK = 8;
-    const HOUSE_STEP = 9;          // spacing along the street (bumped 7.5 → 9 for perf)
-    const STREET_EXTENT = 110;     // walk ±this along each avenue
+    // Walk along each avenue and drop houses on BOTH sides, packed
+    // tight against the pavement curb. Per-house setback is computed
+    // from the house's own width so the street-facing edge always
+    // sits exactly at the curb edge regardless of how wide the
+    // randomly-rolled house is — see the size-aware perpendicular
+    // offset inside the loop. Owner spec: "buildings must touch the
+    // pavement, no grass strip between."
+    //
+    // Pavement extends ±PAVEMENT_HALF m from the avenue centerline.
+    // House's street-facing edge sits at exactly PAVEMENT_HALF +
+    // CURB_EPSILON (a hair off the curb so the polygon doesn't z-
+    // fight with the pavement plane). House centre = PAVEMENT_HALF
+    // + CURB_EPSILON + size/2 from centerline.
+    const PAVEMENT_HALF = 5.5;
+    const CURB_EPSILON = 0.05;
+    const HOUSE_STEP = 7;          // dense spacing → houses fill every street
+    const STREET_EXTENT = 130;     // walk ±this along each avenue
     let placed = 0;
-    // Perf cap — each scenery house = ~15 meshes (walls, cornices,
-    // windows, balcony, mansard, chimney, sign). 320 was burning
-    // ~4500 draw calls just on scenery; dropped to 180 to keep
-    // total frame cost reasonable on mid-range machines.
-    const HARD_CAP = 180;
+    // Lifted cap from 180 → 300 to populate all three EW avenues +
+    // both NS edges without running out of slots. Each scenery
+    // house is ~15 meshes; 300 * 15 = ~4500 draw calls — within
+    // the GPU budget on mid-range machines (was 320 originally,
+    // 180 was a perf-reaction overshoot).
+    const HARD_CAP = 300;
 
     // Track placed shops so the "every plot has a shop within 30 m"
     // post-pass can decide whether to force-convert a nearby house.
@@ -2377,21 +2380,26 @@ export class WorldScene {
     // south-side houses face north (rotY=π, +Z→-Z).
     for (const az of WorldScene.EW_AVENUES) {
       for (const side of [-1, +1] as const) {
-        const baseZ = az + side * HOUSE_SETBACK;
         const rotY = side > 0 ? Math.PI : 0;
         for (let x = -STREET_EXTENT; x <= STREET_EXTENT; x += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
-          // Mild random skip so the row isn't a perfect concrete wall.
-          if (rng() < 0.18) continue;
+          // Light random skip so the row isn't a perfectly uniform
+          // wall (~10 % gaps).
+          if (rng() < 0.10) continue;
           const size = 4 + Math.floor(rng() * 3); // 4..6 tiles wide
           const storeys = 1 + Math.floor(rng() * 2); // 1..2
-          // Slight jitter on both axes so houses don't line up like
-          // a barcode.
-          const jx = x + (rng() - 0.5) * 1.6;
-          const jz = baseZ + (rng() - 0.5) * 1.2;
+          // Size-aware perpendicular offset: house's street-facing
+          // edge sits exactly at the curb (PAVEMENT_HALF + small
+          // epsilon to avoid z-fighting). NO perpendicular jitter
+          // — that's what was leaving inconsistent grass strips.
+          const baseZ = az + side * (PAVEMENT_HALF + CURB_EPSILON + size / 2);
+          // Mild ALONG-street jitter only — keeps the row from
+          // reading as a barcode without ever pulling a house off
+          // the curb line.
+          const jx = x + (rng() - 0.5) * 1.4;
           const isShop = rng() < 0.32;
           const shopName = isShop ? pick(shopNames) : undefined;
-          tryPlace(jx, jz, size, storeys, rotY, shopName);
+          tryPlace(jx, baseZ, size, storeys, rotY, shopName);
         }
       }
     }
@@ -2400,20 +2408,22 @@ export class WorldScene {
     // +Z (default front) → +X. Mirror for east side.
     for (const ax of WorldScene.NS_AVENUES) {
       for (const side of [-1, +1] as const) {
-        const baseX = ax + side * HOUSE_SETBACK;
         // side > 0 = EAST of avenue → face WEST → rotate +Z to -X → rotY=-π/2
         // side < 0 = WEST of avenue → face EAST → rotate +Z to +X → rotY=+π/2
         const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         for (let z = -STREET_EXTENT; z <= STREET_EXTENT; z += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
-          if (rng() < 0.18) continue;
+          if (rng() < 0.10) continue;
           const size = 4 + Math.floor(rng() * 3);
           const storeys = 1 + Math.floor(rng() * 2);
-          const jx = baseX + (rng() - 0.5) * 1.2;
-          const jz = z + (rng() - 0.5) * 1.6;
+          // Same size-aware perpendicular offset as the EW loop —
+          // street-facing edge of the house sits exactly at the
+          // curb regardless of rolled house width.
+          const baseX = ax + side * (PAVEMENT_HALF + CURB_EPSILON + size / 2);
+          const jz = z + (rng() - 0.5) * 1.4;
           const isShop = rng() < 0.32;
           const shopName = isShop ? pick(shopNames) : undefined;
-          tryPlace(jx, jz, size, storeys, rotY, shopName);
+          tryPlace(baseX, jz, size, storeys, rotY, shopName);
         }
       }
     }
