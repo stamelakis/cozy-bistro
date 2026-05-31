@@ -279,6 +279,14 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     const sentinel = opts.collapseSentinel;
     const applyForState = (nowExpanded: boolean): void => {
       if (nowExpanded) {
+        // Refresh from localStorage on every expand — wireResize
+        // persists the new height there, but the `savedHeight`
+        // captured at init is stale once the user has resized
+        // within the same session. Re-reading means
+        // collapse → resize → expand restores the resized height
+        // instead of bouncing back to the page-load value.
+        const fresh = readState(storageKey);
+        if (fresh) savedHeight = fresh.height;
         if (savedHeight !== undefined) {
           root.style.height = `${savedHeight}px`;
           root.style.maxHeight = "none";

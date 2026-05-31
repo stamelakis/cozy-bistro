@@ -92,7 +92,10 @@ export class ChatPanel {
       width: "min(260px, calc(100vw - 920px))",
       minWidth: "220px",
       maxWidth: "280px",
-      maxHeight: "32px", // minimized by default
+      // No maxHeight here — PanelDragResize owns the root's height.
+      // The body starts display:none (set by applyMinimizedStyles in
+      // the constructor) so the root collapses naturally to the
+      // title-bar height for the first paint.
       display: "flex",
       flexDirection: "column",
       background: "rgba(20, 14, 10, 0.86)",
@@ -527,16 +530,20 @@ export class ChatPanel {
    * setMinimized so the constructor can call it once everything is
    * mounted without going through the full toggle path.
    *
-   * Stays anchored at bottom: 12 px in BOTH states — the owner
-   * preferred a stable position over the previous fly-up behaviour.
-   * Expanded just grows the panel upward in place; some overlap with
-   * the centered MenuPanel is accepted as a normal trade-off. */
+   * Only flips body + tabs visibility + the chevron — the ROOT's
+   * height/maxHeight are owned by PanelDragResize (which observes
+   * the body's display flip and re-applies the saved expanded
+   * height on transition). Asserting maxHeight here on every toggle
+   * fought with PanelDragResize's anchor-based positioning + the
+   * saved-height restore, leaving the chat clipped to 280 px on
+   * expand even when the user had resized it taller — that was the
+   * "chat doesn't expand properly" bug that MenuPanel + BuildMenu
+   * never had (neither of them touches root height). */
   private applyMinimizedStyles(): void {
     const min = this.minimized;
     this.body.style.display = min ? "none" : "flex";
     this.tabsRow.style.display = min ? "none" : "flex";
     this.toggleBtn.textContent = min ? "▴" : "▾";
-    this.root.style.maxHeight = min ? "32px" : "280px";
   }
 
   destroy(): void {
