@@ -659,6 +659,14 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
+      // P5.7 — let SpacetimeClient.cloudSaveNow read the live restaurant
+      // open / free-seats state so server-side attraction can skip
+      // closed + full plots.
+      this.cloud.cloudSpawnerHook = () => {
+        const stats = this.spawner?.getSpawnerStats();
+        if (!stats) return null;
+        return { open: this.spawner!.restaurantOpen, freeSeats: stats.seatsAvail };
+      };
       // Re-parent guests onto the right storey group as they cross the
       // stair. Without this hook, every guest is parented to the main
       // scene for their entire visit (always visible) — a Floor 1

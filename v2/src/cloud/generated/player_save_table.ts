@@ -18,4 +18,6 @@ export default __t.row({
   ratingAvg: __t.f32().name("rating_avg"),
   luxuryTier: __t.u32().name("luxury_tier"),
   updatedAt: __t.timestamp().name("updated_at"),
+  restaurantOpen: __t.bool().name("restaurant_open"),
+  freeSeats: __t.u32().name("free_seats"),
 });

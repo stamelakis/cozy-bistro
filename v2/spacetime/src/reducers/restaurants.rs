@@ -109,6 +109,8 @@ pub fn publish_player_save(
     money: i64,
     rating_avg: f32,
     luxury_tier: u32,
+    restaurant_open: bool,
+    free_seats: u32,
 ) -> Result<(), String> {
     if data.len() > 512 * 1024 {
         return Err("Save blob too large (>512 KB)".into());
@@ -121,6 +123,8 @@ pub fn publish_player_save(
         rating_avg,
         luxury_tier,
         updated_at: ctx.timestamp,
+        restaurant_open,
+        free_seats,
     };
     if ctx.db.player_save().identity().find(ctx.sender).is_some() {
         ctx.db.player_save().identity().update(row);

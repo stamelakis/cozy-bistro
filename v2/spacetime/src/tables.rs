@@ -182,6 +182,20 @@ pub struct PlayerSave {
     pub rating_avg: f32,
     pub luxury_tier: u32,
     pub updated_at: Timestamp,
+    /// Whether the restaurant is currently open for business. The
+    /// P5 attraction layer skips closed plots when picking the next
+    /// walker's target. `#[default(true)]` so existing rows from
+    /// before this column was added survive the migration as
+    /// "assumed open" — players notice + start publishing the real
+    /// value within their first autosave.
+    #[default(true)]
+    pub restaurant_open: bool,
+    /// Functional seats currently free. Lets the attraction layer
+    /// skip full restaurants — no point sending another walker who'll
+    /// bounce off a full waiting area. Default 4 = a tiny baseline
+    /// so legacy rows count as "has some seats" until autosaved.
+    #[default(4)]
+    pub free_seats: u32,
 }
 
 /// Achievement unlocks per player. One row per (player, achievement_id)

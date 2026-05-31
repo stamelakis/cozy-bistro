@@ -16,4 +16,6 @@ export default {
   money: __t.i64(),
   ratingAvg: __t.f32(),
   luxuryTier: __t.u32(),
+  restaurantOpen: __t.bool(),
+  freeSeats: __t.u32(),
 };

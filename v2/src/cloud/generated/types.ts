@@ -122,6 +122,8 @@ export const PlayerSave = __t.object("PlayerSave", {
   ratingAvg: __t.f32(),
   luxuryTier: __t.u32(),
   updatedAt: __t.timestamp(),
+  restaurantOpen: __t.bool(),
+  freeSeats: __t.u32(),
 });
 export type PlayerSave = __Infer<typeof PlayerSave>;
 

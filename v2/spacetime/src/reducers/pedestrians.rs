@@ -181,8 +181,17 @@ fn spawn_one(ctx: &ReducerContext) {
 /// the weight, so a 4.5★ place is ~3× as attractive as a 2.5★ one).
 /// Plots without a published rating yet (never autosaved) fall back
 /// to a baseline weight so they still receive some traffic on day 1.
-/// Returns None when there are no claimed plots — caller falls back
-/// to an ambient avenue-to-avenue walker.
+///
+/// Closed restaurants (restaurant_open = false) are skipped entirely
+/// so walkers don't waste a trip on a locked door. Full restaurants
+/// (free_seats == 0) are also skipped — no point sending another
+/// customer to a place that'd bounce them at the door. Both checks
+/// only run when the owner has actually published a save; legacy
+/// rows pre-dating those columns default to open + 4 seats so the
+/// behaviour is "include unless the player explicitly said otherwise".
+///
+/// Returns None when no claimed plot survives those filters — caller
+/// falls back to an ambient avenue-to-avenue walker.
 fn pick_target_plot(ctx: &ReducerContext, rng: &mut impl Rng, _from_x: f32, _from_z: f32) -> Option<Building> {
     let zero = spacetimedb::Identity::__dummy();
     // Materialise the claim list with each plot's attraction weight.
@@ -190,13 +199,16 @@ fn pick_target_plot(ctx: &ReducerContext, rng: &mut impl Rng, _from_x: f32, _fro
     let mut total_weight: f32 = 0.0;
     for b in ctx.db.building().iter() {
         if b.owner_identity == zero { continue; }
-        // Look up the owner's published rating. Default baseline = 3.0
-        // (a "neutral" star count) when the owner hasn't published
-        // a save yet — keeps fresh accounts from being shut out
-        // entirely while they're still setting up.
-        let rating = ctx.db.player_save().identity().find(b.owner_identity)
-            .map(|s| s.rating_avg.max(0.0))
-            .unwrap_or(3.0);
+        // Look up the owner's published save row — None means the
+        // player hasn't autosaved yet. Use a neutral baseline so
+        // fresh accounts still receive some traffic.
+        let save = ctx.db.player_save().identity().find(b.owner_identity);
+        // Hard filters first — closed or full plots are out.
+        if let Some(s) = &save {
+            if !s.restaurant_open { continue; }
+            if s.free_seats == 0 { continue; }
+        }
+        let rating = save.as_ref().map(|s| s.rating_avg.max(0.0)).unwrap_or(3.0);
         // Weight = rating² + 1 so even a 0★ restaurant gets a small
         // chance and a 5★ blows the competition away.
         let weight = rating * rating + 1.0;

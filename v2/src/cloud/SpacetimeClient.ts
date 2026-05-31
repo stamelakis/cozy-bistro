@@ -66,6 +66,12 @@ export class SpacetimeClient {
   private restaurantId: bigint | null = null;
   private identity: Identity | null = null;
   private saveDebounce: number | null = null;
+  /** Engine wires this to GuestSpawner so cloudSaveNow can publish
+   * the live restaurant-open state + functional-seat count. Optional
+   * because cloudSaveNow runs from the SaveSystem hook before the
+   * spawner exists for the first few frames; defaults at that point
+   * are "open with 0 seats" which gets corrected on the next save. */
+  cloudSpawnerHook?: () => { open: boolean; freeSeats: number } | null;
   /** Heartbeat timer that calls ping_presence every 30 s so this
    * player's last_seen_at stays fresh — drives the "online players"
    * HUD count. Started in afterConnect; cleared in destroy. */
@@ -155,8 +161,11 @@ export class SpacetimeClient {
   /** Publish this player's save snapshot to the server. Called by
    * SaveSystem on every autosave so visitors can subscribe to the
    * latest restaurant state. Fire-and-forget — failures (offline,
-   * blob too big) log to console but don't surface to the player. */
-  publishPlayerSave(blob: string, dayNumber: number, money: number, ratingAvg: number, luxuryTier: number): void {
+   * blob too big) log to console but don't surface to the player.
+   * restaurantOpen + freeSeats are read by the P5 attraction layer
+   * to skip closed / full plots when picking the next walker's
+   * target restaurant. */
+  publishPlayerSave(blob: string, dayNumber: number, money: number, ratingAvg: number, luxuryTier: number, restaurantOpen: boolean, freeSeats: number): void {
     if (!this.conn) return;
     try {
       this.conn.reducers.publishPlayerSave({
@@ -165,6 +174,8 @@ export class SpacetimeClient {
         money: BigInt(Math.trunc(money)),
         ratingAvg,
         luxuryTier,
+        restaurantOpen,
+        freeSeats,
       });
     } catch (e) {
       console.warn("[Cloud] publishPlayerSave failed:", e);
@@ -524,13 +535,17 @@ export class SpacetimeClient {
       // P4 — per-identity publish that visit mode subscribes to.
       // Independent of restaurantId so even pre-restaurant accounts
       // (e.g. mid signup) get their state synced as soon as they
-      // start autosaving.
+      // start autosaving. P5.7 adds restaurantOpen + freeSeats so
+      // the attraction layer can skip closed / full plots.
+      const spawnerStats = this.cloudSpawnerHook?.();
       this.publishPlayerSave(
         json,
         this.game.day.getDayNumber(),
         this.game.economy.getMoney(),
         this.game.reputation.getAverageRating(),
         this.game.getLuxuryTier(),
+        spawnerStats?.open ?? true,
+        spawnerStats?.freeSeats ?? 0,
       );
     } catch (e) {
       console.warn("[SpacetimeDB] cloud save failed", e);
