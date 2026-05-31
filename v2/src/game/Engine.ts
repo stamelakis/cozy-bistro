@@ -45,6 +45,7 @@ import { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { LoginModal } from "../ui/LoginModal";
 import { BuildingPickModal } from "../ui/BuildingPickModal";
 import { ChatPanel } from "../ui/ChatPanel";
+import { PlayerRosterPanel } from "../ui/PlayerRosterPanel";
 import { makeDraggableResizable } from "../ui/PanelDragResize";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
@@ -113,6 +114,10 @@ export class Engine {
    * lazily by installAuthGate so it can subscribe to the chat_message
    * table that the cloud only has after the initial subscription. */
   private chatPanel: ChatPanel | null = null;
+  /** Player roster panel sitting just below CameraControls — small
+   * presence list with a green / grey dot per account. Same mount
+   * gating as chatPanel (needs cloud subscription). */
+  private rosterPanel: PlayerRosterPanel | null = null;
 
   private running = false;
   private lastResizeCheckAt = 0;
@@ -1174,6 +1179,17 @@ export class Engine {
       });
     } catch (e) {
       console.warn("[Engine] failed to mount chat panel:", e);
+    }
+    // Player roster panel — small presence list under CameraControls.
+    // Same mount gating (needs the cloud's initial subscription so
+    // auth_record + player tables are populated). Failure is logged
+    // and ignored: the roster is informational, not blocking.
+    try {
+      if (!this.rosterPanel) {
+        this.rosterPanel = new PlayerRosterPanel(container, this.cloud);
+      }
+    } catch (e) {
+      console.warn("[Engine] failed to mount roster panel:", e);
     }
   }
 

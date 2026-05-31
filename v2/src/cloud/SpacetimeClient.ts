@@ -1143,6 +1143,48 @@ export class SpacetimeClient {
     } catch { /* ignore */ }
     return count;
   }
+
+  /** Full roster: every account on the server with an online flag
+   * derived from the player table's last_seen_at (same 90 s window
+   * as countOnlinePlayers). Sorted online-first, then alphabetical
+   * within each section — drives the PlayerRosterPanel. */
+  getPlayerRoster(): Array<{ username: string; displayName: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> {
+    if (!this.conn) return [];
+    const ONLINE_WINDOW_MS = 90_000;
+    const cutoffMs = Date.now() - ONLINE_WINDOW_MS;
+    // Build a quick "identity hex → online" lookup from the player
+    // table so the auth_record loop below doesn't pay O(P) per row.
+    const onlineHex = new Set<string>();
+    try {
+      for (const p of this.conn.db.player.iter()) {
+        const tsMicros = Number((p.lastSeenAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0));
+        const tsMs = tsMicros / 1000;
+        if (tsMs >= cutoffMs) onlineHex.add(p.identity.toHexString().toLowerCase());
+      }
+    } catch { /* ignore */ }
+    const meHex = this.identity?.toHexString().toLowerCase() ?? "";
+    const rows: Array<{ username: string; displayName: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> = [];
+    try {
+      for (const a of this.conn.db.auth_record.iter()) {
+        if (!a.username) continue;
+        const hex = a.identity.toHexString().toLowerCase();
+        rows.push({
+          username: a.username,
+          displayName: a.displayName || a.username,
+          isOnline: onlineHex.has(hex),
+          isMe: hex === meHex,
+          isAdmin: a.isAdmin,
+        });
+      }
+    } catch { /* not wired yet */ }
+    // Online first, then offline; alphabetical (by display name,
+    // case-insensitive) within each section.
+    rows.sort((a, b) => {
+      if (a.isOnline !== b.isOnline) return a.isOnline ? -1 : 1;
+      return a.displayName.toLowerCase().localeCompare(b.displayName.toLowerCase());
+    });
+    return rows;
+  }
 }
 
 /** Identity equality helper. The runtime Identity class doesn't always
