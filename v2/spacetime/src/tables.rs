@@ -285,6 +285,13 @@ pub struct Pedestrian {
     /// Character GLB id — one of the GUEST_VARIANT_IDS list in the
     /// client. Server picks pseudo-randomly via ctx.rng().
     pub variant: String,
+    /// Set when this pedestrian is on its way to a specific plot's
+    /// door (a "potential customer"). The trajectory ends at the
+    /// plot's south-door position instead of the avenue's far end.
+    /// When the pedestrian despawns, the plot owner's client picks
+    /// up the event and spawns the customer in their local
+    /// GuestSpawner. Zero = no target (just an ambient walker).
+    pub target_plot_id: u64,
 }
 
 /// Periodic schedule row that triggers the pedestrian_tick reducer.

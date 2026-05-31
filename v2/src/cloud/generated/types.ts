@@ -96,6 +96,7 @@ export const Pedestrian = __t.object("Pedestrian", {
   spawnAt: __t.timestamp(),
   durationMicros: __t.i64(),
   variant: __t.string(),
+  targetPlotId: __t.u64(),
 });
 export type Pedestrian = __Infer<typeof Pedestrian>;
 

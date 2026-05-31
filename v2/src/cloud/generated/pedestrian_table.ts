@@ -19,4 +19,5 @@ export default __t.row({
   spawnAt: __t.timestamp().name("spawn_at"),
   durationMicros: __t.i64().name("duration_micros"),
   variant: __t.string(),
+  targetPlotId: __t.u64().name("target_plot_id"),
 });

@@ -13,7 +13,7 @@
 //! enough density without overloading the table.
 
 use spacetimedb::{rand::Rng, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
-use crate::tables::{pedestrian, pedestrian_tick_schedule, Pedestrian, PedestrianTickSchedule};
+use crate::tables::{building, pedestrian, pedestrian_tick_schedule, Building, Pedestrian, PedestrianTickSchedule};
 
 /// Cap on simultaneously active pedestrians. Each is one row in the
 /// pedestrian table; client renders one character model per row.
@@ -102,27 +102,65 @@ fn spawn_one(ctx: &ReducerContext) {
     let is_ew = rng.gen_bool(0.6);
     let side: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
     let dir: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
-    let (start_x, start_z, end_x, end_z);
-    let length = 2.0 * STREET_HALF;
+    // Pavement start point — same for both variants below (with or
+    // without a plot target). The end either runs to the OTHER end
+    // of the avenue (ambient walker) or to a chosen plot's door
+    // (potential customer).
+    let (start_x, start_z);
     if is_ew {
         let avenue_z = EW_AVENUES[rng.gen_range(0..EW_AVENUES.len())];
-        let pav_z = avenue_z + side * PAVEMENT_OFFSET;
-        let from_x = dir * -STREET_HALF;
-        let to_x = -from_x;
-        start_x = from_x;
-        start_z = pav_z;
-        end_x = to_x;
-        end_z = pav_z;
+        start_x = dir * -STREET_HALF;
+        start_z = avenue_z + side * PAVEMENT_OFFSET;
     } else {
         let avenue_x = NS_AVENUES[rng.gen_range(0..NS_AVENUES.len())];
-        let pav_x = avenue_x + side * PAVEMENT_OFFSET;
-        let from_z = dir * -STREET_HALF;
-        let to_z = -from_z;
-        start_x = pav_x;
-        start_z = from_z;
-        end_x = pav_x;
-        end_z = to_z;
+        start_x = avenue_x + side * PAVEMENT_OFFSET;
+        start_z = dir * -STREET_HALF;
     }
+
+    // ~35% chance this walker is a potential customer headed to a
+    // specific claimed plot. Pick a claimed plot near the spawn
+    // point — biases the picks toward plots the walker would
+    // realistically reach, instead of cross-city marathons.
+    let mut target_plot_id: u64 = 0;
+    let (mut end_x, mut end_z);
+    if rng.gen_bool(0.35) {
+        if let Some(plot) = pick_target_plot(ctx, &mut rng, start_x, start_z) {
+            // Door sits on the +Z (south) face of the building's
+            // shell. Approach 1.5 m south of the door so the
+            // despawn looks like "stepping inside" instead of
+            // teleporting into the wall.
+            target_plot_id = plot.id;
+            end_x = plot.plot_x as f32;
+            end_z = plot.plot_z as f32 + (plot.plot_h as f32) / 2.0 + 1.5;
+            let dx = end_x - start_x;
+            let dz = end_z - start_z;
+            let length = (dx * dx + dz * dz).sqrt().max(1.0);
+            let duration_secs = length / WALK_SPEED_MPS;
+            let variant = VARIANTS[rng.gen_range(0..VARIANTS.len())];
+            ctx.db.pedestrian().insert(Pedestrian {
+                id: 0, // auto_inc
+                start_x,
+                start_z,
+                end_x,
+                end_z,
+                spawn_at: ctx.timestamp,
+                duration_micros: (duration_secs * 1_000_000.0) as i64,
+                variant: variant.to_string(),
+                target_plot_id,
+            });
+            return;
+        }
+        // No claimed plots yet — fall through to ambient walker.
+    }
+    // Ambient walker — runs the full ±STREET_HALF avenue strip.
+    if is_ew {
+        end_x = -start_x;
+        end_z = start_z;
+    } else {
+        end_x = start_x;
+        end_z = -start_z;
+    }
+    let length = 2.0 * STREET_HALF;
     let duration_secs = length / WALK_SPEED_MPS;
     let variant = VARIANTS[rng.gen_range(0..VARIANTS.len())];
     ctx.db.pedestrian().insert(Pedestrian {
@@ -134,5 +172,21 @@ fn spawn_one(ctx: &ReducerContext) {
         spawn_at: ctx.timestamp,
         duration_micros: (duration_secs * 1_000_000.0) as i64,
         variant: variant.to_string(),
+        target_plot_id,
     });
+}
+
+/// Pick a uniformly-random claimed plot to target. Filters to
+/// CLAIMED buildings (owner != zero identity). Returns None when
+/// there are no claimed plots yet — caller falls back to an ambient
+/// avenue-to-avenue walker. Uniform pick gives each restaurant the
+/// same baseline traffic regardless of where the walker spawned.
+fn pick_target_plot(ctx: &ReducerContext, rng: &mut impl Rng, _from_x: f32, _from_z: f32) -> Option<Building> {
+    let zero = spacetimedb::Identity::__dummy();
+    let claimed: Vec<Building> = ctx.db.building().iter()
+        .filter(|b| b.owner_identity != zero)
+        .collect();
+    if claimed.is_empty() { return None; }
+    let idx = rng.gen_range(0..claimed.len());
+    claimed.into_iter().nth(idx)
 }

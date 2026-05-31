@@ -1521,6 +1521,29 @@ export class GuestSpawner {
     }
   }
 
+  /** P5 — external arrival entry point. SharedPedestrians fires this
+   * via Engine when a target-bound walker reaches the player's plot
+   * door. Bypasses spawnCooldown (the pedestrian's 30+ second walk
+   * already served as the cool-off) but still defers to spawnGuest's
+   * seat availability check — no seat = customer turned away by the
+   * existing waiting-chair / silent-decline logic. */
+  triggerExternalArrival(_variantHint?: string): void {
+    // variantHint is currently unused — spawnGuest still picks its
+    // own variant from GUEST_VARIANT_IDS to keep the existing visual
+    // diversity. Threading the hint through would require an extra
+    // param on spawnGuest; saved for a future polish pass where the
+    // walker's variant carries inside.
+    if (!this.restaurantOpen) return;
+    if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
+    void this.spawnGuest();
+    // Pause the local cooldown briefly so the external arrival
+    // "counts" against the upcoming auto-spawn. Without this the
+    // local timer keeps firing on its usual interval AND the
+    // external arrivals stack on top, double-booking the restaurant
+    // any time other plots' walkers head this way.
+    this.spawnCooldown = Math.max(this.spawnCooldown, 8.0);
+  }
+
   private async spawnGuest(): Promise<void> {
     // Roll archetype + full taste BEFORE picking a seat — the
     // scorer needs every field. Diet is the only hard filter; the

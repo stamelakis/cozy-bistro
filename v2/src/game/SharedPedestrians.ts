@@ -13,6 +13,12 @@ export interface ServerPedestrian {
   /** Milliseconds since epoch (already converted from SDK Timestamp). */
   spawnAtMs: number;
   durationMs: number;
+  /** Plot id this pedestrian intends to enter when their trajectory
+   * ends. 0n = ambient walker (no intent). When non-zero, the
+   * SharedPedestrians renderer fires onArrival on the frame the
+   * pedestrian's trajectory hits t=1 so Engine can deliver the
+   * customer to that plot's local GuestSpawner. */
+  targetPlotId: bigint;
 }
 
 interface RenderedPedestrian {
@@ -26,6 +32,19 @@ interface RenderedPedestrian {
    * direction. The character's facingY is reapplied each frame so
    * the animator doesn't snap it back to a default value. */
   facingY: number;
+  /** Non-zero when this pedestrian is heading for a specific plot's
+   * door. Used by SharedPedestrians.update to fire onArrival when
+   * the trajectory completes. */
+  targetPlotId: bigint;
+  /** Set to true the first time onArrival fires so we don't notify
+   * twice for the same pedestrian (the server's despawn lags the
+   * trajectory end by a couple of seconds — until then the row is
+   * still in the listPedestrians snapshot). */
+  arrivalFired: boolean;
+  /** Cached variant string so onArrival can echo it back to the
+   * GuestSpawner — visual continuity between the walker and the
+   * customer that just sat down. */
+  variant: string;
 }
 
 /**
@@ -48,6 +67,14 @@ export class SharedPedestrians {
   /** Set of pending loads keyed by pedestrian id so concurrent updates
    * don't spawn two models for the same id while the GLB is in flight. */
   private readonly loading = new Set<string>();
+
+  /** Engine wires this to know when a target-bound pedestrian has
+   * reached the door of the plot they were heading for. Engine
+   * checks the targetPlotId against its own ownedPlotId and, if it
+   * matches, calls GuestSpawner.triggerExternalArrival so the
+   * customer flows into the local gameplay simulation. Fires exactly
+   * once per pedestrian (gated by RenderedPedestrian.arrivalFired). */
+  onArrival?: (targetPlotId: bigint, variant: string) => void;
 
   constructor(parent: THREE.Group, loader: CharacterLoader, animator: CharacterAnimator) {
     this.parent = parent;
@@ -122,6 +149,9 @@ export class SharedPedestrians {
         spawnAtMs: sp.spawnAtMs,
         durationMs: sp.durationMs,
         facingY,
+        targetPlotId: sp.targetPlotId,
+        arrivalFired: false,
+        variant: sp.variant,
       });
       // Set initial position immediately to avoid a frame at default Y.
       this.updatePosition(this.rendered.get(key)!, Date.now());
@@ -138,5 +168,18 @@ export class SharedPedestrians {
     r.character.groundPos.x = r.start.x + (r.end.x - r.start.x) * t;
     r.character.groundPos.y = r.start.y + (r.end.y - r.start.y) * t;
     r.character.facingY = r.facingY;
+    // Arrival event — fires once when a target-bound pedestrian has
+    // reached its plot's door. The server keeps the row for another
+    // tick or two (until the next pedestrian_tick despawns it), but
+    // we want the customer to enter the gameplay the MOMENT the
+    // walker visually arrives.
+    if (!r.arrivalFired && r.targetPlotId !== 0n && t >= 1) {
+      r.arrivalFired = true;
+      try {
+        this.onArrival?.(r.targetPlotId, r.variant);
+      } catch (err) {
+        console.warn("[SharedPedestrians] onArrival handler threw:", err);
+      }
+    }
   }
 }

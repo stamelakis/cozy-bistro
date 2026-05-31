@@ -170,10 +170,12 @@ export class SpacetimeClient {
   /** P5 — every shared pedestrian currently walking on the server.
    * Each row is a trajectory: client lerps current position from
    * (now - spawnAtMs) / durationMs. SharedPedestrians polls this
-   * each frame (cheap — small list, all in-memory). */
-  listPedestrians(): { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number }[] {
+   * each frame (cheap — small list, all in-memory). targetPlotId=0n
+   * means an ambient walker; non-zero is a "customer intent" headed
+   * to that plot's door. */
+  listPedestrians(): { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number; targetPlotId: bigint }[] {
     if (!this.conn) return [];
-    const out: { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number }[] = [];
+    const out: { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number; targetPlotId: bigint }[] = [];
     try {
       for (const p of this.conn.db.pedestrian.iter()) {
         out.push({
@@ -185,6 +187,7 @@ export class SpacetimeClient {
           endZ: p.endZ,
           spawnAtMs: Number((p.spawnAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
           durationMs: Number(p.durationMicros) / 1000,
+          targetPlotId: p.targetPlotId,
         });
       }
     } catch { /* table not yet wired */ }

@@ -725,6 +725,20 @@ export class Engine {
       // pedestrian table. Both parent into worldRoot so the player's
       // plot offset shifts the crowd onto the correct visual avenues.
       this.sharedPedestrians = new SharedPedestrians(this.scene.worldRoot, this.scene.characterLoader, this.scene.animator);
+      // P5.3b — when a target-bound walker reaches a plot's door,
+      // SharedPedestrians fires onArrival with the plot id. If it
+      // matches the player's own claimed plot, feed the customer
+      // into the local GuestSpawner so the existing seat-pick /
+      // order / eat flow takes over. Walkers heading to OTHER plots
+      // are visually identical to ambient walkers from this client's
+      // POV — they despawn at someone else's door and that owner's
+      // browser handles the gameplay handoff.
+      this.sharedPedestrians.onArrival = (targetPlotId: bigint, _variant: string): void => {
+        const mine = this.cloud.getMyBuilding();
+        if (!mine) return;
+        if (mine.id !== targetPlotId) return;
+        this.spawner?.triggerExternalArrival(_variant);
+      };
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.
       // The frozen list is delivered to the pantry the moment they're home.
