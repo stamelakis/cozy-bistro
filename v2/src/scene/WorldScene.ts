@@ -2097,21 +2097,24 @@ export class WorldScene {
    * (see addCityScenery — street-following placement, not a random
    * grid scan). */
   private addCityStreets(): void {
-    // North-side service road serving the z=-48 plot row.
-    this.makeCityAvenue("ew", -36);
-    // South service road serving the z=+48 plot row. The plots are
-    // 10 m wide → their south edge is z=+53, leaving a ~3.5 m gap
-    // to this avenue's north pavement — same tight-curb feel as the
-    // north service road's relationship to the z=-48 row.
-    this.makeCityAvenue("ew", 62);
-    // West outer-ring boundary — pushed out to x=-70 so it clears
-    // the gardens of the x=-48 plot column.
+    // Road layout DERIVED from the plot rows so every plot has a
+    // road on both its north and south sides. Plot rows sit at
+    // z=-48, z=0, z=+48; gardens extend ±5 m in Z; the natural
+    // EW grid is therefore:
+    //   z=-66 (north of row 1, 13 m clear of row 1's garden north edge)
+    //   z=-24 (between rows 1 and 2, 14 m clear of either row's garden)
+    //   z=+24 (between rows 2 and 3, mirror of z=-24)
+    //   z=+66 (south of row 3, mirror of z=-66)
+    // Every plot now has road frontage on both its north and south
+    // sides, with a generous garden buffer to either pavement.
+    this.makeCityAvenue("ew", -66);
+    this.makeCityAvenue("ew", -24);
+    this.makeCityAvenue("ew",  24);
+    this.makeCityAvenue("ew",  66);
+    // NS outer ring unchanged — x=±70 clears the easternmost /
+    // westernmost plot columns and their gardens.
     this.makeCityAvenue("ns", -70);
-    // East outer-ring boundary — mirror on x=+70.
     this.makeCityAvenue("ns",  70);
-    // (z=-22 and z=+30 EW avenues removed at owner's request —
-    //  they were in the wrong positions. Owner will specify the
-    //  exact Z for the new middle road in a follow-up.)
   }
 
   /** Centerlines of every avenue in the city — kept in one place so
@@ -2119,7 +2122,7 @@ export class WorldScene {
    * future road-aware system (pedestrian spawner, sign placement)
    * all agree on what counts as a street. Public so PedestrianSpawner
    * can route walkers down them. */
-  static readonly EW_AVENUES: readonly number[] = [-36, 13.5, 62];
+  static readonly EW_AVENUES: readonly number[] = [-66, -24, 24, 66];
   static readonly NS_AVENUES: readonly number[] = [-70, 70];
   /** Half-length of each avenue strip the pedestrian spawner is
    * allowed to walk on. The avenues themselves are drawn 260 m long
@@ -2261,11 +2264,15 @@ export class WorldScene {
     // exactly match what the player will see on the ground.
     const claimPlots: { x: number; z: number; w: number; h: number }[] = WorldScene.CITY_PLOTS.slice();
     const gardenZones = claimPlots.map((p) => WorldScene.gardenBoundsForPlot(p));
-    // Legacy player block keep-out — tighter than before so the
-    // street-follow loop can drop houses on the south side of the
-    // legacy main road (z=13.5 + 12 = z=25.5) without false overlap.
-    // Covers restaurant + garden + pavement strip ~16 m tall, 24 m wide.
-    claimPlots.push({ x: 0, z: 7, w: 24, h: 24 });
+    // Legacy player block keep-out — covers restaurant + east-side
+    // garden. The old main avenue at z=+13.5 is gone (replaced by
+    // the plot-driven grid z=-66, -24, +24, +66), so the keep-out
+    // no longer needs to swallow a pavement strip. Tightened to
+    // span only the restaurant footprint (~12×12 m centered on
+    // origin) plus a 1 m buffer all around. This lets scenery
+    // houses hug the new z=-24 and z=+24 roads' centerlines
+    // without false overlap on the player's plot.
+    claimPlots.push({ x: 0, z: 0, w: 14, h: 14 });
 
     const overlapsClaim = (x: number, z: number, size: number): boolean => {
       const halfS = size / 2 + 1.5;
@@ -2324,7 +2331,14 @@ export class WorldScene {
     // Plot rows naturally gap the scenery — overlapsClaim skips
     // houses on top of plots and onAvenue skips houses where two
     // streets cross.
-    const HOUSE_SETBACK = 13;      // distance from avenue centerline to house centre
+    // Distance from avenue centerline to house centre. Pavement
+    // extends ±5.5 m from centerline; a typical 5-tile house has
+    // 2.5 m half-width. Setting setback = 8 puts the house's
+    // street-facing edge at exactly 5.5 m — flush against the
+    // pavement curb, no grass strip between. Larger 6-tile houses
+    // (half-width 3) get a tiny 0.5 m visual overlap with the curb
+    // line which reads as natural building-to-curb contact.
+    const HOUSE_SETBACK = 8;
     const HOUSE_STEP = 9;          // spacing along the street (bumped 7.5 → 9 for perf)
     const STREET_EXTENT = 110;     // walk ±this along each avenue
     let placed = 0;
