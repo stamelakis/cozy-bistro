@@ -738,6 +738,32 @@ export class WorldScene {
    * registered lamp picks up the current darkness immediately, not on
    * the next applyDayNight tick. */
   private currentNightAmount = 0;
+
+  // === Street lamps (pavement lamp-posts symmetrically along every avenue) ===
+  // ~140 lamp posts. The meshes are InstancedMesh (one draw call per
+  // part type) so even at this count the cost is negligible. ACTUAL
+  // lighting is a fixed pool of N point lights repositioned each tick
+  // to the N closest lamps to the camera — three.js' shader compiles
+  // with NUM_POINT_LIGHTS = N, so the pool size determines per-pixel
+  // cost regardless of how many lamp POSTS exist on the map.
+  /** XZ positions (in worldRoot-local space) of every placed street
+   * lamp, in the same order as the InstancedMesh instance indices.
+   * Consulted by updateStreetLamps to pick the N closest to camera. */
+  private streetLampPositions: { x: number; z: number }[] = [];
+  /** The lantern's emissive bulb mesh — one InstancedMesh shared by
+   * all lamps. We mutate the SHARED material's emissiveIntensity /
+   * opacity each tick to make all bulbs glow at night. */
+  private streetLampBulbMat: THREE.MeshStandardMaterial | null = null;
+  /** Pool of point lights that follow the camera. Sized small enough
+   * to keep the shader cheap; the bulbs themselves give the visual
+   * presence of light at distance. */
+  private streetLampLightPool: THREE.PointLight[] = [];
+  private static readonly STREET_LAMP_POOL_SIZE = 16;
+  /** Cached camera position from the last light-pool reposition. Skip
+   * the re-sort when the camera hasn't moved enough to change which
+   * lamps are closest. */
+  private streetLampLastCamX = Number.NEGATIVE_INFINITY;
+  private streetLampLastCamZ = Number.NEGATIVE_INFINITY;
   /** Procedural rain / snow / confetti overlay + per-weather lighting
    * modifiers. Engine pushes the current weather id via setWeather and
    * ticks update() every frame so particles follow the camera. */
@@ -845,6 +871,234 @@ export class WorldScene {
     bulbMat.opacity = Math.min(1, nightAmount * 1.5);
   }
 
+  /** Build the city's street lamp grid — one Parisian cast-iron post
+   * on each pavement of every avenue, symmetric across the road.
+   * Posts + bulbs are InstancedMesh (shared geometry / material) so
+   * even 140 lamps cost ~6 draw calls total. Real PointLights are
+   * NOT placed per post — see updateStreetLamps for the camera-
+   * following pool that does the actual illumination. */
+  private addStreetLamps(): void {
+    // Pavement extends ±PAVEMENT_HALF (5.5m) from each avenue centerline.
+    // Place the lamp post at perp ±4m so it sits ON the pavement,
+    // ~1.5m back from the curb edge — between pedestrians and the
+    // scenery houses' front walls.
+    const PAVEMENT_HALF = 5.5;
+    const LAMP_PERP = 4.0;
+    // ~18m spacing along the avenue reads as a planned city without
+    // packing the pavement edge-to-edge. At ±130m walk per avenue
+    // that gives ~14-15 lamps per side per avenue.
+    const LAMP_STEP = 18;
+    const LAMP_HALF = 130;
+    // Skip a candidate that would sit on a perpendicular avenue's
+    // pavement — at intersections both avenues claim the same patch,
+    // so we'd otherwise drop a lamp post on the cross street. Only
+    // perpendicular crossings can overlap; parallel avenues never do.
+    const onPerpCrossing = (x: number, z: number, axis: "ew" | "ns"): boolean => {
+      if (axis === "ew") {
+        for (const ax of WorldScene.NS_AVENUES) {
+          if (Math.abs(x - ax) < PAVEMENT_HALF + 0.5) return true;
+        }
+      } else {
+        for (const az of WorldScene.EW_AVENUES) {
+          if (Math.abs(z - az) < PAVEMENT_HALF + 0.5) return true;
+        }
+      }
+      return false;
+    };
+
+    type LampPlacement = { x: number; z: number; rotY: number };
+    const placements: LampPlacement[] = [];
+    // EW avenues — lamps line up along the X axis on the south (-Z)
+    // and north (+Z) pavements. rotY rotates the lantern arm to face
+    // the road (so the post pole sits flush with the building side).
+    for (const az of WorldScene.EW_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const z = az + side * LAMP_PERP;
+        // side=+1 (south pavement, post is south of road) → face north (-Z)
+        // side=-1 (north pavement, post is north of road) → face south (+Z)
+        const rotY = side > 0 ? Math.PI : 0;
+        for (let x = -LAMP_HALF; x <= LAMP_HALF + 0.001; x += LAMP_STEP) {
+          if (onPerpCrossing(x, z, "ew")) continue;
+          placements.push({ x, z, rotY });
+        }
+      }
+    }
+    // NS avenues — same idea, axes swapped. Lamp arm faces the road.
+    for (const ax of WorldScene.NS_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const x = ax + side * LAMP_PERP;
+        const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        for (let z = -LAMP_HALF; z <= LAMP_HALF + 0.001; z += LAMP_STEP) {
+          if (onPerpCrossing(x, z, "ns")) continue;
+          placements.push({ x, z, rotY });
+        }
+      }
+    }
+    if (placements.length === 0) return;
+
+    // === Shared geometries + materials ===
+    const ironMat = new THREE.MeshStandardMaterial({
+      color: 0x18130f, roughness: 0.55, metalness: 0.45,
+    });
+    const lanternMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2218, roughness: 0.40, metalness: 0.55,
+    });
+    // Bulb material — shared across every lamp. updateStreetLamps
+    // mutates emissiveIntensity + opacity once per tick to drive
+    // every bulb's glow simultaneously.
+    this.streetLampBulbMat = new THREE.MeshStandardMaterial({
+      color: 0xfff4cc, emissive: 0xffd99a, emissiveIntensity: 0,
+      transparent: true, opacity: 0.0,
+    });
+
+    // Base disc (slight flare at ground level)
+    const baseGeo = new THREE.CylinderGeometry(0.20, 0.24, 0.18, 10);
+    baseGeo.translate(0, 0.09, 0);
+    // Pole — tapered cylinder 3.0m tall
+    const poleGeo = new THREE.CylinderGeometry(0.07, 0.10, 3.0, 8);
+    poleGeo.translate(0, 1.68, 0);
+    // Decorative cap where pole meets lantern
+    const capGeo = new THREE.CylinderGeometry(0.13, 0.10, 0.18, 8);
+    capGeo.translate(0, 3.27, 0);
+    // Lantern housing (square iron box, glass implied)
+    const lanternGeo = new THREE.BoxGeometry(0.34, 0.40, 0.34);
+    lanternGeo.translate(0, 3.60, 0);
+    // Pyramidal roof on top of lantern
+    const roofGeo = new THREE.ConeGeometry(0.26, 0.20, 4);
+    roofGeo.translate(0, 3.92, 0);
+    // Bulb sphere (inside the lantern housing)
+    const bulbGeo = new THREE.SphereGeometry(0.13, 12, 10);
+    bulbGeo.translate(0, 3.60, 0);
+
+    const count = placements.length;
+    const baseInst = new THREE.InstancedMesh(baseGeo, ironMat, count);
+    const poleInst = new THREE.InstancedMesh(poleGeo, ironMat, count);
+    const capInst = new THREE.InstancedMesh(capGeo, ironMat, count);
+    const lanternInst = new THREE.InstancedMesh(lanternGeo, lanternMat, count);
+    const roofInst = new THREE.InstancedMesh(roofGeo, ironMat, count);
+    const bulbInst = new THREE.InstancedMesh(bulbGeo, this.streetLampBulbMat, count);
+    poleInst.castShadow = true; // pole's the only piece tall enough to cast meaningful shadow
+    lanternInst.castShadow = true;
+
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < count; i += 1) {
+      const p = placements[i];
+      tmp.position.set(p.x, 0, p.z);
+      tmp.rotation.set(0, p.rotY, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      baseInst.setMatrixAt(i, tmp.matrix);
+      poleInst.setMatrixAt(i, tmp.matrix);
+      capInst.setMatrixAt(i, tmp.matrix);
+      lanternInst.setMatrixAt(i, tmp.matrix);
+      roofInst.setMatrixAt(i, tmp.matrix);
+      bulbInst.setMatrixAt(i, tmp.matrix);
+      this.streetLampPositions.push({ x: p.x, z: p.z });
+    }
+    this.worldRoot.add(baseInst);
+    this.worldRoot.add(poleInst);
+    this.worldRoot.add(capInst);
+    this.worldRoot.add(lanternInst);
+    this.worldRoot.add(roofInst);
+    this.worldRoot.add(bulbInst);
+
+    // === Light pool — N point lights repositioned each tick ===
+    for (let i = 0; i < WorldScene.STREET_LAMP_POOL_SIZE; i += 1) {
+      // Warm sodium-vapour glow. Distance ~14m gives a clear pool
+      // under each lit lamp without bleeding across the whole map.
+      // Decay 1.5 keeps the centre bright while falloff still hits
+      // zero at the distance edge.
+      const light = new THREE.PointLight(0xffe1a0, 0, 14, 1.5);
+      light.castShadow = false;
+      light.position.set(0, 3.6, 0);
+      this.worldRoot.add(light);
+      this.streetLampLightPool.push(light);
+    }
+  }
+
+  /** Per-frame: ramp every lamp bulb's emissive with the current
+   * night amount (cheap — one shared material), then reposition the
+   * pool of point lights to the N closest lamps to the camera so the
+   * player walks through pools of light wherever they go.
+   *
+   * Engine.update calls this AFTER applyDayNight so currentNightAmount
+   * is fresh. Skips the full distance re-sort when the camera hasn't
+   * moved enough to change the closest set. */
+  updateStreetLamps(cameraPos: THREE.Vector3): void {
+    if (this.streetLampPositions.length === 0 || !this.streetLampBulbMat) return;
+    const nightAmount = this.currentNightAmount;
+    // === Bulb glow (all bulbs share one material) ===
+    this.streetLampBulbMat.emissiveIntensity = nightAmount * 2.2;
+    this.streetLampBulbMat.opacity = Math.min(1, nightAmount * 1.6);
+    // === Light pool ===
+    if (nightAmount < 0.05) {
+      // Pure daytime — kill the pool entirely so we don't waste
+      // shader work computing zero-intensity contributions.
+      for (const light of this.streetLampLightPool) light.intensity = 0;
+      return;
+    }
+    // Convert camera position into worldRoot-local coords (worldRoot
+    // is offset to keep the player's plot at local origin; lamps live
+    // in worldRoot-local space, so we subtract the offset to compare
+    // distances in the same frame).
+    const cx = cameraPos.x - this.worldRoot.position.x;
+    const cz = cameraPos.z - this.worldRoot.position.z;
+    // Skip the resort if the camera hasn't moved enough. Threshold =
+    // ½ the average lamp spacing — moving less than that can't flip
+    // which lamps are nearest.
+    const dx = cx - this.streetLampLastCamX;
+    const dz = cz - this.streetLampLastCamZ;
+    const moved = dx * dx + dz * dz > 6 * 6;
+    if (!moved) {
+      // Just refresh intensity (in case nightAmount changed) without
+      // re-shuffling which lamps are lit.
+      const peak = nightAmount * 1.7;
+      for (const light of this.streetLampLightPool) {
+        if (light.intensity > 0) light.intensity = peak;
+      }
+      return;
+    }
+    this.streetLampLastCamX = cx;
+    this.streetLampLastCamZ = cz;
+    // Find the POOL_SIZE closest lamps by squared distance. Maintain
+    // a small heap-like array of [index, dSq] sorted by dSq ascending.
+    const POOL = this.streetLampLightPool.length;
+    const closestI: number[] = new Array(POOL).fill(-1);
+    const closestD: number[] = new Array(POOL).fill(Infinity);
+    let worstSlot = 0; // index in closest* arrays holding the largest dSq
+    for (let i = 0; i < this.streetLampPositions.length; i += 1) {
+      const l = this.streetLampPositions[i];
+      const ddx = l.x - cx;
+      const ddz = l.z - cz;
+      const d = ddx * ddx + ddz * ddz;
+      if (d < closestD[worstSlot]) {
+        closestI[worstSlot] = i;
+        closestD[worstSlot] = d;
+        // Recompute the new worst slot.
+        let w = 0;
+        for (let k = 1; k < POOL; k += 1) {
+          if (closestD[k] > closestD[w]) w = k;
+        }
+        worstSlot = w;
+      }
+    }
+    // Hard distance gate — beyond ~80m the lamp would be off-screen
+    // for most reasonable camera angles, so don't waste the slot.
+    const MAX_RANGE_SQ = 80 * 80;
+    const peakIntensity = nightAmount * 1.7;
+    for (let p = 0; p < POOL; p += 1) {
+      const light = this.streetLampLightPool[p];
+      const idx = closestI[p];
+      if (idx >= 0 && closestD[p] < MAX_RANGE_SQ) {
+        const lamp = this.streetLampPositions[idx];
+        light.position.set(lamp.x, 3.6, lamp.z);
+        light.intensity = peakIntensity;
+      } else {
+        light.intensity = 0;
+      }
+    }
+  }
+
   /** Drive lighting + sky tint by time of day. progress is 0..1 over a
    * 24h game-day, divided as 8h night + 4h dawn/dusk + 12h day:
    *   0.000 – 0.083  dawn  (2h, brightening)
@@ -869,21 +1123,24 @@ export class WorldScene {
       dayness = 0;
     }
 
-    // Sun: bright during day, dim during dawn/dusk, very dark at night.
-    // Cap night sun way lower than before so the bistro genuinely
-    // dims when it's supposed to be dark.
-    const sunIntensity = 0.12 + dayness * 1.7;
+    // Sun: bright during day, dim during dawn/dusk, near-black at
+    // night. Floor dropped to 0.04 (was 0.12) so streetlamps actually
+    // pop against the dark instead of fighting the residual sun.
+    const sunIntensity = 0.04 + dayness * 1.78;
     this.sunLight.intensity = sunIntensity;
     this.sunLight.color.setHex(mixColors(0xaab8d6, 0xfff4d8, dayness));
 
-    // Ambient: warm bright during day, cool blue at night. Lower the
-    // night floor here too so corners actually feel dark before lamps
-    // are turned on.
-    this.ambientLight.color.setHex(mixColors(0x8a98b8, 0xfff1d6, dayness));
-    this.ambientLight.intensity = 0.32 + dayness * 0.68;
+    // Ambient: warm bright during day, cool blue at night. Floor
+    // dropped to 0.14 (was 0.32) so the city genuinely feels dark
+    // beyond the lamps' pools of light. The night ambient still has
+    // SOME value so the player can navigate without lamps; we just
+    // shouldn't paint the entire scene a flat bluish glow.
+    this.ambientLight.color.setHex(mixColors(0x707a92, 0xfff1d6, dayness));
+    this.ambientLight.intensity = 0.14 + dayness * 0.86;
 
-    // Fill (sky bounce) — fades with daylight but never to zero.
-    this.fillLight.intensity = 0.18 + dayness * 0.32;
+    // Fill (sky bounce) — fades with daylight. Floor dropped to 0.06
+    // so back-lit surfaces don't read as "the sun's still up a bit."
+    this.fillLight.intensity = 0.06 + dayness * 0.44;
 
     // Sky color — sunrise/sunset orange during the transitions, deep
     // navy at night, cream during the day.
@@ -2090,6 +2347,11 @@ export class WorldScene {
     // building placement pass can avoid sitting on top of them.
     this.addCityStreets();
     this.addCityScenery();
+    // Pavement lamp posts run along every avenue, on BOTH pavements,
+    // symmetrically spaced so the city reads as a planned grid at
+    // night. Lights themselves are a small pool that follows the
+    // camera — see updateStreetLamps for how the pool gets routed.
+    this.addStreetLamps();
   }
 
   /** City avenue grid laid out so every plot row lines a street:

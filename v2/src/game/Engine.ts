@@ -1766,6 +1766,10 @@ export class Engine {
     // loop → dawn fade), so the engine just keeps it informed.
     this.sfx.setDayProgress(dayProgress);
     const day = this.scene.applyDayNight(dayProgress);
+    // Reposition the street-lamp light pool around the camera so the
+    // player walks through pools of light at night. Bulb glow itself
+    // ramps inside applyDayNight via the shared bulb material.
+    this.scene.updateStreetLamps(this.camera.threeCamera.position);
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
