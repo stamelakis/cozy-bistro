@@ -112,6 +112,12 @@ export class FurnitureRegistry {
   private readonly items: PlacedFurnitureItem[] = [];
   private readonly scene: THREE.Scene;
   private readonly loader: ModelLoader;
+  /** Current luxury tier (1..5). Used by getResolvedSeatSlots(true) to
+   * filter out seats on still-locked storeys (defensive — players
+   * normally can't place there). Defaults to 5 so legacy callers
+   * that don't wire setLuxuryTier still get every seat. Engine calls
+   * setLuxuryTier whenever the player buys an expansion. */
+  private currentLuxuryTier = 5;
   /** Lookup for the THREE.Object3D each storey's items should be parented
    * to. Falls back to the main scene when the engine wasn't wired up
    * with one (e.g. older tests that constructed the registry directly). */
@@ -469,6 +475,13 @@ export class FurnitureRegistry {
   /** Read-only snapshot of every placed item (used by BuildMenu auto-arrange
    * to diff before/after). Models are included by reference so callers
    * must not mutate them. */
+  /** Update the cached luxury tier. Engine wires this to
+   * Game.onLuxuryTierChanged so getResolvedSeatSlots(true) immediately
+   * starts including / excluding seats on the (un)locked storey. */
+  setLuxuryTier(tier: number): void {
+    this.currentLuxuryTier = Math.max(1, Math.min(5, Math.floor(tier)));
+  }
+
   snapshotItems(): readonly PlacedFurnitureItem[] {
     return this.items;
   }
@@ -560,14 +573,24 @@ export class FurnitureRegistry {
 
   /** Return every placed table, resolved with its seat slots in world space
    * and whether each slot is filled by a correctly-oriented chair. Pass
-   * `onlyVisible: true` to skip slots whose table is currently hidden by
-   * the luxury-tier visibility groups in WorldScene. Pass `excludeUid`
-   * to ignore a specific chair when computing occupancy (used during move
-   * so a moving chair doesn't appear to occupy its own old slot). */
+   * `onlyVisible: true` to skip slots whose floor is NOT YET UNLOCKED by
+   * the player's luxury tier (a defensive filter — players can't normally
+   * place furniture on a locked floor, but if a tier regression ever
+   * happens we don't want guests trying to walk to seats that no longer
+   * exist gameplay-wise). Pass `excludeUid` to ignore a specific chair
+   * when computing occupancy (used during move so a moving chair doesn't
+   * appear to occupy its own old slot).
+   *
+   * NOTE: this used to check the table's mesh visibility (.visible chain).
+   * That conflated tier-locked storeys (truly unavailable) with
+   * focus-hidden storeys (currently camera-hidden but still functional)
+   * — switching the FloorSelector to ground floor was making every
+   * upper-floor seat read as "doesn't exist" and the guest system
+   * stopped routing customers to those seats. Tier check fixes it. */
   getResolvedSeatSlots(onlyVisible = false, excludeUid?: string): ResolvedSeatSlot[] {
     const out: ResolvedSeatSlot[] = [];
     for (const it of this.items) {
-      if (onlyVisible && !this.isVisibleInScene(it.model)) continue;
+      if (onlyVisible && (it.floor ?? 0) + 1 > this.currentLuxuryTier) continue;
       const def = getFurnitureDef(it.defId);
       if (!def?.seatSlots) continue;
       for (let i = 0; i < def.seatSlots.length; i += 1) {

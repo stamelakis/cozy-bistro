@@ -388,6 +388,10 @@ export class Engine {
     this.game.onLuxuryTierChanged = (tier) => {
       this.scene.setLuxuryTier(tier);
       this.floorSelector.update();
+      // Tell the registry too so its seat catalog filter (which used
+      // to read mesh visibility, but now reads tier) keeps the
+      // upper-floor seats included as they unlock.
+      this.registry.setLuxuryTier(tier);
     };
     this.decorModal = new DecorModal(container, this.game);
     // So opening Decor on Floor 2 lands on Floor 2's tab by default.
@@ -543,6 +547,7 @@ export class Engine {
       }
       // Apply tier visibility so locked sections show their marker.
       this.scene.setLuxuryTier(this.game.getLuxuryTier());
+      this.registry.setLuxuryTier(this.game.getLuxuryTier());
       this.floorSelector.update();
       // Now that the demo door is in the registry (or NOT, for a
       // saved game where it was sold), rebuild every perimeter wall
