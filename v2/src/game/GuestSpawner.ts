@@ -668,6 +668,12 @@ export class GuestSpawner {
    * the ground floor view because their parent ignores storey focus.
    * Engine wires this to WorldScene.reparentCharacterToFloor. */
   reparentCharacter?: (character: AnimatedCharacter, toFloor: number) => void;
+  /** Returns the appropriate scene parent for a static prop (plate,
+   * leftover, etc.) that lives on the given floor. Engine wires this
+   * to WorldScene.getStoreyMount so plates inherit the storey
+   * group's visibility — fixes the "served-food icon visible
+   * through floors below" bug. */
+  getStoreyMount?: (floor: number) => THREE.Object3D;
 
   constructor(
     scene: THREE.Scene,
@@ -1768,14 +1774,22 @@ export class GuestSpawner {
     food.position.set(0, 0.05, 0);
     food.scale.y = 0.6; // squash so it reads as a mound, not a ball
     plate.add(food);
-    this.scene.add(plate);
+    // Parent the plate to its FLOOR'S group (not the root scene)
+    // so it inherits the per-storey visibility — plates on Floor 2
+    // disappear when the player focuses Floor 0 instead of showing
+    // through the ceiling.
+    const mount = this.getStoreyMount?.(g.seatFloor) ?? this.scene;
+    mount.add(plate);
     this.tablePlates.set(g.id, plate);
   }
 
   private removePlateForGuest(guestId: string): void {
     const plate = this.tablePlates.get(guestId);
     if (!plate) return;
-    this.scene.remove(plate);
+    // Use the plate's actual parent — it might be a storey group
+    // (post the per-floor parenting fix above) or the legacy
+    // scene root if the spawner wasn't wired with getStoreyMount.
+    plate.parent?.remove(plate);
     // Children (the food sphere) are auto-removed with the parent.
     this.tablePlates.delete(guestId);
   }
@@ -1821,7 +1835,11 @@ export class GuestSpawner {
       const tier = g.reservedDishTiers[i];
       const mesh = builder.build(tier);
       mesh.position.set(x, tableTop, z);
-      this.scene.add(mesh);
+      // Parent leftover plates/glasses to the SEAT's floor group so
+      // they hide with that storey — same fix as showPlateForGuest
+      // for the served-food icons bleeding through floors below.
+      const mount = this.getStoreyMount?.(g.seatFloor) ?? this.scene;
+      mount.add(mesh);
       this.dirtyTableMeshes.push({
         id: this.nextDirtyId, mesh, kind, claimedBy: null,
         pos: new THREE.Vector2(x, z),
@@ -1878,7 +1896,9 @@ export class GuestSpawner {
     const idx = this.dirtyTableMeshes.findIndex((x) => x.id === id);
     if (idx < 0) return null;
     const entry = this.dirtyTableMeshes.splice(idx, 1)[0];
-    this.scene.remove(entry.mesh);
+    // Post per-floor-parenting fix the mesh might live in a storey
+    // group rather than scene root; remove from its actual parent.
+    entry.mesh.parent?.remove(entry.mesh);
     return entry.kind;
   }
 
@@ -1901,7 +1921,9 @@ export class GuestSpawner {
     const idx = this.dirtyTableMeshes.findIndex((d) => d.kind === kind && !d.claimedBy);
     if (idx < 0) return;
     const entry = this.dirtyTableMeshes.splice(idx, 1)[0];
-    this.scene.remove(entry.mesh);
+    // Post per-floor-parenting fix the mesh might live in a storey
+    // group rather than scene root; remove from its actual parent.
+    entry.mesh.parent?.remove(entry.mesh);
   }
 
   private tickGuest(g: ActiveGuest, dt: number): void {

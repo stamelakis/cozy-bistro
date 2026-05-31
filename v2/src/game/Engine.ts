@@ -87,6 +87,10 @@ export class Engine {
   readonly floorSelector: FloorSelector;
   readonly cameraControls: CameraControls;
   readonly visitMode: VisitMode;
+  /** Build/move/sell controller — promoted to a field so the
+   * onLuxuryTierChanged callback can refresh its tier tabs the
+   * instant the player buys an expansion. */
+  buildMenu!: BuildMenu;
   readonly stockWidget: StockStatusWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
@@ -218,11 +222,12 @@ export class Engine {
       getOnlineCount: () => this.cloud.countOnlinePlayers(),
       // P5.9 — count of pedestrians currently targeting the player's
       // own plot. Surfaces the rating→attraction loop in real time.
-      // Returns 0 when no plot is claimed yet.
+      // Returns 0 when no plot is claimed yet. Reads myPlotId from a
+      // cached value (refreshed in refreshCityBuildings) so the HUD
+      // tick doesn't re-iterate the building table every 200 ms.
       getIncomingCount: () => {
-        const mine = this.cloud.getMyBuilding();
-        if (!mine) return 0;
-        return this.cloud.countPedestriansTargeting(mine.id);
+        if (this.cachedMyPlotId == null) return 0;
+        return this.cloud.countPedestriansTargeting(this.cachedMyPlotId);
       },
       // Admin panel — only renders for the player whose auth_record
       // has is_admin = true (the Dunnin bootstrap). Client-side
@@ -392,6 +397,9 @@ export class Engine {
       // to read mesh visibility, but now reads tier) keeps the
       // upper-floor seats included as they unlock.
       this.registry.setLuxuryTier(tier);
+      // BuildMenu tabs gain / lose the lock badge — refresh so the
+      // freshly-unlocked tier becomes clickable immediately.
+      this.buildMenu?.refreshTierTabs();
     };
     this.decorModal = new DecorModal(container, this.game);
     // So opening Decor on Floor 2 lands on Floor 2's tab by default.
@@ -587,6 +595,7 @@ export class Engine {
     };
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
+    this.buildMenu = buildMenu;
     buildMenu.seatMarkers = this.seatMarkers;
     // Multi-storey hooks: BuildMenu uses these to raycast against the
     // focused floor's slab, mount new placements under the right storey
@@ -703,6 +712,11 @@ export class Engine {
       this.spawner.reparentCharacter = (char, toFloor) => {
         this.scene.reparentCharacterToFloor(char, toFloor);
       };
+      // Plates + leftover meshes also need per-floor parenting so
+      // they hide with the storey when the player focuses elsewhere
+      // (without this the served-food icons on Floor 2 bled through
+      // the slab when the player switched to Floor 0).
+      this.spawner.getStoreyMount = (floor: number) => this.scene.getStoreyMount(floor);
       // We deliberately don't wire dishware.onDishWashed: the wash
       // trip path removes the specific mesh it picked up (via
       // pickupDirty) and firing onDishWashed afterward would yank a
@@ -857,26 +871,45 @@ export class Engine {
       this.scene.updateInternalDoors(doors, dt);
       return;
     }
-    // Snapshot every walkable actor's ground position. SKIP pinned
-    // guests (waiting for a seat, seated, eating, on the toilet, etc.)
-    // — they're stationary by intent and shouldn't make a nearby door
-    // flap open. Only actors actually walking somewhere can "want" to
-    // pass through a door.
-    const positions: { x: number; z: number }[] = [];
+    // Snapshot every walkable actor's ground position + which floor
+    // they're standing on. SKIP pinned guests (waiting for a seat,
+    // seated, eating, on the toilet, etc.) — they're stationary by
+    // intent and shouldn't make a nearby door flap open. Only actors
+    // actually walking somewhere can "want" to pass through a door.
+    // The floor is derived from the character's model Y so a guest
+    // on Floor 1 can't open a Floor 0 door directly below them.
+    const storeyH = WorldScene.getStoreyHeight();
+    const floorOf = (root: THREE.Object3D): number => {
+      const f = Math.round(root.position.y / storeyH);
+      return Math.max(0, Math.min(WorldScene.getNumStoreys() - 1, f));
+    };
+    const positions: { x: number; z: number; floor: number }[] = [];
     if (this.spawner) {
       for (const g of this.spawner.snapshotMovable()) {
         if (g.pinned) continue;
-        positions.push({ x: g.character.groundPos.x, z: g.character.groundPos.y });
+        positions.push({
+          x: g.character.groundPos.x,
+          z: g.character.groundPos.y,
+          floor: floorOf(g.character.root),
+        });
       }
     }
     if (this.router) {
       for (const s of this.router.snapshotStatus()) {
-        positions.push({ x: s.character.groundPos.x, z: s.character.groundPos.y });
+        positions.push({
+          x: s.character.groundPos.x,
+          z: s.character.groundPos.y,
+          floor: floorOf(s.character.root),
+        });
       }
     }
     if (this.errand) {
       for (const h of this.errand.snapshotStatus()) {
-        positions.push({ x: h.character.groundPos.x, z: h.character.groundPos.y });
+        positions.push({
+          x: h.character.groundPos.x,
+          z: h.character.groundPos.y,
+          floor: floorOf(h.character.root),
+        });
       }
     }
     // Per-door trigger zone: a thin corridor along the door's local
@@ -897,8 +930,15 @@ export class Engine {
       if (it.defId !== "int-doorway") continue;
       const cosR = Math.cos(it.rotY);
       const sinR = Math.sin(it.rotY);
+      const doorFloor = it.floor ?? 0;
       let open = false;
       for (const p of positions) {
+        // Cross-floor characters can't trigger this door. Without
+        // this filter a guest walking on Floor 1 would flap the
+        // door panel of any Floor 0 door with the same XZ — the
+        // visible "doors twitching from people who can't reach
+        // them" bug.
+        if (p.floor !== doorFloor) continue;
         const dx = p.x - it.x;
         const dz = p.z - it.z;
         // Project the actor's offset into the door's local frame
@@ -1142,6 +1182,11 @@ export class Engine {
    * still gets picked up. Each poll only does work if the building
    * count changed since the previous pass. */
   private cityBuildingCount = -1;
+  /** Cached player-plot id so the 5 Hz HUD doesn't re-iterate the
+   * building table every tick to find the player's own plot.
+   * Refreshed in refreshCityBuildings when the building count
+   * changes (claim landing / releasing). */
+  private cachedMyPlotId: bigint | null = null;
   private refreshCityBuildings(): void {
     const apply = (): void => {
       const list = this.cloud.listBuildings();
@@ -1157,6 +1202,7 @@ export class Engine {
       });
       this.scene.populateCityBuildings(enriched);
       const mine = this.cloud.getMyBuilding();
+      this.cachedMyPlotId = mine?.id ?? null;
       if (mine) {
         // Shift the shared city so the player's claimed plot
         // appears at the camera's local origin. From a shared-map

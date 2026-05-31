@@ -1463,16 +1463,20 @@ export class WorldScene {
       rail.position.set(cornerOffsetCx, railY, southZ);
       storey.group.add(rail);
       this.parisBalconies.push(rail);
-      // Vertical balusters every ~0.5 m.
-      const balusters = Math.floor(W / 0.5);
-      const baluster = new THREE.BoxGeometry(0.04, 0.9, 0.04);
-      for (let bi = 0; bi <= balusters; bi += 1) {
-        const bx = (cornerOffsetCx - W / 2 + 0.2) + bi * ((W - 0.4) / balusters);
-        const bar = new THREE.Mesh(baluster, balconyMat);
-        bar.position.set(bx, balusterTopY, southZ);
-        storey.group.add(bar);
-        this.parisBalconies.push(bar);
-      }
+      // Balusters reduced to a SECOND horizontal bar instead of ~22
+      // individual vertical posts per floor. The original loop was
+      // 88 baluster meshes on the player's tower alone — at iso
+      // distance the verticals were barely visible anyway. Single
+      // extra rail gives the visual two-band fence look at 1/22nd
+      // the draw-call cost.
+      void balusterTopY; // kept for future detail-mode rendering
+      const lowerRail = new THREE.Mesh(
+        new THREE.BoxGeometry(W - 0.3, 0.04, 0.08),
+        balconyMat,
+      );
+      lowerRail.position.set(cornerOffsetCx, railY - 0.35, southZ);
+      storey.group.add(lowerRail);
+      this.parisBalconies.push(lowerRail);
     }
 
     // ── Mansard roof ──────────────────────────────────────────────
@@ -2326,10 +2330,14 @@ export class WorldScene {
     // houses on top of plots and onAvenue skips houses where two
     // streets cross.
     const HOUSE_SETBACK = 13;      // distance from avenue centerline to house centre
-    const HOUSE_STEP = 7.5;        // spacing along the street
+    const HOUSE_STEP = 9;          // spacing along the street (bumped 7.5 → 9 for perf)
     const STREET_EXTENT = 110;     // walk ±this along each avenue
     let placed = 0;
-    const HARD_CAP = 320;
+    // Perf cap — each scenery house = ~15 meshes (walls, cornices,
+    // windows, balcony, mansard, chimney, sign). 320 was burning
+    // ~4500 draw calls just on scenery; dropped to 180 to keep
+    // total frame cost reasonable on mid-range machines.
+    const HARD_CAP = 180;
 
     // Track placed shops so the "every plot has a shop within 30 m"
     // post-pass can decide whether to force-convert a nearby house.
@@ -3291,6 +3299,11 @@ export class WorldScene {
         g.add(win);
       }
       // ── Wrought-iron balcony rail on upper floors ────────────────
+      // Single horizontal bar — was originally rail + ~6 individual
+      // balusters per house. With 180 scenery houses that's >1000
+      // baluster meshes for the whole city. At iso distance the
+      // balusters were almost invisible anyway; dropping them is a
+      // free perf win.
       if (s > 0) {
         const balconyMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.7 });
         const rail = new THREE.Mesh(
@@ -3299,16 +3312,6 @@ export class WorldScene {
         );
         rail.position.set(0, winY - 0.85, h / 2 + 0.12);
         g.add(rail);
-        // Tiny vertical balusters every ~0.5m so it reads as a real
-        // wrought-iron rail rather than a single floating bar.
-        const baluster = new THREE.BoxGeometry(0.04, 0.9, 0.04);
-        const balusters = Math.floor(w / 0.5);
-        for (let bi = 0; bi <= balusters; bi += 1) {
-          const bx = -w / 2 + 0.2 + bi * ((w - 0.4) / balusters);
-          const bar = new THREE.Mesh(baluster, balconyMat);
-          bar.position.set(bx, winY - 0.4, h / 2 + 0.12);
-          g.add(bar);
-        }
       }
     }
     // ── Heavy dark-wood double door, centre-bottom of +Z face ──────

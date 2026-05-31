@@ -388,32 +388,59 @@ export class BuildMenu {
    * behind the player's current luxury tier, the tabs just slice the
    * catalog by quality so the prestige furniture has a dedicated
    * shelf instead of being lost in a long alphabetical list. */
+  /** Re-render both the tier-tab strip and its content. Engine calls
+   * this when the player buys an expansion so the freshly-unlocked
+   * tier tab becomes clickable without waiting for the next click. */
+  refreshTierTabs(): void {
+    this.renderTierTabs();
+    this.renderTierContent();
+  }
+
   private renderTierTabs(): void {
     if (!this.tierTabsEl) return;
     this.tierTabsEl.innerHTML = "";
+    const playerTier = this.game.getLuxuryTier();
+    // If the currently-selected tier is now LOCKED (e.g. the player
+    // loaded a save with a lower tier than they had previously), clamp
+    // selection back into the unlocked range so the content panel
+    // renders something usable.
+    if (this.selectedTier > playerTier) {
+      this.selectedTier = playerTier as LuxuryTier;
+    }
     for (let t = 1; t <= 5; t += 1) {
       const tier = t as LuxuryTier;
       const active = tier === this.selectedTier;
+      const unlocked = tier <= playerTier;
       const count = furnitureCatalog.filter((d) => inferQualityTier(d) === tier).length;
       const btn = document.createElement("button");
-      btn.textContent = `T${t}`;
-      btn.title = `Tier ${t} — ${count} item${count === 1 ? "" : "s"}`;
+      btn.textContent = unlocked ? `T${t}` : `🔒 T${t}`;
+      btn.title = unlocked
+        ? `Tier ${t} — ${count} item${count === 1 ? "" : "s"}`
+        : `Tier ${t} — locked. Reach restaurant tier ${t} (Expand menu) to unlock these items.`;
+      btn.disabled = !unlocked;
       Object.assign(btn.style, {
         flex: "1",
         padding: "5px 0",
-        background: active ? "rgba(120, 200, 120, 0.30)" : "rgba(255,245,220,0.08)",
-        color: "#fff5dc",
-        border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
+        background: !unlocked
+          ? "rgba(255,245,220,0.04)"
+          : (active ? "rgba(120, 200, 120, 0.30)" : "rgba(255,245,220,0.08)"),
+        color: unlocked ? "#fff5dc" : "rgba(255,245,220,0.40)",
+        border: !unlocked
+          ? "1px solid rgba(255,245,220,0.10)"
+          : (active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)"),
         borderRadius: "4px",
-        cursor: "pointer",
+        cursor: unlocked ? "pointer" : "not-allowed",
         font: "inherit", fontSize: "11px",
         fontWeight: active ? "700" : "500",
+        opacity: unlocked ? "1" : "0.65",
       } as Partial<CSSStyleDeclaration>);
-      btn.onclick = () => {
-        this.selectedTier = tier;
-        this.renderTierTabs();
-        this.renderTierContent();
-      };
+      if (unlocked) {
+        btn.onclick = () => {
+          this.selectedTier = tier;
+          this.renderTierTabs();
+          this.renderTierContent();
+        };
+      }
       this.tierTabsEl.appendChild(btn);
     }
   }
