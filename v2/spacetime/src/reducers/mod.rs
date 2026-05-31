@@ -11,6 +11,7 @@ mod achievements;
 mod leaderboard;
 mod friends;
 mod pedestrians;
+mod chat;
 
 pub use lifecycle::*;
 pub use auth::*;
@@ -20,3 +21,4 @@ pub use achievements::*;
 pub use leaderboard::*;
 pub use friends::*;
 pub use pedestrians::*;
+pub use chat::*;

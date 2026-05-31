@@ -1,0 +1,536 @@
+import { SpacetimeClient } from "../cloud/SpacetimeClient";
+
+/**
+ * Always-on bottom-left chat panel — sits in the strip between the
+ * sidebar (left, 256 px) and the centered MenuPanel. Tabs: a pinned
+ * "Global" tab + one tab per active PM conversation. Each tab has a
+ * scrollable transcript and an input field; click anywhere on a tab
+ * header to focus, X to close (PMs only — global can't be closed).
+ *
+ * Server messages arrive through SpacetimeClient.onChatMessage. The
+ * panel keeps a small per-channel cache (rebuilt from listChatMessages
+ * on demand) so opening a tab the player hasn't visited yet
+ * back-fills the recent transcript without an extra round trip.
+ *
+ * Compact when minimized: just the title bar + tab strip (about
+ * 32 px tall). Click the title bar's chevron to toggle.
+ */
+export class ChatPanel {
+  private readonly cloud: SpacetimeClient;
+  private readonly root: HTMLElement;
+  private readonly tabsRow: HTMLElement;
+  private readonly body: HTMLElement;
+  private readonly logArea: HTMLElement;
+  private readonly inputRow: HTMLElement;
+  private readonly input: HTMLInputElement;
+  private readonly sendBtn: HTMLButtonElement;
+  private readonly newPmBtn: HTMLButtonElement;
+  private readonly toggleBtn: HTMLButtonElement;
+
+  /** Active tab identifier. `"global"` or a `pm:<a>|<b>` channel id. */
+  private activeChannel = "global";
+  /** Tab descriptors keyed by channel id. */
+  private tabs = new Map<string, { channel: string; label: string; closable: boolean; unread: number; otherHex?: string; btn: HTMLButtonElement; close?: HTMLButtonElement }>();
+  /** True when the panel body is collapsed (only title bar visible). */
+  private minimized = false;
+  /** Snapshot of the last-rendered log signature per channel — lets us
+   * skip rebuilding the log DOM when nothing changed for the active
+   * tab. Same defensive pattern as MenuPanel. */
+  private lastLogSig = "";
+  /** Detach the chat-message listener on dispose. */
+  private chatUnsub: (() => void) | null = null;
+  /** Detach the state-change listener on dispose. */
+  private cloudUnsub: (() => void) | null = null;
+
+  constructor(parent: HTMLElement, cloud: SpacetimeClient) {
+    this.cloud = cloud;
+
+    // === Outer chrome ===
+    // Bottom-left strip — far enough right to clear the 256 px sidebar
+    // with margins, narrow enough not to crash into the centered
+    // MenuPanel on common screen sizes. width clamps so a tiny
+    // viewport still hides the panel rather than overlapping things.
+    this.root = document.createElement("div");
+    Object.assign(this.root.style, {
+      position: "fixed",
+      left: "280px",
+      bottom: "12px",
+      width: "min(360px, calc(50vw - 200px))",
+      maxHeight: "320px",
+      display: "flex",
+      flexDirection: "column",
+      background: "rgba(20, 14, 10, 0.86)",
+      color: "#fff5dc",
+      font: "12px/1.4 system-ui, sans-serif",
+      borderRadius: "10px 10px 0 0",
+      pointerEvents: "auto",
+      boxShadow: "0 -4px 14px rgba(0,0,0,0.35)",
+      zIndex: "100",
+      overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(this.root);
+
+    // === Title bar (always visible — drives minimize toggle) ===
+    const titleBar = document.createElement("div");
+    Object.assign(titleBar.style, {
+      display: "flex", alignItems: "center", gap: "6px",
+      padding: "5px 8px 5px 10px",
+      background: "rgba(0,0,0,0.30)",
+      borderBottom: "1px solid rgba(255,245,220,0.15)",
+      cursor: "pointer",
+      userSelect: "none",
+      flex: "0 0 auto",
+    } as Partial<CSSStyleDeclaration>);
+    const titleText = document.createElement("span");
+    titleText.textContent = "💬 CHAT";
+    Object.assign(titleText.style, {
+      fontSize: "11px", fontWeight: "700", letterSpacing: "0.06em", flex: "1",
+    } as Partial<CSSStyleDeclaration>);
+    titleBar.appendChild(titleText);
+    this.toggleBtn = document.createElement("button");
+    this.toggleBtn.textContent = "▾";
+    Object.assign(this.toggleBtn.style, {
+      background: "transparent", color: "#fff5dc",
+      border: "none", cursor: "pointer",
+      font: "inherit", fontSize: "14px", padding: "0 4px",
+      lineHeight: "1",
+    } as Partial<CSSStyleDeclaration>);
+    titleBar.appendChild(this.toggleBtn);
+    titleBar.onclick = () => this.setMinimized(!this.minimized);
+    // Title bar's button shares the click via bubbling — no special
+    // handler needed; both elements toggle the same state.
+    this.root.appendChild(titleBar);
+
+    // === Tab strip ===
+    this.tabsRow = document.createElement("div");
+    Object.assign(this.tabsRow.style, {
+      display: "flex", alignItems: "stretch", gap: "2px",
+      padding: "4px 6px 0 6px",
+      flex: "0 0 auto",
+      background: "rgba(0,0,0,0.18)",
+      overflowX: "auto",
+      whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.tabsRow);
+
+    // === Body (transcript + input) — hidden when minimized ===
+    this.body = document.createElement("div");
+    Object.assign(this.body.style, {
+      display: "flex", flexDirection: "column",
+      flex: "1 1 auto",
+      minHeight: "0", // allow flex children to scroll
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.body);
+
+    this.logArea = document.createElement("div");
+    Object.assign(this.logArea.style, {
+      flex: "1 1 auto",
+      overflowY: "auto",
+      padding: "6px 8px",
+      display: "flex", flexDirection: "column", gap: "3px",
+      minHeight: "120px", maxHeight: "200px",
+    } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(this.logArea);
+
+    // === Input row ===
+    this.inputRow = document.createElement("div");
+    Object.assign(this.inputRow.style, {
+      display: "flex", gap: "4px",
+      padding: "6px 8px 8px 8px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
+      background: "rgba(0,0,0,0.18)",
+    } as Partial<CSSStyleDeclaration>);
+    this.input = document.createElement("input");
+    this.input.type = "text";
+    this.input.placeholder = "Say something…";
+    this.input.maxLength = 500;
+    Object.assign(this.input.style, {
+      flex: "1",
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.22)",
+      borderRadius: "3px",
+      padding: "5px 8px",
+      font: "inherit", fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    this.inputRow.appendChild(this.input);
+    this.sendBtn = document.createElement("button");
+    this.sendBtn.textContent = "Send";
+    Object.assign(this.sendBtn.style, {
+      padding: "5px 10px",
+      background: "rgba(120, 200, 120, 0.25)", color: "#fff5dc",
+      border: "1px solid rgba(120, 200, 120, 0.55)",
+      borderRadius: "3px", cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    this.inputRow.appendChild(this.sendBtn);
+    this.newPmBtn = document.createElement("button");
+    this.newPmBtn.textContent = "✉";
+    this.newPmBtn.title = "Start a private chat with another player";
+    Object.assign(this.newPmBtn.style, {
+      padding: "5px 8px",
+      background: "rgba(255,245,220,0.10)", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.22)",
+      borderRadius: "3px", cursor: "pointer",
+      font: "inherit", fontSize: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    this.inputRow.appendChild(this.newPmBtn);
+    this.body.appendChild(this.inputRow);
+
+    // === Wire interactions ===
+    this.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        this.fireSend();
+      }
+    });
+    // Prevent the global keyboard shortcuts (build menu hotkeys, etc.)
+    // from firing when the player is typing in chat — the engine binds
+    // a bunch of single-letter shortcuts to window keydown, which would
+    // hijack the keypress and never reach the input. Stopping
+    // propagation on the input's own keydown keeps the typed character
+    // local to the field.
+    this.input.addEventListener("keydown", (e) => e.stopPropagation());
+    this.input.addEventListener("keyup", (e) => e.stopPropagation());
+    this.input.addEventListener("keypress", (e) => e.stopPropagation());
+    this.sendBtn.onclick = () => this.fireSend();
+    this.newPmBtn.onclick = () => this.openNewPmFlow();
+
+    // Pin the global tab.
+    this.addTab({ channel: "global", label: "🌐 Global", closable: false });
+    this.setActive("global");
+
+    // Hydrate any PMs that already existed when this client connected
+    // (e.g. the previous session received a PM and now we're reloading).
+    this.discoverExistingPms();
+
+    // Subscribe to new chat messages — bump unread counts, refresh
+    // active log, auto-spawn a tab if it's a PM we haven't seen.
+    this.chatUnsub = this.cloud.onChatMessage((msg) => this.onIncoming(msg));
+    // Also subscribe to generic state changes so the active log
+    // refreshes after our own send (the row appears in the cache via
+    // the same notify path that drives the rest of the UI).
+    this.cloudUnsub = this.cloud.subscribe(() => {
+      // Cheap when nothing changed — the signature check inside
+      // refreshActiveLog short-circuits.
+      this.refreshActiveLog();
+    });
+  }
+
+  // ============================================================
+  //                       TAB MANAGEMENT
+  // ============================================================
+
+  private addTab(opts: { channel: string; label: string; closable: boolean; otherHex?: string }): void {
+    if (this.tabs.has(opts.channel)) return;
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      padding: "4px 8px",
+      background: "rgba(255,245,220,0.08)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.18)",
+      borderTopLeftRadius: "4px", borderTopRightRadius: "4px",
+      borderBottom: "none",
+      cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
+      display: "flex", alignItems: "center", gap: "4px",
+      whiteSpace: "nowrap",
+      flex: "0 0 auto",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = () => this.setActive(opts.channel);
+    const labelEl = document.createElement("span");
+    labelEl.textContent = opts.label;
+    btn.appendChild(labelEl);
+    let close: HTMLButtonElement | undefined;
+    if (opts.closable) {
+      close = document.createElement("button");
+      close.textContent = "×";
+      Object.assign(close.style, {
+        background: "transparent", color: "#fff5dc",
+        border: "none", cursor: "pointer",
+        font: "inherit", fontSize: "12px",
+        padding: "0 2px", lineHeight: "1", opacity: "0.7",
+      } as Partial<CSSStyleDeclaration>);
+      close.onclick = (e) => {
+        e.stopPropagation();
+        this.removeTab(opts.channel);
+      };
+      btn.appendChild(close);
+    }
+    this.tabsRow.appendChild(btn);
+    this.tabs.set(opts.channel, { ...opts, unread: 0, btn, close });
+    this.refreshTabStyles();
+  }
+
+  private removeTab(channel: string): void {
+    if (channel === "global") return; // pinned
+    const t = this.tabs.get(channel);
+    if (!t) return;
+    try { t.btn.remove(); } catch { /* already gone */ }
+    this.tabs.delete(channel);
+    if (this.activeChannel === channel) this.setActive("global");
+  }
+
+  private setActive(channel: string): void {
+    if (!this.tabs.has(channel)) return;
+    this.activeChannel = channel;
+    // Clear the unread count when focusing a tab.
+    const t = this.tabs.get(channel);
+    if (t) t.unread = 0;
+    this.input.value = "";
+    this.input.placeholder = channel === "global"
+      ? "Say something in Global…"
+      : `Private — message ${this.tabs.get(channel)?.label.replace(/^@/, "") ?? "player"}…`;
+    this.refreshTabStyles();
+    this.lastLogSig = ""; // force log rebuild
+    this.refreshActiveLog();
+    // Focus the input if the panel is visible so the player can
+    // start typing immediately after a tab switch.
+    if (!this.minimized) this.input.focus();
+  }
+
+  private refreshTabStyles(): void {
+    for (const t of this.tabs.values()) {
+      const active = t.channel === this.activeChannel;
+      t.btn.style.background = active ? "rgba(120, 200, 120, 0.30)" : "rgba(255,245,220,0.08)";
+      t.btn.style.borderColor = active ? "rgba(120, 200, 120, 0.55)" : "rgba(255,245,220,0.18)";
+      t.btn.style.fontWeight = active ? "700" : "600";
+      // First child is the label span — rewrite its text to include
+      // the unread badge inline so wide-character labels (Greek names,
+      // emoji) still align cleanly without a separate flex layout.
+      const labelSpan = t.btn.querySelector("span");
+      if (labelSpan) {
+        if (t.unread > 0 && !active) {
+          labelSpan.innerHTML = `${escapeHtml(t.label)} <span style="background:#d36a6a;color:#fff5dc;border-radius:8px;padding:0 5px;font-size:9px;margin-left:2px">${t.unread > 99 ? "99+" : t.unread}</span>`;
+        } else {
+          labelSpan.textContent = t.label;
+        }
+      }
+    }
+  }
+
+  // ============================================================
+  //                       MESSAGE HANDLING
+  // ============================================================
+
+  private onIncoming(msg: { id: bigint; channel: string; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }): void {
+    // Auto-spawn a PM tab when we receive a message on a channel we
+    // didn't already have open (the recipient may not have started
+    // the conversation themselves).
+    if (msg.channel.startsWith("pm:") && !this.tabs.has(msg.channel)) {
+      // Resolve the OTHER party of the PM channel — for incoming
+      // messages from someone else, that's the sender; for our own
+      // sent messages it's whoever the channel id pairs us with.
+      const myHex = (this.cloud.getMyHex() || "").toLowerCase();
+      let otherHex = msg.senderHex.toLowerCase();
+      if (msg.isMine) {
+        const body = msg.channel.slice(3);
+        const [a, b] = body.split("|");
+        otherHex = (a?.toLowerCase() === myHex ? b : a) ?? otherHex;
+      }
+      const otherName = this.cloud.displayNameFor(otherHex);
+      this.addTab({ channel: msg.channel, label: `@${otherName}`, closable: true, otherHex });
+    }
+    // If the active tab matches, just refresh the log; otherwise bump
+    // the unread counter for that tab.
+    if (msg.channel === this.activeChannel) {
+      this.lastLogSig = "";
+      this.refreshActiveLog();
+    } else if (!msg.isMine) {
+      const t = this.tabs.get(msg.channel);
+      if (t) { t.unread += 1; this.refreshTabStyles(); }
+    }
+  }
+
+  private refreshActiveLog(): void {
+    const channel = this.activeChannel;
+    const msgs = this.cloud.listChatMessages(channel, 200);
+    // Signature = id of newest message + length. A new send or delete
+    // bumps either field; signatures match → no rebuild needed.
+    const sig = msgs.length === 0 ? "0|0" : `${msgs[msgs.length - 1].id}|${msgs.length}`;
+    if (sig === this.lastLogSig) return;
+    this.lastLogSig = sig;
+    this.logArea.innerHTML = "";
+    if (msgs.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = channel === "global"
+        ? "Be the first to say hello!"
+        : "No messages yet — say hi!";
+      Object.assign(empty.style, {
+        textAlign: "center", opacity: "0.5", fontSize: "11px",
+        padding: "16px 0",
+      } as Partial<CSSStyleDeclaration>);
+      this.logArea.appendChild(empty);
+      return;
+    }
+    for (const m of msgs) this.logArea.appendChild(renderMessageRow(m));
+    // Scroll to bottom so the newest message is visible.
+    this.logArea.scrollTop = this.logArea.scrollHeight;
+  }
+
+  private async fireSend(): Promise<void> {
+    const text = this.input.value.trim();
+    if (!text) return;
+    this.input.disabled = true;
+    this.sendBtn.disabled = true;
+    try {
+      if (this.activeChannel === "global") {
+        await this.cloud.sendChatGlobal(text);
+      } else if (this.activeChannel.startsWith("pm:")) {
+        const t = this.tabs.get(this.activeChannel);
+        if (!t?.otherHex) {
+          this.flashError("Can't determine recipient for this conversation");
+          return;
+        }
+        await this.cloud.sendChatPrivate(t.otherHex, text);
+      }
+      this.input.value = "";
+    } catch (e) {
+      this.flashError(errorString(e));
+    } finally {
+      this.input.disabled = false;
+      this.sendBtn.disabled = false;
+      this.input.focus();
+    }
+  }
+
+  private flashError(text: string): void {
+    // Surface in the input field as a transient placeholder swap —
+    // small and unobtrusive, no separate toast required.
+    const old = this.input.placeholder;
+    this.input.placeholder = `⚠ ${text}`;
+    this.input.style.borderColor = "rgba(220, 130, 130, 0.6)";
+    window.setTimeout(() => {
+      this.input.placeholder = old;
+      this.input.style.borderColor = "rgba(255,245,220,0.22)";
+    }, 4000);
+  }
+
+  // ============================================================
+  //                       NEW PM FLOW
+  // ============================================================
+
+  /** Prompt the player for a username, look them up via the cloud's
+   * auth_record cache, then open a PM tab. Simple `window.prompt`
+   * for v1 — could be upgraded to a player picker UI later that
+   * surfaces online players inline. */
+  private openNewPmFlow(): void {
+    const raw = window.prompt("Username to message:");
+    if (!raw) return;
+    const target = raw.trim();
+    if (!target) return;
+    const targetLc = target.toLowerCase();
+    // Find the account by username.
+    const account = this.cloud.listAccounts().find((a) => a.username === targetLc);
+    if (!account) {
+      this.flashError(`No account named "${target}"`);
+      return;
+    }
+    if (account.isMe) {
+      this.flashError("Can't PM yourself");
+      return;
+    }
+    const otherHex = account.identity.toHexString().toLowerCase();
+    const meHex = (this.cloud.getMyHex() || "").toLowerCase();
+    if (!meHex) {
+      this.flashError("Not connected yet — try again in a moment");
+      return;
+    }
+    // Compute the channel id locally (same shape as the server's
+    // pm_channel_for) so the new tab maps to the SAME conversation
+    // as any prior history.
+    const channel = SpacetimeClient.pmChannelFor(meHex, otherHex);
+    this.addTab({ channel, label: `@${account.displayName || account.username}`, closable: true, otherHex });
+    this.setActive(channel);
+  }
+
+  /** On panel mount, walk the chat_message cache for any PM channels
+   * where I'm a participant and pre-open tabs so existing
+   * conversations are immediately accessible. */
+  private discoverExistingPms(): void {
+    for (const conv of this.cloud.listMyPmConversations()) {
+      this.addTab({
+        channel: conv.channel,
+        label: `@${conv.otherName}`,
+        closable: true,
+        otherHex: conv.otherHex,
+      });
+    }
+  }
+
+  // ============================================================
+  //                       MINIMIZE / DISPOSE
+  // ============================================================
+
+  setMinimized(min: boolean): void {
+    this.minimized = min;
+    this.body.style.display = min ? "none" : "flex";
+    this.tabsRow.style.display = min ? "none" : "flex";
+    this.toggleBtn.textContent = min ? "▴" : "▾";
+    this.root.style.maxHeight = min ? "32px" : "320px";
+  }
+
+  destroy(): void {
+    if (this.chatUnsub) { this.chatUnsub(); this.chatUnsub = null; }
+    if (this.cloudUnsub) { this.cloudUnsub(); this.cloudUnsub = null; }
+    try { this.root.remove(); } catch { /* already gone */ }
+  }
+}
+
+// ============================================================
+//                       HELPERS
+// ============================================================
+
+function renderMessageRow(m: { senderName: string; senderHex: string; text: string; sentAtMs: number; isMine: boolean }): HTMLElement {
+  const row = document.createElement("div");
+  Object.assign(row.style, {
+    display: "flex", flexDirection: "column",
+    padding: "2px 0",
+    borderBottom: "1px dotted rgba(255,245,220,0.06)",
+  } as Partial<CSSStyleDeclaration>);
+  const head = document.createElement("div");
+  Object.assign(head.style, {
+    display: "flex", justifyContent: "space-between", alignItems: "baseline",
+    gap: "8px", fontSize: "10px",
+  } as Partial<CSSStyleDeclaration>);
+  const name = document.createElement("span");
+  name.textContent = m.isMine ? "You" : m.senderName;
+  Object.assign(name.style, {
+    fontWeight: "700",
+    color: m.isMine ? "#a8e2a8" : "#ffd986",
+  } as Partial<CSSStyleDeclaration>);
+  head.appendChild(name);
+  const time = document.createElement("span");
+  time.textContent = formatShortTime(m.sentAtMs);
+  Object.assign(time.style, { opacity: "0.5" } as Partial<CSSStyleDeclaration>);
+  head.appendChild(time);
+  row.appendChild(head);
+  const text = document.createElement("div");
+  text.textContent = m.text;
+  Object.assign(text.style, {
+    fontSize: "12px", lineHeight: "1.35",
+    wordBreak: "break-word", whiteSpace: "pre-wrap",
+  } as Partial<CSSStyleDeclaration>);
+  row.appendChild(text);
+  return row;
+}
+
+function formatShortTime(ms: number): string {
+  const d = new Date(ms);
+  const hh = d.getHours().toString().padStart(2, "0");
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function errorString(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Send failed";
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#39;",
+  } as Record<string, string>)[c] ?? c);
+}

@@ -48,6 +48,21 @@ export const Building = __t.object("Building", {
 });
 export type Building = __Infer<typeof Building>;
 
+export const ChatCleanupSchedule = __t.object("ChatCleanupSchedule", {
+  id: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type ChatCleanupSchedule = __Infer<typeof ChatCleanupSchedule>;
+
+export const ChatMessage = __t.object("ChatMessage", {
+  id: __t.u64(),
+  sender: __t.identity(),
+  channel: __t.string(),
+  text: __t.string(),
+  sentAt: __t.timestamp(),
+});
+export type ChatMessage = __Infer<typeof ChatMessage>;
+
 export const CoOwner = __t.object("CoOwner", {
   id: __t.u64(),
   restaurantId: __t.u64(),

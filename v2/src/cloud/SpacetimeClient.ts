@@ -80,6 +80,11 @@ export class SpacetimeClient {
   /** Subscribers that want to be notified when DB state mutates. UI panels
    * register a re-render here so leaderboards/friends update live. */
   private readonly listeners = new Set<() => void>();
+  /** P8 chat — separate listener set fed individual ChatMessage rows
+   * as they arrive, so the ChatPanel can show a desktop toast / play
+   * a sound / bump an unread counter for the SPECIFIC message
+   * instead of doing a full-table diff on every `notify()`. */
+  private readonly chatMessageListeners = new Set<(m: { id: bigint; channel: string; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }) => void>();
 
   constructor(game: Game, saver: SaveSystem, cfg: SpacetimeConfig = {}) {
     this.game = game;
@@ -407,6 +412,123 @@ export class SpacetimeClient {
       this.conn!.reducers.adminDeleteRestaurant({ targetUsername }));
   }
 
+  // ============================================================================
+  //                           P8 — CHAT
+  // ============================================================================
+
+  /** Build the canonical PM channel id for a pair of identity hex
+   * strings. Stable regardless of order so the same conversation
+   * maps to the same channel for both participants. Mirrors the
+   * server's `pm_channel_for` so client-side filtering matches. */
+  static pmChannelFor(meHex: string, otherHex: string): string {
+    const me = meHex.toLowerCase();
+    const other = otherHex.toLowerCase();
+    const [a, b] = me <= other ? [me, other] : [other, me];
+    return `pm:${a}|${b}`;
+  }
+
+  /** Read all messages on a given channel, sorted oldest-first. The
+   * channel id is either "global" or "pm:<hex>|<hex>" (use
+   * SpacetimeClient.pmChannelFor to build the latter). */
+  listChatMessages(channel: string, limit = 200): { id: bigint; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }[] {
+    if (!this.conn) return [];
+    const me = this.identity?.toHexString() ?? "";
+    const rows: { id: bigint; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }[] = [];
+    try {
+      for (const m of this.conn.db.chat_message.iter()) {
+        if (m.channel !== channel) continue;
+        const hex = m.sender.toHexString();
+        rows.push({
+          id: m.id,
+          senderHex: hex,
+          senderName: this.displayNameFor(hex),
+          text: m.text,
+          sentAtMs: Number((m.sentAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
+          isMine: hex === me,
+        });
+      }
+    } catch { /* table not yet wired */ }
+    rows.sort((a, b) => a.sentAtMs - b.sentAtMs);
+    return rows.slice(-limit);
+  }
+
+  /** Set of channel ids that have any messages where I'm one of the
+   * participants — drives auto-discovery of PM tabs the player has
+   * received but not yet opened. Returns an array of `{channel,
+   * otherHex, otherName}` for every PM conversation involving me. */
+  listMyPmConversations(): { channel: string; otherHex: string; otherName: string }[] {
+    if (!this.conn || !this.identity) return [];
+    const meHex = this.identity.toHexString().toLowerCase();
+    const seen = new Map<string, string>(); // channel → otherHex
+    try {
+      for (const m of this.conn.db.chat_message.iter()) {
+        if (!m.channel.startsWith("pm:")) continue;
+        // Parse "pm:hexA|hexB" — return the half that isn't me.
+        const body = m.channel.slice(3);
+        const [a, b] = body.split("|");
+        if (!a || !b) continue;
+        const aLc = a.toLowerCase(); const bLc = b.toLowerCase();
+        let other: string;
+        if (aLc === meHex) other = bLc;
+        else if (bLc === meHex) other = aLc;
+        else continue; // not my conversation
+        if (!seen.has(m.channel)) seen.set(m.channel, other);
+      }
+    } catch { /* ignore */ }
+    const out: { channel: string; otherHex: string; otherName: string }[] = [];
+    for (const [channel, otherHex] of seen) {
+      out.push({ channel, otherHex, otherName: this.displayNameFor(otherHex) });
+    }
+    return out;
+  }
+
+  /** Send a message to the global channel. */
+  sendChatGlobal(text: string): Promise<void> {
+    return this.callReducer("sendChatGlobal", () =>
+      this.conn!.reducers.sendChatGlobal({ text }));
+  }
+
+  /** Send a private message to the player with the given identity hex. */
+  sendChatPrivate(recipientHex: string, text: string): Promise<void> {
+    if (!this.conn) return Promise.reject(new Error("Not connected"));
+    let recipient: Identity;
+    try {
+      recipient = Identity.fromString(recipientHex);
+    } catch (e) {
+      return Promise.reject(new Error("Invalid recipient identity"));
+    }
+    return this.callReducer("sendChatPrivate", () =>
+      this.conn!.reducers.sendChatPrivate({ recipient, text }));
+  }
+
+  /** Resolve a hex identity to a display name. Prefers auth_record's
+   * display_name (matches what other players see in social UI), then
+   * falls back to player.name, then to a shortened hex. */
+  displayNameFor(hex: string): string {
+    if (!this.conn) return shortHex(hex);
+    const lc = hex.toLowerCase();
+    try {
+      for (const a of this.conn.db.auth_record.iter()) {
+        if (a.identity.toHexString().toLowerCase() === lc) return a.displayName || a.username;
+      }
+    } catch { /* ignore */ }
+    try {
+      for (const p of this.conn.db.player.iter()) {
+        if (p.identity.toHexString().toLowerCase() === lc) return p.name || shortHex(hex);
+      }
+    } catch { /* ignore */ }
+    return shortHex(hex);
+  }
+
+  /** Register a callback fired for every new chat_message insert (any
+   * channel). Returns an unsubscribe fn. The ChatPanel uses this to
+   * bump unread counts for tabs that aren't currently focused and to
+   * surface a toast for incoming PMs while the panel is minimized. */
+  onChatMessage(cb: (m: { id: bigint; channel: string; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }) => void): () => void {
+    this.chatMessageListeners.add(cb);
+    return () => { this.chatMessageListeners.delete(cb); };
+  }
+
   /** Wait for one reducer call to apply OR fail. SpacetimeDB
    * reducers fire-and-forget; we wire transient onSuccess /
    * onError listeners to convert that into a Promise the modal
@@ -567,6 +689,27 @@ export class SpacetimeClient {
       ctx.db.password_reset_request.onInsert(ping);
       ctx.db.password_reset_request.onUpdate(ping);
       ctx.db.password_reset_request.onDelete(ping);
+      // P8 chat — drive ChatPanel live re-render on every new
+      // message. Insert fires for both sent and received messages;
+      // the panel filters by active channel and tracks unread
+      // counts for inactive tabs.
+      ctx.db.chat_message.onInsert((_evCtx, row) => {
+        ping();
+        for (const cb of this.chatMessageListeners) {
+          try {
+            cb({
+              id: row.id,
+              channel: row.channel,
+              senderHex: row.sender.toHexString(),
+              senderName: this.displayNameFor(row.sender.toHexString()),
+              text: row.text,
+              sentAtMs: Number((row.sentAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
+              isMine: this.identity ? identityEquals(row.sender, this.identity) : false,
+            });
+          } catch { /* ignore */ }
+        }
+      });
+      ctx.db.chat_message.onDelete(ping);
       // P2+ — building rows feed BuildingPickModal's live refresh
       // and Engine.refreshCityBuildings.
       ctx.db.building.onInsert(ping);

@@ -39,6 +39,7 @@ import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
 import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
+import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
@@ -54,6 +55,8 @@ import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
+import SendChatGlobalReducer from "./send_chat_global_reducer";
+import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
@@ -69,6 +72,7 @@ import AchievementUnlockRow from "./achievement_unlock_table";
 import AuthRecordRow from "./auth_record_table";
 import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
+import ChatMessageRow from "./chat_message_table";
 import CoOwnerRow from "./co_owner_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
@@ -138,6 +142,23 @@ const tablesSchema = __schema({
       { name: 'building_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, BuildingRow),
+  chat_message: __table({
+    name: 'chat_message',
+    indexes: [
+      { accessor: 'channel', name: 'chat_message_channel_idx_btree', algorithm: 'btree', columns: [
+        'channel',
+      ] },
+      { accessor: 'id', name: 'chat_message_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'sender', name: 'chat_message_sender_idx_btree', algorithm: 'btree', columns: [
+        'sender',
+      ] },
+    ],
+    constraints: [
+      { name: 'chat_message_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ChatMessageRow),
   co_owner: __table({
     name: 'co_owner',
     indexes: [
@@ -304,6 +325,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
   __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
+  __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
@@ -319,6 +341,8 @@ const reducersSchema = __reducers(
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
+  __reducerSchema("send_chat_global", SendChatGlobalReducer),
+  __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),

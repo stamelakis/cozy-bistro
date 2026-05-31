@@ -370,6 +370,53 @@ pub struct PedestrianTickSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
+/// P8 — a single chat message. One row per sent message. Used for
+/// both the global channel and private 1:1 conversations; the
+/// `channel` string distinguishes them:
+///   - "global"       → everyone sees it
+///   - "pm:<idA>|<idB>" → 1:1 conversation, where idA, idB are the
+///     lowercased hex Identity strings of the two participants
+///     sorted lexicographically (so each pair gets a stable channel
+///     id regardless of which side sent the message)
+///
+/// `public` is necessary because subscriptions are per-table, not
+/// per-row — every client sees every row. Clients filter by channel
+/// to render only what's relevant for the currently-active tab.
+/// Server-side rate limiting + a global row cap keep storage bounded.
+///
+/// Each chat tab in the client subscribes to changes on this table
+/// and pulls the channel-filtered subset on each update.
+#[table(name = chat_message, public)]
+pub struct ChatMessage {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Sender Identity. Display name is resolved on the client by
+    /// joining against auth_record / player.
+    #[index(btree)]
+    pub sender: Identity,
+    /// Channel identifier — "global" or "pm:<hex_a>|<hex_b>" where
+    /// hex_a < hex_b lexicographically. Indexed so the client's
+    /// channel-filtered iteration is fast.
+    #[index(btree)]
+    pub channel: String,
+    /// Message body. Server caps at 500 chars and rejects empty.
+    pub text: String,
+    pub sent_at: Timestamp,
+}
+
+/// P8 — periodic chat cleanup tick. Fires every ~5 min to delete
+/// chat messages older than the retention window (configured in
+/// the reducer) so the table stays bounded. Same pattern as
+/// pedestrian_tick_schedule — single Interval row inserted at init.
+#[table(name = chat_cleanup_schedule, scheduled(crate::reducers::chat_cleanup))]
+pub struct ChatCleanupSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
 /// Co-owner row for a shared restaurant. The owner Identity on Restaurant
 /// is the primary owner; co-owners can edit but can't delete.
 #[table(name = co_owner, public)]

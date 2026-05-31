@@ -44,6 +44,7 @@ import { SaveSystem } from "./SaveSystem";
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { LoginModal } from "../ui/LoginModal";
 import { BuildingPickModal } from "../ui/BuildingPickModal";
+import { ChatPanel } from "../ui/ChatPanel";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -107,6 +108,10 @@ export class Engine {
   readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
   readonly cloud: SpacetimeClient;
+  /** P8 chat panel — bottom-left, always visible after auth. Mounted
+   * lazily by installAuthGate so it can subscribe to the chat_message
+   * table that the cloud only has after the initial subscription. */
+  private chatPanel: ChatPanel | null = null;
 
   private running = false;
   private lastResizeCheckAt = 0;
@@ -1090,6 +1095,20 @@ export class Engine {
 
   /** Wipe the active save slot and reload. Asks for confirmation since
    * this is destructive. */
+  /** Mount the persistent bottom-left chat panel. Idempotent — the
+   * panel is created once per Engine lifetime, after auth completes,
+   * because it subscribes to the chat_message table during
+   * construction and that table is only populated after the cloud's
+   * initial subscription lands. */
+  private mountChatPanel(container: HTMLElement): void {
+    if (this.chatPanel) return;
+    try {
+      this.chatPanel = new ChatPanel(container, this.cloud);
+    } catch (e) {
+      console.warn("[Engine] failed to mount chat panel:", e);
+    }
+  }
+
   /** Spawn the LoginModal AND start polling to see if the connecting
    * identity is already authenticated (returning player). On
    * authenticated, check building ownership — players who haven't
@@ -1119,6 +1138,11 @@ export class Engine {
         }
       }
       this.game.setAuthGated(false);
+      // P8 — spawn the persistent chat panel now that we know the
+      // player is authenticated AND the cloud is wired (the panel
+      // subscribes to the chat_message table during construction).
+      // Constructed at most once per Engine lifetime; idempotent.
+      this.mountChatPanel(container);
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as
       // multiplayer even before we ship per-other-restaurant

@@ -2,7 +2,10 @@
 //! called automatically by SpacetimeDB; they don't need a client RPC.
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
-use crate::tables::{player, pedestrian_tick_schedule, Player, PedestrianTickSchedule};
+use crate::tables::{
+    player, pedestrian_tick_schedule, chat_cleanup_schedule,
+    Player, PedestrianTickSchedule, ChatCleanupSchedule,
+};
 
 /// Runs once when the module is first published. Anything that needs a
 /// seed (default values, system messages, building inventory, etc)
@@ -25,6 +28,15 @@ pub fn init(ctx: &ReducerContext) {
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(2_000_000)), // 2s
         });
         log::info!("Pedestrian tick schedule installed (every 2s)");
+    }
+    // P8 — chat cleanup every 5 minutes. Trims expired messages
+    // and caps the global channel.
+    if ctx.db.chat_cleanup_schedule().iter().next().is_none() {
+        ctx.db.chat_cleanup_schedule().insert(ChatCleanupSchedule {
+            id: 0,
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(5 * 60 * 1_000_000)),
+        });
+        log::info!("Chat cleanup schedule installed (every 5 min)");
     }
 }
 
