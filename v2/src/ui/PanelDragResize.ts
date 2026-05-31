@@ -121,6 +121,12 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   // records height and whether the resize handles are clickable.
   let isExpanded = !sentinelStartsCollapsed;
 
+  /** Hook called from drag/resize end so the collapse-sentinel
+   * branch can re-cache its anchored edge after an explicit
+   * user move. Filled in by the collapseSentinel block below if
+   * a sentinel was wired; no-op otherwise. */
+  let refreshAnchorsAfterUserMove: () => void = () => { /* no sentinel — nothing to anchor */ };
+
   // === DRAG ===
   // Title bars often double as click-to-collapse buttons, so we
   // distinguish a tap from a drag: pointerdown only ARMS a possible
@@ -191,6 +197,10 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     activePointerId = -1;
     if (committed) {
       try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      // Re-cache the anchored edge so the next expand/collapse
+      // uses the dragged position as its baseline instead of the
+      // pre-drag one.
+      refreshAnchorsAfterUserMove();
       // Pass isExpanded so saveCurrentLayout preserves the
       // last-known EXPANDED height even when the user drags a
       // collapsed panel — otherwise the collapsed title-only
@@ -233,7 +243,7 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
       borderBottomRightRadius: d.id === "se" ? "4px" : undefined,
       ...d.style,
     } as Partial<CSSStyleDeclaration>);
-    wireResize(h, d.id, root, minW, minH, storageKey, onChange, () => isExpanded);
+    wireResize(h, d.id, root, minW, minH, storageKey, onChange, () => isExpanded, () => refreshAnchorsAfterUserMove());
     root.appendChild(h);
     resizeHandleEls.push(h);
   }
@@ -245,17 +255,30 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   // corners + the title bar's lower border.
 
   // === COLLAPSE SENTINEL (height + reposition on expand/collapse) ===
+  // Anchor tracking — the visible edge that should stay put across
+  // expand/collapse. For "up" direction panels (chat / menu) we
+  // anchor the BOTTOM; for "down" panels (build) we anchor the
+  // TOP. The anchor is captured up front and updated only when
+  // the user EXPLICITLY moves the panel (drag / resize / clamp).
+  // We can't derive it from getBoundingClientRect() inside
+  // applyForState because by then the body's display flip has
+  // already changed the rect — that was the bug where chat /
+  // menu wandered up on expand and stayed there on collapse.
+  let anchoredTop: number = root.getBoundingClientRect().top;
+  let anchoredBottom: number = root.getBoundingClientRect().bottom;
+  /** Re-cache both anchors from the current rect. Called after any
+   * USER-INITIATED reposition (drag end, resize end, viewport-clamp
+   * during expand). NOT called from inside applyForState's height
+   * flip — that's the whole point. */
+  const updateAnchorsFromRect = (): void => {
+    const r = root.getBoundingClientRect();
+    anchoredTop = r.top;
+    anchoredBottom = r.bottom;
+  };
   if (opts.collapseSentinel) {
     const sentinel = opts.collapseSentinel;
     const applyForState = (nowExpanded: boolean): void => {
-      // Anchor edge depends on preferred direction: "up" keeps
-      // bottom edge in place when growing, "down" keeps top.
-      const beforeTop = parseFloat(root.style.top || "0") || root.getBoundingClientRect().top;
-      const beforeHeight = root.offsetHeight;
-      const beforeBottom = beforeTop + beforeHeight;
       if (nowExpanded) {
-        // Restore last-known expanded height (saved from a prior
-        // resize). If none, clear and let CSS pick.
         if (savedHeight !== undefined) {
           root.style.height = `${savedHeight}px`;
           root.style.maxHeight = "none";
@@ -265,39 +288,50 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
           root.style.maxHeight = "";
         }
       } else {
-        // Collapsed — drop height so the panel shrinks to whatever
-        // its still-visible children (title bar) need. The panel's
-        // OWN collapse code hides the body; together they leave just
-        // the title visible.
+        // Collapsed — drop height; the panel's body is already
+        // display:none so the root shrinks naturally to the
+        // title-bar height.
         root.style.height = "";
         root.style.maxHeight = "";
       }
-      // Reposition based on direction so the visible edge stays put.
+      // Position from the persisted anchor, NOT from the just-mutated
+      // rect — see the comments on the anchor variables.
       const newHeight = root.offsetHeight;
-      let newTop = beforeTop;
+      let newTop: number;
       if (expandDirection === "up") {
-        newTop = beforeBottom - newHeight;
+        newTop = anchoredBottom - newHeight;
+      } else {
+        newTop = anchoredTop;
       }
-      // Clamp into viewport. If preferred-direction placement runs
-      // off the edge, fall back to whichever edge fits.
+      // Clamp into viewport. If we had to clamp, re-anchor so a
+      // subsequent collapse uses the clamped position as the new
+      // baseline (otherwise the panel would jump back to the
+      // off-screen position on collapse).
+      let clamped = false;
       if (newTop + newHeight > window.innerHeight - VIEWPORT_PADDING) {
         newTop = window.innerHeight - VIEWPORT_PADDING - newHeight;
+        clamped = true;
       }
-      if (newTop < VIEWPORT_PADDING) newTop = VIEWPORT_PADDING;
+      if (newTop < VIEWPORT_PADDING) {
+        newTop = VIEWPORT_PADDING;
+        clamped = true;
+      }
       root.style.top = `${newTop}px`;
-      // Show/hide resize handles — there's nothing useful to resize
-      // when the panel body is collapsed.
+      if (clamped) {
+        anchoredTop = newTop;
+        anchoredBottom = newTop + newHeight;
+      }
       for (const h of resizeHandleEls) {
         h.style.display = nowExpanded ? "" : "none";
       }
       isExpanded = nowExpanded;
     };
-    // Apply initial visual state so the height + handle visibility
-    // match the body's current display value.
+    // Initial pass — apply CSS height/visibility to match the
+    // sentinel's current state, then capture the resulting bottom
+    // edge as the baseline anchor (so the very FIRST toggle uses
+    // the right reference).
     applyForState(!sentinelStartsCollapsed);
-    // Watch for future toggles. We could observe `attributes` only,
-    // but `attributeFilter: ["style"]` covers the common case (the
-    // panels we wire all set body.style.display directly).
+    updateAnchorsFromRect();
     const observer = new MutationObserver(() => {
       const nowExpanded = sentinel.style.display !== "none";
       if (nowExpanded === isExpanded) return;
@@ -305,16 +339,10 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     });
     observer.observe(sentinel, { attributes: true, attributeFilter: ["style"] });
   }
+  // Make the anchor updater available to the drag handler above so
+  // explicit panel moves re-cache the anchored edge.
+  refreshAnchorsAfterUserMove = updateAnchorsFromRect;
 
-  // Allow resize handlers to write back to savedHeight when the
-  // panel is expanded (collapsed-height writes are ignored).
-  // Capture by re-defining saveCurrentLayout's update path here.
-  // (No code needed — wireResize calls saveCurrentLayout which
-  //  reads root.getBoundingClientRect; savedHeight pickup happens
-  //  via the next loadState() on reload. To keep the in-memory
-  //  savedHeight in sync immediately we'd need a callback; the
-  //  current resize-then-collapse-then-expand path works because
-  //  the page reload boundary re-reads localStorage.)
   void savedHeight; // referenced for closure capture
 }
 
@@ -332,6 +360,9 @@ function wireResize(
    * a no-op when collapsed (no useful body to size; also avoids
    * saving the tiny collapsed height back as the "expanded" size). */
   expandedGate?: () => boolean,
+  /** Called on resize-end so the outer collapse-sentinel logic
+   * can re-cache its anchor edge against the resized rect. */
+  afterUserMove?: () => void,
 ): void {
   let active = false;
   let startX = 0, startY = 0;
@@ -388,6 +419,7 @@ function wireResize(
     active = false;
     pid = -1;
     try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    afterUserMove?.();
     // Resize is gated to expanded-only by onDown (expandedGate),
     // so always treat this save as an expanded-state save.
     saveCurrentLayout(storageKey, root, true);
