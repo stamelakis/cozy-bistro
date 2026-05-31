@@ -31,8 +31,11 @@ export class ChatPanel {
   private activeChannel = "global";
   /** Tab descriptors keyed by channel id. */
   private tabs = new Map<string, { channel: string; label: string; closable: boolean; unread: number; otherHex?: string; btn: HTMLButtonElement; close?: HTMLButtonElement }>();
-  /** True when the panel body is collapsed (only title bar visible). */
-  private minimized = false;
+  /** True when the panel body is collapsed (only title bar visible).
+   * Defaults TRUE so the panel opens as a thin 32 px-tall bar that
+   * doesn't crowd the centered MenuPanel. The user clicks the title
+   * to expand. */
+  private minimized = true;
   /** Snapshot of the last-rendered log signature per channel — lets us
    * skip rebuilding the log DOM when nothing changed for the active
    * tab. Same defensive pattern as MenuPanel. */
@@ -51,19 +54,25 @@ export class ChatPanel {
     // MenuPanel on common screen sizes. width clamps so a tiny
     // viewport still hides the panel rather than overlapping things.
     this.root = document.createElement("div");
-    // Bottom-left strip — right of the 256 px sidebar (with 12 px
-    // gap), left of the centered MenuPanel. Width uses max(200, ...)
-    // so a very narrow viewport (or a CSS engine that resolves
-    // calc-to-negative before applying min) still gives us SOMETHING
-    // visible — better a slightly-overlapping panel than an invisible
-    // 0-width one. minWidth is the absolute floor.
+    // Bottom-left strip — right of the 256 px sidebar (12 px gap).
+    // The centered MenuPanel can grow leftward to meet this strip on
+    // typical viewports (at 100vw=1280, menu_left = 280 = chat_left
+    // exactly), so the chat MUST stay narrow and START minimized
+    // to avoid hiding the menu's first column. Width caps at 300 px
+    // because that's the widest the panel can be before it starts
+    // visibly crashing into the menu at ~1400 px viewports.
+    //
+    // Expanded behaviour (see setMinimized): the panel lifts ABOVE
+    // the MenuPanel's max possible expanded height so the two never
+    // visually collide when both are open.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "280px",
       bottom: "12px",
-      width: "min(400px, max(260px, calc(100vw - 820px)))",
-      minWidth: "260px",
-      maxHeight: "320px",
+      width: "min(300px, calc(100vw - 880px))",
+      minWidth: "240px",
+      maxWidth: "320px",
+      maxHeight: "32px", // minimized by default
       display: "flex",
       flexDirection: "column",
       background: "rgba(20, 14, 10, 0.86)",
@@ -207,6 +216,12 @@ export class ChatPanel {
     // Pin the global tab.
     this.addTab({ channel: "global", label: "🌐 Global", closable: false });
     this.setActive("global");
+
+    // Default minimized — hide body + tabs so only the title bar
+    // shows. setMinimized(true) is idempotent with the field
+    // default; calling it here ensures the visible state matches
+    // `this.minimized` after construction.
+    this.applyMinimizedStyles();
 
     // Hydrate any PMs that already existed when this client connected
     // (e.g. the previous session received a PM and now we're reloading).
@@ -472,10 +487,29 @@ export class ChatPanel {
 
   setMinimized(min: boolean): void {
     this.minimized = min;
+    this.applyMinimizedStyles();
+  }
+
+  /** Apply the visual state for `this.minimized`. Split out from
+   * setMinimized so the constructor can call it once everything is
+   * mounted without going through the full toggle path.
+   *
+   * When expanded the panel LIFTS above the MenuPanel's max possible
+   * expanded height (~30vh body + 50 px chrome) so the chat body
+   * doesn't visually crash into the menu's recipe rows. When
+   * minimized it drops back to bottom: 12 px as a slim title bar
+   * that only overlaps the menu's bottom-most strip. */
+  private applyMinimizedStyles(): void {
+    const min = this.minimized;
     this.body.style.display = min ? "none" : "flex";
     this.tabsRow.style.display = min ? "none" : "flex";
     this.toggleBtn.textContent = min ? "▴" : "▾";
-    this.root.style.maxHeight = min ? "32px" : "320px";
+    this.root.style.maxHeight = min ? "32px" : "280px";
+    // Lift the panel above the MenuPanel's expanded body when open.
+    // MenuPanel's content area maxHeight is 30vh; plus tier tabs (~30
+    // px) + title (~22 px) + body padding = ~60 px of chrome. Adding
+    // 24 px breathing room puts our chat-bottom well clear.
+    this.root.style.bottom = min ? "12px" : "calc(30vh + 84px)";
   }
 
   destroy(): void {
