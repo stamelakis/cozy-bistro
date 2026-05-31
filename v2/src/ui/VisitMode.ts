@@ -182,6 +182,23 @@ export class VisitMode {
       : "Unclaimed plot";
     popup.appendChild(nameLine);
     if (plot.ownerName) {
+      // Preview the owner's published stats right in the popup so
+      // the player can window-shop the city before committing to a
+      // visit. Same fetcher the overlay uses.
+      const stats = this.fetchVisitedStats?.(plot.ownerHex) ?? null;
+      if (stats) {
+        const statsLine = document.createElement("div");
+        Object.assign(statsLine.style, {
+          fontSize: "11px",
+          opacity: "0.8",
+          marginBottom: "8px",
+          color: "#e8c89a",
+        } as Partial<CSSStyleDeclaration>);
+        const money = `$${stats.money.toLocaleString("en-US")}`;
+        const rating = stats.ratingAvg.toFixed(1);
+        statsLine.textContent = `Day ${stats.dayNumber} · ${money} · ${rating}⭐ · Tier ${stats.luxuryTier}`;
+        popup.appendChild(statsLine);
+      }
       const btn = document.createElement("button");
       btn.textContent = `🏃 Visit Restaurant`;
       Object.assign(btn.style, {
