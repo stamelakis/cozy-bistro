@@ -37,27 +37,27 @@ export class WeatherEffects {
   // === Rain ===
   private rain?: THREE.Points;
   private rainVelocities!: Float32Array;
-  private static readonly RAIN_COUNT = 4500;
+  private static readonly RAIN_COUNT = 9000;
 
   // === Heavy rain (≈ 2× density + faster fall) ===
   private heavyRain?: THREE.Points;
   private heavyRainVelocities!: Float32Array;
-  private static readonly HEAVY_RAIN_COUNT = 9000;
+  private static readonly HEAVY_RAIN_COUNT = 16000;
 
   // === Snow (light dusting) ===
   private snow?: THREE.Points;
   private snowPhases!: Float32Array;
-  private static readonly SNOW_COUNT = 1800;
+  private static readonly SNOW_COUNT = 3600;
 
   // === Heavy snow (thick snowfall) ===
   private heavySnow?: THREE.Points;
   private heavySnowPhases!: Float32Array;
-  private static readonly HEAVY_SNOW_COUNT = 5000;
+  private static readonly HEAVY_SNOW_COUNT = 11000;
 
   // === Festival confetti ===
   private confetti?: THREE.Points;
   private confettiPhases!: Float32Array;
-  private static readonly CONFETTI_COUNT = 700;
+  private static readonly CONFETTI_COUNT = 1500;
 
   // === Cloud shadows ===
   // Dark soft-edged blobs drifting across the ground. Each is a
@@ -67,22 +67,22 @@ export class WeatherEffects {
   // opacity scales with how overcast the weather is.
   private cloudShadows: THREE.Mesh[] = [];
   private cloudShadowDrifts!: { vx: number; vz: number; phaseY: number }[];
-  private static readonly CLOUD_SHADOW_COUNT = 90;
-  /** Wide spread so cloud shadows cover the whole visible map (not
-   * just the 30 m around the player). Iso camera at full zoom-out
-   * sees ~400 m across, so ±150 m gives shadows that stretch past
-   * the visible city edge into the fog. */
-  private static readonly CLOUD_AREA_HALF = 150;
+  private static readonly CLOUD_SHADOW_COUNT = 140;
+  /** Wide spread so cloud shadows cover the whole visible map. */
+  private static readonly CLOUD_AREA_HALF = 280;
 
-  /** Shared horizontal/vertical extents around the CAMERA. Particles
-   * outside this box wrap back to the opposite side, so the storm
-   * stays visually centred on the player. 220 m (±110) covers the
-   * full visible city at any reasonable zoom — used to be 18 m which
-   * made the rain / snow look like a tiny patch following the camera.
-   * Particle COUNTS were bumped proportionally so the volume still
-   * reads as a real storm at the larger area. */
-  private static readonly AREA_HALF = 110;
-  private static readonly CEILING_Y = 16;
+  /** Shared horizontal/vertical extents centred on WORLD ORIGIN
+   * (the player's own restaurant — worldRoot is offset to put it
+   * there regardless of which plot the player owns). The volume
+   * is STATIC: panning the camera no longer drags the storm
+   * around. ±280 m covers the entire built city (±130 m of street
+   * extent + scenery + a generous margin into the fog horizon),
+   * so wherever the player pans, the rain / snow is always
+   * already there — no more "patch that follows the camera".
+   * CEILING_Y bumped so particles fall from above the tallest
+   * scenery rooftop. */
+  private static readonly AREA_HALF = 280;
+  private static readonly CEILING_Y = 18;
 
   /** Time accumulator for sine-wave sways. */
   private clock = 0;
@@ -382,6 +382,7 @@ export class WeatherEffects {
     points: THREE.Points, velocities: Float32Array,
     dt: number, cam: THREE.Vector3, n: number,
   ): void {
+    void cam; // STATIC volume now — see AREA_HALF doc-comment.
     const attr = points.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
     const half = WeatherEffects.AREA_HALF;
@@ -395,11 +396,13 @@ export class WeatherEffects {
       pos[base]     += wx + (Math.random() - 0.5) * 0.05;
       pos[base + 2] += wz + (Math.random() - 0.5) * 0.05;
       if (pos[base + 1] < 0
-          || Math.abs(pos[base]     - cam.x) > half
-          || Math.abs(pos[base + 2] - cam.z) > half) {
-        pos[base]     = cam.x + (Math.random() - 0.5) * half * 2;
+          || Math.abs(pos[base])     > half
+          || Math.abs(pos[base + 2]) > half) {
+        // Respawn ANYWHERE in the (static) volume so the storm
+        // doesn't develop a hole around the camera path.
+        pos[base]     = (Math.random() - 0.5) * half * 2;
         pos[base + 1] = WeatherEffects.CEILING_Y;
-        pos[base + 2] = cam.z + (Math.random() - 0.5) * half * 2;
+        pos[base + 2] = (Math.random() - 0.5) * half * 2;
       }
     }
     attr.needsUpdate = true;
@@ -418,6 +421,7 @@ export class WeatherEffects {
     dt: number, cam: THREE.Vector3, n: number,
     fallSpeed: number, swayAmplitude: number,
   ): void {
+    void cam; // STATIC volume now — see AREA_HALF doc-comment.
     const attr = points.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
     const half = WeatherEffects.AREA_HALF;
@@ -432,11 +436,11 @@ export class WeatherEffects {
       pos[base]     += wx + Math.sin(t * 0.7 + phases[i]) * swayAmplitude * dt;
       pos[base + 2] += wz + Math.cos(t * 0.6 + phases[i]) * swayAmplitude * dt;
       if (pos[base + 1] < 0
-          || Math.abs(pos[base]     - cam.x) > half
-          || Math.abs(pos[base + 2] - cam.z) > half) {
-        pos[base]     = cam.x + (Math.random() - 0.5) * half * 2;
+          || Math.abs(pos[base])     > half
+          || Math.abs(pos[base + 2]) > half) {
+        pos[base]     = (Math.random() - 0.5) * half * 2;
         pos[base + 1] = WeatherEffects.CEILING_Y;
-        pos[base + 2] = cam.z + (Math.random() - 0.5) * half * 2;
+        pos[base + 2] = (Math.random() - 0.5) * half * 2;
       }
     }
     attr.needsUpdate = true;
@@ -444,6 +448,7 @@ export class WeatherEffects {
 
   private updateConfetti(dt: number, cam: THREE.Vector3): void {
     if (!this.confetti) return;
+    void cam; // STATIC volume now — see AREA_HALF doc-comment.
     const attr = this.confetti.geometry.attributes.position as THREE.BufferAttribute;
     const pos = attr.array as Float32Array;
     const n = WeatherEffects.CONFETTI_COUNT;
@@ -455,21 +460,22 @@ export class WeatherEffects {
       pos[base]     += Math.sin(t * 1.1 + this.confettiPhases[i]) * 0.55 * dt;
       pos[base + 2] += Math.cos(t * 0.9 + this.confettiPhases[i]) * 0.55 * dt;
       if (pos[base + 1] < 0
-          || Math.abs(pos[base]     - cam.x) > half
-          || Math.abs(pos[base + 2] - cam.z) > half) {
-        pos[base]     = cam.x + (Math.random() - 0.5) * half * 2;
+          || Math.abs(pos[base])     > half
+          || Math.abs(pos[base + 2]) > half) {
+        pos[base]     = (Math.random() - 0.5) * half * 2;
         pos[base + 1] = WeatherEffects.CEILING_Y;
-        pos[base + 2] = cam.z + (Math.random() - 0.5) * half * 2;
+        pos[base + 2] = (Math.random() - 0.5) * half * 2;
       }
     }
     attr.needsUpdate = true;
   }
 
   /** Drift cloud shadows across the ground + lerp each one's opacity
-   * toward its overcast-driven target. Wraps around the camera so the
-   * patches stay in view across long pans. Uses the cloud-specific
-   * wider area so 12 patches cover the whole visible yard. */
+   * toward its overcast-driven target. Wraps around the WORLD ORIGIN
+   * (player's restaurant) so the patches cover the whole built city
+   * statically, regardless of where the camera pans. */
   private updateCloudShadows(dt: number, cam: THREE.Vector3): void {
+    void cam; // STATIC volume now — wrap around world origin.
     const overcast = this.getOvercast();
     const half = WeatherEffects.CLOUD_AREA_HALF;
     const t = this.clock;
@@ -478,10 +484,10 @@ export class WeatherEffects {
       const drift = this.cloudShadowDrifts[i];
       mesh.position.x += drift.vx * dt;
       mesh.position.z += drift.vz * dt;
-      if (mesh.position.x - cam.x > half) mesh.position.x -= half * 2;
-      if (mesh.position.x - cam.x < -half) mesh.position.x += half * 2;
-      if (mesh.position.z - cam.z > half) mesh.position.z -= half * 2;
-      if (mesh.position.z - cam.z < -half) mesh.position.z += half * 2;
+      if (mesh.position.x > half) mesh.position.x -= half * 2;
+      if (mesh.position.x < -half) mesh.position.x += half * 2;
+      if (mesh.position.z > half) mesh.position.z -= half * 2;
+      if (mesh.position.z < -half) mesh.position.z += half * 2;
       // Per-cloud opacity wobble — gives the overcast a breathing feel.
       const wobble = 0.5 + 0.5 * Math.sin(t * 0.25 + drift.phaseY);
       // Material opacity scales the texture's already-fractional
