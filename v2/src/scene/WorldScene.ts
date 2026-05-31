@@ -2293,10 +2293,28 @@ export class WorldScene {
       }
       return false;
     };
-    // Avenue keep-out — uses the canonical EW/NS_AVENUES lists so
-    // adding a future road doesn't need a second edit here.
+    // Avenue keep-out — rejects house centres that would overlap
+    // the pavement plane. Pavement extends ±5.5 m from each avenue
+    // centerline; a house of width `size` has half-width `size/2`,
+    // so a house whose CENTER is closer than 5.5 + size/2 would
+    // partially overlap the pavement. The filter rejects that.
+    //
+    // OLD (buggy): buf = size/2 + 6.5 with a "safety margin" of 1 m
+    // on top of the pavement half-width. That bug rejected EVERY
+    // scenery house the EW/NS placement loops tried to create:
+    // the loops position houses with their street-facing edge
+    // exactly AT the curb (centre at PAVEMENT_HALF + size/2 from
+    // the avenue), so distance == 5.5 + size/2, which was strictly
+    // < 6.5 + size/2 → rejected. Result: every avenue stayed bare.
+    //
+    // FIXED: drop the unneeded safety margin so a house placed
+    // flush against the curb (centre at exactly PAVEMENT_HALF +
+    // size/2) passes the strict-less-than test by sitting at the
+    // boundary. The size-aware placement above is the actual source
+    // of truth for the position; this filter just stops candidates
+    // that would land ON the asphalt.
     const onAvenue = (x: number, z: number, size: number): boolean => {
-      const buf = size / 2 + 6.5;
+      const buf = size / 2 + 5.5;
       for (const az of WorldScene.EW_AVENUES) {
         if (Math.abs(z - az) < buf) return true;
       }
