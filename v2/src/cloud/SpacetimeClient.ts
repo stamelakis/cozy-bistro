@@ -231,6 +231,21 @@ export class SpacetimeClient {
     return out;
   }
 
+  /** Count pedestrians on the server who are currently heading for
+   * the given plot id. HUD reads this off the player's own claimed
+   * building to surface a "N incoming" indicator — visible feedback
+   * for the rating → attraction → walker spawn loop. */
+  countPedestriansTargeting(plotId: bigint): number {
+    if (!this.conn) return 0;
+    let n = 0;
+    try {
+      for (const p of this.conn.db.pedestrian.iter()) {
+        if (p.targetPlotId === plotId) n += 1;
+      }
+    } catch { /* ignore */ }
+    return n;
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */

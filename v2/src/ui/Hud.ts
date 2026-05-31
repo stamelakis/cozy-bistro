@@ -52,6 +52,11 @@ export interface HudActions {
    * Engine wires to SpacetimeClient.countOnlinePlayers. Returns 0
    * before connect is finished. */
   getOnlineCount?: () => number;
+  /** P5.9 — live count of pedestrians whose server-side
+   * target_plot_id matches the player's own claimed plot. Lets the
+   * HUD show "🚶 N incoming" so the rating→attraction→walker loop
+   * is visible. */
+  getIncomingCount?: () => number;
 }
 
 /** A modal-trigger icon for the icon row. */
@@ -77,6 +82,9 @@ export class Hud {
   /** Span inside the title block that shows the live online-player
    * count. Updated each HUD tick via actions.getOnlineCount. */
   private onlineCountEl?: HTMLSpanElement;
+  /** Span next to the online count showing 🚶 N incoming — walkers
+   * currently heading for the player's plot from the shared city. */
+  private incomingCountEl?: HTMLSpanElement;
   private devOpen = false;
   private devSection?: HTMLDivElement;
   private devToggle?: HTMLButtonElement;
@@ -105,10 +113,14 @@ export class Hud {
     // standalone chip) so the multiplayer cue is always next to the
     // game's identity without taking dedicated vertical space.
     const onlineSpan = `<span data-online-count>0</span>`;
+    const incomingSpan = `<span data-incoming-count>0</span>`;
     t.innerHTML =
       `<span style="font-size:14px;font-weight:800;letter-spacing:0.06em;">COZY BISTRO 3D</span>` +
       `<div style="font-size:9px;font-weight:600;letter-spacing:0.18em;opacity:0.55;margin-top:1px;">YOUR RESTAURANT</div>` +
-      `<div style="font-size:10px;font-weight:600;letter-spacing:0.04em;opacity:0.75;margin-top:3px;color:#a8d4cc;">👥 ${onlineSpan} online</div>`;
+      `<div style="font-size:10px;font-weight:600;letter-spacing:0.04em;opacity:0.75;margin-top:3px;">` +
+        `<span style="color:#a8d4cc;">👥 ${onlineSpan} online</span>` +
+        `<span style="color:#e8c89a;margin-left:10px;">🚶 ${incomingSpan} incoming</span>` +
+      `</div>`;
     Object.assign(t.style, {
       marginBottom: "8px", textAlign: "center", opacity: "0.95",
       padding: "6px 8px",
@@ -117,9 +129,10 @@ export class Hud {
       borderRadius: "5px",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(t);
-    // Cache the count span so update() can rewrite just the number
+    // Cache the count spans so update() can rewrite just the numbers
     // instead of rebuilding the whole title each HUD tick.
     this.onlineCountEl = t.querySelector("[data-online-count]") as HTMLSpanElement;
+    this.incomingCountEl = t.querySelector("[data-incoming-count]") as HTMLSpanElement;
   }
 
   /** Visually-rich stat cards. Each card is a small chip with:
@@ -552,6 +565,13 @@ export class Hud {
       const target = String(online);
       if (this.onlineCountEl.textContent !== target) {
         this.onlineCountEl.textContent = target;
+      }
+    }
+    if (this.incomingCountEl) {
+      const incoming = this.actions.getIncomingCount?.() ?? 0;
+      const target = String(incoming);
+      if (this.incomingCountEl.textContent !== target) {
+        this.incomingCountEl.textContent = target;
       }
     }
     this.fields.money.textContent = `$${money.toLocaleString("en-US")}`;

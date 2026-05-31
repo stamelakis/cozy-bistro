@@ -216,6 +216,14 @@ export class Engine {
       // last_seen_at window. HUD renders "👥 N online" in the title
       // block so multiplayer presence is always visible.
       getOnlineCount: () => this.cloud.countOnlinePlayers(),
+      // P5.9 — count of pedestrians currently targeting the player's
+      // own plot. Surfaces the rating→attraction loop in real time.
+      // Returns 0 when no plot is claimed yet.
+      getIncomingCount: () => {
+        const mine = this.cloud.getMyBuilding();
+        if (!mine) return 0;
+        return this.cloud.countPedestriansTargeting(mine.id);
+      },
       // Admin panel — only renders for the player whose auth_record
       // has is_admin = true (the Dunnin bootstrap). Client-side
       // check is a UX gate; the server-side is_admin flag is the
