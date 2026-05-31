@@ -1380,6 +1380,11 @@ export class WorldScene {
   private parisMansard?: THREE.Mesh;
   private parisMansardCap?: THREE.Mesh;
   private parisMansardChimney?: THREE.Mesh;
+  /** Iron-balcony meshes (rails + balusters) per upper storey. Tracked
+   * so applyStoreyVisibility can hide them in interior mode — when
+   * the player has zoomed in for inside work, the spiky black rails
+   * floating outside the wall just clutter the view. */
+  private parisBalconies: THREE.Mesh[] = [];
 
   /** Add cornice bands between floors + iron balconies on upper
    * storeys + a tier-tracking mansard roof. Mirrors the makeBuildingShell
@@ -1400,33 +1405,43 @@ export class WorldScene {
     });
 
     // ── Cornice bands ─────────────────────────────────────────────
-    // One band at the top of each storey (y = (idx+1)*H). Storey 0's
-    // cornice sits at y=H and lives at threeScene root because ground
-    // floor is always visible. Storey N's cornice (for N >= 1) is
-    // parented INSIDE storey N's group so it inherits the tier +
-    // focus visibility logic — exact same hide-when-hidden behaviour
-    // every upper-floor mesh already has.
+    // Four thin perimeter strips per floor (not a full square plate —
+    // a square would form an indoor ceiling and hide the upper-floor
+    // interior from below). One band at the top of each storey
+    // (y = (idx+1)*H). Ground-floor cornice lives at threeScene
+    // root; upper-floor cornices parent into each storey's group so
+    // they inherit the existing tier + focus visibility.
+    const cBandH = 0.14;
+    const cBandThick = 0.3;
+    const cExtra = 0.3; // how far beyond the wall the band sticks out
+    const cLong = W + cExtra * 2;
     for (let idx = 0; idx < WorldScene.NUM_STOREYS; idx += 1) {
-      const cornice = new THREE.Mesh(
-        new THREE.BoxGeometry(W + 0.3, 0.14, W + 0.3),
-        corniceMat,
-      );
-      cornice.position.set(cornerOffsetCx, (idx + 1) * H - 0.04, cornerOffsetCz);
-      cornice.castShadow = true;
-      cornice.receiveShadow = true;
-      if (idx === 0) {
-        // Ground floor's top cornice is always visible — parent it
-        // to the main scene so it doesn't get yanked when the upper
-        // groups hide.
-        this.threeScene.add(cornice);
-      } else {
-        // Storey N >= 1's top cornice rides with that storey's group.
-        // The cornice geometry is at world Y = (N+1)*H but the storey
-        // group has no Y translation (its meshes use absolute Y),
-        // so we just add it directly.
-        const storey = this.upperStoreys.get(idx);
-        if (storey) storey.group.add(cornice);
-      }
+      const y = (idx + 1) * H - cBandH / 2;
+      const halfW = W / 2;
+      // Four sides — south (+Z), north (-Z), east (+X), west (-X).
+      const southZ = cornerOffsetCz + halfW + cBandThick / 2;
+      const northZ = cornerOffsetCz - halfW - cBandThick / 2;
+      const eastX = cornerOffsetCx + halfW + cBandThick / 2;
+      const westX = cornerOffsetCx - halfW - cBandThick / 2;
+      const sideGeo = new THREE.BoxGeometry(cLong, cBandH, cBandThick);
+      const endGeo = new THREE.BoxGeometry(cBandThick, cBandH, cLong);
+      const mkSide = (g: THREE.BufferGeometry, x: number, z: number) => {
+        const m = new THREE.Mesh(g, corniceMat);
+        m.position.set(x, y, z);
+        m.castShadow = true;
+        m.receiveShadow = true;
+        return m;
+      };
+      const pieces = [
+        mkSide(sideGeo, cornerOffsetCx, southZ),
+        mkSide(sideGeo, cornerOffsetCx, northZ),
+        mkSide(endGeo,  eastX, cornerOffsetCz),
+        mkSide(endGeo,  westX, cornerOffsetCz),
+      ];
+      const parent: THREE.Object3D = idx === 0
+        ? this.threeScene
+        : (this.upperStoreys.get(idx)?.group ?? this.threeScene);
+      for (const p of pieces) parent.add(p);
     }
 
     // ── Iron balconies on upper storey south walls ───────────────
@@ -1447,6 +1462,7 @@ export class WorldScene {
       );
       rail.position.set(cornerOffsetCx, railY, southZ);
       storey.group.add(rail);
+      this.parisBalconies.push(rail);
       // Vertical balusters every ~0.5 m.
       const balusters = Math.floor(W / 0.5);
       const baluster = new THREE.BoxGeometry(0.04, 0.9, 0.04);
@@ -1455,6 +1471,7 @@ export class WorldScene {
         const bar = new THREE.Mesh(baluster, balconyMat);
         bar.position.set(bx, balusterTopY, southZ);
         storey.group.add(bar);
+        this.parisBalconies.push(bar);
       }
     }
 
@@ -3567,6 +3584,14 @@ export class WorldScene {
     if (this.parisMansardChimney) {
       this.parisMansardChimney.visible = showMansard;
       this.parisMansardChimney.position.y = mansardBaseY + mansardH + 0.55;
+    }
+    // Iron balconies — only show in exterior mode. In interior view
+    // they read as spiky black noise outside the wall ghost (no value
+    // when the player is doing close-up build work). Each balcony's
+    // OWN storey-group visibility still gates them additionally, so
+    // they only render when the storey they belong to is on-screen.
+    for (const b of this.parisBalconies) {
+      b.visible = this.exteriorMode;
     }
   }
 
