@@ -479,8 +479,10 @@ export class Engine {
       this.floatingText.pop(0, 5, `🏆 ${a.name}`, "#ffd986");
       this.sfx.chime();
     };
-    // Auto-show the welcome modal on a brand-new visit.
-    if (!HelpModal.hasBeenSeen()) this.helpModal.show();
+    // Auto-show the welcome modal on a brand-new visit — but ONLY
+    // after auth completes (see enterGame below). Triggering it
+    // here during Engine construction made the welcome card flash
+    // for a moment behind the login modal on every fresh load.
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
     // Furniture registry — tracks every placed item so it persists, supports
@@ -1212,6 +1214,18 @@ export class Engine {
       // interiors. Re-poll the cache for a couple of seconds in
       // case the building list lands after the auth_record one.
       this.refreshCityBuildings();
+      // First-visit welcome pop. Deferred to here (instead of the
+      // Engine constructor) so it can't flash for a moment behind
+      // the login modal on a cold load. Only first-time players
+      // see it; the modal sets a localStorage flag on dismiss.
+      if (!HelpModal.hasBeenSeen()) {
+        // Small delay so the welcome lands AFTER the auth-modal
+        // dismiss animation (which has its own ~600 ms tail) — that
+        // way they don't visually stack.
+        window.setTimeout(() => {
+          if (!HelpModal.hasBeenSeen()) this.helpModal.show();
+        }, 800);
+      }
     };
     const afterAuth = (): void => {
       // Auth complete. Check if this account has a plot; if not,
