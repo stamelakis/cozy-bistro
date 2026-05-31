@@ -141,6 +141,9 @@ export class IsoCamera {
     const factor = Math.exp(e.deltaY * 0.0030);
     this.zoom = THREE.MathUtils.clamp(this.zoom * factor, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
     this.resize(window.innerWidth, window.innerHeight);
+    // Zoom can force a steeper elevation via the minElevForNoVoid
+    // floor — recompute camera position so the angle catches up.
+    this.updatePose();
   };
 
   // ─── Public read-only accessors for the on-screen CameraControls ───
@@ -206,12 +209,14 @@ export class IsoCamera {
   zoomBy(factor: number): void {
     this.zoom = THREE.MathUtils.clamp(this.zoom * factor, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
     this.resize(window.innerWidth, window.innerHeight);
+    this.updatePose();
   }
 
   /** Snap the zoom to its default starting value. */
   resetZoom(): void {
     this.zoom = IsoCamera.DEFAULT_ZOOM;
     this.resize(window.innerWidth, window.innerHeight);
+    this.updatePose();
   }
 
   /** Rotate the camera around the vertical axis by `deltaRad` radians.
@@ -248,6 +253,7 @@ export class IsoCamera {
     // Cancel any in-flight floor tween so the snap actually sticks.
     this.tweenDur = 0;
     this.resize(window.innerWidth, window.innerHeight);
+    this.updatePose();
   }
 
   private dragButton = 0; // which mouse button started the drag
@@ -304,11 +310,33 @@ export class IsoCamera {
     this.dragging = false;
   };
 
+  /** Minimum elevation that keeps the bottom-of-screen ray pointing
+   * at or above the ground plane (Y=0) for the current zoom. Derived
+   * from the asymmetric frustum geometry:
+   *   bottom ray start Y = r·sin(elev) − bot_frac·zoom·cos(elev)
+   * We need that > 0 → tan(elev) > bot_frac·zoom / r.
+   * As the player zooms out (zoom rises), the required elevation
+   * climbs — at max zoom (200) we need ~63° to look near-straight
+   * down. Returns the bare angle; updatePose adds a small safety
+   * margin on top so the bottom isn't exactly at the horizon. */
+  private minElevForNoVoid(): number {
+    const r = 30;
+    const ratio = (IsoCamera.FRUSTUM_BOT_FRAC * this.zoom) / r;
+    return Math.atan(ratio);
+  }
+
   private updatePose(): void {
     const r = 30;
-    const x = r * Math.cos(this.elevation) * Math.cos(this.azimuth);
-    const z = r * Math.cos(this.elevation) * Math.sin(this.azimuth);
-    const y = r * Math.sin(this.elevation);
+    // Use the steeper of (a) the user's manual elevation and (b) the
+    // minimum elevation that the current zoom requires to keep the
+    // bottom of the screen on the ground. At default zoom the user's
+    // setting wins; as they zoom out, the floor kicks in and tilts the
+    // camera toward straight-down so void never appears.
+    const minSafe = this.minElevForNoVoid() + Math.PI / 36; // +5° safety
+    const effectiveElev = Math.max(this.elevation, Math.min(Math.PI / 2 - 0.05, minSafe));
+    const x = r * Math.cos(effectiveElev) * Math.cos(this.azimuth);
+    const z = r * Math.cos(effectiveElev) * Math.sin(this.azimuth);
+    const y = r * Math.sin(effectiveElev);
     this.threeCamera.position.set(this.target.x + x, this.target.y + y, this.target.z + z);
     this.threeCamera.lookAt(this.target);
     this.threeCamera.up.set(0, 1, 0);
