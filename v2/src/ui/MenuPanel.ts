@@ -19,6 +19,19 @@ const SUMMARY_SECTIONS: { key: RecipeDefinition["category"]; label: string }[] =
   { key: "dessert",   label: "Dessert"    },
 ];
 
+/** Per-tier badge colours for the summary panel's dish chips.
+ * Reads as a rarity ladder — green → blue → purple → orange → gold —
+ * the same vocabulary players already know from loot games, so a
+ * glance at the summary tells you both what's on the menu AND how
+ * pricey the line-up skews. Index = tier − 1. */
+const TIER_BADGE_BG: readonly string[] = [
+  "#5fa650", // T1 — fresh green
+  "#4a8cd0", // T2 — solid blue
+  "#9462c8", // T3 — refined purple
+  "#d68b3a", // T4 — premium orange
+  "#d6b441", // T5 — luxury gold
+];
+
 /**
  * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
  * recipes of that tier, locked tabs are grayed and uncheckable. Each
@@ -224,12 +237,43 @@ export class MenuPanel {
       } else {
         for (const r of items) {
           const line = document.createElement("div");
-          // Bullet + name. Use a real character bullet so the
-          // monospace alignment carries through.
-          line.textContent = `• ${r.name}`;
+          // Flex row: coloured tier chip + dish name. The chip serves
+          // as the visual list marker (no bullet character needed)
+          // and tells the player at a glance how pricey each picked
+          // dish is — useful when the menu mixes tiers and the player
+          // is trying to balance a starter T1 against a flagship T4.
           Object.assign(line.style, {
-            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            display: "flex", alignItems: "center", gap: "5px",
+            whiteSpace: "nowrap", overflow: "hidden",
           } as Partial<CSSStyleDeclaration>);
+          const tier = getRecipeLuxuryTier(r);
+          const badge = document.createElement("span");
+          badge.textContent = `T${tier}`;
+          const bg = TIER_BADGE_BG[Math.max(0, Math.min(TIER_BADGE_BG.length - 1, tier - 1))];
+          Object.assign(badge.style, {
+            display: "inline-block",
+            background: bg,
+            color: "#fff",
+            fontSize: "9px",
+            fontWeight: "700",
+            letterSpacing: "0.04em",
+            padding: "1px 5px",
+            borderRadius: "3px",
+            flex: "0 0 auto",
+            // Slight inset shadow gives the chip a subtle pill look
+            // against the dark summary background.
+            boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.25)",
+          } as Partial<CSSStyleDeclaration>);
+          line.appendChild(badge);
+          const name = document.createElement("span");
+          name.textContent = r.name;
+          Object.assign(name.style, {
+            flex: "1 1 auto",
+            minWidth: "0",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          } as Partial<CSSStyleDeclaration>);
+          line.appendChild(name);
           refs.list.appendChild(line);
         }
       }
