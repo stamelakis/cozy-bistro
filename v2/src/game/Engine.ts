@@ -287,12 +287,16 @@ export class Engine {
     // player later moves to a different plot.
     this.cameraControls = new CameraControls(container, this.camera,
       () => ({
-        x: this.scene.ownedPlotAnchor.x,
+        // The actual playable restaurant is hardcoded at world origin
+        // — the multiplayer plot anchor only affects the PLACEHOLDER
+        // shell rendered in the cityBuildings group. Home should land
+        // on the real restaurant the player interacts with, so (0,0).
+        x: 0,
         // Y = currently-focused floor's height so Home preserves the
         // floor the player picked from the FloorSelector (not whatever
         // garbage target.y might have collected over a session).
         y: this.scene.getFocusedStorey() * WorldScene.getStoreyHeight(),
-        z: this.scene.ownedPlotAnchor.y,
+        z: 0,
       }));
     // Classify each floor by what its seats serve so the FloorSelector
     // can show a sub-label under each button (food / drinks / mix /
@@ -839,8 +843,15 @@ export class Engine {
   }
 
   /** Build a fresh status-bubble list from the routers' + spawner's
-   * current state. One entry per actor; empty label = no bubble. */
+   * current state. One entry per actor; empty label = no bubble.
+   * In exterior mode (camera zoomed out past 40%) we suppress every
+   * bubble — the building reads as a closed exterior, no peeking at
+   * the staff/guest status from outside. */
   private updateStatusBubbles(): void {
+    if (this.scene.isExteriorMode()) {
+      this.statusBubbles.update([]);
+      return;
+    }
     const entries: StatusEntry[] = [];
     if (this.router) {
       const snap = this.router.snapshotStatus();

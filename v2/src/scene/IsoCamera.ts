@@ -286,13 +286,12 @@ export class IsoCamera {
     if (this.dragButton === 2 || this.dragButton === 1 || e.shiftKey) {
       // Right / middle / Shift+left = rotate.
       this.azimuth -= dx * 0.005;
-      // Min elevation bumped π/12 (15°) → π/5 (36°) so the camera
-      // can't tilt so horizontal that the asymmetric frustum can no
-      // longer keep the world inside the viewport. Below ~36° the
-      // bottom-of-screen rays start escaping past the ground plane
-      // and the sky dome has to do all the work; keeping a sensible
-      // minimum keeps the iso look consistent.
-      this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 5, Math.PI / 2 - 0.05);
+      // The user can tilt down to π/8 (22.5°) for close-up shots;
+      // the per-frame auto-elevation floor in updatePose() then
+      // raises the EFFECTIVE elevation back up as needed when the
+      // player zooms out, so void can't reappear at low manual
+      // angles + wide zoom.
+      this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 8, Math.PI / 2 - 0.05);
     } else {
       // Plain left-drag = pan. The camera's local +Y axis has a non-
       // zero world-Y component at iso angle, so naively panning along
