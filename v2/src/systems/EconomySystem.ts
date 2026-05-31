@@ -12,7 +12,13 @@ export class EconomySystem {
   private dailyRevenueTotal = 0;
   private dailyExpensesTotal = 0;
 
-  constructor(startingMoney = 6000) {
+  constructor(startingMoney = 0) {
+    // Default is 0 because the Engine's enterGame flow grants the
+    // size-specific starter cash on first claim (small=$1000,
+    // medium=$1500, large=$2000). Returning players have their
+    // saved money loaded over the top via load(). The previous
+    // default of $6000 stacked with the claim bonus to give new
+    // players a much larger pot than intended.
     this.money = startingMoney;
   }
 

@@ -1149,11 +1149,13 @@ export class Engine {
           mine.kind === "large" ? 1.4 :
           1.0;
         if (didClaim) {
-          // Starter cash bonus inverse to size — small gets the most
-          // to compensate for the tight interior; large still gets
-          // something so claiming the prestige plot doesn't feel
-          // like a punishment.
-          const bonus = mine.kind === "small" ? 6000 : mine.kind === "medium" ? 4000 : 2000;
+          // Starter cash scales WITH plot size — bigger plot, bigger
+          // grant. A larger restaurant takes more furniture to fill
+          // out a viable opening day, so the extra cash offsets the
+          // higher build-out cost. EconomySystem now starts at $0
+          // (instead of $6000) so this grant IS the player's total
+          // opening pot.
+          const bonus = mine.kind === "small" ? 1000 : mine.kind === "medium" ? 1500 : 2000;
           this.game.economy.earnMoney(bonus, "grant");
           console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot`);
         }
