@@ -6,6 +6,7 @@ import { GuestSpawner } from "./GuestSpawner";
 import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { PedestrianSpawner } from "./PedestrianSpawner";
+import { SharedPedestrians } from "./SharedPedestrians";
 import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
 import { Sidebar } from "../ui/Sidebar";
@@ -61,6 +62,7 @@ export class Engine {
   private dishwareLeakWatcher?: DishwareLeakWatcher;
   errand?: ErrandRouter;
   pedestrians?: PedestrianSpawner;
+  sharedPedestrians?: SharedPedestrians;
   trash?: TrashSpawner;
   readonly registry: FurnitureRegistry;
   /** Shared A* pathfinder. Reads obstacle positions live from the
@@ -718,10 +720,11 @@ export class Engine {
       if (this.router) {
         this.router.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       }
-      // Pedestrians live under worldRoot so they shift with the
-      // shared city when setOwnedPlotOffset moves it relative to the
-      // local-origin restaurant.
-      this.pedestrians = new PedestrianSpawner(this.scene.worldRoot, this.scene.characterLoader, this.scene.animator);
+      // P5 — replace the legacy per-client PedestrianSpawner with the
+      // SharedPedestrians renderer that consumes the server-side
+      // pedestrian table. Both parent into worldRoot so the player's
+      // plot offset shifts the crowd onto the correct visual avenues.
+      this.sharedPedestrians = new SharedPedestrians(this.scene.worldRoot, this.scene.characterLoader, this.scene.animator);
       this.trash = new TrashSpawner(this.scene.threeScene, this.game);
       // Errand helper — carries the shopping list out the door, then back.
       // The frozen list is delivered to the pantry the moment they're home.
@@ -873,6 +876,11 @@ export class Engine {
     }
     if (this.pedestrians) {
       for (const p of this.pedestrians.snapshotMovable()) {
+        if (check(p.character.groundPos.x, p.character.groundPos.y)) return true;
+      }
+    }
+    if (this.sharedPedestrians) {
+      for (const p of this.sharedPedestrians.snapshotMovable()) {
         if (check(p.character.groundPos.x, p.character.groundPos.y)) return true;
       }
     }
@@ -1308,13 +1316,21 @@ export class Engine {
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.pedestrians?.update(dt);
+    // P5 — pull the current server pedestrian list every frame and
+    // reconcile the renderer against it. Cheap: list is tiny (<24
+    // rows) and the renderer only adds/removes models on changes,
+    // pure-lerps existing positions.
+    if (this.sharedPedestrians) {
+      this.sharedPedestrians.update(this.cloud.listPedestrians(), rawDt);
+    }
     this.trash?.update(dt);
     // After all movement, run a personal-space pass so walking guests
     // + pedestrians don't stack on top of each other.
-    if (dt > 0 && (this.spawner || this.pedestrians)) {
+    if (dt > 0 && (this.spawner || this.pedestrians || this.sharedPedestrians)) {
       const actors: MovableActor[] = [];
       if (this.spawner) actors.push(...this.spawner.snapshotMovable());
       if (this.pedestrians) actors.push(...this.pedestrians.snapshotMovable());
+      if (this.sharedPedestrians) actors.push(...this.sharedPedestrians.snapshotMovable());
       PersonalSpace.apply(actors, dt);
     }
     // Per-stove flames — reconcile the flame map with the registry's

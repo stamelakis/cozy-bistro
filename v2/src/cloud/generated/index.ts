@@ -37,6 +37,7 @@ import {
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
+import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
@@ -67,6 +68,7 @@ import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
+import PedestrianRow from "./pedestrian_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
@@ -200,6 +202,17 @@ const tablesSchema = __schema({
       { name: 'password_reset_request_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PasswordResetRequestRow),
+  pedestrian: __table({
+    name: 'pedestrian',
+    indexes: [
+      { accessor: 'id', name: 'pedestrian_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'pedestrian_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, PedestrianRow),
   player: __table({
     name: 'player',
     indexes: [
@@ -254,6 +267,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
+  __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),

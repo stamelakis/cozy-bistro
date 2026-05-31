@@ -167,6 +167,30 @@ export class SpacetimeClient {
     }
   }
 
+  /** P5 — every shared pedestrian currently walking on the server.
+   * Each row is a trajectory: client lerps current position from
+   * (now - spawnAtMs) / durationMs. SharedPedestrians polls this
+   * each frame (cheap — small list, all in-memory). */
+  listPedestrians(): { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number }[] {
+    if (!this.conn) return [];
+    const out: { id: bigint; variant: string; startX: number; startZ: number; endX: number; endZ: number; spawnAtMs: number; durationMs: number }[] = [];
+    try {
+      for (const p of this.conn.db.pedestrian.iter()) {
+        out.push({
+          id: p.id,
+          variant: p.variant,
+          startX: p.startX,
+          startZ: p.startZ,
+          endX: p.endX,
+          endZ: p.endZ,
+          spawnAtMs: Number((p.spawnAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0)) / 1000,
+          durationMs: Number(p.durationMicros) / 1000,
+        });
+      }
+    } catch { /* table not yet wired */ }
+    return out;
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */
@@ -400,6 +424,11 @@ export class SpacetimeClient {
       // open visit overlay needs to refresh.
       ctx.db.player_save.onInsert(ping);
       ctx.db.player_save.onUpdate(ping);
+      // P5 — pedestrian inserts/deletes drive the SharedPedestrians
+      // renderer's add/remove of character models. Position updates
+      // happen client-side via lerp; the server only spawns + despawns.
+      ctx.db.pedestrian.onInsert(ping);
+      ctx.db.pedestrian.onDelete(ping);
     } catch (e) {
       // The SDK's onInsert/etc. names occasionally vary by codegen version.
       // Failing to wire just means no live updates — manual refreshes still work.

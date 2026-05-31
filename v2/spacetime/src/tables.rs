@@ -4,7 +4,7 @@
 //! so the auto-generated client SDK can subscribe to them. `public` means
 //! all clients can read; reducers gate writes by Identity.
 
-use spacetimedb::{table, Identity, Timestamp};
+use spacetimedb::{table, Identity, ScheduleAt, Timestamp};
 
 /// A signed-in player. One row per Identity. Created automatically by
 /// the `client_connected` lifecycle reducer. Auth credentials live
@@ -249,6 +249,57 @@ pub struct Friendship {
     #[index(btree)]
     pub player_b: Identity,
     pub since: Timestamp,
+}
+
+/// P5 — a single shared pedestrian walking one of the city's avenues.
+/// Stored as a "trajectory" (start, end, spawn time, duration) so the
+/// client computes the current position by lerping with the elapsed
+/// real time. No per-frame server updates needed; the scheduled
+/// pedestrian_tick reducer only fires every couple of seconds to
+/// spawn new ones + despawn ones whose trajectory has elapsed.
+///
+/// All clients subscribe to this table → everyone sees the same
+/// pedestrians at the same time, no matter which plot they own.
+/// Variant is the character GLB id ("guest-v0" .. "guest-v6") so the
+/// shared crowd looks varied.
+#[table(name = pedestrian, public)]
+pub struct Pedestrian {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// World X coordinate at spawn.
+    pub start_x: f32,
+    /// World Z coordinate at spawn.
+    pub start_z: f32,
+    /// World X coordinate at despawn.
+    pub end_x: f32,
+    /// World Z coordinate at despawn.
+    pub end_z: f32,
+    /// When this pedestrian was spawned. Client lerps using
+    /// (now - spawn_at) / duration_micros.
+    pub spawn_at: Timestamp,
+    /// Total trip duration in microseconds. Client despawns the
+    /// rendered model once (now - spawn_at) > duration; the
+    /// pedestrian_tick reducer removes the row shortly afterwards.
+    pub duration_micros: i64,
+    /// Character GLB id — one of the GUEST_VARIANT_IDS list in the
+    /// client. Server picks pseudo-randomly via ctx.rng().
+    pub variant: String,
+}
+
+/// Periodic schedule row that triggers the pedestrian_tick reducer.
+/// The init lifecycle reducer inserts ONE row with an Interval
+/// schedule (every ~2 seconds); the SDK then fires pedestrian_tick on
+/// that cadence until the row is deleted. The reducer itself lives
+/// in reducers::pedestrians and is re-exported through reducers::mod
+/// so the `scheduled(...)` attribute below resolves it via the crate
+/// root.
+#[table(name = pedestrian_tick_schedule, scheduled(crate::reducers::pedestrian_tick))]
+pub struct PedestrianTickSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
 }
 
 /// Co-owner row for a shared restaurant. The owner Identity on Restaurant

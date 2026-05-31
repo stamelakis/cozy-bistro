@@ -87,6 +87,24 @@ export const PasswordResetRequest = __t.object("PasswordResetRequest", {
 });
 export type PasswordResetRequest = __Infer<typeof PasswordResetRequest>;
 
+export const Pedestrian = __t.object("Pedestrian", {
+  id: __t.u64(),
+  startX: __t.f32(),
+  startZ: __t.f32(),
+  endX: __t.f32(),
+  endZ: __t.f32(),
+  spawnAt: __t.timestamp(),
+  durationMicros: __t.i64(),
+  variant: __t.string(),
+});
+export type Pedestrian = __Infer<typeof Pedestrian>;
+
+export const PedestrianTickSchedule = __t.object("PedestrianTickSchedule", {
+  id: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type PedestrianTickSchedule = __Infer<typeof PedestrianTickSchedule>;
+
 export const Player = __t.object("Player", {
   identity: __t.identity(),
   name: __t.string(),

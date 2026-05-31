@@ -1,8 +1,8 @@
 //! Init + connect/disconnect hooks. These are special lifecycle reducers
 //! called automatically by SpacetimeDB; they don't need a client RPC.
 
-use spacetimedb::{reducer, ReducerContext, Table};
-use crate::tables::{player, Player};
+use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use crate::tables::{player, pedestrian_tick_schedule, Player, PedestrianTickSchedule};
 
 /// Runs once when the module is first published. Anything that needs a
 /// seed (default values, system messages, building inventory, etc)
@@ -14,6 +14,18 @@ pub fn init(ctx: &ReducerContext) {
     // or after a manual reset). Subsequent re-publishes preserve
     // existing rows.
     crate::reducers::buildings::seed_buildings_if_empty(ctx);
+    // P5 — start the periodic pedestrian_tick. Interval schedule
+    // means the row persists and the reducer fires every interval.
+    // We only insert ONE schedule row; subsequent re-publishes
+    // detect the existing row and skip (so the tick doesn't pile
+    // up after each republish).
+    if ctx.db.pedestrian_tick_schedule().iter().next().is_none() {
+        ctx.db.pedestrian_tick_schedule().insert(PedestrianTickSchedule {
+            id: 0, // auto_inc
+            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(2_000_000)), // 2s
+        });
+        log::info!("Pedestrian tick schedule installed (every 2s)");
+    }
 }
 
 /// Called automatically whenever a client connects (after the WebSocket

@@ -10,6 +10,7 @@ mod restaurants;
 mod achievements;
 mod leaderboard;
 mod friends;
+mod pedestrians;
 
 pub use lifecycle::*;
 pub use auth::*;
@@ -18,3 +19,4 @@ pub use restaurants::*;
 pub use achievements::*;
 pub use leaderboard::*;
 pub use friends::*;
+pub use pedestrians::*;
