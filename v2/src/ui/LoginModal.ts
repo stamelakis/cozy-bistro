@@ -38,14 +38,26 @@ export class LoginModal {
     this.onAuthenticated = onAuthenticated;
 
     this.root = document.createElement("div");
+    // Background = the COZY BISTRO scene artwork (in v2/public/login-bg.png).
+    // Vite serves files from `public/` at the project's base URL —
+    // BASE_URL is "/cozy-bistro/cozy-bistro-3d/" in prod and
+    // "/cozy-bistro-3d/" in dev. Layering a soft radial-vignette on top
+    // of the image gives the form card enough contrast against the
+    // brighter parts of the scene (kitchen lights, sign) without
+    // washing out the painterly look.
+    //
+    // Fallback color sits under the image so a CDN miss still shows a
+    // warm amber backdrop instead of plain white.
+    const bgUrl = `${import.meta.env.BASE_URL}login-bg.png`;
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
       width: "100vw", height: "100vh",
       display: startHidden ? "none" : "flex",
       alignItems: "center", justifyContent: "center",
-      // Cozy bistro mood: warm dark amber wash so the login screen
-      // doesn't feel like a sterile auth page in a different game.
-      background: "linear-gradient(135deg, rgba(40, 24, 14, 0.96) 0%, rgba(20, 12, 8, 0.98) 100%)",
+      background:
+        `radial-gradient(ellipse at center, rgba(20, 12, 8, 0.15) 0%, rgba(20, 12, 8, 0.55) 100%), ` +
+        `url('${bgUrl}') center / cover no-repeat, ` +
+        `rgba(40, 24, 14, 0.96)`,
       zIndex: "2000",
       pointerEvents: "auto",
     } as Partial<CSSStyleDeclaration>);
@@ -55,38 +67,46 @@ export class LoginModal {
 
     const card = document.createElement("div");
     Object.assign(card.style, {
-      width: "min(420px, calc(100vw - 40px))",
-      padding: "24px 28px",
-      background: "rgba(28, 20, 14, 0.98)",
+      width: "min(380px, calc(100vw - 40px))",
+      padding: "20px 26px",
+      // Slightly translucent so the artwork breathes through the
+      // edges of the card. Backdrop blur softens the busy pixels
+      // behind the form so the text still reads cleanly.
+      background: "rgba(28, 20, 14, 0.88)",
+      backdropFilter: "blur(6px)",
+      WebkitBackdropFilter: "blur(6px)",
       color: "#fff5dc",
       font: "13px/1.5 system-ui, sans-serif",
       borderRadius: "12px",
-      border: "2px solid #d8b98f",
-      boxShadow: "0 12px 40px rgba(0,0,0,0.8)",
+      border: "1px solid rgba(216, 185, 143, 0.55)",
+      boxShadow: "0 18px 50px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,245,220,0.08) inset",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(card);
 
-    // Title — game brand.
-    const brand = document.createElement("div");
-    brand.textContent = "🍴 COZY BISTRO";
-    Object.assign(brand.style, {
-      fontSize: "20px",
+    // Brand title — the artwork already prints "COZY BISTRO" big at
+    // the top, so the form just gets a small welcome line instead of
+    // repeating the wordmark.
+    const subtitle = document.createElement("div");
+    subtitle.textContent = "Welcome back, Chef";
+    Object.assign(subtitle.style, {
+      fontSize: "15px",
       fontWeight: "700",
-      letterSpacing: "0.06em",
       textAlign: "center",
       marginBottom: "4px",
-    } as Partial<CSSStyleDeclaration>);
-    card.appendChild(brand);
-    const subtitle = document.createElement("div");
-    subtitle.textContent = "log in to start cooking";
-    Object.assign(subtitle.style, {
-      fontSize: "11px",
-      textAlign: "center",
-      opacity: "0.65",
-      marginBottom: "18px",
       letterSpacing: "0.04em",
+      color: "#ffd986",
     } as Partial<CSSStyleDeclaration>);
     card.appendChild(subtitle);
+    const tag = document.createElement("div");
+    tag.textContent = "log in to start cooking";
+    Object.assign(tag.style, {
+      fontSize: "10px",
+      textAlign: "center",
+      opacity: "0.65",
+      marginBottom: "16px",
+      letterSpacing: "0.04em",
+    } as Partial<CSSStyleDeclaration>);
+    card.appendChild(tag);
 
     // Tab strip.
     const tabs = document.createElement("div");
