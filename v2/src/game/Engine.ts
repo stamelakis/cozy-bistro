@@ -1307,6 +1307,18 @@ export class Engine {
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
     }
+    // Sky dome — same hue as the fog haze so the "void" past the
+    // visible city dissolves into the same horizon colour. Without
+    // this, low-elevation rays escape past the ground plane and
+    // the renderer just draws the clear colour where they miss.
+    this.scene.setSkyColor(day.skyColor);
+    // Pin the dome to the camera so it ALWAYS surrounds the
+    // viewport — even when the player has panned the target far
+    // from origin. Without this the dome sits at (0,0,0) and at
+    // large pans the camera could end up looking out past it.
+    if (this.scene.skyDome) {
+      this.scene.skyDome.position.copy(this.camera.threeCamera.position);
+    }
     // Tick weather particles — uses rawDt so rain still falls at a
     // believable rate when the simulation is paused or fast-forwarded.
     // Camera position lets the particle volume follow the player.

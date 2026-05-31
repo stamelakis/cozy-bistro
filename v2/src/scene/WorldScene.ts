@@ -646,6 +646,13 @@ export class WorldScene {
   ambientLight!: THREE.AmbientLight;
   sunLight!: THREE.DirectionalLight;
   fillLight!: THREE.DirectionalLight;
+  /** Inside-facing sky sphere — fills any pixel where the camera ray
+   * exits world geometry (e.g., the bottom of the screen at low
+   * elevation where rays escape past the ground). Color tracks the
+   * day-night sky in Engine via setSkyColor(). Material is unlit and
+   * fog-disabled so the dome reads as a continuous horizon haze
+   * rather than a faceted sphere with shading. */
+  skyDome!: THREE.Mesh;
 
   private addLighting(): void {
     this.ambientLight = new THREE.AmbientLight(0xfff1d6, 0.55);
@@ -667,6 +674,37 @@ export class WorldScene {
     this.fillLight = new THREE.DirectionalLight(0xb8c8e0, 0.25);
     this.fillLight.position.set(-6, 10, -4);
     this.threeScene.add(this.fillLight);
+
+    // Sky dome — sphere radius 600 (well inside the camera's far
+    // plane of 1000) with BackSide material so the camera sees its
+    // inner surface, depthWrite false so it never occludes scene
+    // geometry. MeshBasicMaterial is unlit + fog-disabled → renders
+    // as a uniform colour matching the renderer's clear colour.
+    // Engine.tick pins this.skyDome.position to the camera every
+    // frame so wherever the player pans, the dome is always centred
+    // on them — any ray that escapes the world geometry (e.g., the
+    // bottom of the screen at low elevation rays that miss the
+    // ground plane) hits the dome's inner surface and renders sky.
+    const skyGeom = new THREE.SphereGeometry(600, 24, 12);
+    const skyMat = new THREE.MeshBasicMaterial({
+      color: 0xd8c4a3,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    });
+    this.skyDome = new THREE.Mesh(skyGeom, skyMat);
+    // Render the sky FIRST so other geometry overdraws it correctly.
+    this.skyDome.renderOrder = -1000;
+    this.threeScene.add(this.skyDome);
+  }
+
+  /** Engine calls this every frame as the day-night cycle changes the
+   * sky tint. We update the dome material colour so the void matches
+   * the fog haze at every time of day. */
+  setSkyColor(hex: number): void {
+    if (!this.skyDome) return;
+    const mat = this.skyDome.material as THREE.MeshBasicMaterial;
+    mat.color.setHex(hex);
   }
 
   // === Placed lamps (lighting items registered via registerLamp) ===
