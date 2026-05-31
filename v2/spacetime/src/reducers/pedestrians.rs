@@ -13,7 +13,7 @@
 //! enough density without overloading the table.
 
 use spacetimedb::{rand::Rng, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
-use crate::tables::{building, pedestrian, pedestrian_tick_schedule, player_save, Building, Pedestrian, PedestrianTickSchedule};
+use crate::tables::{building, pedestrian, pedestrian_tick_schedule, player_save, visit_event, Building, Pedestrian, PedestrianTickSchedule};
 
 /// Cap on simultaneously active pedestrians. Each is one row in the
 /// pedestrian table; client renders one character model per row.
@@ -73,6 +73,19 @@ pub fn pedestrian_tick(ctx: &ReducerContext, _schedule: PedestrianTickSchedule) 
     let want_to_spawn = (MAX_ACTIVE.saturating_sub(alive_count)).min(2);
     for _ in 0..want_to_spawn {
         spawn_one(ctx);
+    }
+    // Pass 3 — prune visit_event rows older than 10 minutes. Each
+    // toast only needs to fire once, so a stale row's only effect is
+    // a phantom notification for a player coming online after the
+    // event. 10 min is a comfortable cushion for legitimate "real-
+    // time" toasts without letting the table grow unbounded.
+    let stale_cutoff = now_micros - 10 * 60 * 1_000_000;
+    let stale: Vec<u64> = ctx.db.visit_event().iter()
+        .filter(|v| v.visited_at.to_micros_since_unix_epoch() < stale_cutoff)
+        .map(|v| v.id)
+        .collect();
+    for id in stale {
+        ctx.db.visit_event().id().delete(id);
     }
     Ok(())
 }
