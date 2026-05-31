@@ -311,14 +311,22 @@ export class SpacetimeClient {
   }
 
   /** Call sign_up. Resolves on success, rejects with the reducer's
-   * error string (e.g. "Username already taken"). */
-  signUp(username: string, password: string): Promise<void> {
+   * error string (e.g. "Username already taken"). `rememberMe`
+   * controls whether the identity token is stored in localStorage
+   * (true, default — survives browser restart) or sessionStorage
+   * (false — cleared on tab close). */
+  signUp(username: string, password: string, rememberMe = true): Promise<void> {
+    this.setRememberMe(rememberMe);
     return this.callReducer("signUp", () => this.conn!.reducers.signUp({ username, password }));
   }
 
   /** Call login. Resolves on success, rejects with the reducer's
-   * error string (e.g. "Wrong password"). */
-  login(username: string, password: string): Promise<void> {
+   * error string (e.g. "Wrong password"). `rememberMe` controls
+   * whether the identity token is stored in localStorage (true,
+   * default — survives browser restart) or sessionStorage (false —
+   * cleared on tab close). */
+  login(username: string, password: string, rememberMe = true): Promise<void> {
+    this.setRememberMe(rememberMe);
     return this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
   }
 
@@ -567,15 +575,34 @@ export class SpacetimeClient {
   }
 
   /** Build the connection and start listening. Safe to await; failures
-   * only log + leave the game running offline. */
+   * only log + leave the game running offline.
+   *
+   * Token lookup order:
+   *   1) sessionStorage — present means the user logged in last time
+   *      with "Remember me" UNCHECKED. We use it so the in-tab refresh
+   *      experience is seamless, but the token dies with the tab.
+   *   2) localStorage — present means "Remember me" was checked.
+   *      Survives browser restart.
+   * If we find a session-storage token we flip rememberMe to false
+   * for this session so the onConnect write-back goes to the same
+   * place (otherwise we'd silently "upgrade" the user to remembered). */
   connect(): void {
     let stored: string | undefined;
-    try { stored = localStorage.getItem(TOKEN_KEY) ?? undefined; } catch { /* private mode */ }
+    try {
+      const sessionTok = sessionStorage.getItem(TOKEN_KEY);
+      if (sessionTok) {
+        stored = sessionTok;
+        this.rememberMe = false;
+      } else {
+        stored = localStorage.getItem(TOKEN_KEY) ?? undefined;
+        // rememberMe stays at its current value (default true)
+      }
+    } catch { /* private-mode storage error — connect anyway */ }
     let builder = DbConnection.builder()
       .withUri(this.cfg.host)
       .withDatabaseName(this.cfg.moduleName)
       .onConnect((conn, identity, token) => {
-        try { localStorage.setItem(TOKEN_KEY, token); } catch { /* ignore */ }
+        this.persistToken(token);
         console.log("[SpacetimeDB] connected as", identity.toHexString());
         this.identity = identity;
         this.afterConnect(conn, identity);
@@ -589,6 +616,54 @@ export class SpacetimeClient {
     } catch (e) {
       console.error("[SpacetimeDB] failed to build connection", e);
     }
+  }
+
+  /** Whether the player's identity token is persisted across browser
+   * restarts. True (default) writes to localStorage; false writes to
+   * sessionStorage and removes any existing localStorage entry. The
+   * LoginModal's "Remember me" checkbox flips this via setRememberMe
+   * before submitting credentials. */
+  private rememberMe = true;
+
+  /** Update the persistence mode for the identity token. Called by
+   * login() / signUp() with the checkbox state. Also migrates any
+   * already-stored token between localStorage and sessionStorage so
+   * the choice takes effect immediately, not only on the NEXT
+   * connect — important because the SDK's initial connect happens
+   * BEFORE the user sees the login form. */
+  setRememberMe(b: boolean): void {
+    this.rememberMe = b;
+    try {
+      const fromLocal = localStorage.getItem(TOKEN_KEY);
+      const fromSession = sessionStorage.getItem(TOKEN_KEY);
+      const token = fromLocal ?? fromSession;
+      if (!token) return;
+      if (b) {
+        // Promote to permanent storage.
+        localStorage.setItem(TOKEN_KEY, token);
+        sessionStorage.removeItem(TOKEN_KEY);
+      } else {
+        // Demote to session-only storage; wipe permanent copy so a
+        // browser close really clears the identity.
+        sessionStorage.setItem(TOKEN_KEY, token);
+        localStorage.removeItem(TOKEN_KEY);
+      }
+    } catch { /* ignore quota / private mode */ }
+  }
+
+  /** Write the identity token to whichever storage matches the
+   * current rememberMe preference. Pairs with connect() reading
+   * from the same place. */
+  private persistToken(token: string): void {
+    try {
+      if (this.rememberMe) {
+        localStorage.setItem(TOKEN_KEY, token);
+        sessionStorage.removeItem(TOKEN_KEY);
+      } else {
+        sessionStorage.setItem(TOKEN_KEY, token);
+        localStorage.removeItem(TOKEN_KEY);
+      }
+    } catch { /* ignore */ }
   }
 
   /** Wire up the bridges between Game events and reducer calls. Called

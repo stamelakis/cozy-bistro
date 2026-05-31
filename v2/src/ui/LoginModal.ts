@@ -173,6 +173,9 @@ export class LoginModal {
     this.body.appendChild(userInput.wrap);
     this.body.appendChild(passInput.wrap);
 
+    const remember = this.makeRememberMeRow();
+    this.body.appendChild(remember.wrap);
+
     const submit = this.makePrimaryButton("Log in");
     submit.onclick = async () => {
       const u = userInput.input.value.trim();
@@ -183,7 +186,7 @@ export class LoginModal {
       }
       this.setBusy(true, "Logging in…");
       try {
-        await this.cloud.login(u, p);
+        await this.cloud.login(u, p, remember.checkbox.checked);
         if (this.cloud.isAuthenticated()) {
           this.flash("Welcome back!", "success");
           this.dismiss();
@@ -210,6 +213,9 @@ export class LoginModal {
     this.body.appendChild(userInput.wrap);
     this.body.appendChild(passInput.wrap);
 
+    const remember = this.makeRememberMeRow();
+    this.body.appendChild(remember.wrap);
+
     const submit = this.makePrimaryButton("Create account");
     submit.onclick = async () => {
       const u = userInput.input.value.trim();
@@ -220,7 +226,7 @@ export class LoginModal {
       }
       this.setBusy(true, "Creating account…");
       try {
-        await this.cloud.signUp(u, p);
+        await this.cloud.signUp(u, p, remember.checkbox.checked);
         if (this.cloud.isAuthenticated()) {
           this.flash("Account created. Welcome!", "success");
           this.dismiss();
@@ -327,6 +333,43 @@ export class LoginModal {
     } as Partial<CSSStyleDeclaration>);
     wrap.appendChild(input);
     return { wrap, input };
+  }
+
+  /** Build the "Remember me" checkbox row that sits between the
+   * password field and the submit button. Checkbox default is
+   * CHECKED to match common-case expectations (most players will
+   * want their identity persisted across browser restarts). When
+   * unchecked, the SpacetimeClient writes the identity token to
+   * sessionStorage instead of localStorage — a tab close clears it
+   * and the next visit triggers a fresh login. */
+  private makeRememberMeRow(): { wrap: HTMLElement; checkbox: HTMLInputElement } {
+    const wrap = document.createElement("label");
+    Object.assign(wrap.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      margin: "4px 0 14px 0",
+      fontSize: "12px",
+      cursor: "pointer",
+      userSelect: "none",
+    } as Partial<CSSStyleDeclaration>);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    Object.assign(checkbox.style, {
+      width: "14px", height: "14px",
+      accentColor: "#d8b98f",
+      cursor: "pointer",
+      margin: "0",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(checkbox);
+    const text = document.createElement("span");
+    text.textContent = "Remember me on this device";
+    Object.assign(text.style, {
+      opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(text);
+    return { wrap, checkbox };
   }
 
   private makePrimaryButton(label: string): HTMLButtonElement {
