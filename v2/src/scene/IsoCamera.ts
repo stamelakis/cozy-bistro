@@ -64,7 +64,36 @@ export class IsoCamera {
       -this.zoom * IsoCamera.FRUSTUM_BOT_FRAC,
       0.1, 1000,
     );
+    // Initial framing — center the world origin (the player's
+    // restaurant) on the screen the same way the Home button does.
+    // Without this the asymmetric frustum (target lands 15 % from
+    // the bottom) put the building down in the lower strip on
+    // first render, so the player saw a wide expanse of sky above
+    // their restaurant on reload. Same XZ offset as goHome.
+    this.setTargetCenteredOnScreen(0, 0, 0);
     this.updatePose();
+  }
+
+  /** Set the camera target so that (worldX, floorY, worldZ) lands
+   * at the visual center of the screen, compensating for the
+   * asymmetric frustum (TOP_FRAC/BOT_FRAC). The shift is
+   * restricted to the XZ plane so target.y stays exactly on
+   * `floorY` — important for FloorSelector semantics.
+   *
+   * Math: with TOP=1.7, BOT=0.3, the midpoint of the visible
+   * frustum is at camera-space y = (TOP - BOT)/2 × zoom = 0.7 × zoom
+   * above the look-at target. Shifting the target by S along the
+   * world XZ component of camera_up makes the desired world point
+   * appear at camera-space y = sin(elev) × S. Solve for S so that
+   * = 0.7 × zoom → S = 0.7 × zoom / sin(elev), direction
+   * (cos azimuth, 0, sin azimuth). */
+  private setTargetCenteredOnScreen(worldX: number, floorY: number, worldZ: number): void {
+    const verticalBias = (IsoCamera.FRUSTUM_TOP_FRAC - IsoCamera.FRUSTUM_BOT_FRAC) / 2 * this.zoom;
+    const sinEl = Math.sin(this.elevation);
+    const k = sinEl > 1e-3 ? verticalBias / sinEl : 0;
+    this.target.x = worldX + k * Math.cos(this.azimuth);
+    this.target.y = floorY;
+    this.target.z = worldZ + k * Math.sin(this.azimuth);
   }
 
   /** Attach pointer + wheel handlers to the canvas for pan/zoom/rotate. */
@@ -285,21 +314,10 @@ export class IsoCamera {
     this.zoom = IsoCamera.DEFAULT_ZOOM;
     this.azimuth = IsoCamera.DEFAULT_AZIMUTH;
     this.elevation = Math.atan(1 / Math.SQRT2); // ~35.26°, the constructor default
-    // Pixels-of-screen-up to shift the target by, in world units. The
-    // asymmetric frustum's midpoint sits at +0.7 × zoom in camera-y
-    // (relative to look-at), so shifting target along camera_up by
-    // -0.7 × zoom brings the building TO screen center.
-    const verticalBias = (IsoCamera.FRUSTUM_TOP_FRAC - IsoCamera.FRUSTUM_BOT_FRAC) / 2 * this.zoom;
-    // camera_up world projection onto XZ = (-cos az, -sin az) * sin elev.
-    // To shift target.y=floorY (so floor selection sticks) we restrict
-    // the shift to the XZ plane only. Solve: (Δ.x * (-sin el cos az) +
-    // Δ.z * (-sin el sin az)) = -0.7 × zoom, choosing Δ along
-    // (cos az, sin az). Result: k = 0.7 × zoom / sin el.
-    const sinEl = Math.sin(this.elevation);
-    const k = sinEl > 1e-3 ? verticalBias / sinEl : 0;
-    this.target.x = x + k * Math.cos(this.azimuth);
-    this.target.y = floorY;
-    this.target.z = z + k * Math.sin(this.azimuth);
+    // Use the shared centering helper so Home and the initial
+    // page-load framing always match. See setTargetCenteredOnScreen
+    // for the math derivation.
+    this.setTargetCenteredOnScreen(x, floorY, z);
     // Cancel any in-flight floor tween so the snap actually sticks.
     this.tweenDur = 0;
     this.resize(window.innerWidth, window.innerHeight);
