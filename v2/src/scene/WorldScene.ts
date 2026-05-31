@@ -727,6 +727,13 @@ export class WorldScene {
   // ramps the intensity with how dark the sky is. Cap is enforced
   // implicitly by the player's furniture budget.
   private placedLamps: { model: THREE.Object3D; light: THREE.PointLight; bulb: THREE.Mesh }[] = [];
+  /** Footprints of every procedurally-placed scenery house in the city
+   * (populated by addCityScenery). The scatter passes that follow
+   * (grass blades, wildflowers, trees, rocks) consult this list via
+   * isOnRoadOrBuildingForScatter so nothing spawns inside or on top of
+   * a neighbour building. halfSize is the box half-extent on each
+   * horizontal axis (scenery houses are square in footprint). */
+  private placedSceneryHouses: { x: number; z: number; halfSize: number }[] = [];
   /** Most recently computed nightAmount in [0, 1] — used so a freshly
    * registered lamp picks up the current darkness immediately, not on
    * the next applyDayNight tick. */
@@ -2390,6 +2397,10 @@ export class WorldScene {
       );
       sceneryGroup.add(house);
       placedHouses.push({ x, z, group: house, isShop: !!shopName });
+      // Track footprint so the grass / wildflower / tree / rock scatter
+      // passes know to skip this tile. halfSize = size/2 + small skin
+      // so a tree right against a wall doesn't poke through the eaves.
+      this.placedSceneryHouses.push({ x, z, halfSize: size / 2 + 0.4 });
       if (shopName) placedShops.push({ x, z });
       placed += 1;
       return true;
@@ -2769,10 +2780,13 @@ export class WorldScene {
     }
     const geom = mergeBufferGeometries(planes);
     geom.translate(0, h / 2, 0);
-    // Big density bump — 10000 instances spread across a ~60×60 m area
-    // gives roughly 3 clumps per m², dense enough to read as
-    // continuous turf at iso distance.
-    const count = 10000;
+    // Big density bump + map-wide spread — 25000 instances scattered
+    // across ±180m (360×360 = 130,000 m²) gives ~0.19 clumps/m². Sparse
+    // enough that the GPU's happy with a single InstancedMesh draw,
+    // dense enough that the player sees grass tufts anywhere they walk
+    // (including the back streets and the empty corners of the city,
+    // not just within 40m of their plot like before).
+    const count = 25000;
     const blades = new THREE.InstancedMesh(geom, bladeMat, count);
     const tmp = new THREE.Object3D();
     let placed = 0;
@@ -2780,9 +2794,9 @@ export class WorldScene {
     const maxAttempts = count * 4;
     while (placed < count && attempts < maxAttempts) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 84;
-      const z = (Math.random() - 0.5) * 84;
-      if (WorldScene.isExclusionZone(x, z, /* margin */ 0.4)) continue;
+      const x = (Math.random() - 0.5) * 360;
+      const z = (Math.random() - 0.5) * 360;
+      if (this.isOnRoadOrBuildingForScatter(x, z, /* margin */ 0.4)) continue;
       tmp.position.set(x, 0, z);
       tmp.rotation.y = Math.random() * Math.PI * 2;
       // Per-instance scale jitter — some short, some tall, some wider.
@@ -2849,14 +2863,18 @@ export class WorldScene {
   }
 
   /** Sparse wildflowers — tiny coloured discs lying flat on the lawn.
-   * Just a pop of colour, not a full bloom system. */
+   * Just a pop of colour, not a full bloom system. Spread map-wide
+   * (±150m) so flowers show up even in the far corners of the city. */
   private addWildflowers(): void {
     const palette = [0xffe066, 0xff8aa6, 0xffffff, 0xf0b0e8, 0xffc46e];
     const flowers = new THREE.Group();
-    for (let i = 0; i < 160; i += 1) {
-      const x = (Math.random() - 0.5) * 80;
-      const z = (Math.random() - 0.5) * 80;
-      if (WorldScene.isExclusionZone(x, z, 0.6)) { i -= 1; continue; }
+    let placed = 0;
+    let attempts = 0;
+    while (placed < 400 && attempts < 2000) {
+      attempts += 1;
+      const x = (Math.random() - 0.5) * 300;
+      const z = (Math.random() - 0.5) * 300;
+      if (this.isOnRoadOrBuildingForScatter(x, z, 0.6)) continue;
       const color = palette[Math.floor(Math.random() * palette.length)];
       const flower = new THREE.Mesh(
         new THREE.CircleGeometry(0.08 + Math.random() * 0.04, 8),
@@ -2865,13 +2883,17 @@ export class WorldScene {
       flower.rotation.x = -Math.PI / 2;
       flower.position.set(x, 0.02, z);
       flowers.add(flower);
+      placed += 1;
     }
     this.threeScene.add(flowers);
   }
 
-  /** Low-poly trees scattered across the lawn — cone canopy on a
-   * cylinder trunk. Keep counts modest so the camera path stays
-   * unobstructed. */
+  /** Low-poly trees scattered map-wide — cone canopy on a cylinder
+   * trunk. Used to be 22 trees in a 40m radius of the player plot;
+   * now ~250 trees across ±180m so the back streets and city outskirts
+   * read as parkland too. Performance: trees share one trunk geometry
+   * + one canopy geometry per palette colour via InstancedMesh, so
+   * the full forest is 4 draw calls (1 trunks + 3 canopies). */
   private addLawnTrees(): void {
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.9 });
     const canopyMats = [
@@ -2879,53 +2901,91 @@ export class WorldScene {
       new THREE.MeshStandardMaterial({ color: 0x4a8a4a, roughness: 0.85 }),
       new THREE.MeshStandardMaterial({ color: 0x2e6a2e, roughness: 0.85 }),
     ];
-    const trees = new THREE.Group();
-    let placed = 0;
+
+    // Roll positions first so we know the final count per canopy
+    // palette before sizing the InstancedMeshes.
+    type Plan = { x: number; z: number; rotY: number; trunkH: number; canopyH: number; canopyR: number; palette: number };
+    const plans: Plan[] = [];
     let attempts = 0;
-    while (placed < 22 && attempts < 400) {
+    const TARGET = 250;
+    while (plans.length < TARGET && attempts < TARGET * 8) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 80;
-      const z = (Math.random() - 0.5) * 80;
-      if (WorldScene.isExclusionZone(x, z, 1.8)) continue;
-      // Avoid spawning right in front of the door view either.
+      const x = (Math.random() - 0.5) * 360;
+      const z = (Math.random() - 0.5) * 360;
+      // Wider margin than grass — a tree canopy is ~1m across, so we
+      // need a couple of metres of clearance to keep branches from
+      // intersecting walls / cars / customers walking the pavement.
+      if (this.isOnRoadOrBuildingForScatter(x, z, 1.8)) continue;
+      // Keep the path between the player's front door and the legacy
+      // main street clear so the camera always has a clean view of
+      // the door from default zoom.
       if (Math.abs(x) < 6 && z > 5.5 && z < 12) continue;
-      const tree = new THREE.Group();
-      const trunkH = 0.8 + Math.random() * 0.5;
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.14, trunkH, 8), trunkMat);
-      trunk.position.y = trunkH / 2;
-      trunk.castShadow = true;
-      tree.add(trunk);
-      const canopyH = 1.6 + Math.random() * 1.0;
-      const canopyR = 0.65 + Math.random() * 0.4;
-      const canopy = new THREE.Mesh(
-        new THREE.ConeGeometry(canopyR, canopyH, 8),
-        canopyMats[Math.floor(Math.random() * canopyMats.length)],
-      );
-      canopy.position.y = trunkH + canopyH / 2 - 0.15;
-      canopy.castShadow = true;
-      tree.add(canopy);
-      tree.position.set(x, 0, z);
-      tree.rotation.y = Math.random() * Math.PI * 2;
-      trees.add(tree);
-      placed += 1;
+      plans.push({
+        x, z,
+        rotY: Math.random() * Math.PI * 2,
+        trunkH: 0.8 + Math.random() * 0.5,
+        canopyH: 1.6 + Math.random() * 1.0,
+        canopyR: 0.65 + Math.random() * 0.4,
+        palette: Math.floor(Math.random() * canopyMats.length),
+      });
     }
-    this.threeScene.add(trees);
+
+    // Shared geometries — sized for unit scale, per-instance matrix
+    // applies the actual height + radius via non-uniform Y scale.
+    const trunkGeo = new THREE.CylinderGeometry(0.10, 0.14, 1, 8);
+    trunkGeo.translate(0, 0.5, 0); // base at y=0, top at y=1
+    const canopyGeo = new THREE.ConeGeometry(1, 1, 8);
+    canopyGeo.translate(0, 0.5, 0); // base at y=0, tip at y=1
+
+    // One trunk InstancedMesh for everything — trunk colour is uniform.
+    const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, plans.length);
+    trunks.castShadow = true;
+    // One canopy InstancedMesh per palette colour. Build buckets first.
+    const buckets: Plan[][] = canopyMats.map(() => []);
+    plans.forEach((p) => buckets[p.palette].push(p));
+    const tmp = new THREE.Object3D();
+    plans.forEach((p, i) => {
+      tmp.position.set(p.x, 0, p.z);
+      tmp.rotation.set(0, p.rotY, 0);
+      tmp.scale.set(1, p.trunkH, 1);
+      tmp.updateMatrix();
+      trunks.setMatrixAt(i, tmp.matrix);
+    });
+    this.threeScene.add(trunks);
+    for (let pi = 0; pi < canopyMats.length; pi += 1) {
+      const bucket = buckets[pi];
+      if (bucket.length === 0) continue;
+      const canopies = new THREE.InstancedMesh(canopyGeo, canopyMats[pi], bucket.length);
+      canopies.castShadow = true;
+      bucket.forEach((p, i) => {
+        // Canopy sits ON TOP of trunk with a slight overlap so trunk
+        // disappears into the canopy base instead of poking through.
+        tmp.position.set(p.x, p.trunkH - 0.15, p.z);
+        tmp.rotation.set(0, p.rotY, 0);
+        tmp.scale.set(p.canopyR, p.canopyH, p.canopyR);
+        tmp.updateMatrix();
+        canopies.setMatrixAt(i, tmp.matrix);
+      });
+      this.threeScene.add(canopies);
+    }
   }
 
   /** Small instanced grey rocks scattered around to break up the
-   * uniform green. */
+   * uniform green. Map-wide spread (±150m) to match the grass and
+   * tree coverage. */
   private addRocks(): void {
     const rockGeo = new THREE.IcosahedronGeometry(0.18, 0);
     const rockMat = new THREE.MeshStandardMaterial({ color: 0x7e7672, roughness: 0.95 });
-    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, 36);
+    const TARGET = 120;
+    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, TARGET);
     const tmp = new THREE.Object3D();
     let placed = 0;
     let attempts = 0;
-    while (placed < 36 && attempts < 400) {
+    while (placed < TARGET && attempts < TARGET * 8) {
       attempts += 1;
-      const x = (Math.random() - 0.5) * 82;
-      const z = (Math.random() - 0.5) * 82;
-      if (WorldScene.isExclusionZone(x, z, 0.4)) continue;
+      const x = (Math.random() - 0.5) * 300;
+      const z = (Math.random() - 0.5) * 300;
+      if (this.isOnRoadOrBuildingForScatter(x, z, 0.4)) continue;
       tmp.position.set(x, 0.06, z);
       tmp.rotation.set(Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.4);
       const sc = 0.6 + Math.random() * 0.9;
@@ -2998,14 +3058,54 @@ export class WorldScene {
     }
   }
 
-  /** True when (x, z) is too close to the building interior, the
-   * pavement / road / far-pavement strip (full map width now), or
-   * the future garden area. Strip runs z=5.5..21.5 across x=-40..40. */
-  private static isExclusionZone(x: number, z: number, margin: number): boolean {
-    if (x > -5.5 - margin && x < 5.5 + margin && z > -5.5 - margin && z < 5.5 + margin) return true;
-    if (z > 5.5 - margin && z < 21.5 + margin && x > -40 && x < 40) return true;
-    const g = WorldScene.GARDEN_BOUNDS;
-    if (x > g.minX - margin && x < g.maxX + margin && z > g.minZ - margin && z < g.maxZ + margin) return true;
+  /** True when (x, z) sits on a road, pavement, plot building, garden,
+   * or scenery house — the four scatter passes (grass blades,
+   * wildflowers, trees, rocks) consult this so nothing spawns on
+   * asphalt or inside a building. Margin is added outward from each
+   * obstacle so e.g. a tree's 1m canopy doesn't poke through a wall.
+   *
+   * Replaces the old static isExclusionZone, which only knew about
+   * the legacy player block + pavement strip and was useless once
+   * the city grew to 12 plots + 5 avenues + ~300 scenery houses. */
+  private isOnRoadOrBuildingForScatter(x: number, z: number, margin: number): boolean {
+    // Avenue pavements — pavement strip extends PAVEMENT_HALF (5.5m)
+    // out from each centerline on both sides. Reject anything within
+    // (5.5 + margin) of any avenue line. Checking the 5 avenues first
+    // (3 EW + 2 NS) culls the asphalt strips fastest.
+    const PAVEMENT_HALF = 5.5;
+    for (const az of WorldScene.EW_AVENUES) {
+      if (Math.abs(z - az) < PAVEMENT_HALF + margin) return true;
+    }
+    for (const ax of WorldScene.NS_AVENUES) {
+      if (Math.abs(x - ax) < PAVEMENT_HALF + margin) return true;
+    }
+    // City plots — exact building footprint + 1m + margin. Same data
+    // the populateCityBuildings code uses, so the keep-out matches
+    // what the player sees on the ground.
+    for (const p of WorldScene.CITY_PLOTS) {
+      if (Math.abs(x - p.x) < p.w / 2 + 1 + margin &&
+          Math.abs(z - p.z) < p.h / 2 + 1 + margin) return true;
+    }
+    // Per-plot gardens (east-or-west of each plot).
+    for (const p of WorldScene.CITY_PLOTS) {
+      const g = WorldScene.gardenBoundsForPlot(p);
+      if (x > g.minX - margin && x < g.maxX + margin &&
+          z > g.minZ - margin && z < g.maxZ + margin) return true;
+    }
+    // Legacy player block (centered on origin, ~12×12 footprint) +
+    // its east-side legacy garden.
+    if (Math.abs(x) < 7 + margin && Math.abs(z) < 7 + margin) return true;
+    const lg = WorldScene.GARDEN_BOUNDS;
+    if (x > lg.minX - margin && x < lg.maxX + margin &&
+        z > lg.minZ - margin && z < lg.maxZ + margin) return true;
+    // Scenery houses placed by addCityScenery — must be last because
+    // there can be ~300 of them, and most candidates are already culled
+    // by the cheaper checks above. Each entry already includes a small
+    // skin in halfSize, so a tight margin here is fine.
+    for (const h of this.placedSceneryHouses) {
+      if (Math.abs(x - h.x) < h.halfSize + margin &&
+          Math.abs(z - h.z) < h.halfSize + margin) return true;
+    }
     return false;
   }
 
