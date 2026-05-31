@@ -1729,7 +1729,12 @@ export class WorldScene {
     this.addWildflowers();
     this.addLawnTrees();
     this.addRocks();
-    this.addPavementAndRoad();
+    // Legacy local pavement (addPavementAndRoad) is intentionally NOT
+    // called — its z=13.5 road duplicates the SHARED city avenue at
+    // the same position for plots in the middle row and Z-fights with
+    // every other plot's nearest avenue. The world avenues now serve
+    // as the player's main street regardless of plot row, with the
+    // street-follow scenery dropping houses + shops along each one.
     this.addGardenArea();
   }
 
@@ -2714,6 +2719,9 @@ export class WorldScene {
     this.threeScene.add(rocks);
   }
 
+  // @ts-expect-error — addPavementAndRoad kept on the class as a
+  // reference implementation but no longer wired up (see addBuilding;
+  // the world avenues handle the player's main street now).
   private addPavementAndRoad(): void {
     // The strip spans the full map width (lawn plane is 70×70 m, so
     // 80 m of strip overshoots into the grass margin and disappears
