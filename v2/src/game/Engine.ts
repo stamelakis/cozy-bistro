@@ -18,6 +18,7 @@ import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
 import { FloorSelector } from "../ui/FloorSelector";
 import { CameraControls } from "../ui/CameraControls";
+import { VisitMode } from "../ui/VisitMode";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
@@ -83,6 +84,7 @@ export class Engine {
   readonly expandWidget: ExpandWidget;
   readonly floorSelector: FloorSelector;
   readonly cameraControls: CameraControls;
+  readonly visitMode: VisitMode;
   readonly stockWidget: StockStatusWidget;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
@@ -298,6 +300,19 @@ export class Engine {
         y: this.scene.getFocusedStorey() * WorldScene.getStoreyHeight(),
         z: 0,
       }));
+    // P4 visit mode — click on another player's shell to fly the
+    // camera to that plot and view it. Engine doesn't need to gate
+    // anything yet; the build menu's placement raycast targets the
+    // ground plane, not city shells, so the two click handlers don't
+    // collide.
+    this.visitMode = new VisitMode(container, this.renderer.domElement, this.camera, this.scene);
+    // Home button while visiting should exit visit mode first so the
+    // player goes back to their own restaurant cleanly.
+    const originalGoHome = this.camera.goHome.bind(this.camera);
+    this.camera.goHome = (x: number, z: number, floorY: number): void => {
+      if (this.visitMode.isVisiting()) this.visitMode.exit();
+      originalGoHome(x, z, floorY);
+    };
     // Classify each floor by what its seats serve so the FloorSelector
     // can show a sub-label under each button (food / drinks / mix /
     // empty). Re-evaluated on the selector's own 1.5s timer so the tag
@@ -1046,7 +1061,15 @@ export class Engine {
       const list = this.cloud.listBuildings();
       if (list.length === this.cityBuildingCount) return;
       this.cityBuildingCount = list.length;
-      this.scene.populateCityBuildings(list);
+      // Enrich each building with the owner's display name so the
+      // visit overlay can show "Visit Alice's Restaurant" instead of
+      // raw identity hex. Lookup is via the auth_record cache.
+      const accounts = this.cloud.listAccounts();
+      const enriched = list.map((b) => {
+        const acct = accounts.find((a) => a.identity.toHexString() === b.ownerIdentity.toHexString());
+        return { ...b, ownerName: acct?.displayName ?? "" };
+      });
+      this.scene.populateCityBuildings(enriched);
       const mine = this.cloud.getMyBuilding();
       if (mine) {
         // Shift the shared city so the player's claimed plot

@@ -203,7 +203,7 @@ export class WorldScene {
    * adds visual markers for every other claimed/unclaimed plot
    * so the player sees the city around them. P2.4 stops here;
    * full per-other-player restaurant interiors come later. */
-  private cityBuildings = new THREE.Group();
+  cityBuildings = new THREE.Group();
   /** Parent group for all SHARED city content (grass, avenues,
    * scenery houses, other plots' shells, pedestrians). The player's
    * own restaurant + characters stay at the threeScene root in their
@@ -3009,7 +3009,7 @@ export class WorldScene {
    * call again on cache updates (e.g. another player claims a
    * plot) — fully rebuilds the group. */
   populateCityBuildings(
-    buildings: readonly { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; isMine: boolean }[],
+    buildings: readonly { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; isMine: boolean; ownerIdentity?: { toHexString(): string }; ownerName?: string }[],
     skipMine: boolean = true,
   ): void {
     // Wipe + rebuild — buildings change rarely so the cost is fine.
@@ -3023,7 +3023,20 @@ export class WorldScene {
       // by addGardenArea(); this group adds fences for the OTHER 11
       // plots regardless of ownership).
       if (skipMine && b.isMine) continue;
-      this.cityBuildings.add(this.makeBuildingShell(b));
+      const shell = this.makeBuildingShell(b);
+      // Stamp the visit-mode metadata on the shell + every descendant
+      // mesh so Engine's click raycast can identify which player owns
+      // the plot the click landed on. Walking up the parent chain in
+      // Engine yields the building info regardless of which mesh the
+      // raycaster topped out on.
+      shell.userData.visitPlot = {
+        id: b.id,
+        plotX: b.plotX,
+        plotZ: b.plotZ,
+        ownerHex: b.ownerIdentity?.toHexString?.() ?? "",
+        ownerName: b.ownerName ?? "",
+      };
+      this.cityBuildings.add(shell);
       this.cityBuildings.add(this.makePlotGardenFence({
         x: b.plotX, z: b.plotZ, w: b.plotW, h: b.plotH,
       }));

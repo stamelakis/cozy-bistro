@@ -240,6 +240,30 @@ export class IsoCamera {
     this.updatePose();
   }
 
+  /** Read the look-at target's world (X, Z). Used by Engine to
+   * snapshot the camera state before entering visit mode so it can
+   * restore on exit. */
+  getTargetXZ(): { x: number; z: number } {
+    return { x: this.target.x, z: this.target.z };
+  }
+
+  /** Instantly set the camera zoom (clamped to [MIN_ZOOM, MAX_ZOOM])
+   * and re-apply the projection. Used by visit mode to drop the
+   * camera to a "look at this plot" zoom without a wheel ramp. */
+  setZoom(z: number): void {
+    this.zoom = THREE.MathUtils.clamp(z, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
+    this.resize(window.innerWidth, window.innerHeight);
+    this.updatePose();
+  }
+
+  /** Instantly set the azimuth (rotation around Y). Used by visit
+   * mode so the visited plot is shown at the default iso angle even
+   * if the player had rotated their own view. */
+  setAzimuth(rad: number): void {
+    this.azimuth = rad;
+    this.updatePose();
+  }
+
   /** Reset target to (x, floorY, z), restore default zoom, restore
    * default azimuth + iso elevation. The caller passes floorY so the
    * floor selection is respected explicitly — previously we just left
