@@ -51,11 +51,18 @@ export class ChatPanel {
     // MenuPanel on common screen sizes. width clamps so a tiny
     // viewport still hides the panel rather than overlapping things.
     this.root = document.createElement("div");
+    // Bottom-left strip — right of the 256 px sidebar (with 12 px
+    // gap), left of the centered MenuPanel. Width uses max(200, ...)
+    // so a very narrow viewport (or a CSS engine that resolves
+    // calc-to-negative before applying min) still gives us SOMETHING
+    // visible — better a slightly-overlapping panel than an invisible
+    // 0-width one. minWidth is the absolute floor.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "280px",
       bottom: "12px",
-      width: "min(360px, calc(50vw - 200px))",
+      width: "min(400px, max(260px, calc(100vw - 820px)))",
+      minWidth: "260px",
       maxHeight: "320px",
       display: "flex",
       flexDirection: "column",
@@ -69,6 +76,7 @@ export class ChatPanel {
       overflow: "hidden",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
+    console.log("[ChatPanel] mounted at left:280, bottom:12 (root attached to:", parent.tagName, ")");
 
     // === Title bar (always visible — drives minimize toggle) ===
     const titleBar = document.createElement("div");

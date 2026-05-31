@@ -1099,9 +1099,30 @@ export class Engine {
    * panel is created once per Engine lifetime, after auth completes,
    * because it subscribes to the chat_message table during
    * construction and that table is only populated after the cloud's
-   * initial subscription lands. */
+   * initial subscription lands.
+   *
+   * Defensive: if the cloud isn't ready yet (initial subscription
+   * still in flight) we retry on a short delay. That covers the
+   * race where enterGame fires after a successful login but before
+   * the subscription's onApplied has populated the table cache. */
   private mountChatPanel(container: HTMLElement): void {
     if (this.chatPanel) return;
+    if (!this.cloud.isReady()) {
+      // Subscribe so we mount the moment the cloud finishes its
+      // initial wire-up. Also schedule a fallback timer so we
+      // mount even if subscribe(...) never fires (offline mode,
+      // SDK quirk). 2-second floor is generous — once it fires
+      // the idempotent guard at the top stops a double-mount.
+      const tryMount = (): void => {
+        if (this.chatPanel) return;
+        if (!this.cloud.isReady()) return;
+        this.mountChatPanel(container);
+        unsub();
+      };
+      const unsub = this.cloud.subscribe(tryMount);
+      window.setTimeout(tryMount, 2000);
+      return;
+    }
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
     } catch (e) {

@@ -270,14 +270,36 @@ export class IsoCamera {
    * target.y untouched, but the left-drag pan bug could push y to
    * weird values, and "preserve current y" then carried that garbage
    * forward. Now Home always snaps y to a known floor height. Used
-   * by the CameraControls Home button. */
+   * by the CameraControls Home button.
+   *
+   * Centers (x, floorY, z) on the SCREEN, not on the look-at axis.
+   * The asymmetric frustum (TOP_FRAC=1.7, BOT_FRAC=0.3) means the
+   * raw look-at target lands ~15% from the bottom of the screen, so
+   * a naive `target = (x, floorY, z)` puts the player's building
+   * down in the lower strip. We compensate by sliding the target in
+   * the XZ plane along the camera-up projection so the building lands
+   * at the visual midpoint while target.y stays on the chosen floor
+   * (preserves FloorSelector semantics — switching floors only moves
+   * target.y, the centered-offset on X/Z carries over). */
   goHome(x: number, z: number, floorY: number): void {
-    this.target.x = x;
-    this.target.y = floorY;
-    this.target.z = z;
     this.zoom = IsoCamera.DEFAULT_ZOOM;
     this.azimuth = IsoCamera.DEFAULT_AZIMUTH;
     this.elevation = Math.atan(1 / Math.SQRT2); // ~35.26°, the constructor default
+    // Pixels-of-screen-up to shift the target by, in world units. The
+    // asymmetric frustum's midpoint sits at +0.7 × zoom in camera-y
+    // (relative to look-at), so shifting target along camera_up by
+    // -0.7 × zoom brings the building TO screen center.
+    const verticalBias = (IsoCamera.FRUSTUM_TOP_FRAC - IsoCamera.FRUSTUM_BOT_FRAC) / 2 * this.zoom;
+    // camera_up world projection onto XZ = (-cos az, -sin az) * sin elev.
+    // To shift target.y=floorY (so floor selection sticks) we restrict
+    // the shift to the XZ plane only. Solve: (Δ.x * (-sin el cos az) +
+    // Δ.z * (-sin el sin az)) = -0.7 × zoom, choosing Δ along
+    // (cos az, sin az). Result: k = 0.7 × zoom / sin el.
+    const sinEl = Math.sin(this.elevation);
+    const k = sinEl > 1e-3 ? verticalBias / sinEl : 0;
+    this.target.x = x + k * Math.cos(this.azimuth);
+    this.target.y = floorY;
+    this.target.z = z + k * Math.sin(this.azimuth);
     // Cancel any in-flight floor tween so the snap actually sticks.
     this.tweenDur = 0;
     this.resize(window.innerWidth, window.innerHeight);

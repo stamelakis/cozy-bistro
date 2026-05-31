@@ -665,11 +665,12 @@ export class Hud {
     }
     if (this.devToggle) {
       this.devToggle.style.background = this.devOpen ? "rgba(255,245,220,0.18)" : "rgba(180, 180, 180, 0.18)";
-      // Show Dev tools only in dev builds OR for the admin account.
-      // For everyone else in production the entire row hides; we
-      // also collapse the open section so a refresh after a player
-      // demotion doesn't leak the dev controls.
-      const shouldShow = import.meta.env.DEV || (this.actions.isAdmin?.() ?? false);
+      // Show Dev tools ONLY for the admin account (Dunnin). Even in
+      // dev builds, non-admin test accounts (Alice, etc.) shouldn't
+      // see the cheats — the owner specifically asked for this gate
+      // to be strict so their dev-mode test users can't accidentally
+      // (or intentionally) wander into the admin panel.
+      const shouldShow = this.actions.isAdmin?.() ?? false;
       this.devToggle.style.display = shouldShow ? "" : "none";
       if (!shouldShow && this.devSection) this.devSection.style.display = "none";
     }
