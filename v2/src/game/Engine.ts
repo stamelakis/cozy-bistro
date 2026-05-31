@@ -302,6 +302,8 @@ export class Engine {
       storageKey: "cozy-bistro.panel.menu",
       root: this.menuPanel.root,
       handle: this.menuPanel.titleEl,
+      collapseSentinel: this.menuPanel.body,
+      expandDirection: "up", // bottom-anchored — grow up when expanded
       minWidth: 320,
       minHeight: 60,
     });
@@ -614,6 +616,8 @@ export class Engine {
         storageKey: "cozy-bistro.panel.build",
         root: buildMenu.rootEl,
         handle: buildMenu.titleEl,
+        collapseSentinel: buildMenu.bodyEl,
+        expandDirection: "down", // top-anchored — grow down when expanded
         minWidth: 220,
         minHeight: 60,
       });
@@ -1146,6 +1150,8 @@ export class Engine {
         storageKey: "cozy-bistro.panel.chat",
         root: this.chatPanel.root,
         handle: this.chatPanel.titleBar,
+        collapseSentinel: this.chatPanel.body,
+        expandDirection: "up", // bottom-anchored — grow up when expanded
         minWidth: 200,
         minHeight: 32,
       });

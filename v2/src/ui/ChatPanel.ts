@@ -23,7 +23,10 @@ export class ChatPanel {
   /** Title bar — used as the drag handle by PanelDragResize. */
   readonly titleBar: HTMLElement;
   private readonly tabsRow: HTMLElement;
-  private readonly body: HTMLElement;
+  /** Body container holding tabs + log + input row. display:none
+   * when minimized. Exposed so PanelDragResize can watch it as
+   * the collapse sentinel. */
+  readonly body: HTMLElement;
   private readonly logArea: HTMLElement;
   private readonly inputRow: HTMLElement;
   private readonly input: HTMLInputElement;

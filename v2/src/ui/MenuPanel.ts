@@ -34,7 +34,9 @@ export class MenuPanel {
   readonly root: HTMLElement;
   /** Title bar — used as the drag handle by PanelDragResize. */
   readonly titleEl: HTMLElement;
-  private readonly body: HTMLElement;
+  /** Body wrapper — display:none when collapsed. Exposed so
+   * PanelDragResize can watch it as the collapse sentinel. */
+  readonly body: HTMLElement;
   private readonly tabsRow: HTMLElement;
   private readonly content: HTMLElement;
   /** Right-side summary panel — sits next to the recipe list when

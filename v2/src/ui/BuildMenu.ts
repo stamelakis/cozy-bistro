@@ -174,8 +174,10 @@ export class BuildMenu {
   /** Title bar DOM element — text + arrow updated on collapse toggle.
    * Also exposed as the drag-handle for PanelDragResize. */
   titleEl?: HTMLDivElement;
-  /** Body wrapper holding the tier tabs + content. Hidden when collapsed. */
-  private bodyEl?: HTMLDivElement;
+  /** Body wrapper holding the tier tabs + content. Hidden when
+   * collapsed. Exposed so PanelDragResize can use it as the
+   * collapseSentinel and react to the body's display flipping. */
+  bodyEl?: HTMLDivElement;
   /** Root panel element — exposed so the engine can attach the
    * draggable/resizable behaviour after construction. */
   rootEl?: HTMLDivElement;
