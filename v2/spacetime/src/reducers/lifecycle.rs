@@ -73,3 +73,22 @@ pub fn set_player_name(ctx: &ReducerContext, name: String) -> Result<(), String>
     });
     Ok(())
 }
+
+/// Bump the caller's last_seen_at — clients call this every ~30 s
+/// to keep their presence fresh so the "👥 N online" HUD indicator
+/// can count them as live. Without this, last_seen_at only updates
+/// on (re)connection so a player who's been in the tab for an hour
+/// would still report their initial-connect timestamp.
+///
+/// Cheap: single-row update by primary key. If the player row is
+/// missing (shouldn't happen but defensive), silently no-op so a
+/// bad reducer call can't stall the client.
+#[reducer]
+pub fn ping_presence(ctx: &ReducerContext) {
+    if let Some(p) = ctx.db.player().identity().find(ctx.sender) {
+        ctx.db.player().identity().update(Player {
+            last_seen_at: ctx.timestamp,
+            ..p
+        });
+    }
+}

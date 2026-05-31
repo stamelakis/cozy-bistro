@@ -48,6 +48,10 @@ export interface HudActions {
    * production builds — admin tools are gated to Dunnin OR any
    * dev build. Returns false / undefined until auth completes. */
   isAdmin?: () => boolean;
+  /** P5 — live count of players currently online (heartbeat-based).
+   * Engine wires to SpacetimeClient.countOnlinePlayers. Returns 0
+   * before connect is finished. */
+  getOnlineCount?: () => number;
 }
 
 /** A modal-trigger icon for the icon row. */
@@ -70,6 +74,9 @@ export class Hud {
   private musicBtn?: HTMLButtonElement;
   private volumeSlider?: HTMLInputElement;
   private openCloseBtn?: HTMLButtonElement;
+  /** Span inside the title block that shows the live online-player
+   * count. Updated each HUD tick via actions.getOnlineCount. */
+  private onlineCountEl?: HTMLSpanElement;
   private devOpen = false;
   private devSection?: HTMLDivElement;
   private devToggle?: HTMLButtonElement;
@@ -93,9 +100,15 @@ export class Hud {
 
   private buildTitle(): void {
     const t = document.createElement("div");
-    // Two-line title: brand + small "your restaurant" subtitle so the
-    // panel reads as a proper info card instead of a stripped header.
-    t.innerHTML = `<span style="font-size:14px;font-weight:800;letter-spacing:0.06em;">COZY BISTRO 3D</span><div style="font-size:9px;font-weight:600;letter-spacing:0.18em;opacity:0.55;margin-top:1px;">YOUR RESTAURANT</div>`;
+    // Three-line title: brand + "your restaurant" + live online count.
+    // The presence row lives inside the title block (instead of a
+    // standalone chip) so the multiplayer cue is always next to the
+    // game's identity without taking dedicated vertical space.
+    const onlineSpan = `<span data-online-count>0</span>`;
+    t.innerHTML =
+      `<span style="font-size:14px;font-weight:800;letter-spacing:0.06em;">COZY BISTRO 3D</span>` +
+      `<div style="font-size:9px;font-weight:600;letter-spacing:0.18em;opacity:0.55;margin-top:1px;">YOUR RESTAURANT</div>` +
+      `<div style="font-size:10px;font-weight:600;letter-spacing:0.04em;opacity:0.75;margin-top:3px;color:#a8d4cc;">👥 ${onlineSpan} online</div>`;
     Object.assign(t.style, {
       marginBottom: "8px", textAlign: "center", opacity: "0.95",
       padding: "6px 8px",
@@ -104,6 +117,9 @@ export class Hud {
       borderRadius: "5px",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(t);
+    // Cache the count span so update() can rewrite just the number
+    // instead of rebuilding the whole title each HUD tick.
+    this.onlineCountEl = t.querySelector("[data-online-count]") as HTMLSpanElement;
   }
 
   /** Visually-rich stat cards. Each card is a small chip with:
@@ -530,6 +546,14 @@ export class Hud {
     // Cash with thousands separator — $19,716 reads more cleanly than
     // $19716. Red accent when negative (still rendered: the game lets
     // you go below zero through wages / rent).
+    // Refresh the live online-player count in the title block.
+    if (this.onlineCountEl) {
+      const online = this.actions.getOnlineCount?.() ?? 0;
+      const target = String(online);
+      if (this.onlineCountEl.textContent !== target) {
+        this.onlineCountEl.textContent = target;
+      }
+    }
     this.fields.money.textContent = `$${money.toLocaleString("en-US")}`;
     this.fields.money.style.color = money < 0 ? "#ff9a9a" : money < 200 ? "#e8c89a" : "#a8e2a8";
     // Rating shown out of 5 so the number has a built-in scale reference.

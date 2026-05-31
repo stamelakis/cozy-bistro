@@ -100,6 +100,7 @@ pub fn save_restaurant_snapshot(
 /// other client can subscribe to see it (used by P4 visit mode).
 /// Owner is always ctx.sender; the public `player_save` table holds
 /// at most one row per Identity.
+///
 #[reducer]
 pub fn publish_player_save(
     ctx: &ReducerContext,

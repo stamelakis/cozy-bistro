@@ -66,6 +66,10 @@ export class SpacetimeClient {
   private restaurantId: bigint | null = null;
   private identity: Identity | null = null;
   private saveDebounce: number | null = null;
+  /** Heartbeat timer that calls ping_presence every 30 s so this
+   * player's last_seen_at stays fresh — drives the "online players"
+   * HUD count. Started in afterConnect; cleared in destroy. */
+  private heartbeatTimer: number | null = null;
   private wired = false;
   /** Subscribers that want to be notified when DB state mutates. UI panels
    * register a re-render here so leaderboards/friends update live. */
@@ -391,6 +395,15 @@ export class SpacetimeClient {
     }
     this.wireGameHooks();
     this.wireCloudListeners(ctx);
+    // Presence heartbeat — keeps last_seen_at fresh so the HUD's
+    // online-count is accurate. 30 s cadence + 90 s "online window"
+    // on the read side gives us 3 missed pings before someone drops
+    // from the count (handles slow networks / sleeping tabs).
+    this.heartbeatTimer = window.setInterval(() => {
+      try { this.conn?.reducers.pingPresence({}); } catch { /* ignore */ }
+    }, 30_000);
+    // Fire one immediately so the first count reflects this player.
+    try { this.conn?.reducers.pingPresence({}); } catch { /* ignore */ }
     this.wired = true;
     this.notify();
   }
@@ -724,8 +737,30 @@ export class SpacetimeClient {
       window.clearTimeout(this.saveDebounce);
       this.saveDebounce = null;
     }
+    if (this.heartbeatTimer != null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     this.conn?.disconnect();
     this.conn = null;
+  }
+
+  /** Count players whose last_seen_at falls within the online window
+   * (~90 s — 3× the heartbeat cadence to tolerate a couple of missed
+   * pings before someone drops from the count). */
+  countOnlinePlayers(): number {
+    if (!this.conn) return 0;
+    const ONLINE_WINDOW_MS = 90_000;
+    const cutoffMs = Date.now() - ONLINE_WINDOW_MS;
+    let count = 0;
+    try {
+      for (const p of this.conn.db.player.iter()) {
+        const tsMicros = Number((p.lastSeenAt as unknown as { __timestamp_micros_since_unix_epoch__: bigint }).__timestamp_micros_since_unix_epoch__ ?? BigInt(0));
+        const tsMs = tsMicros / 1000;
+        if (tsMs >= cutoffMs) count += 1;
+      }
+    } catch { /* ignore */ }
+    return count;
   }
 }
 

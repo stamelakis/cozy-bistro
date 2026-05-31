@@ -44,6 +44,7 @@ import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import PingPresenceReducer from "./ping_presence_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
@@ -274,6 +275,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("ping_presence", PingPresenceReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),

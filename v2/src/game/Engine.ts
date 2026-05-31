@@ -212,6 +212,10 @@ export class Engine {
         this.slotsModal.show();
       },
       isAdmin: () => this.cloud.getCurrentAccount()?.isAdmin ?? false,
+      // P5 — live online player count read off the heartbeat-driven
+      // last_seen_at window. HUD renders "👥 N online" in the title
+      // block so multiplayer presence is always visible.
+      getOnlineCount: () => this.cloud.countOnlinePlayers(),
       // Admin panel — only renders for the player whose auth_record
       // has is_admin = true (the Dunnin bootstrap). Client-side
       // check is a UX gate; the server-side is_admin flag is the
