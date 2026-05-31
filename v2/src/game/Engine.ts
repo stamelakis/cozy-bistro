@@ -438,6 +438,11 @@ export class Engine {
     };
     this.ledgerModal = new LedgerModal(container, this.game);
     this.helpModal = new HelpModal(container);
+    // Hard block: HelpModal won't open while the game is still
+    // auth-gated, regardless of who calls show(). Stops the welcome
+    // card from flashing before the LoginModal on a cold load even
+    // if a race condition somewhere else triggers show() early.
+    this.helpModal.canShow = () => !this.game.isAuthGated();
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game);
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);

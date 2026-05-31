@@ -52,6 +52,12 @@ const SECTIONS: HelpSection[] = [
 
 export class HelpModal {
   private readonly root: HTMLElement;
+  /** Optional gate set by the Engine — when present and returns
+   * false the modal refuses to show. Used to block the welcome
+   * pop while the auth flow is still in progress so the help
+   * card can't visually stack with / flash behind the LoginModal
+   * on a cold load, no matter what code path triggers show(). */
+  canShow?: () => boolean;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -164,6 +170,11 @@ export class HelpModal {
   }
 
   show(): void {
+    if (this.canShow && !this.canShow()) {
+      // Auth flow still in progress (LoginModal owns the screen).
+      // Silently drop the request rather than stacking under it.
+      return;
+    }
     this.root.style.display = "flex";
   }
 

@@ -342,6 +342,10 @@ export class Game {
    * the player loses time on every reconnect. */
   private authGated = false;
   setAuthGated(gated: boolean): void { this.authGated = gated; }
+  /** True while the LoginModal owns the screen. Other UI checks
+   * this to refuse rendering on top of the login flow (e.g.
+   * HelpModal's auto-show). */
+  isAuthGated(): boolean { return this.authGated; }
 
   update(dt: number): void {
     if (this.authGated) return;
