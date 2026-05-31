@@ -321,6 +321,15 @@ export class Engine {
         luxuryTier: save.luxuryTier,
       };
     };
+    // And the full save blob so VisitMode can load the visited
+    // restaurant's furniture into the visitorRoot group.
+    this.visitMode.fetchVisitedSaveBlob = (ownerHex: string) => {
+      const accounts = this.cloud.listAccounts();
+      const acct = accounts.find((a) => a.identity.toHexString() === ownerHex);
+      if (!acct) return null;
+      const save = this.cloud.getPlayerSave(acct.identity);
+      return save?.data ?? null;
+    };
     // Home button while visiting should exit visit mode first so the
     // player goes back to their own restaurant cleanly.
     const originalGoHome = this.camera.goHome.bind(this.camera);

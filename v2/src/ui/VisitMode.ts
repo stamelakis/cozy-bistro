@@ -1,6 +1,12 @@
 import * as THREE from "three";
 import type { IsoCamera } from "../scene/IsoCamera";
 import type { WorldScene } from "../scene/WorldScene";
+import { getFurnitureDef } from "../data/furnitureCatalog";
+import { fitFurniture, placementY } from "../assets/fitFurniture";
+
+/** Meters between adjacent floor slabs — mirrors
+ * WorldScene.STOREY_HEIGHT (currently 3 m). */
+const STOREY_HEIGHT = 3;
 
 /** Metadata stamped on each city-building shell by
  * WorldScene.populateCityBuildings so a click raycast can identify
@@ -62,6 +68,15 @@ export class VisitMode {
   private activePlot: VisitablePlot | null = null;
   private popup: HTMLDivElement | null = null;
   private overlay: HTMLDivElement | null = null;
+  /** Group holding every loaded furniture model for the current
+   * visit. Parented to worldRoot at the visited plot's coords on
+   * enter; removed + nulled on exit. Geometries/materials come from
+   * the model loader's cache and are reused across visits. */
+  private visitorRoot: THREE.Group | null = null;
+  /** Shell mesh at the visited plot — hidden during visit so the
+   * loaded interior is unobstructed by the placeholder facade.
+   * Re-shown on exit. */
+  private hiddenShell: THREE.Object3D | null = null;
   /** Optional hook so Engine can pause its own systems while a visit
    * is active (e.g. suppress build-menu placement, hide bubbles). */
   onEnter?: (plot: VisitablePlot) => void;
@@ -71,6 +86,11 @@ export class VisitMode {
    * rating, tier) read from their published save. Returns null if
    * the visited player hasn't synced a save yet. */
   fetchVisitedStats?: (ownerHex: string) => VisitedSaveStats | null;
+  /** Engine wires this to SpacetimeClient.getPlayerSave so the
+   * interior render can load the visited player's furniture
+   * placements. Returns the raw JSON blob (the same string the
+   * publish_player_save reducer received). */
+  fetchVisitedSaveBlob?: (ownerHex: string) => string | null;
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -218,6 +238,12 @@ export class VisitMode {
     // the same angle — easier to compare layouts.
     this.camera.setAzimuth(Math.PI / 4);
     this.showOverlay(plot);
+    // Hide the placeholder shell so the loaded interior is visible
+    // (otherwise the Paris-style facade walls occlude the furniture).
+    this.hideVisitedShell(plot);
+    // Kick off the interior render — fire-and-forget; the overlay
+    // shows "(loading interior…)" until the placements land.
+    void this.loadVisitedInterior(plot);
     this.onEnter?.(plot);
   }
 
@@ -230,7 +256,92 @@ export class VisitMode {
     this.snapshot = null;
     this.activePlot = null;
     this.hideOverlay();
+    this.disposeVisitorRoot();
+    this.restoreVisitedShell();
     this.onExit?.();
+  }
+
+  // ─── Interior render (P4.3) ──────────────────────────────────────
+
+  /** Walk the cityBuildings group to find the shell whose visitPlot
+   * userData matches the given plot, and hide it so the loaded
+   * interior renders unobstructed. */
+  private hideVisitedShell(plot: VisitablePlot): void {
+    if (!this.scene.cityBuildings) return;
+    for (const child of this.scene.cityBuildings.children) {
+      const p = child.userData?.visitPlot as VisitablePlot | undefined;
+      if (p && p.id === plot.id) {
+        child.visible = false;
+        this.hiddenShell = child;
+        return;
+      }
+    }
+  }
+
+  private restoreVisitedShell(): void {
+    if (this.hiddenShell) {
+      this.hiddenShell.visible = true;
+      this.hiddenShell = null;
+    }
+  }
+
+  private disposeVisitorRoot(): void {
+    if (!this.visitorRoot) return;
+    this.scene.worldRoot.remove(this.visitorRoot);
+    // Geometries + materials come from the shared ModelLoader cache —
+    // do NOT dispose them here or the player's own restaurant loses
+    // every furniture mesh on the next visit.
+    this.visitorRoot = null;
+  }
+
+  private async loadVisitedInterior(plot: VisitablePlot): Promise<void> {
+    const blob = this.fetchVisitedSaveBlob?.(plot.ownerHex);
+    if (!blob) return; // overlay already shows "(save not synced yet)"
+    let save: { furniture?: Array<{ uid: string; furnitureId: string; position: { x: number; y: number }; rotation?: number; floor?: number }> };
+    try {
+      save = JSON.parse(blob);
+    } catch (e) {
+      console.warn("[Visit] failed to parse visited save:", e);
+      return;
+    }
+    if (!save.furniture || !Array.isArray(save.furniture)) return;
+
+    // Visitor root lives INSIDE worldRoot at the plot's local
+    // coordinates — so the same worldRoot offset that positions every
+    // other player's shell also positions our render. The save's
+    // placements are in restaurant-local coords (origin = building
+    // centre), which is exactly what we want here too.
+    const root = new THREE.Group();
+    root.position.set(plot.plotX, 0, plot.plotZ);
+    this.scene.worldRoot.add(root);
+    this.visitorRoot = root;
+
+    // Snapshot the active plot id — if the player exits mid-load
+    // we must NOT keep adding meshes to a stale root.
+    const targetPlotId = plot.id;
+
+    await Promise.all(save.furniture.map(async (p) => {
+      if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
+      const def = getFurnitureDef(p.furnitureId);
+      if (!def) return;
+      try {
+        const model = await this.scene.loader.load(def.modelPath);
+        if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
+        // Each load returns a fresh clone from the cache. Pose it.
+        fitFurniture(model, def);
+        const floor = Math.max(0, p.floor ?? 0);
+        const rotY = ((p.rotation ?? 0) * Math.PI) / 180;
+        model.position.set(
+          p.position.x,
+          placementY(model, def) + floor * STOREY_HEIGHT,
+          p.position.y, // save's "y" is world Z (legacy 2D grid naming)
+        );
+        model.rotation.y = rotY;
+        this.visitorRoot.add(model);
+      } catch (err) {
+        console.warn(`[Visit] failed to load ${def.id}:`, err);
+      }
+    }));
   }
 
   // ─── Top-center "Visiting X · Exit" overlay ─────────────────────
