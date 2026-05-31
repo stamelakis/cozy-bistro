@@ -1287,41 +1287,50 @@ export class Engine {
     // they are, the modal is destroyed without ever being shown —
     // no "login screen flashes on reload" anymore. If they're not,
     // we reveal it after the timeout.
-    const modal = new LoginModal(container, this.cloud, afterAuth, /* startHidden */ true);
+    const modal = new LoginModal(container, this.cloud, () => afterAuthOnce(), /* startHidden */ true);
+
+    // afterAuth must run exactly once — both the manual-login path
+    // (modal's onAuthenticated callback) and the silent-detection
+    // path (subscription listener below) can race to invoke it
+    // when login completes. Without this guard the second caller
+    // would re-enter the game and trample the in-flight state set
+    // by the first.
+    let didAfterAuth = false;
+    const afterAuthOnce = (): void => {
+      if (didAfterAuth) return;
+      didAfterAuth = true;
+      try { unsub?.(); } catch { /* ignore */ }
+      window.clearTimeout(timer);
+      afterAuth();
+    };
 
     // Already authenticated synchronously (cache hot, common path
     // when the page reloads and the token deserializes immediately).
     if (this.cloud.isAuthenticated()) {
       modal.destroy();
-      afterAuth();
+      afterAuthOnce();
       return;
     }
 
     // Otherwise wait for the auth_record cache to land. Subscribe to
-    // the cloud's table-change notifications + race a 3s timeout.
-    // First side to fire wins: a notification firing isAuthenticated
-    // before the timeout silently dismisses the modal; a timeout
-    // before notification means there's really no account for this
-    // identity → reveal the modal so the player can log in / sign up.
-    let resolved = false;
+    // the cloud's table-change notifications and KEEP listening even
+    // after the modal is shown — slow connections / cold maincloud
+    // can take >5s for the auth_record row to land, and we want a
+    // late arrival to auto-dismiss the modal instead of forcing the
+    // already-logged-in player to type credentials again. The 8s
+    // patience window (was 3s) just controls when the modal becomes
+    // visible if we haven't detected auth by then.
     let timer = 0;
-    let unsub: (() => void) | null = null;
-    const finish = (authed: boolean): void => {
-      if (resolved) return;
-      resolved = true;
-      window.clearTimeout(timer);
-      unsub?.();
-      if (authed) {
+    const unsub: () => void = this.cloud.subscribe(() => {
+      if (didAfterAuth) return;
+      if (this.cloud.isAuthenticated()) {
         modal.destroy();
-        afterAuth();
-      } else {
-        modal.show();
+        afterAuthOnce();
       }
-    };
-    unsub = this.cloud.subscribe(() => {
-      if (this.cloud.isAuthenticated()) finish(true);
     });
-    timer = window.setTimeout(() => finish(false), 3000);
+    timer = window.setTimeout(() => {
+      if (!didAfterAuth) modal.show();
+    }, 8000);
   }
 
   /** Read the current building list from SpacetimeDB and have

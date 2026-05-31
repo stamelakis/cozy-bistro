@@ -226,6 +226,10 @@ export class LoginModal {
       }
     };
     this.body.appendChild(submit);
+    // Pressing Enter in either credential field submits the form —
+    // anything else and the player has to mouse the button, which
+    // breaks the typing flow.
+    wireEnterSubmit([userInput.input, passInput.input], submit);
   }
 
   private renderSignup(): void {
@@ -266,6 +270,7 @@ export class LoginModal {
       }
     };
     this.body.appendChild(submit);
+    wireEnterSubmit([userInput.input, passInput.input], submit);
   }
 
   private renderForgot(): void {
@@ -326,6 +331,9 @@ export class LoginModal {
       }
     };
     this.body.appendChild(submit);
+    // Enter on the username field submits; the message textarea is
+    // multiline so Enter there should insert a newline as normal.
+    wireEnterSubmit([userInput.input], submit);
   }
 
   // ============================================================================
@@ -460,6 +468,25 @@ export class LoginModal {
    * placeholder, nothing to dismiss visually. */
   destroy(): void {
     try { this.root.remove(); } catch { /* already gone */ }
+  }
+}
+
+/** Wire pressing Enter inside any of the given input fields to a
+ * click on the submit button. Lets the player tab through fields
+ * + hit Enter without ever touching the mouse, which is the
+ * baseline expectation for any login form. Ignored when the
+ * button is disabled (already busy / Enter held during a request). */
+function wireEnterSubmit(inputs: HTMLInputElement[], submit: HTMLButtonElement): void {
+  for (const input of inputs) {
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      // Don't fire if the field is currently disabled (the submit
+      // path disables every input + button while a request is in
+      // flight; double-submit would re-fire the network call).
+      if (submit.disabled || input.disabled) return;
+      e.preventDefault();
+      submit.click();
+    });
   }
 }
 
