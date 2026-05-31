@@ -465,7 +465,7 @@ export class Game {
     // Per-tier dishware snapshot — preferred over the legacy
     // dirtyDishCount when both are present. Hydrate sets up the pool
     // (or seeds starter inventory when no save data is present).
-    this.dishware.hydrate(save.dishware, save.inFlightDishes, save.dishwareLifetime);
+    this.dishware.hydrate(save.dishware, save.inFlightDishes, save.dishwareLifetime, save.dishwarePurchases);
     // Old-save fallback: dirtyDishCount existed pre-feature. We MOVE
     // pieces from clean → dirty rather than ADD to dirty, so total
     // ownership stays at the starter amount instead of inflating to
@@ -1209,6 +1209,20 @@ export class Game {
    * the starting average. */
   adminResetReputation(): void {
     this.reputation.adminReset();
+  }
+
+  /** Admin one-shot: undo accumulated dishware over-compensation
+   * by rewinding inventory + lifetime totals to STARTER + the
+   * recorded purchase log. Players who sat on the pre-fix hydrate
+   * bug had hundreds of phantom plates / glasses; this gets them
+   * back to "exactly what I actually bought" without losing any
+   * future purchases. */
+  adminReconcileDishware(): { plates: number; glasses: number } {
+    this.dishware.reconcileToPurchaseLog();
+    return {
+      plates: this.dishware.getOwned("plate"),
+      glasses: this.dishware.getOwned("glass"),
+    };
   }
 }
 

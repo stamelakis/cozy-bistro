@@ -672,6 +672,39 @@ export class AdminModal {
       this.game.autoShopEnabled = !this.game.autoShopEnabled;
     }));
     section.appendChild(row);
+    // Dishware reconciliation — undoes drift from the pre-fix
+    // over-compensation. Resets inventory to STARTER + sum(purchase
+    // log) so the player can recover from "I have 363 plates" back
+    // to "I have whatever I actually bought + starter stock". Lives
+    // on its own row because it triggers a confirm dialog and the
+    // result text deserves its own line.
+    const reconcileRow = document.createElement("div");
+    Object.assign(reconcileRow.style, {
+      marginTop: "6px",
+      display: "flex", flexDirection: "column", gap: "3px",
+    } as Partial<CSSStyleDeclaration>);
+    const reconcileBtn = this.actionButton("🍽 Reconcile dishware (fix duping)", "danger", () => {
+      const before = `${this.game.dishware.getOwned("plate")}p + ${this.game.dishware.getOwned("glass")}g`;
+      if (!window.confirm(
+        `Reset dishware inventory to STARTER + recorded purchases?\n\n` +
+        `Current: ${before}\n` +
+        `This wipes any phantom dishes left over from the\n` +
+        `pre-fix over-compensation bug. Your purchase history\n` +
+        `is preserved — only the inventory counters reset.`
+      )) return;
+      const after = this.game.adminReconcileDishware();
+      // Brief inline feedback so the player sees the new count.
+      const msg = document.createElement("div");
+      msg.textContent = `Reconciled: ${before} → ${after.plates}p + ${after.glasses}g`;
+      Object.assign(msg.style, {
+        fontSize: "10px", opacity: "0.85", padding: "2px 4px",
+        background: "rgba(120, 200, 120, 0.18)", borderRadius: "3px",
+      } as Partial<CSSStyleDeclaration>);
+      reconcileRow.appendChild(msg);
+      window.setTimeout(() => { try { msg.remove(); } catch { /* ignore */ } }, 5000);
+    });
+    reconcileRow.appendChild(reconcileBtn);
+    section.appendChild(reconcileRow);
     return section;
   }
 

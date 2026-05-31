@@ -251,6 +251,12 @@ export class SaveSystem {
       // hydrate path tops up the clean pool to match this so any
       // pieces that leaked during play return as clean.
       dishwareLifetime: this.game.dishware.getLifetimeAddedByKind(),
+      // Append-only audit log of every dishware purchase. STARTER +
+      // sum(log) is the immutable ground truth for lifetime totals
+      // — if the in-game pool ever drifts, admin can call
+      // reconcileToPurchaseLog to rewind back to exactly what the
+      // player actually bought.
+      dishwarePurchases: this.game.dishware.getPurchaseLog().slice(),
       // Per-tier dish/glass snapshot. Legacy dirtyDishCount is no
       // longer written — the new field has strictly more info, and
       // the loader handles either.

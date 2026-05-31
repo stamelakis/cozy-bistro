@@ -66,9 +66,21 @@ export class DishwareSystem {
    * for plates and glasses independently. On hydrate the system tops
    * up the clean pool to match these totals — any pieces that leaked
    * during the previous session come back as clean plates / glasses,
-   * preventing the slow inventory shrink the player kept seeing. */
+   * preventing the slow inventory shrink the player kept seeing.
+   *
+   * SOURCE OF TRUTH: these are computed from STARTER + sum(purchaseLog).
+   * The mutable fields shadow the running total so we don't recompute
+   * on every read. They're INCREMENTED only by buySet (real purchases)
+   * and RESET only by resetToStarter / hydrate-with-log. Hydrate never
+   * does a Math.max re-baseline — that was the duping bug. */
   private lifetimeAddedPlate = 0;
   private lifetimeAddedGlass = 0;
+  /** Append-only log of every dishware purchase the player has made
+   * this lifetime — the source of truth for the lifetime totals.
+   * Persisted in the save so the player can always reconcile back to
+   * "starter stock plus the dishware they bought" if the in-game
+   * counters ever drift. Each entry is one buySet call. */
+  private purchaseLog: Array<{ kind: DishKind; tier: number; count: number; at: number }> = [];
 
   /** Optional dev-mode logger — every mutation calls this with a
    * one-line description before returning. Wired by Engine to the
@@ -277,8 +289,51 @@ export class DishwareSystem {
     // also calls addClean to return reservations, and those plates were
     // already part of the lifetime when bought.
     this.bumpLifetime(set.kind, taken);
+    if (taken > 0) {
+      // Append to the immutable purchase log — this is the audit
+      // trail the player can use to reconcile their inventory if
+      // the in-game pool ever drifts. Combined with STARTER counts
+      // it's the ground-truth lifetime.
+      this.purchaseLog.push({ kind: set.kind, tier: set.tier, count: taken, at: Date.now() });
+    }
     this.log(`buySet(${set.id ?? set.kind}, t${set.tier}, +${taken}) → lifetime ${this.getLifetimeAdded()}`);
     return taken;
+  }
+
+  /** Read-only view of the purchase log for debug / admin UI. */
+  getPurchaseLog(): readonly { kind: DishKind; tier: number; count: number; at: number }[] {
+    return this.purchaseLog;
+  }
+
+  /** Recompute the "expected" lifetime totals straight from STARTER
+   * + sum(purchaseLog). This is the canonical formula — if the
+   * mutable lifetime counters ever disagree, this is the value
+   * they should be reset to. */
+  computeLifetimeFromLog(): { plate: number; glass: number } {
+    let plate = STARTER_PLATE_COUNT;
+    let glass = STARTER_GLASS_COUNT;
+    for (const p of this.purchaseLog) {
+      if (p.kind === "plate") plate += p.count;
+      else glass += p.count;
+    }
+    return { plate, glass };
+  }
+
+  /** Admin: reset both pool and lifetime counters to STARTER +
+   * sum(purchaseLog). Sole purpose is undoing the accumulated
+   * over-compensation from the pre-fix hydrate bug. Players who
+   * sat on that bug for many sessions ended up with hundreds of
+   * phantom dishes; this rewinds them to "what you actually
+   * bought" without losing the purchase history. */
+  reconcileToPurchaseLog(): void {
+    const target = this.computeLifetimeFromLog();
+    this.plates = new Map();
+    this.glasses = new Map();
+    this.plates.set(1, { clean: target.plate, dirty: 0 });
+    this.glasses.set(1, { clean: target.glass, dirty: 0 });
+    this.lifetimeAddedPlate = target.plate;
+    this.lifetimeAddedGlass = target.glass;
+    this.log(`reconcileToPurchaseLog → ${target.plate} plates, ${target.glass} glasses (starter + ${this.purchaseLog.length} purchases)`);
   }
 
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===
@@ -428,6 +483,7 @@ export class DishwareSystem {
     save: { plates?: Array<[number, number, number]>; glasses?: Array<[number, number, number]> } | null | undefined,
     inFlight?: Array<{ kind: string; tier: number; count: number }>,
     lifetime?: { plate?: number; glass?: number },
+    purchaseLog?: Array<{ kind: string; tier: number; count: number; at?: number }>,
   ): void {
     this.plates = new Map();
     this.glasses = new Map();
@@ -437,54 +493,59 @@ export class DishwareSystem {
     if (this.glasses.size === 0) this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
     autoWashPool(this.plates);
     autoWashPool(this.glasses);
-    // Restore in-flight reservations. Guests aren't persisted, so a
-    // plate they were holding at save time would otherwise vanish.
-    if (inFlight && Array.isArray(inFlight)) {
-      let recovered = 0;
-      for (const e of inFlight) {
-        if (!e || typeof e.tier !== "number" || typeof e.count !== "number") continue;
-        if (e.tier < 1 || e.tier > 5) continue;
-        const c = Math.max(0, Math.floor(e.count));
-        if (c <= 0) continue;
-        const kind: DishKind = e.kind === "glass" ? "glass" : "plate";
-        const pool = this.poolFor(kind);
-        const entry = pool.get(e.tier) ?? { clean: 0, dirty: 0 };
-        entry.clean += c;
-        pool.set(e.tier, entry);
-        recovered += c;
-      }
-      if (recovered > 0) this.log(`hydrate restored ${recovered} in-flight piece(s) to clean`);
-    }
-    // Adopt persisted lifetime totals (fall back to "current owned"
-    // for old saves that don't have them). Then top up the clean pool
-    // for each kind so any pieces that LEAKED during the previous
-    // session — those that should have been there but weren't — come
-    // back as clean tier-1 pieces. This is the user-requested
-    // "disappeared plates/glasses return as clean on next load".
-    const wantPlate = Math.max(0, Math.floor(lifetime?.plate ?? this.getOwned("plate")));
-    const wantGlass = Math.max(0, Math.floor(lifetime?.glass ?? this.getOwned("glass")));
+    // (No in-flight add here anymore — that's the duping bug. The
+    //  saved in-flight count was sometimes double-counted from
+    //  reservedDishTiers, and the unconditional `pool += in-flight`
+    //  inflated the pool past the lifetime, which then propagated
+    //  upward via the Math.max baseline below. The top-up branch
+    //  beneath this comment already recovers any plates the guest
+    //  was holding at save time — anything in-flight shows up as
+    //  `lifetime > pool` after the save snapshot is loaded.)
+    // Lifetime is the GROUND TRUTH. It comes from the persisted save
+    // value (which only grows via buySet) — no Math.max re-baseline,
+    // no widening on hydrate noise. Old saves without a lifetime
+    // field fall back to "current owned" so they don't fail to load.
+    this.lifetimeAddedPlate = Math.max(0, Math.floor(lifetime?.plate ?? this.getOwned("plate")));
+    this.lifetimeAddedGlass = Math.max(0, Math.floor(lifetime?.glass ?? this.getOwned("glass")));
+    // Top up the pool to match lifetime. Recovers BOTH leaks and
+    // in-flight pieces in one shot.
     const havePlate = this.getOwned("plate");
     const haveGlass = this.getOwned("glass");
-    if (wantPlate > havePlate) {
-      const missing = wantPlate - havePlate;
+    if (this.lifetimeAddedPlate > havePlate) {
+      const missing = this.lifetimeAddedPlate - havePlate;
       const e = this.plates.get(1) ?? { clean: 0, dirty: 0 };
       e.clean += missing;
       this.plates.set(1, e);
       this.log(`hydrate recovered ${missing} missing plate(s) → clean tier 1`);
     }
-    if (wantGlass > haveGlass) {
-      const missing = wantGlass - haveGlass;
+    if (this.lifetimeAddedGlass > haveGlass) {
+      const missing = this.lifetimeAddedGlass - haveGlass;
       const e = this.glasses.get(1) ?? { clean: 0, dirty: 0 };
       e.clean += missing;
       this.glasses.set(1, e);
       this.log(`hydrate recovered ${missing} missing glass(es) → clean tier 1`);
     }
-    // Re-baseline lifetime totals to the larger of (persisted, current
-    // owned). Players who somehow have MORE than the persisted lifetime
-    // shouldn't be penalised by a re-baseline lowering it.
-    this.lifetimeAddedPlate = Math.max(wantPlate, this.getOwned("plate"));
-    this.lifetimeAddedGlass = Math.max(wantGlass, this.getOwned("glass"));
-    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass}`);
+    // Restore purchase log if present in the save. Old saves don't
+    // have one; their lifetime stays whatever value the save
+    // recorded (may be bloated from the pre-fix bug — admin can
+    // call reconcileToPurchaseLog if they want to wipe back to
+    // STARTER + whatever future buys they make).
+    if (purchaseLog && Array.isArray(purchaseLog)) {
+      this.purchaseLog = purchaseLog
+        .filter((p) => p && typeof p.tier === "number" && typeof p.count === "number"
+          && p.tier >= 1 && p.tier <= 5 && p.count > 0)
+        .map((p) => ({
+          kind: p.kind === "glass" ? "glass" : "plate" as DishKind,
+          tier: Math.floor(p.tier),
+          count: Math.floor(p.count),
+          at: typeof p.at === "number" ? p.at : 0,
+        }));
+    }
+    // Quiet/silently-ignore the in-flight param — it's now unused on
+    // the read side. Keeping the signature for backwards-compat with
+    // the save format so old call sites don't have to change.
+    void inFlight;
+    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass}, log entries: ${this.purchaseLog.length}`);
   }
 
   // === Rating bonus ===

@@ -279,6 +279,13 @@ export interface SaveGameState {
    * silently dropped during the previous session, the inventory comes
    * back equal to or greater than this number. */
   dishwareLifetime?: { plate?: number; glass?: number };
+  /** Append-only audit trail of every dishware purchase the player
+   * made this lifetime. STARTER + sum(this) is the canonical
+   * formula for what the player should own — used by the admin
+   * "Reconcile dishware" action to wipe inventory drift back to
+   * the player's actual purchase history. Optional for old saves
+   * that pre-date the log. */
+  dishwarePurchases?: Array<{ kind: string; tier: number; count: number; at?: number }>;
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];
