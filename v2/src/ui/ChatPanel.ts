@@ -35,6 +35,15 @@ export class ChatPanel {
   private activeChannel = "global";
   /** Tab descriptors keyed by channel id. */
   private tabs = new Map<string, { channel: string; label: string; closable: boolean; unread: number; otherHex?: string; btn: HTMLButtonElement; close?: HTMLButtonElement }>();
+  /** In-memory message log per channel. Populated ONLY from
+   * onChatMessage callbacks fired during the current session — no
+   * server-cached replay is rendered. This is what enforces
+   * "ephemeral chat": a reload starts the UI fresh even if the
+   * server still briefly holds messages from a few seconds ago. */
+  private sessionMessages = new Map<string, SessionMessage[]>();
+  /** Cap on messages kept per channel — older ones drop. Keeps
+   * memory bounded if a session runs for hours. */
+  private readonly maxPerChannel = 200;
   /** True when the panel body is collapsed (only title bar visible).
    * Defaults TRUE so the panel opens as a thin 32 px-tall bar that
    * doesn't crowd the centered MenuPanel. The user clicks the title
@@ -46,8 +55,6 @@ export class ChatPanel {
   private lastLogSig = "";
   /** Detach the chat-message listener on dispose. */
   private chatUnsub: (() => void) | null = null;
-  /** Detach the state-change listener on dispose. */
-  private cloudUnsub: (() => void) | null = null;
 
   constructor(parent: HTMLElement, cloud: SpacetimeClient) {
     this.cloud = cloud;
@@ -234,21 +241,15 @@ export class ChatPanel {
     // `this.minimized` after construction.
     this.applyMinimizedStyles();
 
-    // Hydrate any PMs that already existed when this client connected
-    // (e.g. the previous session received a PM and now we're reloading).
-    this.discoverExistingPms();
+    // No discoverExistingPms() — explicitly ephemeral. PM tabs spawn
+    // when the FIRST message arrives in this session, not from
+    // server-cached history.
 
     // Subscribe to new chat messages — bump unread counts, refresh
     // active log, auto-spawn a tab if it's a PM we haven't seen.
+    // This is the ONLY source of messages for the UI; nothing
+    // reads from the server-side cache (cloud.listChatMessages).
     this.chatUnsub = this.cloud.onChatMessage((msg) => this.onIncoming(msg));
-    // Also subscribe to generic state changes so the active log
-    // refreshes after our own send (the row appears in the cache via
-    // the same notify path that drives the rest of the UI).
-    this.cloudUnsub = this.cloud.subscribe(() => {
-      // Cheap when nothing changed — the signature check inside
-      // refreshActiveLog short-circuits.
-      this.refreshActiveLog();
-    });
   }
 
   // ============================================================
@@ -348,6 +349,30 @@ export class ChatPanel {
   // ============================================================
 
   private onIncoming(msg: { id: bigint; channel: string; senderHex: string; senderName: string; text: string; sentAtMs: number; isMine: boolean }): void {
+    // Push into the session-only in-memory store. We deliberately
+    // do NOT consult the server cache for older messages — every
+    // session starts with an empty log.
+    //
+    // Dedupe by message id (in case the server replays a row we
+    // already received earlier in the session).
+    let list = this.sessionMessages.get(msg.channel);
+    if (!list) {
+      list = [];
+      this.sessionMessages.set(msg.channel, list);
+    }
+    if (list.some((m) => m.id === msg.id)) return;
+    list.push({
+      id: msg.id,
+      senderHex: msg.senderHex,
+      senderName: msg.senderName,
+      text: msg.text,
+      sentAtMs: msg.sentAtMs,
+      isMine: msg.isMine,
+    });
+    // Trim oldest if we're over the per-channel cap.
+    if (list.length > this.maxPerChannel) {
+      list.splice(0, list.length - this.maxPerChannel);
+    }
     // Auto-spawn a PM tab when we receive a message on a channel we
     // didn't already have open (the recipient may not have started
     // the conversation themselves).
@@ -378,7 +403,11 @@ export class ChatPanel {
 
   private refreshActiveLog(): void {
     const channel = this.activeChannel;
-    const msgs = this.cloud.listChatMessages(channel, 200);
+    // Read from the session-only in-memory store, NOT from the
+    // server-side cache (cloud.listChatMessages). This guarantees a
+    // reload starts the chat fresh even if the server still has a
+    // few seconds of recently-delivered messages in its table.
+    const msgs = this.sessionMessages.get(channel) ?? [];
     // Signature = id of newest message + length. A new send or delete
     // bumps either field; signatures match → no rebuild needed.
     const sig = msgs.length === 0 ? "0|0" : `${msgs[msgs.length - 1].id}|${msgs.length}`;
@@ -478,19 +507,9 @@ export class ChatPanel {
     this.setActive(channel);
   }
 
-  /** On panel mount, walk the chat_message cache for any PM channels
-   * where I'm a participant and pre-open tabs so existing
-   * conversations are immediately accessible. */
-  private discoverExistingPms(): void {
-    for (const conv of this.cloud.listMyPmConversations()) {
-      this.addTab({
-        channel: conv.channel,
-        label: `@${conv.otherName}`,
-        closable: true,
-        otherHex: conv.otherHex,
-      });
-    }
-  }
+  // (discoverExistingPms removed — owner wants ephemeral chat with
+  //  no historical replay. PM tabs auto-spawn from onIncoming when
+  //  the first in-session message arrives on a new channel.)
 
   // ============================================================
   //                       MINIMIZE / DISPOSE
@@ -519,9 +538,20 @@ export class ChatPanel {
 
   destroy(): void {
     if (this.chatUnsub) { this.chatUnsub(); this.chatUnsub = null; }
-    if (this.cloudUnsub) { this.cloudUnsub(); this.cloudUnsub = null; }
     try { this.root.remove(); } catch { /* already gone */ }
   }
+}
+
+/** Session-only message record. Lives entirely in the ChatPanel's
+ * in-memory store and never gets re-hydrated from the server cache
+ * on the next session (that's the whole point — ephemeral chat). */
+interface SessionMessage {
+  id: bigint;
+  senderHex: string;
+  senderName: string;
+  text: string;
+  sentAtMs: number;
+  isMine: boolean;
 }
 
 // ============================================================

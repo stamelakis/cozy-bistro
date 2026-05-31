@@ -25,13 +25,20 @@ const MAX_TEXT_LEN: usize = 500;
 const RATE_LIMIT_WINDOW_MICROS: i64 = 10_000_000; // 10 s
 const RATE_LIMIT_COUNT: usize = 5;
 
-/// Retention: drop messages older than this from any channel.
-const RETENTION_MICROS: i64 = 24 * 60 * 60 * 1_000_000; // 24 h
+/// Retention: drop messages older than this from any channel. Owner
+/// asked for ephemeral chat (no server-side history), so this is
+/// kept SHORT — just long enough for the SpacetimeDB pub/sub to
+/// deliver the row to every live subscriber. Combined with the
+/// 5-min cleanup tick that's enough to keep the chat_message table
+/// effectively empty most of the time; the client also ignores any
+/// rows older than its own session start, so even the worst-case
+/// "5 min of replay on reload" produces an empty chat UI.
+const RETENTION_MICROS: i64 = 60 * 1_000_000; // 60 s
 
-/// Global-channel cap: even within the retention window, keep at
-/// most this many global messages — the oldest are deleted to make
-/// room. Prevents a burst of activity from filling the table.
-const GLOBAL_KEEP: usize = 500;
+/// Global-channel cap — backstop in case of a sudden burst. With
+/// retention at 60 s + a 5-msg/10-s per-sender rate limit it's
+/// almost impossible to reach, but it's free insurance.
+const GLOBAL_KEEP: usize = 50;
 
 /// Send a message to the global channel. Rejects banned accounts +
 /// rate-limited senders. Channel is hard-coded so a client can't
