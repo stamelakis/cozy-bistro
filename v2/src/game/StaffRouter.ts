@@ -274,6 +274,25 @@ const CHEF_SPEED = 1.2;
 // per-customer wait times sane even when one waiter is covering
 // multiple floors.
 const WAITER_SPEED = 2.4;
+
+/** Player-restaurant interior bounds — the floor plane is
+ * PlaneGeometry(10, 10) centered at (+0.5, +0.5), spanning X ∈
+ * [-4.5, +5.5] and Z ∈ [-4.5, +5.5]. Waiters / chefs / barmen are
+ * "indoor staff" and must NEVER end up outside those walls.
+ *
+ * The bug this stops: PersonalSpace pushes overlapping actors
+ * apart each frame; near the door (south wall, z=+5.5) waiters and
+ * arriving customers cluster, and the cumulative outward push
+ * eventually drove an idle waiter through the wall onto the
+ * pavement / mid-air outside upper floors.
+ *
+ * Clamp values are inset by 0.30 m from the wall plane so the
+ * character body (≈0.45 m wide) doesn't visibly clip the wall
+ * from the outside. */
+const INTERIOR_MIN_X = -4.20;
+const INTERIOR_MAX_X = +5.20;
+const INTERIOR_MIN_Z = -4.20;
+const INTERIOR_MAX_Z = +5.20;
 /** How long an idle waiter (or chef) will wait for HOME-FLOOR work
  * before falling back to cross-floor work. Tuned for ~2s so a local
  * chef / waiter has a moment to free up before the staff member
@@ -690,6 +709,28 @@ export class StaffRouter {
    * caller (Engine) can remove its model from the scene. Prefers idle
    * chefs so we don't strand an in-progress ticket. Returns null if the
    * pool is empty. */
+  /** Pin every indoor staff member's XZ position back inside the
+   * building's walls. Engine calls this once per frame AFTER the
+   * PersonalSpace push pass — without it, two waiters jostling each
+   * other near the door can be incrementally shoved through the
+   * south wall over a few seconds (the bug that put idle waiters
+   * on the exterior wall surface of upper floors).
+   *
+   * Cheap: just three array walks with two compare-and-assign
+   * branches per actor; safe to call every frame. */
+  clampAllStaffToInterior(): void {
+    const clampOne = (a: StaffActor): void => {
+      const p = a.character.groundPos;
+      if (p.x < INTERIOR_MIN_X) p.x = INTERIOR_MIN_X;
+      else if (p.x > INTERIOR_MAX_X) p.x = INTERIOR_MAX_X;
+      if (p.y < INTERIOR_MIN_Z) p.y = INTERIOR_MIN_Z;
+      else if (p.y > INTERIOR_MAX_Z) p.y = INTERIOR_MAX_Z;
+    };
+    for (const a of this.chefs) clampOne(a);
+    for (const a of this.waiters) clampOne(a);
+    for (const a of this.barmen) clampOne(a);
+  }
+
   removeChef(): AnimatedCharacter | null {
     return this.popPreferIdle(this.chefs);
   }
@@ -2070,6 +2111,13 @@ export class StaffRouter {
     const step = Math.min(dist, a.speed * speedMult * dt);
     pos.x += (dx / dist) * step;
     pos.y += (dz / dist) * step;
+    // Containment clamp — under no circumstance should an indoor
+    // staff member's body cross the building wall. Even a momentary
+    // stale path or floating-point drift gets pinned back inside.
+    if (pos.x < INTERIOR_MIN_X) pos.x = INTERIOR_MIN_X;
+    else if (pos.x > INTERIOR_MAX_X) pos.x = INTERIOR_MAX_X;
+    if (pos.y < INTERIOR_MIN_Z) pos.y = INTERIOR_MIN_Z;
+    else if (pos.y > INTERIOR_MAX_Z) pos.y = INTERIOR_MAX_Z;
     // Stair walk Y — lerp between the previous waypoint's slab anchor
     // and the next waypoint's slab anchor based on XZ progress across
     // the stair span. Slab anchor = floor*STOREY + feetLift (not _baseY,

@@ -1908,6 +1908,11 @@ export class Engine {
       if (this.pedestrians) actors.push(...this.pedestrians.snapshotMovable());
       if (this.sharedPedestrians) actors.push(...this.sharedPedestrians.snapshotMovable());
       PersonalSpace.apply(actors, dt);
+      // Re-pin every indoor staff member's XZ back inside the
+      // building walls AFTER the PersonalSpace push — without this
+      // a crowded doorway can incrementally drive a waiter through
+      // the south wall onto the pavement / mid-air outside.
+      this.router?.clampAllStaffToInterior();
     }
     // Per-stove flames — reconcile the flame map with the registry's
     // current cooking-stoves (adds new flames, removes ones for sold
