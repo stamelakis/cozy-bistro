@@ -1,0 +1,79 @@
+Cozy Bistro 3D — Proprietary License
+Copyright (c) 2024-2026 Andrew Stamelakis ("the Author").
+All Rights Reserved.
+
+This repository (the "Software") — including, without limitation, the
+source code under `v2/src/` and `v2/spacetime/`, the assets under
+`v2/public/` and `art_input/`, the build configuration, and any
+documentation, art, audio, or design materials authored in this
+project — is the proprietary work of the Author.
+
+The Author publishes this repository publicly on GitHub for
+demonstration, code-review, and portfolio purposes. Publication on a
+public host does NOT constitute a license to copy, modify, or
+redistribute the Software. No license, express or implied, is granted
+to anyone other than as explicitly stated below.
+
+
+WHAT YOU MAY DO
+
+  1. View the Software's source code on github.com/stamelakis/cozy-bistro
+     in your browser.
+  2. Fork the repository solely to exercise GitHub's site-internal
+     contribution mechanics (pull requests, issues, code review).
+     Maintaining a fork for any other purpose — running it as a
+     service, redistributing it, learning-by-copy, or developing a
+     derivative work — is NOT permitted.
+  3. Play the live deployment at the Author's published URL as an
+     end user.
+
+
+WHAT YOU MAY NOT DO
+
+Without the Author's prior, written permission you may NOT:
+
+  1. Copy, reproduce, or republish the Software or any substantial
+     portion of it.
+  2. Modify, adapt, translate, or create derivative works based on
+     the Software.
+  3. Use the Software (in source, binary, or modified form) in any
+     other project, product, or service — personal, commercial,
+     educational, or otherwise.
+  4. Distribute, publish, sublicense, sell, rent, lease, or otherwise
+     transfer the Software to any third party.
+  5. Remove or alter this license, the copyright notices, or any
+     attribution embedded in the Software.
+  6. Use the Author's name, the "Cozy Bistro" name, or any related
+     branding to endorse or promote a product without prior, written
+     permission.
+  7. Reverse-engineer the deployed client or server binaries to
+     extract, recreate, or compete with the Software.
+  8. Train a machine-learning model on the Software's source code or
+     assets without prior, written permission.
+
+
+THIRD-PARTY COMPONENTS
+
+The Software incorporates third-party libraries (e.g. three.js, the
+SpacetimeDB SDK, and the Kenney furniture asset pack) that are
+licensed under their own terms. Those third-party components remain
+governed by their respective licenses; this proprietary license
+applies ONLY to the Author's original work, not to the included
+third-party code or assets.
+
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-
+INFRINGEMENT. THE AUTHOR SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+CONTACT
+
+For licensing inquiries, partnerships, or written permission to use
+the Software in ways not allowed above, contact the Author at
+andrewstamelakis@gmail.com.
