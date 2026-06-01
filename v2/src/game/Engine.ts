@@ -149,7 +149,11 @@ export class Engine {
       // Small perf hit on integrated GPUs but invaluable for tooling.
       preserveDrawingBuffer: true,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Cap at 1.5 (was 2). 2× on a retina/4K display means 4× the
+    // fragment work per frame — the single biggest perf knob in the
+    // engine. 1.5 keeps text + thin edges crisp while cutting the
+    // pixel count by ~44% vs 2.0. On a 1× display this is a no-op.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;

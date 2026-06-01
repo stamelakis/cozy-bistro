@@ -675,7 +675,11 @@ export class WorldScene {
     this.sunLight = new THREE.DirectionalLight(0xffeac2, 1.1);
     this.sunLight.position.set(8, 14, 6);
     this.sunLight.castShadow = true;
-    this.sunLight.shadow.mapSize.set(2048, 2048);
+    // 1024² (was 2048²) — quarters the per-frame shadow texel count.
+    // At iso distance the visible shadow edges are still soft (we use
+    // PCFSoftShadowMap which blurs them on top), so the difference
+    // is hard to spot in practice. Cuts shadow-pass GPU cost ~3-4×.
+    this.sunLight.shadow.mapSize.set(1024, 1024);
     this.sunLight.shadow.camera.left = -20;
     this.sunLight.shadow.camera.right = 20;
     this.sunLight.shadow.camera.top = 20;
@@ -977,8 +981,15 @@ export class WorldScene {
     const lanternInst = new THREE.InstancedMesh(lanternGeo, lanternMat, count);
     const roofInst = new THREE.InstancedMesh(roofGeo, ironMat, count);
     const bulbInst = new THREE.InstancedMesh(bulbGeo, this.streetLampBulbMat, count);
-    poleInst.castShadow = true; // pole's the only piece tall enough to cast meaningful shadow
-    lanternInst.castShadow = true;
+    // Street lamps do NOT cast shadows. The 140-lamp InstancedMesh
+    // has a bounding box that spans ±130 m (the full street grid),
+    // so three.js renders ALL 140 instances into the shadow pass
+    // even though only ~6 near origin fall inside the sun's ±20 m
+    // shadow frustum. Net effect was a lot of wasted shadow texels
+    // for shadows that get clipped immediately. Tiny visual loss
+    // (the streaks were short at iso angle anyway).
+    poleInst.castShadow = false;
+    lanternInst.castShadow = false;
 
     const tmp = new THREE.Object3D();
     for (let i = 0; i < count; i += 1) {
@@ -2795,7 +2806,12 @@ export class WorldScene {
       new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.85 }),
     );
     walls.position.y = wallH / 2;
-    walls.castShadow = true;
+    // NOTE: scenery houses do NOT cast shadows. The sun's shadow
+    // camera covers ±20 m around world origin (the player's plot);
+    // every scenery house sits at z=±50+ along an avenue, which is
+    // already outside that frustum. Casting shadows here was pure
+    // GPU waste — three.js still iterated each scenery mesh into
+    // the shadow render pass even though the result was clipped.
     walls.receiveShadow = true;
     g.add(walls);
     // ── Horizontal cornices between floors (subtle warm band) ──────
@@ -2806,7 +2822,6 @@ export class WorldScene {
         corniceMat,
       );
       cornice.position.y = s * 2.8;
-      cornice.castShadow = true;
       g.add(cornice);
     }
     // ── Tall narrow windows on the FRONT face (+Z) ─────────────────
@@ -2849,14 +2864,12 @@ export class WorldScene {
       corniceMat,
     );
     topCornice.position.y = wallH + 0.06;
-    topCornice.castShadow = true;
     g.add(topCornice);
     const mansard = new THREE.Mesh(
       new THREE.BoxGeometry(size + 0.15, 0.7, size + 0.15),
       new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.5, metalness: 0.05 }),
     );
     mansard.position.y = wallH + 0.12 + 0.35;
-    mansard.castShadow = true;
     g.add(mansard);
     // Flat slate cap on top, slightly inset (suggests the roof's
     // upper "deck" without authoring real slopes).
@@ -2873,7 +2886,6 @@ export class WorldScene {
       chimneyMat,
     );
     chimney.position.set(size / 2 - 0.6, wallH + 0.12 + 0.7 + 0.4, -size / 2 + 0.6);
-    chimney.castShadow = true;
     g.add(chimney);
     // ── Door ──────────────────────────────────────────────────────
     const door = new THREE.Mesh(
@@ -3201,7 +3213,14 @@ export class WorldScene {
 
     // One trunk InstancedMesh for everything — trunk colour is uniform.
     const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, plans.length);
-    trunks.castShadow = true;
+    // Trees span ±180 m (way beyond the sun's ±20 m shadow frustum)
+    // so the InstancedMesh's union bounding box drags ALL 250 trees
+    // into the shadow render pass even though almost none of them
+    // sit inside the frustum. Disabling castShadow keeps the trunks
+    // out of the shadow pass entirely — they're decorative scenery,
+    // a tiny shadow streak at iso angle is a fine trade for the GPU
+    // time saved.
+    trunks.castShadow = false;
     // One canopy InstancedMesh per palette colour. Build buckets first.
     const buckets: Plan[][] = canopyMats.map(() => []);
     plans.forEach((p) => buckets[p.palette].push(p));
@@ -3218,7 +3237,9 @@ export class WorldScene {
       const bucket = buckets[pi];
       if (bucket.length === 0) continue;
       const canopies = new THREE.InstancedMesh(canopyGeo, canopyMats[pi], bucket.length);
-      canopies.castShadow = true;
+      // Same reasoning as trunks above — all 250 canopies span the
+      // map and would otherwise enter the shadow pass for nothing.
+      canopies.castShadow = false;
       bucket.forEach((p, i) => {
         // Canopy sits ON TOP of trunk with a slight overlap so trunk
         // disappears into the canopy base instead of poking through.
