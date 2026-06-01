@@ -286,6 +286,35 @@ export interface SaveGameState {
    * the player's actual purchase history. Optional for old saves
    * that pre-date the log. */
   dishwarePurchases?: Array<{ kind: string; tier: number; count: number; at?: number }>;
+  /** Lifetime counters powering the broader achievement set. Each
+   * field is monotonically non-decreasing; the game bumps them at
+   * the relevant interaction sites (place furniture, swap theme,
+   * use boost, etc). Optional everywhere so a save predating any
+   * counter just reads zero / empty. */
+  playerCounters?: {
+    /** Pieces of furniture placed across the lifetime of this save.
+     * Bumped by BuildMenu on every successful place. Selling does
+     * NOT decrement — this is "total times the player decorated". */
+    furniturePlaced?: number;
+    /** Times the player has changed any floor's theme via DecorModal. */
+    themeChanges?: number;
+    /** Distinct theme ids the player has ever applied to any floor. */
+    themesTried?: string[];
+    /** Restaurants visited via the city click-popup → Visit flow. */
+    visitsOut?: number;
+    /** Times another player visited this restaurant (driven by
+     * the inbound visit_event subscription in SpacetimeClient). */
+    visitsIn?: number;
+    /** Chat messages this player has sent (global + PM combined). */
+    chatsSent?: number;
+    /** Times the player tapped the boost button. */
+    boostsUsed?: number;
+    /** Distinct weather ids the player has seen during play. */
+    weathersSeen?: string[];
+    /** Distinct customers served — derived from a session counter
+     * but persisted so refresh doesn't lose it. */
+    customersServedLifetime?: number;
+  };
   lastSavedAt?: number;
   staffActors?: SavedStaffActorState[];
   guests?: SavedGuestState[];

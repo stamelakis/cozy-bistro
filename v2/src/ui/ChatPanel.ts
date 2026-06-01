@@ -17,6 +17,10 @@ import { SpacetimeClient } from "../cloud/SpacetimeClient";
  */
 export class ChatPanel {
   private readonly cloud: SpacetimeClient;
+  /** Optional hook fired after a successful send (global OR PM).
+   * Engine wires this to bump game.playerCounters.chatsSent so the
+   * social achievements unlock. */
+  onMessageSent?: () => void;
   /** Root panel element — exposed so the engine can make it
    * draggable + resizable. */
   readonly root: HTMLElement;
@@ -454,6 +458,9 @@ export class ChatPanel {
         await this.cloud.sendChatPrivate(t.otherHex, text);
       }
       this.input.value = "";
+      // Notify the engine so it can bump the lifetime "chats sent"
+      // counter (drives the social achievements). Fire-and-forget.
+      try { this.onMessageSent?.(); } catch { /* ignore */ }
     } catch (e) {
       this.flashError(errorString(e));
     } finally {

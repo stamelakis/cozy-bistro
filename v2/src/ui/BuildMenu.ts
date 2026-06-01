@@ -1745,6 +1745,9 @@ export class BuildMenu {
         : undefined;
       const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent, placeFloor);
       this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
+      // Lifetime "pieces placed" counter for the achievement system —
+      // monotonically non-decreasing (sells don't undo it).
+      this.game.bumpPlayerCounter("furniturePlaced");
       // Real doors keep their existing hook (hinged panel + front-
       // wall cut). Windows have their own callback that triggers
       // a perimeter-wall rebuild so the sill + lintel gap shows

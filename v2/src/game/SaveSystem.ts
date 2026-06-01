@@ -240,6 +240,20 @@ export class SaveSystem {
       expansionLevel: this.game.getLuxuryTier() - 1,
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
+      // Lifetime player counters — fed by the various interaction
+      // sites (BuildMenu place, DecorModal theme apply, ExpandWidget
+      // boost, VisitMode enter, ChatPanel send, weather tint tick)
+      // and consumed by the achievement predicates.
+      playerCounters: {
+        furniturePlaced: this.game.playerCounters.furniturePlaced,
+        themeChanges: this.game.playerCounters.themeChanges,
+        themesTried: Array.from(this.game.playerCounters.themesTried),
+        visitsOut: this.game.playerCounters.visitsOut,
+        visitsIn: this.game.playerCounters.visitsIn,
+        chatsSent: this.game.playerCounters.chatsSent,
+        boostsUsed: this.game.playerCounters.boostsUsed,
+        weathersSeen: Array.from(this.game.playerCounters.weathersSeen),
+      },
       themeId: this.game.getCurrentTheme().id,
       themeByFloor: this.game.snapshotThemesByFloor(),
       restaurantName: this.game.getRestaurantName(),

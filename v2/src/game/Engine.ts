@@ -446,6 +446,9 @@ export class Engine {
       const acct = accounts.find((a) => a.identity.toHexString() === hostHex);
       if (!acct) return;
       this.cloud.recordVisit(acct.identity);
+      // Lifetime "I visited someone" counter — used by the
+      // social-themed achievements.
+      this.game.bumpPlayerCounter("visitsOut");
     };
     // Inbound side: subscribe to visit_event inserts targeting this
     // identity. Show a small bottom-right toast that auto-fades.
@@ -453,6 +456,8 @@ export class Engine {
       const accounts = this.cloud.listAccounts();
       const visitor = accounts.find((a) => a.identity.toHexString() === visitorHex);
       this.showVisitToast(visitor?.displayName ?? "Someone");
+      // Lifetime "someone visited me" counter.
+      this.game.bumpPlayerCounter("visitsIn");
     });
     // Home button while visiting should exit visit mode first so the
     // player goes back to their own restaurant cleanly.
@@ -1241,6 +1246,7 @@ export class Engine {
     }
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
+      this.chatPanel.onMessageSent = () => this.game.bumpPlayerCounter("chatsSent");
       makeDraggableResizable({
         storageKey: "cozy-bistro.panel.chat.v2",
         root: this.chatPanel.root,
@@ -1930,7 +1936,13 @@ export class Engine {
     // Push the current weather id BEFORE applyDayNight so the lighting
     // tint matches today's roll. setWeather is a no-op when nothing
     // changed, so cheap to call every frame.
-    this.scene.setWeather(this.game.weather.getCurrent().id);
+    const todaysWeatherId = this.game.weather.getCurrent().id;
+    this.scene.setWeather(todaysWeatherId);
+    // Track which weather kinds the player has ever seen — drives
+    // the "experienced every weather" achievement. The set is small
+    // so .add is a no-op for already-seen entries; safe to call
+    // every frame.
+    this.game.recordPlayerSet("weathersSeen", todaysWeatherId);
     // Day/night lighting follows the in-game day timer; applyDayNight
     // layers any weather tints on top of the base dayness ramp.
     const dayProgress = this.game.day.getDayProgress();

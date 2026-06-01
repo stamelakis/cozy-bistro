@@ -196,6 +196,49 @@ export class Game {
   // runs its own wash clock.
   /** Runtime-mutable tuning knobs (AdminPanel). */
   readonly admin: AdminSettings = { ...DEFAULT_ADMIN_SETTINGS };
+
+  /** Lifetime counters powering the broader achievement set. Mutated
+   * by the relevant interaction sites (BuildMenu placement, DecorModal
+   * theme change, ExpandWidget boost click, VisitMode enter, ChatPanel
+   * send, …). Persisted via save.playerCounters and hydrated on load.
+   *
+   * Each counter is monotonically non-decreasing; selling furniture
+   * doesn't unbump furniturePlaced, for example — these are "how many
+   * times the player did X across the lifetime of the save". */
+  readonly playerCounters: {
+    furniturePlaced: number;
+    themeChanges: number;
+    themesTried: Set<string>;
+    visitsOut: number;
+    visitsIn: number;
+    chatsSent: number;
+    boostsUsed: number;
+    weathersSeen: Set<string>;
+  } = {
+    furniturePlaced: 0,
+    themeChanges: 0,
+    themesTried: new Set<string>(),
+    visitsOut: 0,
+    visitsIn: 0,
+    chatsSent: 0,
+    boostsUsed: 0,
+    weathersSeen: new Set<string>(),
+  };
+
+  /** Bump a numeric counter and persist on the next save tick. */
+  bumpPlayerCounter(
+    key: "furniturePlaced" | "themeChanges" | "visitsOut" | "visitsIn" | "chatsSent" | "boostsUsed",
+    delta = 1,
+  ): void {
+    this.playerCounters[key] = Math.max(0, this.playerCounters[key] + delta);
+  }
+
+  /** Record that a particular theme / weather id has been seen at
+   * least once. No-op if already in the set. */
+  recordPlayerSet(key: "themesTried" | "weathersSeen", id: string): void {
+    if (!id) return;
+    this.playerCounters[key].add(id);
+  }
   /** Optional callback fired when a floor's theme changes — Engine
    * wires this to WorldScene.setStoreyTheme so just that floor's
    * walls + slab recolour. Includes the floor index so the listener
@@ -435,6 +478,24 @@ export class Game {
     }
     if (Array.isArray(save.achievements)) {
       this.achievements.hydrate(save.achievements as string[]);
+    }
+    // Lifetime counters — preserve any field absent from the save so
+    // a partial old save doesn't wipe newer counters. Sets get
+    // re-hydrated from string arrays.
+    if (save.playerCounters && typeof save.playerCounters === "object") {
+      const pc = save.playerCounters;
+      if (typeof pc.furniturePlaced === "number") this.playerCounters.furniturePlaced = Math.max(0, pc.furniturePlaced);
+      if (typeof pc.themeChanges === "number") this.playerCounters.themeChanges = Math.max(0, pc.themeChanges);
+      if (typeof pc.visitsOut === "number") this.playerCounters.visitsOut = Math.max(0, pc.visitsOut);
+      if (typeof pc.visitsIn === "number") this.playerCounters.visitsIn = Math.max(0, pc.visitsIn);
+      if (typeof pc.chatsSent === "number") this.playerCounters.chatsSent = Math.max(0, pc.chatsSent);
+      if (typeof pc.boostsUsed === "number") this.playerCounters.boostsUsed = Math.max(0, pc.boostsUsed);
+      if (Array.isArray(pc.themesTried)) {
+        for (const id of pc.themesTried) if (typeof id === "string") this.playerCounters.themesTried.add(id);
+      }
+      if (Array.isArray(pc.weathersSeen)) {
+        for (const id of pc.weathersSeen) if (typeof id === "string") this.playerCounters.weathersSeen.add(id);
+      }
     }
     if (typeof save.themeId === "string") {
       this.themeId = save.themeId;
@@ -904,8 +965,30 @@ export class Game {
    * once the world is ready. Used by getAttractiveness to read decor. */
   registry?: {
     getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number };
-    snapshotItems(): readonly { defId: string }[];
+    snapshotItems(): readonly { defId: string; floor: number }[];
   };
+
+  /** Per-placement floor indices for the build-on-N-floors and
+   * skyscraper achievements. Empty when no registry is wired
+   * (pre-Engine.start) or no furniture is placed yet. */
+  snapshotFurnitureFloors(): readonly number[] {
+    if (!this.registry) return [];
+    return this.registry.snapshotItems().map((it) => it.floor);
+  }
+
+  /** Per-placement category strings — derived from the catalog so
+   * the achievement predicates can count decor-class items
+   * (decoration / plant / lamp) without each one stamping itself.
+   * Returns an empty array when the registry isn't wired yet. */
+  snapshotFurnitureCategories(): readonly string[] {
+    if (!this.registry) return [];
+    const out: string[] = [];
+    for (const it of this.registry.snapshotItems()) {
+      const def = getFurnitureDef(it.defId);
+      if (def?.category) out.push(def.category);
+    }
+    return out;
+  }
 
   /** Per-plot rent multiplier — small plots pay 60% rent, medium
    * 100%, large 140%. Set by Engine when the player's claimed
@@ -997,6 +1080,9 @@ export class Game {
     if (theme.cost > 0 && !this.economy.spendMoney(theme.cost, "decor")) return false;
     this.themeByFloor[floor] = theme.id;
     if (floor === 0) this.themeId = theme.id; // keep legacy field in sync for save compat
+    // Lifetime counters for the achievement system.
+    this.bumpPlayerCounter("themeChanges");
+    this.recordPlayerSet("themesTried", theme.id);
     this.onThemeChanged?.(floor, theme);
     return true;
   }
@@ -1072,6 +1158,7 @@ export class Game {
     if (this.boostCooldownRemaining > 0) return false;
     if (!this.economy.spendMoney(this.getBoostCost(), "decor")) return false;
     this.boostRemaining = this.getBoostDurationSeconds();
+    this.bumpPlayerCounter("boostsUsed");
     return true;
   }
 
