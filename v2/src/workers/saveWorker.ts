@@ -35,3 +35,8 @@ scope.addEventListener("message", (ev: MessageEvent<SerializeRequest>) => {
   }
   scope.postMessage(res);
 });
+
+// Force this file to be treated as a module so the top-level type
+// aliases don't leak into the global script scope (where they'd
+// collide with the identical names in textureWorker.ts).
+export {};

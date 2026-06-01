@@ -6,6 +6,7 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
 import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
+import { TextureService } from "./TextureService";
 
 /** Plaque visual catalogs — each id is a small string the modal exposes
  * as a radio button. Picked to read as warm cosy bistro defaults but
@@ -122,6 +123,10 @@ export class WorldScene {
   readonly loader = new ModelLoader();
   readonly characterLoader = new CharacterLoader(this.loader);
   readonly animator = new CharacterAnimator();
+  /** Off-thread procedural-texture painter. Used to push ~100 shop-sign
+   * canvas draws onto a worker at boot — that paint pass otherwise
+   * burns ~300 ms on the main thread during city construction. */
+  private readonly textureService = new TextureService();
   /** Exposed for StaffRouter to drive their state machines. Populated
    * asynchronously during populateCharacters — may be undefined for the
    * first frame or two while GLBs load. */
@@ -3314,7 +3319,15 @@ export class WorldScene {
         x, 0, z, rotY, doorColor);
       // Shop sign + iron frame.
       if (isShop && shopName) {
-        const tex = WorldScene.makeShopSignTexture(shopName);
+        // Off-thread paint: worker draws the sign canvas in parallel
+        // and the texture's `image` populates a frame or two later.
+        // If the worker isn't available the service synchronously
+        // calls the fallback painter and we get the same texture
+        // we always had (just with the original main-thread cost).
+        const tex = this.textureService.paintShopSign(
+          shopName,
+          () => WorldScene.makeShopSignTexture(shopName),
+        );
         // Phong with emissiveMap so the sign reads at night.
         const signMat = new THREE.MeshPhongMaterial({
           map: tex, shininess: 8,
