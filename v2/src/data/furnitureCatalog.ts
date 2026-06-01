@@ -731,11 +731,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     modelPath: "proc:int-wall-half", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 14, style: 1,
     tier: 1, placement: "edge" },
   { id: "int-doorway",    name: "Internal Doorway", category: "wall",
-    modelPath: "proc:int-doorway", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 40, style: 2, ratingBonus: 0.01,
-    tier: 2, placement: "edge" },
+    modelPath: "proc:int-doorway", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 28, style: 2, ratingBonus: 0.01,
+    tier: 1, placement: "edge" },
   { id: "int-window",     name: "Interior Window", category: "wall",
-    modelPath: "proc:int-window", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 50, style: 2, attractionBonus: 1, ratingBonus: 0.02,
-    tier: 2, placement: "edge" },
+    modelPath: "proc:int-window", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 32, style: 2, attractionBonus: 1, ratingBonus: 0.02,
+    tier: 1, placement: "edge" },
 
   // === More tables: coffee variants for lounge corners. ===
   // Same drinks-only behaviour as the round coffee tables above.
