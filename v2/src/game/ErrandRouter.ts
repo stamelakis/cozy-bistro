@@ -176,10 +176,29 @@ export class ErrandRouter {
    * abandon a trip mid-flight. Returns the character so Engine can drop
    * its model from the scene. If the removed helper was carrying a
    * payload, it goes back onto the queue so another helper can fetch it. */
+  /** Same LIFO + prefer-idle pop. Public API for the legacy
+   * fire-by-role path; the by-id path calls removeHelperById. */
   removeHelper(): AnimatedCharacter | null {
     if (this.helpers.length === 0) return null;
     const idleIdx = this.helpers.findIndex((h) => h.state === "idle");
     const idx = idleIdx >= 0 ? idleIdx : this.helpers.length - 1;
+    return this.removeHelperAt(idx);
+  }
+
+  /** Remove a specific helper by their HiredStaffMember.id. Runs the
+   * same payload-recovery + visibility-restore the LIFO path runs,
+   * so firing a specific errand mid-shopping doesn't strand their
+   * pending grocery trip. Returns null if no helper matches. */
+  removeHelperById(memberId: string): AnimatedCharacter | null {
+    const idx = this.helpers.findIndex((h) => h.memberId === memberId);
+    if (idx < 0) return null;
+    return this.removeHelperAt(idx);
+  }
+
+  /** Shared cleanup + splice. Called by both removeHelper (LIFO)
+   * and removeHelperById (specific actor). */
+  private removeHelperAt(idx: number): AnimatedCharacter | null {
+    if (idx < 0 || idx >= this.helpers.length) return null;
     const removed = this.helpers[idx];
     if (removed.payload && this.pendingTrips.length < MAX_PENDING_TRIPS) {
       this.pendingTrips.unshift(removed.payload);

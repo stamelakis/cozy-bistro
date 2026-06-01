@@ -16,9 +16,9 @@ export class StaffPanel {
   private readonly game: Game;
   private readonly rows: Record<StaffRole, {
     label: HTMLElement; activity: HTMLElement;
-    hire: HTMLButtonElement; fire: HTMLButtonElement;
+    hire: HTMLButtonElement;
     members: HTMLElement;
-  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; fire: HTMLButtonElement; members: HTMLElement }>;
+  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; members: HTMLElement }>;
   private payrollLine?: HTMLElement;
   /** Fired when the player reassigns a member to a new home floor.
    * Engine wires this to WorldScene.relocateStaff so the model is
@@ -82,13 +82,15 @@ export class StaffPanel {
     Object.assign(top.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
     const label = document.createElement("span");
     Object.assign(label.style, { fontWeight: "600", fontSize: "12px", flex: "1" } as Partial<CSSStyleDeclaration>);
+    // Hire (+) stays here because adding a new member is a generic
+    // role-level action ("I need another chef"). Per-member fire (−)
+    // lives in the member row below — necessary now that training
+    // raises individual member value, so the player has to be able
+    // to pick which specific member to let go.
     const hire = this.makeBtn("+", "rgba(120,200,120,0.22)");
-    const fire = this.makeBtn("−", "rgba(200,120,120,0.22)");
     hire.onclick = () => { if (this.game.hireStaff(role)) this.update(); };
-    fire.onclick = () => { if (this.game.fireStaff(role)) this.update(); };
     top.appendChild(label);
     top.appendChild(hire);
-    top.appendChild(fire);
     block.appendChild(top);
 
     const activity = document.createElement("div");
@@ -103,7 +105,7 @@ export class StaffPanel {
     block.appendChild(members);
 
     this.root.appendChild(block);
-    this.rows[role] = { label, activity, hire, fire, members };
+    this.rows[role] = { label, activity, hire, members };
   }
 
   /** Cache of the most-recent roster signature per role. Lets
@@ -125,9 +127,12 @@ export class StaffPanel {
   private renderMembers(role: StaffRole, hostEl: HTMLElement): void {
     const tier = this.game.getLuxuryTier();
     const numStoreys = WorldScene.getNumStoreys();
-    // Hide the whole strip on tier 1 — only one floor exists, no
-    // assignment to make.
-    if (tier < 2) {
+    const members = this.game.staff.getMembers(role);
+    // Always render member rows so the per-member fire button is
+    // reachable, even on tier 1 where there's only one floor to
+    // assign to. The floor-button strip is suppressed at tier 1
+    // since the player has no assignment choice to make there.
+    if (members.length === 0) {
       if (hostEl.childElementCount > 0 || hostEl.style.display !== "none") {
         hostEl.style.display = "none";
         hostEl.innerHTML = "";
@@ -135,7 +140,6 @@ export class StaffPanel {
       }
       return;
     }
-    const members = this.game.staff.getMembers(role);
     // Signature captures everything that affects what the UI draws:
     // tier (gates the active floor buttons), the member list (id +
     // current home floor). If two consecutive ticks produce the
@@ -147,6 +151,7 @@ export class StaffPanel {
     this.memberRosterSig[role] = sig;
     hostEl.innerHTML = "";
     hostEl.style.display = "block";
+    const showFloorButtons = tier >= 2;
     for (const member of members) {
       const row = document.createElement("div");
       Object.assign(row.style, {
@@ -161,42 +166,71 @@ export class StaffPanel {
         whiteSpace: "nowrap", opacity: "0.9",
       } as Partial<CSSStyleDeclaration>);
       row.appendChild(name);
-      const current = member.homeFloor ?? 0;
-      for (let idx = 0; idx < numStoreys; idx += 1) {
-        const unlocked = idx === 0 || tier >= idx + 1;
-        const isActive = idx === current;
-        const btn = document.createElement("button");
-        btn.textContent = idx === 0 ? "G" : String(idx);
-        btn.title = unlocked
-          ? (idx === 0 ? "Ground" : `Floor ${idx}`)
-          : `Floor ${idx} — unlocks at tier ${idx + 1}`;
-        btn.disabled = !unlocked;
-        Object.assign(btn.style, {
-          width: "16px", height: "18px", padding: "0",
-          fontSize: "10px", fontWeight: "700",
-          background: isActive
-            ? "rgba(255, 210, 120, 0.45)"
-            : "rgba(120, 180, 200, 0.18)",
-          color: isActive ? "#fffff0" : "#fff5dc",
-          border: isActive
-            ? "1px solid rgba(255, 220, 150, 0.85)"
-            : "1px solid rgba(255,245,220,0.22)",
-          borderRadius: "3px",
-          cursor: unlocked ? "pointer" : "not-allowed",
-          opacity: unlocked ? "1" : "0.4",
-          font: "inherit",
-        } as Partial<CSSStyleDeclaration>);
-        if (unlocked && !isActive) {
-          btn.onclick = () => {
-            const old = member.homeFloor ?? 0;
-            if (this.game.staff.setMemberHomeFloor(member.id, idx)) {
-              this.onStaffFloorChanged?.(member.id, old, idx);
-              this.update();
-            }
-          };
+      if (showFloorButtons) {
+        const current = member.homeFloor ?? 0;
+        for (let idx = 0; idx < numStoreys; idx += 1) {
+          const unlocked = idx === 0 || tier >= idx + 1;
+          const isActive = idx === current;
+          const btn = document.createElement("button");
+          btn.textContent = idx === 0 ? "G" : String(idx);
+          btn.title = unlocked
+            ? (idx === 0 ? "Ground" : `Floor ${idx}`)
+            : `Floor ${idx} — unlocks at tier ${idx + 1}`;
+          btn.disabled = !unlocked;
+          Object.assign(btn.style, {
+            width: "16px", height: "18px", padding: "0",
+            fontSize: "10px", fontWeight: "700",
+            background: isActive
+              ? "rgba(255, 210, 120, 0.45)"
+              : "rgba(120, 180, 200, 0.18)",
+            color: isActive ? "#fffff0" : "#fff5dc",
+            border: isActive
+              ? "1px solid rgba(255, 220, 150, 0.85)"
+              : "1px solid rgba(255,245,220,0.22)",
+            borderRadius: "3px",
+            cursor: unlocked ? "pointer" : "not-allowed",
+            opacity: unlocked ? "1" : "0.4",
+            font: "inherit",
+          } as Partial<CSSStyleDeclaration>);
+          if (unlocked && !isActive) {
+            btn.onclick = () => {
+              const old = member.homeFloor ?? 0;
+              if (this.game.staff.setMemberHomeFloor(member.id, idx)) {
+                this.onStaffFloorChanged?.(member.id, old, idx);
+                this.update();
+              }
+            };
+          }
+          row.appendChild(btn);
         }
-        row.appendChild(btn);
       }
+      // Per-member fire button — far right of the row. Replaces the
+      // old role-level − button at the top, which was problematic now
+      // that staff can be individually trained: the player needs to
+      // choose WHO to let go, not "whoever the LIFO picks". Wears the
+      // member's name in the tooltip + severance cost so misclicks
+      // self-correct.
+      const fire = document.createElement("button");
+      fire.textContent = "−";
+      const severance = this.game.staff.getStaffFireCost(role);
+      const trainingLvl = this.game.getMemberUpgradeLevel(member.id);
+      fire.title = `Fire ${member.name} (L${trainingLvl} ${role}) — costs $${severance} severance`;
+      Object.assign(fire.style, {
+        width: "16px", height: "18px", padding: "0",
+        marginLeft: "4px",
+        fontSize: "12px", fontWeight: "700",
+        background: "rgba(200, 120, 120, 0.22)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255, 180, 180, 0.45)",
+        borderRadius: "3px",
+        cursor: "pointer",
+        font: "inherit",
+        lineHeight: "1",
+      } as Partial<CSSStyleDeclaration>);
+      fire.onclick = () => {
+        if (this.game.fireStaffMember(member.id)) this.update();
+      };
+      row.appendChild(fire);
       hostEl.appendChild(row);
     }
   }
@@ -220,7 +254,6 @@ export class StaffPanel {
     (["chef", "barman", "waiter", "errand"] as StaffRole[]).forEach((role) => {
       const count = this.game.staff.getStaffCount(role);
       const hireCost = this.game.staff.getStaffHireCost(role);
-      const fireCost = this.game.staff.getStaffFireCost(role);
       const label = this.game.staff.getStaffRoleLabel(role);
       const working = this.game.getStaffWorkingCount?.(role) ?? 0;
       const idle = Math.max(0, count - working);
@@ -253,11 +286,10 @@ export class StaffPanel {
       row.hire.title = hireGate.ok
         ? `Hire ${label} ($${hireCost}) — adds $${perStaff}/min payroll`
         : `${hireGate.reason} · would cost $${hireCost} + $${perStaff}/min`;
-      row.fire.title = `Fire ${label} (−$${fireCost} severance)`;
       row.hire.disabled = !hireGate.ok;
       row.hire.style.opacity = hireGate.ok ? "1" : "0.4";
-      row.fire.disabled = count === 0;
-      row.fire.style.opacity = count === 0 ? "0.4" : "1";
+      // Per-member fire buttons (one per row in `members`) replaced
+      // the old role-level − here; renderMembers builds them.
       this.renderMembers(role, row.members);
       totalCount += count;
       totalPayroll += rolePayroll;

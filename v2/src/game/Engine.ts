@@ -952,6 +952,9 @@ export class Engine {
       this.game.onStaffFired = (role) => {
         this.handleStaffFired(role);
       };
+      this.game.onStaffMemberFired = (memberId, role) => {
+        this.handleStaffMemberFired(memberId, role);
+      };
       this.game.onTrainingCompleted = (member) => {
         // Find the actor's world position so the toast pops over the
         // right character. Fall back to the supply counter for errand
@@ -1789,6 +1792,33 @@ export class Engine {
     else if (role === "barman") removed = { character: this.router?.removeBarman() ?? null };
     else removed = { character: this.errand?.removeHelper() ?? null };
     const model = removed?.character?.root;
+    if (model) {
+      this.scene.threeScene.remove(model);
+      this.scene.animator.remove(model);
+    }
+  }
+
+  /** Per-member fire path. Targets the SPECIFIC actor whose
+   * AnimatedCharacter.memberId matches, so an upgraded staff
+   * member the player picks out by name disappears from the
+   * scene (not a random colleague of the same role).
+   *
+   * Falls back to the LIFO removeChef/Waiter/Barman/Helper if the
+   * actor isn't in the pool yet — covers the race where the
+   * spawn promise hasn't resolved when the player clicks fire. */
+  private handleStaffMemberFired(memberId: string, role: "chef" | "waiter" | "errand" | "barman"): void {
+    let character: { root: import("three").Object3D } | null = null;
+    if (role === "errand") {
+      character = this.errand?.removeHelperById(memberId)
+        ?? this.errand?.removeHelper()
+        ?? null;
+    } else {
+      character = this.router?.removeMemberById(memberId)
+        ?? (role === "chef"   ? this.router?.removeChef()   ?? null
+           : role === "waiter" ? this.router?.removeWaiter() ?? null
+           : this.router?.removeBarman() ?? null);
+    }
+    const model = character?.root;
     if (model) {
       this.scene.threeScene.remove(model);
       this.scene.animator.remove(model);

@@ -703,6 +703,22 @@ export class StaffRouter {
     return this.popPreferIdle(this.waiters);
   }
 
+  /** Remove a specific staff member by their HiredStaffMember.id —
+   * walks every pool, runs the same cleanup (ticket rollback, stove
+   * release, wash-trip recovery, take-order claim release) that the
+   * LIFO removeChef/Waiter/Barman path runs, and returns the
+   * AnimatedCharacter so Engine can drop the model. Returns null
+   * if no actor in any pool maps to this memberId (e.g. the spawn
+   * promise hasn't resolved yet — fall back to the legacy LIFO
+   * remover in that case). */
+  removeMemberById(memberId: string): AnimatedCharacter | null {
+    for (const pool of [this.chefs, this.waiters, this.barmen]) {
+      const idx = pool.findIndex((a) => a.memberId === memberId);
+      if (idx >= 0) return this.popPreferIdle(pool, idx);
+    }
+    return null;
+  }
+
   /** Find the AnimatedCharacter wired to a specific HiredStaffMember.id
    * across both pools. Returns null if no actor maps to that id
    * (e.g. the spawn promise hasn't resolved yet). Used by Engine when
@@ -755,10 +771,24 @@ export class StaffRouter {
     }
   }
 
-  private popPreferIdle(pool: StaffActor[]): AnimatedCharacter | null {
+  /** Pull one actor out of the pool, running the full cleanup
+   * pipeline (ticket rollback, stove release, wash-trip recovery,
+   * take-order claim release) and returning their visible
+   * character so Engine can detach the model.
+   *
+   * `targetIdx` lets a caller (removeMemberById) pin a specific
+   * actor; without it the default policy is "prefer idle, else
+   * pop the most-recently-hired". */
+  private popPreferIdle(pool: StaffActor[], targetIdx: number | null = null): AnimatedCharacter | null {
     if (pool.length === 0) return null;
-    const idleIdx = pool.findIndex((a) => a.state === "idle");
-    const idx = idleIdx >= 0 ? idleIdx : pool.length - 1;
+    let idx: number;
+    if (targetIdx !== null) {
+      if (targetIdx < 0 || targetIdx >= pool.length) return null;
+      idx = targetIdx;
+    } else {
+      const idleIdx = pool.findIndex((a) => a.state === "idle");
+      idx = idleIdx >= 0 ? idleIdx : pool.length - 1;
+    }
     const removed = pool[idx];
     // If they were mid-task, mark the ticket back to its previous queue state
     // so another staffer can pick it up.

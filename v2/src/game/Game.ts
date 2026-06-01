@@ -303,6 +303,12 @@ export class Game {
   /** Fired when the player fires a staff member. Engine uses this to
    * remove the matching character from the world. */
   onStaffFired?: (role: StaffRole) => void;
+  /** Fired when the player fires a SPECIFIC staff member (per-row
+   * fire button in the StaffPanel). Engine uses memberId to target
+   * the exact character model so a fired upgraded staff member
+   * disappears from the world correctly — without this the old
+   * LIFO removeChef path would yank a random chef instead. */
+  onStaffMemberFired?: (memberId: string, role: StaffRole) => void;
 
   constructor(save?: SaveGameState) {
     this.economy = new EconomySystem();
@@ -1211,6 +1217,24 @@ export class Game {
     this.economy.forceSpendMoney(cost, "charge");
     this.staff.removeStaff(role);
     this.onStaffFired?.(role);
+    return true;
+  }
+
+  /** Fire one SPECIFIC hired staff member by their id. Charges the
+   * usual severance for the member's role, drops them from the
+   * StaffSystem roster, and fires onStaffMemberFired so Engine can
+   * remove the right character model from the scene. Returns
+   * true on success, false if the id is unknown. */
+  fireStaffMember(memberId: string): boolean {
+    const members = this.staff.getMembers();
+    const member = members.find((m) => m.id === memberId);
+    if (!member) return false;
+    const role = member.role;
+    const cost = this.staff.getStaffFireCost(role);
+    this.economy.forceSpendMoney(cost, "charge");
+    const removed = this.staff.removeStaffById(memberId);
+    if (!removed) return false;
+    this.onStaffMemberFired?.(memberId, role);
     return true;
   }
 
