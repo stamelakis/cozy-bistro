@@ -3066,22 +3066,32 @@ export class WorldScene {
     // 180 was a perf-reaction overshoot).
     const HARD_CAP = 300;
 
-    // Track placed shops so the "every plot has a shop within 30 m"
-    // post-pass can decide whether to force-convert a nearby house.
+    // PHASE 1 — collect every house's PLAN as data (no geometry yet).
+    // The merge pass at the end ingests the final, post-shop-conversion
+    // list, so all randomness has to be locked in before we touch any
+    // BufferGeometry. Without this split, the post-pass shop converter
+    // would have to surgically remove a merged geometry segment from
+    // the combined mesh, which is way more painful than just deferring
+    // the merge.
+    type HousePlan = {
+      x: number; z: number; size: number; storeys: number; rotY: number;
+      isShop: boolean; shopName?: string;
+      wallColor: number; roofColor: number; doorColor: number;
+    };
+    const placedHouses: HousePlan[] = [];
     const placedShops: { x: number; z: number }[] = [];
-    const placedHouses: { x: number; z: number; group: THREE.Group; isShop: boolean }[] = [];
 
     const tryPlace = (x: number, z: number, size: number, storeys: number, rotY: number, shopName?: string): boolean => {
       if (overlapsClaim(x, z, size)) return false;
       if (overlapsGarden(x, z, size)) return false;
       if (onAvenue(x, z, size)) return false;
-      const house = this.makeSceneryHouse(
-        x, z, size, storeys,
-        pick(wallColors), pick(roofColors), pick(doorColors),
-        rotY, shopName,
-      );
-      sceneryGroup.add(house);
-      placedHouses.push({ x, z, group: house, isShop: !!shopName });
+      placedHouses.push({
+        x, z, size, storeys, rotY,
+        isShop: !!shopName, shopName,
+        wallColor: pick(wallColors),
+        roofColor: pick(roofColors),
+        doorColor: pick(doorColors),
+      });
       // Track footprint so the grass / wildflower / tree / rock scatter
       // passes know to skip this tile. halfSize = size/2 + small skin
       // so a tree right against a wall doesn't poke through the eaves.
@@ -3147,14 +3157,16 @@ export class WorldScene {
       }
     }
 
-    // ── Post-pass: ensure every plot has a shop nearby ─────────────
+    // ── PHASE 2 — post-pass: ensure every plot has a shop nearby ───
     // For each claim plot (skipping the legacy player block), pick the
     // nearest scenery house within 30 m. If none of the houses in
-    // that radius are shops, convert the closest house to one.
+    // that radius are shops, convert the closest house's PLAN to one.
+    // Mutation happens BEFORE geometry construction so we don't have
+    // to surgically remove anything from a merged BufferGeometry.
     const SHOP_NEAR_RADIUS = 30;
     for (const plot of WorldScene.CITY_PLOTS) {
       let hasShop = false;
-      let closest: { house: typeof placedHouses[number]; dSq: number } | undefined;
+      let closest: { house: HousePlan; dSq: number } | undefined;
       for (const h of placedHouses) {
         const dx = h.x - plot.x, dz = h.z - plot.z;
         const dSq = dx * dx + dz * dz;
@@ -3163,12 +3175,6 @@ export class WorldScene {
         if (!closest || dSq < closest.dSq) closest = { house: h, dSq };
       }
       if (hasShop || !closest) continue;
-      // Rebuild the closest house as a shop. Cheaper than mutating
-      // the existing group's children — the original size/storeys
-      // aren't stored, so we re-pick a small variant.
-      sceneryGroup.remove(closest.house.group);
-      const size = 5;
-      const storeys = 2;
       // Re-derive a rotation that still faces the nearest avenue so
       // the shop's sign points at the street, not into the plot.
       let bestAv = WorldScene.EW_AVENUES[0];
@@ -3186,151 +3192,211 @@ export class WorldScene {
       } else {
         rotY = closest.house.x > bestAv ? -Math.PI / 2 : Math.PI / 2;
       }
-      const shopName = pick(shopNames);
-      const newHouse = this.makeSceneryHouse(
-        closest.house.x, closest.house.z, size, storeys,
-        pick(wallColors), pick(roofColors), pick(doorColors),
-        rotY, shopName,
-      );
-      sceneryGroup.add(newHouse);
-      closest.house.group = newHouse;
+      // Mutate the plan in place. The geometry-builder below sees the
+      // updated values.
       closest.house.isShop = true;
+      closest.house.shopName = pick(shopNames);
+      closest.house.size = 5;
+      closest.house.storeys = 2;
+      closest.house.rotY = rotY;
       placedShops.push({ x: closest.house.x, z: closest.house.z });
     }
-  }
 
-  /** Build one small Parisian scenery house. Cream limestone walls,
-   * tall narrow windows, slate mansard roof, dark-wood door. Variants
-   * in size, height, wall/roof/door colour, and orientation give the
-   * street visual variety without authoring per-house meshes. If
-   * `shopName` is provided, a small storefront sign hangs above the
-   * door — turns ~22% of scenery into named shops (boulangerie,
-   * café, etc.) so the player can read the city as a real
-   * neighbourhood instead of an undifferentiated row of houses. */
-  private makeSceneryHouse(x: number, z: number, size: number, storeys: number,
-                           wallColor: number, roofColor: number, doorColor: number,
-                           rotY: number, shopName?: string): THREE.Group {
-    const g = new THREE.Group();
-    const wallH = storeys * 2.8;
-    // ── Walls (cream limestone) ─────────────────────────────────────
-    const walls = new THREE.Mesh(
-      new THREE.BoxGeometry(size, wallH, size),
-      new THREE.MeshStandardMaterial({ color: wallColor, roughness: 0.85 }),
-    );
-    walls.position.y = wallH / 2;
-    // NOTE: scenery houses do NOT cast shadows. The sun's shadow
-    // camera covers ±20 m around world origin (the player's plot);
-    // every scenery house sits at z=±50+ along an avenue, which is
-    // already outside that frustum. Casting shadows here was pure
-    // GPU waste — three.js still iterated each scenery mesh into
-    // the shadow render pass even though the result was clipped.
-    walls.receiveShadow = true;
-    g.add(walls);
-    // ── Horizontal cornices between floors (subtle warm band) ──────
-    const corniceMat = new THREE.MeshStandardMaterial({ color: 0xc8b888, roughness: 0.8 });
-    for (let s = 1; s < storeys; s += 1) {
-      const cornice = new THREE.Mesh(
-        new THREE.BoxGeometry(size + 0.15, 0.12, size + 0.15),
-        corniceMat,
-      );
-      cornice.position.y = s * 2.8;
-      g.add(cornice);
+    // ── PHASE 3 — build geometries from plans into per-part buckets ─
+    // Each house gets ~10 boxes. With ~300 houses that's ~3000 draw
+    // calls if rendered individually — way over budget. Instead we
+    // collect every box into a bucket keyed by part type, bake per-
+    // house colours into vertex-colour attributes where the colour
+    // varies (walls, mansard, door), then merge each bucket into ONE
+    // BufferGeometry at the end and draw it with a single Phong mesh.
+    //
+    // Phong instead of Standard: scenery houses are mostly matte and
+    // far from the camera. The difference between Standard's PBR and
+    // Phong's classic Blinn-Phong is invisible at iso distance and
+    // Phong is ~30 % cheaper per fragment. With hundreds of houses
+    // drawn every frame, that's a real win.
+    type GeoBucket = { geos: THREE.BufferGeometry[]; usesVertexColor: boolean };
+    const mkBucket = (vc: boolean): GeoBucket => ({ geos: [], usesVertexColor: vc });
+    const wallsBucket    = mkBucket(true);   // per-house wallColor
+    const corniceBucket  = mkBucket(false);  // fixed warm cream
+    const windowsBucket  = mkBucket(false);  // fixed slate blue
+    const balconyBucket  = mkBucket(false);  // fixed iron black
+    const mansardBucket  = mkBucket(true);   // per-house roofColor
+    const capBucket      = mkBucket(false);  // fixed slate
+    const chimneyBucket  = mkBucket(false);  // fixed terracotta
+    const doorsBucket    = mkBucket(true);   // per-house doorColor
+    const shopFrameBucket = mkBucket(false); // fixed black
+
+    // Per-house geometry builder. Replicates the layout of the old
+    // makeSceneryHouse function but writes into buckets instead of
+    // appending children to a Group.
+    const pushBox = (
+      bucket: GeoBucket, w: number, h: number, d: number,
+      px: number, py: number, pz: number,
+      hx: number, hy: number, hz: number, rotY: number,
+      color?: number,
+    ): void => {
+      const g = new THREE.BoxGeometry(w, h, d);
+      // Local position inside the house frame.
+      g.translate(px, py, pz);
+      // Apply per-house rotY around origin, then translate to world.
+      g.rotateY(rotY);
+      g.translate(hx, hy, hz);
+      if (bucket.usesVertexColor && color !== undefined) {
+        const c = new THREE.Color(color);
+        const count = g.attributes.position.count;
+        const arr = new Float32Array(count * 3);
+        for (let i = 0; i < count; i += 1) {
+          arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b;
+        }
+        g.setAttribute("color", new THREE.BufferAttribute(arr, 3));
+      }
+      bucket.geos.push(g);
+    };
+
+    // Shop signs have UNIQUE textures (one canvas-painted texture per
+    // shop name) so they can't be merged into a single material. Keep
+    // them as individual meshes; with ~30 % of houses being shops ×
+    // ~300 houses, that's ~100 shop sign meshes — a tiny fraction of
+    // the ~3000 we just collapsed.
+    for (const plan of placedHouses) {
+      const { x, z, size, storeys, rotY, wallColor, roofColor, doorColor, isShop, shopName } = plan;
+      const wallH = storeys * 2.8;
+      // Walls — single big box, per-house wallColor via vertex colour.
+      pushBox(wallsBucket, size, wallH, size,
+        0, wallH / 2, 0,
+        x, 0, z, rotY, wallColor);
+      // Horizontal cornices between floors — shared cream.
+      for (let s = 1; s < storeys; s += 1) {
+        pushBox(corniceBucket, size + 0.15, 0.12, size + 0.15,
+          0, s * 2.8, 0,
+          x, 0, z, rotY);
+      }
+      // Tall narrow windows on the front (+Z) face.
+      const numWin = Math.max(2, Math.floor(size / 1.4));
+      const winSpacing = size / (numWin + 1);
+      for (let s = 0; s < storeys; s += 1) {
+        const winY = s * 2.8 + 1.55;
+        for (let i = 0; i < numWin; i += 1) {
+          const wx = -size / 2 + (i + 1) * winSpacing;
+          // Skip the centre window on the ground floor — door goes there.
+          if (s === 0 && Math.abs(wx) < 0.5) continue;
+          pushBox(windowsBucket, 0.55, 1.25, 0.04,
+            wx, winY, size / 2 + 0.025,
+            x, 0, z, rotY);
+        }
+        // Thin iron balcony rail on upper floors.
+        if (s > 0) {
+          pushBox(balconyBucket, size - 0.2, 0.05, 0.08,
+            0, winY - 0.7, size / 2 + 0.10,
+            x, 0, z, rotY);
+        }
+      }
+      // Top cornice band (thin warm cream sitting at the wall top).
+      pushBox(corniceBucket, size + 0.25, 0.12, size + 0.25,
+        0, wallH + 0.06, 0,
+        x, 0, z, rotY);
+      // Mansard roof body — per-house roofColor.
+      pushBox(mansardBucket, size + 0.15, 0.7, size + 0.15,
+        0, wallH + 0.12 + 0.35, 0,
+        x, 0, z, rotY, roofColor);
+      // Flat slate cap on top.
+      pushBox(capBucket, size - 0.4, 0.08, size - 0.4,
+        0, wallH + 0.12 + 0.7 + 0.04, 0,
+        x, 0, z, rotY);
+      // Chimney.
+      pushBox(chimneyBucket, 0.32, 0.8, 0.32,
+        size / 2 - 0.6, wallH + 0.12 + 0.7 + 0.4, -size / 2 + 0.6,
+        x, 0, z, rotY);
+      // Door — per-house doorColor.
+      pushBox(doorsBucket, 0.85, 1.95, 0.05,
+        0, 0.975, size / 2 + 0.03,
+        x, 0, z, rotY, doorColor);
+      // Shop sign + iron frame.
+      if (isShop && shopName) {
+        const tex = WorldScene.makeShopSignTexture(shopName);
+        // Phong with emissiveMap so the sign reads at night.
+        const signMat = new THREE.MeshPhongMaterial({
+          map: tex, shininess: 8,
+          emissive: 0x222018, emissiveMap: tex, emissiveIntensity: 0.18,
+        });
+        const sign = new THREE.Mesh(
+          new THREE.PlaneGeometry(Math.min(size - 0.4, 2.4), 0.55),
+          signMat,
+        );
+        // Apply local position then rotY then world position. Wrap in
+        // a small Group so the sign rotates with the house.
+        sign.position.set(0, 2.25, size / 2 + 0.04);
+        const signWrap = new THREE.Group();
+        signWrap.add(sign);
+        signWrap.position.set(x, 0, z);
+        signWrap.rotation.y = rotY;
+        sceneryGroup.add(signWrap);
+        // Iron frame under the sign — fixed black, can merge.
+        pushBox(shopFrameBucket, Math.min(size - 0.3, 2.5), 0.06, 0.04,
+          0, 2.55, size / 2 + 0.05,
+          x, 0, z, rotY);
+      }
     }
-    // ── Tall narrow windows on the FRONT face (+Z) ─────────────────
-    const windowMat = new THREE.MeshStandardMaterial({
-      color: 0x223040, roughness: 0.35, metalness: 0.3,
+
+    // ── PHASE 4 — merge each bucket and add as a single mesh ───────
+    // Shared Phong materials (one per fixed-colour part). Lit, low-
+    // shininess so they read as matte stone / wood / iron.
+    const wallsMat = new THREE.MeshPhongMaterial({
+      vertexColors: true, shininess: 5, specular: 0x111111,
+    });
+    const corniceMat = new THREE.MeshPhongMaterial({
+      color: 0xc8b888, shininess: 5, specular: 0x111111,
+    });
+    const windowsMat = new THREE.MeshPhongMaterial({
+      color: 0x223040, shininess: 40, specular: 0x556677,
       emissive: 0x1a2538, emissiveIntensity: 0.05,
     });
-    const numWin = Math.max(2, Math.floor(size / 1.4));
-    const winSpacing = size / (numWin + 1);
-    for (let s = 0; s < storeys; s += 1) {
-      const winY = s * 2.8 + 1.55;
-      for (let i = 0; i < numWin; i += 1) {
-        const wx = -size / 2 + (i + 1) * winSpacing;
-        // Skip the centre window on the ground floor — that's where the door goes.
-        if (s === 0 && Math.abs(wx) < 0.5) continue;
-        const win = new THREE.Mesh(
-          new THREE.BoxGeometry(0.55, 1.25, 0.04),
-          windowMat,
-        );
-        win.position.set(wx, winY, size / 2 + 0.025);
-        g.add(win);
+    const balconyMat = new THREE.MeshPhongMaterial({
+      color: 0x1a1a1a, shininess: 60, specular: 0x666666,
+    });
+    const mansardMat = new THREE.MeshPhongMaterial({
+      vertexColors: true, shininess: 12, specular: 0x222222,
+    });
+    const capMat = new THREE.MeshPhongMaterial({
+      color: 0x2a3038, shininess: 8, specular: 0x222222,
+    });
+    const chimneyMat = new THREE.MeshPhongMaterial({
+      color: 0x9a6850, shininess: 3, specular: 0x111111,
+    });
+    const doorsMat = new THREE.MeshPhongMaterial({
+      vertexColors: true, shininess: 8, specular: 0x111111,
+    });
+    const shopFrameMat = new THREE.MeshPhongMaterial({
+      color: 0x1a1a1a, shininess: 40, specular: 0x555555,
+    });
+
+    const flushBucket = (bucket: GeoBucket, mat: THREE.Material, receive: boolean): void => {
+      if (bucket.geos.length === 0) return;
+      const merged = mergeBufferGeometries(bucket.geos, false);
+      for (const g of bucket.geos) g.dispose();
+      if (!merged) {
+        console.warn("[WorldScene] failed to merge scenery house bucket");
+        return;
       }
-      // ── Thin iron balcony rail on upper floors ───────────────────
-      if (s > 0) {
-        const balconyMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.4, metalness: 0.7 });
-        const rail = new THREE.Mesh(
-          new THREE.BoxGeometry(size - 0.2, 0.05, 0.08),
-          balconyMat,
-        );
-        rail.position.set(0, winY - 0.7, size / 2 + 0.10);
-        g.add(rail);
-      }
-    }
-    // ── Mansard roof (slate grey) ──────────────────────────────────
-    // Two-piece silhouette: thin warm cornice band right at the top
-    // of the wall, then a slate-grey body that's slightly bigger than
-    // the wall (so it overhangs like a real mansard).
-    const topCornice = new THREE.Mesh(
-      new THREE.BoxGeometry(size + 0.25, 0.12, size + 0.25),
-      corniceMat,
-    );
-    topCornice.position.y = wallH + 0.06;
-    g.add(topCornice);
-    const mansard = new THREE.Mesh(
-      new THREE.BoxGeometry(size + 0.15, 0.7, size + 0.15),
-      new THREE.MeshStandardMaterial({ color: roofColor, roughness: 0.5, metalness: 0.05 }),
-    );
-    mansard.position.y = wallH + 0.12 + 0.35;
-    g.add(mansard);
-    // Flat slate cap on top, slightly inset (suggests the roof's
-    // upper "deck" without authoring real slopes).
-    const cap = new THREE.Mesh(
-      new THREE.BoxGeometry(size - 0.4, 0.08, size - 0.4),
-      new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
-    );
-    cap.position.y = wallH + 0.12 + 0.7 + 0.04;
-    g.add(cap);
-    // ── Chimney(s) ────────────────────────────────────────────────
-    const chimneyMat = new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 });
-    const chimney = new THREE.Mesh(
-      new THREE.BoxGeometry(0.32, 0.8, 0.32),
-      chimneyMat,
-    );
-    chimney.position.set(size / 2 - 0.6, wallH + 0.12 + 0.7 + 0.4, -size / 2 + 0.6);
-    g.add(chimney);
-    // ── Door ──────────────────────────────────────────────────────
-    const door = new THREE.Mesh(
-      new THREE.BoxGeometry(0.85, 1.95, 0.05),
-      new THREE.MeshStandardMaterial({ color: doorColor, roughness: 0.55 }),
-    );
-    door.position.set(0, 0.975, size / 2 + 0.03);
-    g.add(door);
-    // ── Shop sign over the door ───────────────────────────────────
-    if (shopName) {
-      const tex = WorldScene.makeShopSignTexture(shopName);
-      const signMat = new THREE.MeshStandardMaterial({
-        map: tex, roughness: 0.55, transparent: false,
-        emissive: 0x222018, emissiveMap: tex, emissiveIntensity: 0.18,
-      });
-      const sign = new THREE.Mesh(
-        new THREE.PlaneGeometry(Math.min(size - 0.4, 2.4), 0.55),
-        signMat,
-      );
-      sign.position.set(0, 2.25, size / 2 + 0.04);
-      g.add(sign);
-      // Tiny iron frame under the sign for a hint of street-level depth.
-      const frameMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.5, metalness: 0.5 });
-      const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(Math.min(size - 0.3, 2.5), 0.06, 0.04),
-        frameMat,
-      );
-      frame.position.set(0, 2.55, size / 2 + 0.05);
-      g.add(frame);
-    }
-    g.position.set(x, 0, z);
-    g.rotation.y = rotY;
-    return g;
+      const mesh = new THREE.Mesh(merged, mat);
+      // Scenery houses never cast shadows: every scenery house sits at
+      // z=±50+ along an avenue, outside the sun's ±20 m shadow frustum
+      // around world origin. Casting was pure GPU waste — the result
+      // was always clipped by the shadow camera.
+      mesh.castShadow = false;
+      mesh.receiveShadow = receive;
+      sceneryGroup.add(mesh);
+    };
+    flushBucket(wallsBucket,    wallsMat,    true);
+    flushBucket(corniceBucket,  corniceMat,  true);
+    flushBucket(windowsBucket,  windowsMat,  false);
+    flushBucket(balconyBucket,  balconyMat,  false);
+    flushBucket(mansardBucket,  mansardMat,  true);
+    flushBucket(capBucket,      capMat,      true);
+    flushBucket(chimneyBucket,  chimneyMat,  true);
+    flushBucket(doorsBucket,    doorsMat,    false);
+    flushBucket(shopFrameBucket, shopFrameMat, false);
   }
 
   /** Canvas-painted storefront sign. Cream background with a thin

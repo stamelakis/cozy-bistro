@@ -300,7 +300,15 @@ export class WeatherEffects {
       // Random Y-rotation so the silhouette doesn't read as a tiled
       // pattern across multiple clouds.
       mesh.rotation.y = Math.random() * Math.PI * 2;
-      mesh.frustumCulled = false;
+      // Frustum-cull cloud shadows — each shadow is a 14-26 m world-
+      // space patch sitting at fixed Y, so three.js's built-in bounding-
+      // sphere test will reliably skip off-screen planes. Previously
+      // disabled (`= false`) because confetti / Points particles must
+      // stay uncullable, but a flat shadow plane has a proper bbox.
+      // With ~12 shadows scattered across the map and the camera
+      // typically seeing 3-4 at once, this saves ~8 draw calls per
+      // frame when overcast is up.
+      mesh.frustumCulled = true;
       mesh.renderOrder = 1;
       this.scene.add(mesh);
       this.cloudShadows.push(mesh);
