@@ -107,7 +107,24 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     const heightToApply = (opts.collapseSentinel && sentinelStartsCollapsed)
       ? undefined
       : saved.height;
-    applyLayout(root, saved.left, saved.top, saved.width, heightToApply);
+    // For bottom-anchored panels (Menu, Chat) the SAVED BOTTOM is
+    // the meaningful anchor. saved.top + saved.height records the
+    // bottom edge at save time; if the panel reloads collapsed,
+    // saved.height no longer applies and using saved.top alone
+    // puts the title bar where the body used to be — mid-screen
+    // instead of pinned to the bottom of the viewport. Translate
+    // top so the bottom edge stays put. 32 px is the conservative
+    // collapsed-content height; the post-mount anchor sweep below
+    // re-caches the real bottom from the actual rect on the
+    // first user move, so a small error here self-corrects.
+    let topToApply = saved.top;
+    if (opts.expandDirection === "up"
+        && opts.collapseSentinel
+        && sentinelStartsCollapsed) {
+      const COLLAPSED_HEIGHT_GUESS = 32;
+      topToApply = saved.top + saved.height - COLLAPSED_HEIGHT_GUESS;
+    }
+    applyLayout(root, saved.left, topToApply, saved.width, heightToApply);
   } else {
     // First-time wiring — capture whatever absolute position the panel
     // currently has (its CSS top/right/bottom/left + transform) and
