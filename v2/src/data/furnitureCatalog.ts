@@ -577,13 +577,10 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "wine-wall",       name: "Wine Wall",         category: "decoration",
     modelPath: "proc:wine-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 550, style: 6, ratingBonus: 0.06, attractionBonus: 3,
     tier: 4, placement: "wall" },
-  // Wood wall paneling — Kenney's `paneling.glb`. A flat panel that
-  // attaches to a wall like art, but covers a larger area + lends a
-  // warmer "finished-room" feel. Cheap T1 entry so a starter dining
-  // room can feel less like bare drywall.
-  { id: "wall-paneling",   name: "Wall Paneling",     category: "decoration",
-    modelPath: "assets/kenney/paneling.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 35, style: 2, comfort: 1, ratingBonus: 0.01,
-    tier: 1, placement: "wall" },
+  // (wall-paneling removed — Kenney's paneling.glb renders as a flat
+  //  tan rectangle at iso distance, indistinguishable from a stretched
+  //  piece of cardboard. Doesn't earn a slot in the catalog without
+  //  more authored detail.)
 
   // Plants — explicit targetHeight per variant so Small / Medium /
   // Tall actually read as a height progression instead of all landing
@@ -600,17 +597,22 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "potted-plant",   name: "Potted Plant",    category: "plant",
     modelPath: "assets/kenney/pottedPlant.glb", scale: S_PLANT, size: { width: 1, depth: 1 }, cost: 55, attractionBonus: 3, style: 2, ratingBonus: 0.01,
     tier: 2 },
+  // Bookcase variants — both widened to 2x1 because the Kenney shelf
+  // meshes ship empty (no books, no clutter), and at 1-tile width they
+  // read as a tall narrow plank rather than a piece of furniture. Wider
+  // footprint gives them more visual weight even though the shelves
+  // stay bare.
+  //
+  // Closed (with doors): uses the authored 2-wide mesh (no stretch
+  // needed). Open: uses the 1-tile open mesh with stretchFootprint so
+  // X and Z scale independently; the shelf-depth axis stays correct
+  // while the width fills two tiles.
   { id: "bookcase",       name: "Bookcase",        category: "decoration",
-    modelPath: "assets/kenney/bookcaseClosedDoors.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 100, style: 4, attractionBonus: 2, ratingBonus: 0.02,
-    tier: 2, targetHeight: 1.65, surfaceSlots: [{ dx: 0, dz: 0 }] },
-  { id: "bookcase-open",  name: "Open Bookcase",   category: "decoration",
-    modelPath: "assets/kenney/bookcaseOpen.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 2, ratingBonus: 0.01,
-    tier: 2, targetHeight: 1.65, surfaceSlots: [{ dx: 0, dz: 0 }] },
-  // 2-wide closed bookcase. Holds more visual mass on the wall — bigger
-  // style + attraction bump than the 1x1 closed bookcase. Two surface
-  // slots so the player can prop books / a lamp / a small plant on top.
-  { id: "bookcase-wide",  name: "Wide Bookcase",   category: "decoration",
     modelPath: "assets/kenney/bookcaseClosedWide.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 170, style: 4, attractionBonus: 3, ratingBonus: 0.03,
+    tier: 2, targetHeight: 1.65, stretchFootprint: true,
+    surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
+  { id: "bookcase-open",  name: "Open Bookcase",   category: "decoration",
+    modelPath: "assets/kenney/bookcaseOpen.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 110, style: 3, attractionBonus: 2, ratingBonus: 0.02,
     tier: 2, targetHeight: 1.65, stretchFootprint: true,
     surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "coat-rack",      name: "Coat Rack",       category: "decoration",
@@ -798,14 +800,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
     tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf", rotationOffset: Math.PI },
-  // Upper-cabinet corner piece — slots into the inside corner where two
-  // walls meet so an L-shaped upper run reads as continuous. Wall-shelf
-  // like the other upper cabinets; a small premium over the straight
-  // upper because the corner geometry is what makes a kitchen feel
-  // "built-in" instead of "boxes on a wall".
-  { id: "kitchen-upper-corner", name: "Upper Cabinet Corner", category: "storage",
-    modelPath: "assets/kenney/kitchenCabinetUpperCorner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 100, style: 2,
-    tier: 2, stockCapacity: 2, dishCapacity: 6, placement: "wall-shelf", rotationOffset: Math.PI },
+  // (kitchen-upper-corner removed — the Kenney mesh is authored as half
+  //  an L cabinet and expects a perpendicular run to fill the other
+  //  face. Our wall-shelf placement only gives it one wall, so the
+  //  empty back face shows. Revisit with a `mirror` field on
+  //  FurnitureDef + double-sided rendering when there's time.)
   // Corner cabinets are FULL-HEIGHT base units (counter line), not
   // upper wall-shelf cabinets — they fit at the corner of a counter
   // run on the floor. Surface slot on top so the player can put a
