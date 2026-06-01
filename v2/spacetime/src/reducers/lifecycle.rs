@@ -3,7 +3,7 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
-    player, pedestrian_tick_schedule, chat_cleanup_schedule,
+    player, pedestrian_tick_schedule, chat_cleanup_schedule, restaurant,
     Player, PedestrianTickSchedule, ChatCleanupSchedule,
 };
 
@@ -44,6 +44,19 @@ pub fn init(ctx: &ReducerContext) {
     // standalone manual reducer after a deploy.
     if let Err(e) = crate::reducers::weather::bootstrap_weather(ctx) {
         log::warn!("bootstrap_weather failed during init: {}", e);
+    }
+    // Phase A4 — backfill: every existing restaurant gets a sim tick
+    // schedule. New restaurants get one automatically via
+    // create_restaurant; this loop catches the ones that existed
+    // before the schedule feature shipped. ensure_tick_schedule is
+    // idempotent so a republish is safe.
+    let restaurant_ids: Vec<u64> = ctx.db.restaurant().iter().map(|r| r.id).collect();
+    let backfilled = restaurant_ids.len();
+    for rid in restaurant_ids {
+        crate::reducers::restaurant_sim::ensure_tick_schedule(ctx, rid);
+    }
+    if backfilled > 0 {
+        log::info!("Backfilled restaurant_tick schedules for {} existing restaurants", backfilled);
     }
 }
 

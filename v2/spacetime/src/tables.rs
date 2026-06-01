@@ -462,3 +462,46 @@ pub struct CoOwner {
     pub player: Identity,
     pub invited_at: Timestamp,
 }
+
+/// Server-authoritative simulation — per-restaurant scheduled tick row.
+/// One row per restaurant; each fires `restaurant_tick` at a fixed
+/// interval so the live simulation (guests, tickets, staff actors)
+/// advances on the server. Inserted by `create_restaurant`; removed
+/// by `delete_restaurant`.
+///
+/// The schedule row carries `restaurant_id` so the reducer knows which
+/// restaurant to step. SpacetimeDB passes the scheduled row to the
+/// reducer as the second argument — that's how the dispatch fans out
+/// per-restaurant without a global table scan on each tick.
+///
+/// Skeleton in Phase A4. The reducer doesn't simulate anything yet;
+/// Phase B (guest spawning) lights up the first real branch.
+#[table(name = restaurant_tick_schedule,
+        scheduled(crate::reducers::restaurant_tick))]
+pub struct RestaurantTickSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+    /// Which restaurant this schedule row drives. Used by the
+    /// `restaurant_tick` reducer to look up the per-restaurant state
+    /// it should advance.
+    #[index(btree)]
+    pub restaurant_id: u64,
+}
+
+/// Per-restaurant tick bookkeeping — when the last `restaurant_tick`
+/// ran for this restaurant. Used by the reducer to compute dt in
+/// microseconds; also used by the leak watcher / dev tools to confirm
+/// the schedule is actually firing. One row per restaurant, upserted
+/// by the first tick after creation.
+#[table(name = restaurant_tick_state, public)]
+pub struct RestaurantTickState {
+    #[primary_key]
+    pub restaurant_id: u64,
+    pub last_tick_at: Timestamp,
+    /// Monotonic counter of how many ticks have run. Useful for the
+    /// dev banner ("server tick #N") + sanity-checking that the
+    /// schedule didn't silently stop.
+    pub tick_count: u64,
+}

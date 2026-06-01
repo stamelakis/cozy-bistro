@@ -10,13 +10,17 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
     if trimmed.is_empty() || trimmed.len() > 48 {
         return Err("Name must be 1-48 characters".into());
     }
-    ctx.db.restaurant().insert(Restaurant {
+    let inserted = ctx.db.restaurant().insert(Restaurant {
         id: 0, // auto_inc
         owner: ctx.sender,
         name: trimmed.to_string(),
         public,
         created_at: ctx.timestamp,
     });
+    // Boot the simulation tick for this restaurant. Idempotent; skips
+    // if a schedule row already exists for the id (e.g. someone
+    // calls create_restaurant twice during init backfill).
+    crate::reducers::restaurant_sim::ensure_tick_schedule(ctx, inserted.id);
     Ok(())
 }
 
@@ -49,6 +53,10 @@ pub fn delete_restaurant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(),
     for c in ctx.db.co_owner().restaurant_id().filter(restaurant_id) {
         ctx.db.co_owner().id().delete(c.id);
     }
+    // Stop the simulation tick + drop its bookkeeping row. Idempotent
+    // — silent no-op if the schedule never existed (e.g. legacy
+    // restaurant deleted before sim ticks shipped).
+    crate::reducers::restaurant_sim::drop_tick_schedule(ctx, restaurant_id);
     ctx.db.restaurant().id().delete(restaurant_id);
     Ok(())
 }

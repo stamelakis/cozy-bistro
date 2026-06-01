@@ -13,6 +13,7 @@ mod friends;
 mod pedestrians;
 mod chat;
 mod weather;
+mod restaurant_sim;
 
 pub use lifecycle::*;
 pub use auth::*;
@@ -24,3 +25,4 @@ pub use friends::*;
 pub use pedestrians::*;
 pub use chat::*;
 pub use weather::*;
+pub use restaurant_sim::*;
