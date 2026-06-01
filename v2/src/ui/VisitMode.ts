@@ -1,12 +1,42 @@
 import * as THREE from "three";
 import type { IsoCamera } from "../scene/IsoCamera";
 import type { WorldScene } from "../scene/WorldScene";
+import type { AnimatedCharacter, CharacterAction } from "../scene/CharacterAnimator";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { fitFurniture, placementY } from "../assets/fitFurniture";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
 const STOREY_HEIGHT = 3;
+
+/** Customer character variants — duplicates the GuestSpawner's roster
+ * so a visited save's ghost customers cycle through the same set of
+ * faces the player sees in their own restaurant. Kept inline here so
+ * VisitMode doesn't have to import GuestSpawner just for the strings. */
+const GUEST_VARIANT_IDS = [
+  "guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6",
+];
+
+/** Save snapshot of a placed piece of furniture as published by
+ * publish_player_save. Position uses the legacy "y = world Z" 2D-grid
+ * naming. */
+interface SavedFurniture {
+  uid: string;
+  furnitureId: string;
+  position: { x: number; y: number };
+  rotation?: number;
+  floor?: number;
+}
+
+/** Categorised placement of a placed piece — what VisitMode actually
+ * needs to position characters near it. */
+interface PlacementSlot {
+  x: number;
+  z: number;
+  rotationRad: number;
+  floor: number;
+  category: string;
+}
 
 /** Metadata stamped on each city-building shell by
  * WorldScene.populateCityBuildings so a click raycast can identify
@@ -73,6 +103,19 @@ export class VisitMode {
    * enter; removed + nulled on exit. Geometries/materials come from
    * the model loader's cache and are reused across visits. */
   private visitorRoot: THREE.Group | null = null;
+  /** Animated character roots spawned by spawnVisitorActivity. The
+   * animator owns the per-frame motion; on exit we remove each one
+   * from the animator (otherwise we'd leak idle/sit poses ticking on
+   * meshes the visit no longer owns). */
+  private spawnedGhostRoots: THREE.Object3D[] = [];
+  /** Liveness counts surfaced in the overlay — "🍽 X seated · 👤 Y staff".
+   * Bumped as ghosts spawn; the overlay refreshes when they land. */
+  private liveCustomerCount = 0;
+  private liveStaffCount = 0;
+  /** Element inside the overlay that renders the liveness counts —
+   * cached so spawn callbacks can re-render it without rebuilding
+   * the whole overlay. */
+  private livenessEl: HTMLSpanElement | null = null;
   /** Shell mesh at the visited plot — hidden during visit so the
    * loaded interior is unobstructed by the placeholder facade.
    * Re-shown on exit. */
@@ -182,23 +225,11 @@ export class VisitMode {
       : "Unclaimed plot";
     popup.appendChild(nameLine);
     if (plot.ownerName) {
-      // Preview the owner's published stats right in the popup so
-      // the player can window-shop the city before committing to a
-      // visit. Same fetcher the overlay uses.
-      const stats = this.fetchVisitedStats?.(plot.ownerHex) ?? null;
-      if (stats) {
-        const statsLine = document.createElement("div");
-        Object.assign(statsLine.style, {
-          fontSize: "11px",
-          opacity: "0.8",
-          marginBottom: "8px",
-          color: "#e8c89a",
-        } as Partial<CSSStyleDeclaration>);
-        const money = `$${stats.money.toLocaleString("en-US")}`;
-        const rating = stats.ratingAvg.toFixed(1);
-        statsLine.textContent = `Day ${stats.dayNumber} · ${money} · ${rating}⭐ · Tier ${stats.luxuryTier}`;
-        popup.appendChild(statsLine);
-      }
+      // Popup intentionally does NOT preview stats (money / rating /
+      // tier / day) — the visit experience now leans on what the
+      // player can SEE inside the restaurant (live staff + customer
+      // ghosts), not a numeric stat card. The Visit Restaurant button
+      // is the only call to action here.
       const btn = document.createElement("button");
       btn.textContent = `🏃 Visit Restaurant`;
       Object.assign(btn.style, {
@@ -310,6 +341,17 @@ export class VisitMode {
   }
 
   private disposeVisitorRoot(): void {
+    // Detach every spawned ghost from the animator first — leaving
+    // them registered would mean per-frame idle/sit poses still
+    // ticking on meshes that have already been removed from the
+    // scene, accumulating wasted work across repeat visits.
+    for (const root of this.spawnedGhostRoots) {
+      this.scene.animator.remove(root);
+    }
+    this.spawnedGhostRoots = [];
+    this.liveCustomerCount = 0;
+    this.liveStaffCount = 0;
+    this.livenessEl = null;
     if (!this.visitorRoot) return;
     this.scene.worldRoot.remove(this.visitorRoot);
     // Geometries + materials come from the shared ModelLoader cache —
@@ -321,7 +363,11 @@ export class VisitMode {
   private async loadVisitedInterior(plot: VisitablePlot): Promise<void> {
     const blob = this.fetchVisitedSaveBlob?.(plot.ownerHex);
     if (!blob) return; // overlay already shows "(save not synced yet)"
-    let save: { furniture?: Array<{ uid: string; furnitureId: string; position: { x: number; y: number }; rotation?: number; floor?: number }> };
+    let save: {
+      furniture?: SavedFurniture[];
+      staffMembers?: Array<{ role?: string }>;
+      staff?: { chefs?: number; waiters?: number; errandBoys?: number };
+    };
     try {
       save = JSON.parse(blob);
     } catch (e) {
@@ -344,10 +390,25 @@ export class VisitMode {
     // we must NOT keep adding meshes to a stale root.
     const targetPlotId = plot.id;
 
+    // Categorize placements while we load so the activity-spawn pass
+    // below can find chairs / stoves / counters / bars in O(items).
+    const placements: PlacementSlot[] = [];
+
     await Promise.all(save.furniture.map(async (p) => {
       if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
       const def = getFurnitureDef(p.furnitureId);
       if (!def) return;
+      // Record the slot regardless of whether the model loads — for
+      // activity placement we only need the position + category,
+      // and we want chairs to seat ghosts even if a single chair
+      // mesh fails to load.
+      placements.push({
+        x: p.position.x,
+        z: p.position.y,
+        rotationRad: ((p.rotation ?? 0) * Math.PI) / 180,
+        floor: Math.max(0, p.floor ?? 0),
+        category: def.category,
+      });
       try {
         const model = await this.scene.loader.load(def.modelPath);
         if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
@@ -366,6 +427,189 @@ export class VisitMode {
         console.warn(`[Visit] failed to load ${def.id}:`, err);
       }
     }));
+
+    // Furniture is in place — populate the visit with live characters.
+    // Fire-and-forget; each character spawn updates the overlay's
+    // liveness counter as it lands.
+    if (this.activePlot?.id === targetPlotId) {
+      void this.spawnVisitorActivity(plot, save, placements);
+    }
+  }
+
+  /** Spawn the host's staff + a roster of seated ghost customers so
+   * the visited restaurant reads as alive instead of an empty doll-
+   * house. Driven entirely by the published save snapshot — there's
+   * no live state sync, but staff counts + furniture positions give
+   * enough information to fake a believable scene. */
+  private async spawnVisitorActivity(
+    plot: VisitablePlot,
+    save: {
+      staffMembers?: Array<{ role?: string }>;
+      staff?: { chefs?: number; waiters?: number; errandBoys?: number };
+    },
+    placements: PlacementSlot[],
+  ): Promise<void> {
+    if (!this.visitorRoot) return;
+    const targetPlotId = plot.id;
+
+    // Bucket placements by category so we can match staff to their
+    // workstations without rescanning the list per character.
+    const chairs: PlacementSlot[] = [];
+    const stoves: PlacementSlot[] = [];
+    const counters: PlacementSlot[] = [];
+    const bars: PlacementSlot[] = [];
+    for (const p of placements) {
+      switch (p.category) {
+        case "chair":   chairs.push(p); break;
+        case "stove":   stoves.push(p); break;
+        case "counter": counters.push(p); break;
+        case "bar":     bars.push(p); break;
+      }
+    }
+
+    // === Resolve the staff roster ===
+    // Prefer staffMembers (the per-individual list); fall back to the
+    // aggregate counts for legacy saves that never wrote the detailed
+    // array. Each entry distils down to a role string.
+    const roles: ("chef" | "waiter" | "barman" | "errand")[] = [];
+    if (Array.isArray(save.staffMembers) && save.staffMembers.length > 0) {
+      for (const m of save.staffMembers) {
+        const role = m.role;
+        if (role === "chef" || role === "waiter" || role === "barman" || role === "errand") {
+          roles.push(role);
+        }
+      }
+    } else {
+      const s = save.staff ?? {};
+      for (let i = 0; i < (s.chefs ?? 0); i += 1) roles.push("chef");
+      for (let i = 0; i < (s.waiters ?? 0); i += 1) roles.push("waiter");
+      for (let i = 0; i < (s.errandBoys ?? 0); i += 1) roles.push("errand");
+    }
+
+    // === Spawn the staff ===
+    // Each role prefers a category of workstation; falls back to a
+    // generic "stand near the centre" pose if no station of that
+    // category was placed in the visited save.
+    const stationByRole: Record<string, PlacementSlot[]> = {
+      chef: stoves.length ? stoves : counters,
+      waiter: counters.length ? counters : chairs,
+      barman: bars.length ? bars : counters,
+      errand: counters.length ? counters : stoves,
+    };
+    const counterCursor: Record<string, number> = {};
+    const staffPromises: Promise<void>[] = [];
+    for (const role of roles) {
+      const pool = stationByRole[role] ?? counters;
+      let slot: PlacementSlot | undefined;
+      if (pool.length > 0) {
+        const idx = (counterCursor[role] ?? 0) % pool.length;
+        counterCursor[role] = idx + 1;
+        slot = pool[idx];
+      }
+      staffPromises.push(this.spawnGhostCharacter(role, slot, "idle", targetPlotId, /* isStaff */ true));
+    }
+
+    // === Spawn the seated ghost customers ===
+    // Customer count derives from rating × 1.5 capped by chair count
+    // — high-rated restaurants read as busier without ever placing
+    // more guests than there are chairs to seat them at. Ratings are
+    // pulled from the same fetcher the popup never uses but is still
+    // present for analytics; absent rating defaults to 3.0.
+    const ratingForCount = this.fetchVisitedStats?.(plot.ownerHex)?.ratingAvg ?? 3.0;
+    const targetCustomerCount = Math.max(
+      0,
+      Math.min(
+        chairs.length,
+        Math.floor(1 + ratingForCount * 1.5),
+      ),
+    );
+    // Fisher-Yates shuffle in place (avoid Array.sort with random,
+    // which is biased and produces uneven distributions).
+    const shuffledChairs = chairs.slice();
+    for (let i = shuffledChairs.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledChairs[i], shuffledChairs[j]] = [shuffledChairs[j], shuffledChairs[i]];
+    }
+    const customerPromises: Promise<void>[] = [];
+    for (let i = 0; i < targetCustomerCount; i += 1) {
+      const variant = GUEST_VARIANT_IDS[Math.floor(Math.random() * GUEST_VARIANT_IDS.length)];
+      customerPromises.push(this.spawnGhostCharacter(variant, shuffledChairs[i], "sit", targetPlotId, /* isStaff */ false));
+    }
+
+    await Promise.all([...staffPromises, ...customerPromises]);
+    // Final overlay refresh — sometimes a single character spawn fails
+    // and the running tally would land slightly off; this is the
+    // settle-state pass.
+    this.refreshLivenessLabel();
+  }
+
+  /** Load + position a single ghost character. modelId is the loader
+   * key — either a role ("chef"/"waiter"/...) or a guest variant
+   * ("guest-v3"). The character registers with the scene's animator
+   * so the existing idle / sit poses tick on it; on visit exit
+   * disposeVisitorRoot detaches it. */
+  private async spawnGhostCharacter(
+    modelId: string,
+    slot: PlacementSlot | undefined,
+    action: CharacterAction,
+    targetPlotId: bigint,
+    isStaff: boolean,
+  ): Promise<void> {
+    if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
+    try {
+      const model = await this.scene.characterLoader.load(modelId);
+      if (!this.visitorRoot || this.activePlot?.id !== targetPlotId) return;
+      // Pull the character a metre off the workstation so they read
+      // as standing BESIDE it rather than inside it; sitting ghosts
+      // anchor directly on the chair slot so seatHeight lifts them to
+      // the seat cushion.
+      let x = slot?.x ?? 0;
+      let z = slot?.z ?? 0;
+      const facingY = slot?.rotationRad ?? 0;
+      const floor = slot?.floor ?? 0;
+      if (action !== "sit" && slot) {
+        // Step backward from the workstation along the slot's facing
+        // direction so the character ends up on the "approach" side
+        // (chefs in front of stoves, waiters at the counter front).
+        const back = 0.55;
+        x -= Math.sin(facingY) * back;
+        z -= Math.cos(facingY) * back;
+      }
+      model.position.set(x, floor * STOREY_HEIGHT, z);
+      model.rotation.y = facingY;
+      const animated: AnimatedCharacter = {
+        root: model,
+        groundPos: new THREE.Vector2(x, z),
+        facingY,
+        action,
+        phase: Math.random() * 5,
+        // Chair seat height — matches the player's own guests so the
+        // sitting pose lands the character on the cushion, not the floor.
+        seatHeight: 0.5,
+      };
+      this.visitorRoot.add(model);
+      this.scene.animator.add(animated);
+      this.spawnedGhostRoots.push(model);
+      if (isStaff) this.liveStaffCount += 1;
+      else this.liveCustomerCount += 1;
+      this.refreshLivenessLabel();
+    } catch (e) {
+      console.warn(`[Visit] failed to spawn ghost ${modelId}:`, e);
+    }
+  }
+
+  /** Update the overlay's liveness chip in-place. Cheap textContent
+   * write — no DOM rebuild — so we can call it from every spawn
+   * callback without thrashing layout. */
+  private refreshLivenessLabel(): void {
+    if (!this.livenessEl) return;
+    const c = this.liveCustomerCount;
+    const s = this.liveStaffCount;
+    if (c === 0 && s === 0) {
+      this.livenessEl.textContent = "(quiet right now)";
+    } else {
+      this.livenessEl.textContent = `🍽 ${c} seated · 👤 ${s} staff`;
+    }
   }
 
   // ─── Top-center "Visiting X · Exit" overlay ─────────────────────
@@ -394,33 +638,20 @@ export class VisitMode {
     const label = document.createElement("span");
     label.innerHTML = `🏃 Visiting <b>${escapeHtml(plot.ownerName)}'s</b> restaurant`;
     wrap.appendChild(label);
-    // Read published save stats from the cloud, if Engine wired the
-    // fetcher. Shows "Day 12 · $4,820 · 4.3⭐ · Tier 3" so the player
-    // can see what state the visited restaurant is in even before the
-    // full interior render (P4.3, future).
-    const stats = this.fetchVisitedStats?.(plot.ownerHex) ?? null;
-    if (stats) {
-      const statsLine = document.createElement("span");
-      Object.assign(statsLine.style, {
-        fontSize: "12px",
-        opacity: "0.85",
-        borderLeft: "1px solid rgba(255, 220, 150, 0.3)",
-        paddingLeft: "10px",
-      } as Partial<CSSStyleDeclaration>);
-      const money = `$${stats.money.toLocaleString("en-US")}`;
-      const rating = stats.ratingAvg.toFixed(1);
-      statsLine.textContent = `Day ${stats.dayNumber} · ${money} · ${rating}⭐ · Tier ${stats.luxuryTier}`;
-      wrap.appendChild(statsLine);
-    } else {
-      const note = document.createElement("span");
-      Object.assign(note.style, {
-        fontSize: "12px",
-        opacity: "0.55",
-        fontStyle: "italic",
-      } as Partial<CSSStyleDeclaration>);
-      note.textContent = "(save not synced yet)";
-      wrap.appendChild(note);
-    }
+    // Liveness — counts of staff + seated customers actually visible
+    // inside the restaurant right now. Replaces the old money / rating
+    // / tier stat strip: the visit is meant to be about WATCHING the
+    // restaurant in motion, not reading a numbers card.
+    const liveness = document.createElement("span");
+    Object.assign(liveness.style, {
+      fontSize: "12px",
+      opacity: "0.85",
+      borderLeft: "1px solid rgba(255, 220, 150, 0.3)",
+      paddingLeft: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    liveness.textContent = "loading…";
+    wrap.appendChild(liveness);
+    this.livenessEl = liveness;
     const exit = document.createElement("button");
     exit.textContent = "Exit Visit";
     Object.assign(exit.style, {
