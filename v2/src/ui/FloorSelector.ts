@@ -133,8 +133,11 @@ export class FloorSelector {
     const H = (this.scene.constructor as typeof WorldScene).getStoreyHeight();
     // Lift the camera target so the chosen floor's mid-height is roughly
     // centered. We aim a touch above the slab so doors/walls of that
-    // floor sit comfortably below the screen middle.
-    this.camera.tweenTargetY(idx * H, 0.5);
+    // floor sit comfortably below the screen middle. Tween shortened
+    // from 0.5 s → 0.30 s so the click→arrived feel is snappier;
+    // anything below ~0.25 s starts feeling like a teleport instead
+    // of a deliberate camera move.
+    this.camera.tweenTargetY(idx * H, 0.30);
 
     this.onFocusChanged?.();
     this.update();

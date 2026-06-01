@@ -4011,6 +4011,52 @@ export class WorldScene {
     }
   }
 
+  /** Force Three.js to compile shader programs for every material in
+   * the scene RIGHT NOW, including objects that are currently hidden
+   * (upper storeys, the mansard roof, balconies, etc).
+   *
+   * Three.js compiles a fragment+vertex program lazily the first time
+   * a given material/geometry combo is actually rendered. Upper
+   * storeys start with `.visible = false`, so their materials never
+   * get compiled at startup — and the first time the player clicks
+   * a floor button to reveal Floor 1+, the renderer stalls for
+   * ~50-300 ms compiling every fresh program. That's the "laggy"
+   * feel when clicking floor buttons.
+   *
+   * Workaround: briefly flip every storey + balcony + roof visible,
+   * call `renderer.compile`, then restore the original visibility.
+   * The compile call is synchronous and traverses all visible objects,
+   * compiling each material's program against the camera's current
+   * settings. After this, every storey reveal is instant. Cheap to
+   * call once at startup; safe to call again later if new materials
+   * are added (re-compiling already-compiled programs is a no-op). */
+  precompileShaders(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    // Snapshot current visibility of everything we'll flip.
+    type Snap = { obj: THREE.Object3D; visible: boolean };
+    const snaps: Snap[] = [];
+    const flip = (obj: THREE.Object3D | undefined | null): void => {
+      if (!obj) return;
+      snaps.push({ obj, visible: obj.visible });
+      obj.visible = true;
+    };
+    for (const [, storey] of this.upperStoreys) flip(storey.group);
+    for (const [, stair] of this.stairFlights) flip(stair);
+    flip(this.parisMansard);
+    flip(this.parisMansardCap);
+    flip(this.parisMansardChimney);
+    flip(this.buildingRoof);
+    for (const b of this.parisBalconies) flip(b);
+    try {
+      renderer.compile(this.threeScene, camera);
+    } catch (e) {
+      // Hard to imagine compile failing, but a partial compile leaves
+      // valid programs in the cache so the next render still works.
+      console.warn("[WorldScene] precompile failed:", e);
+    }
+    // Restore exactly what was visible before.
+    for (const s of snaps) s.obj.visible = s.visible;
+  }
+
   /** Switch the world between interior view (default; see-through walls,
    * focus-only storey visibility, hidden roof) and exterior view
    * (closed walls on every side, all unlocked storeys + roof visible

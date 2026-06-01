@@ -1242,6 +1242,18 @@ export class Engine {
       // interiors. Re-poll the cache for a couple of seconds in
       // case the building list lands after the auth_record one.
       this.refreshCityBuildings();
+      // Pre-compile shaders for hidden storeys + roof so the first
+      // click on Floor 1+ doesn't stall the renderer compiling fresh
+      // material programs on the reveal frame. Defer one frame so
+      // refreshCityBuildings' async shell spawning gets a chance to
+      // populate the scene; missed materials on later tier upgrades
+      // are caught on the next floor click anyway (the second reveal
+      // is already cached so it's fast). Without this the player
+      // gets a 50-300 ms freeze when they click an upper floor for
+      // the first time on a cold session.
+      window.setTimeout(() => {
+        this.scene.precompileShaders(this.renderer, this.camera.threeCamera);
+      }, 0);
       // First-visit welcome pop. Deferred to here (instead of the
       // Engine constructor) so it can't flash for a moment behind
       // the login modal on a cold load. Only first-time players
