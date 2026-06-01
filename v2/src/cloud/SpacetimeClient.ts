@@ -78,6 +78,17 @@ export class SpacetimeClient {
    * HUD count. Started in afterConnect; cleared in destroy. */
   private heartbeatTimer: number | null = null;
   private wired = false;
+  /** True iff the engine booted without a local save in the active slot.
+   * Set by Engine before connect(). When the subscription resolves the
+   * player's restaurant and finds a cloud save_snapshot, this flag tells
+   * us it's safe to auto-load that snapshot into localStorage + reload
+   * — there's no local progress to overwrite. Cross-device login (the
+   * "same account on a second machine" case) lives entirely on this
+   * code path; without it the user starts over with an empty shop. */
+  private wasFreshStart = false;
+  /** Latch — flips true the first time we auto-load a cloud save so a
+   * subsequent table mutation doesn't trigger a reload loop. */
+  private cloudAutoLoadTriggered = false;
   /** Subscribers that want to be notified when DB state mutates. UI panels
    * register a re-render here so leaderboards/friends update live. */
   private readonly listeners = new Set<() => void>();
@@ -94,6 +105,52 @@ export class SpacetimeClient {
       moduleName: cfg.moduleName ?? DEFAULT_MODULE,
       host: cfg.host ?? DEFAULT_HOST,
     };
+  }
+
+  /** Engine calls this before connect() to tell us whether the local
+   * save was empty at boot. We use it to gate the cross-device auto
+   * load — if the player walked in on a fresh device AND their cloud
+   * save exists, we transparently pull it instead of starting them
+   * over. */
+  setWasFreshStart(fresh: boolean): void {
+    this.wasFreshStart = fresh;
+  }
+
+  /** If the engine started on a truly fresh device (no localStorage)
+   * AND the DB has a cloud save for this player's restaurant, pull
+   * the snapshot, write it into the active slot's localStorage key,
+   * and reload the page so the game restarts with the real data.
+   * Called from onSubscriptionReady after restaurantId is established.
+   * Latched so it only fires once per session. */
+  private maybeAutoLoadCloudSave(snap: { data: string } | null): void {
+    if (this.cloudAutoLoadTriggered) return;
+    if (!this.wasFreshStart) return;
+    if (!snap || typeof snap.data !== "string" || snap.data.length === 0) return;
+    try {
+      // Validate the payload parses BEFORE we trample the slot — a
+      // corrupt cloud save shouldn't lock the player into a reload
+      // loop with a busted localStorage entry.
+      JSON.parse(snap.data);
+    } catch (e) {
+      console.warn("[SpacetimeDB] cloud save is unparseable; not auto-loading.", e);
+      return;
+    }
+    const slot = this.saver.getActiveSlot();
+    const key = slot === 1 ? "cozy-bistro-3d-save" : `cozy-bistro-3d-save-${slot}`;
+    try {
+      localStorage.setItem(key, snap.data);
+    } catch (e) {
+      console.warn("[SpacetimeDB] couldn't write cloud save to localStorage (quota?)", e);
+      return;
+    }
+    this.cloudAutoLoadTriggered = true;
+    console.log(`[SpacetimeDB] cross-device login — auto-loaded cloud save into slot ${slot}, reloading`);
+    // Tiny delay so the console message can flush + so the user
+    // sees a brief "loading…" before the page swaps. The reload
+    // re-enters Engine boot, which now finds the save in
+    // localStorage and hydrates as if it were a normal returning
+    // player.
+    window.setTimeout(() => window.location.reload(), 250);
   }
 
   // ============================================================================
@@ -720,9 +777,13 @@ export class SpacetimeClient {
       const snap = ctx.db.save_snapshot.restaurant_id.find(this.restaurantId);
       if (snap) {
         console.log(`[SpacetimeDB] found cloud save for restaurant ${this.restaurantId} on day ${snap.dayNumber} ($${snap.money})`);
-        // Don't override the local save automatically — the game has
-        // already started from localStorage. The "Load from cloud" button
-        // (SlotsModal) lets the player pull this snapshot on demand.
+        // If the player walked in on a fresh device with no local save,
+        // pull the cloud snapshot now and reload. On a device that
+        // ALREADY had a local save we leave the cloud copy alone — the
+        // local game has already booted and the player can still pull
+        // the cloud version manually via SlotsModal's "Load from cloud"
+        // button if they want to overwrite.
+        this.maybeAutoLoadCloudSave(snap);
       } else {
         console.log(`[SpacetimeDB] restaurant ${this.restaurantId} exists but no save yet`);
       }

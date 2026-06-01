@@ -226,12 +226,20 @@ export class Engine {
     this.camera.attachInputTo(this.renderer.domElement);
 
     const savedState = SaveSystem.loadFromStorage();
+    // Track whether we booted on a truly fresh device (no localStorage
+    // save in this slot). The SpacetimeDB layer uses this signal to
+    // decide whether to auto-pull the cloud save — without it, a
+    // returning player who logs in on a second machine would silently
+    // start over with an empty restaurant while their real save sat
+    // untouched in the DB.
+    const wasFreshStart = !savedState;
     this.game = new Game(savedState);
     this.saver = new SaveSystem(this.game);
     // Cloud sync to SpacetimeDB Maincloud (cozy-bistro-andre). Runs in
     // parallel with the local save; if the network is down the game
     // continues working from localStorage.
     this.cloud = new SpacetimeClient(this.game, this.saver);
+    this.cloud.setWasFreshStart(wasFreshStart);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
 
