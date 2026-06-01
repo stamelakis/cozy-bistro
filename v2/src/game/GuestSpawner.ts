@@ -953,10 +953,23 @@ export class GuestSpawner {
    * not yet marked dirty (eating) or returned (giving up). Without
    * this number the leak watcher would see a phantom deficit any time
    * a guest is mid-meal: actual = clean + dirty would be < lifetime
-   * by exactly the in-flight count. */
+   * by exactly the in-flight count.
+   *
+   * IMPORTANT: skip guests whose `dishesSettled` flag is already true.
+   * settleGuestDishes moves each eaten reservation into the DIRTY pool
+   * but doesn't clear reservedDishTiers (other code reads it — leftover
+   * mesh spawning, save / debug snapshot). Counting them as in-flight
+   * AFTER settlement double-counts the same plate: once in dirty,
+   * once in this in-flight total. The displayed HUD denominator was
+   * spiking up by 1-3 every time a guest finished a course (between
+   * finalizeVisit → settleGuestDishes and the despawnGuest tick that
+   * removes them from this.guests). */
   getInFlightDishCount(): number {
     let n = 0;
-    for (const g of this.guests) n += g.reservedDishTiers.length;
+    for (const g of this.guests) {
+      if (g.dishesSettled) continue;
+      n += g.reservedDishTiers.length;
+    }
     return n;
   }
 
@@ -970,6 +983,10 @@ export class GuestSpawner {
   getInFlightByKindTier(): Array<{ kind: DishKind; tier: number; count: number }> {
     const byKey = new Map<string, number>();
     for (const g of this.guests) {
+      // Same dishesSettled guard as getInFlightDishCount — settled
+      // reservations are already in the dirty pool, listing them here
+      // would dupe them in the save's recovery path.
+      if (g.dishesSettled) continue;
       for (let i = 0; i < g.reservedDishTiers.length; i += 1) {
         const recipe = g.order[i];
         if (!recipe) continue;
