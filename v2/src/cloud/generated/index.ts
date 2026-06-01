@@ -50,6 +50,7 @@ import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import MarkGuestLeavingReducer from "./mark_guest_leaving_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
@@ -63,9 +64,11 @@ import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
+import SpawnGuestReducer from "./spawn_guest_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
+import UpdateGuestPositionReducer from "./update_guest_position_reducer";
 import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 
 // Import all procedure arg schemas
@@ -378,6 +381,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("mark_guest_leaving", MarkGuestLeavingReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
@@ -391,9 +395,11 @@ const reducersSchema = __reducers(
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("sign_up", SignUpReducer),
+  __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
+  __reducerSchema("update_guest_position", UpdateGuestPositionReducer),
   __reducerSchema("wipe_my_restaurant", WipeMyRestaurantReducer),
 );
 
