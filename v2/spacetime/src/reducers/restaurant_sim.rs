@@ -13,8 +13,8 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
-    restaurant_tick_schedule, restaurant_tick_state,
-    RestaurantTickSchedule, RestaurantTickState,
+    active_guest, restaurant_tick_schedule, restaurant_tick_state,
+    ActiveGuest, RestaurantTickSchedule, RestaurantTickState,
 };
 
 /// Interval the simulation ticks at, in microseconds. 100 ms = 10 Hz —
@@ -106,5 +106,53 @@ pub fn restaurant_tick(
     // the client sets via reducers (or a server-side config table
     // we add later). For now: no-op past the bookkeeping.
 
+    // Phase B.1 — iterate every active_guest belonging to this
+    // restaurant and step its state machine. tick_guest_state is a
+    // no-op stub in B.1 (just exercise the dispatch + table access);
+    // B.2 fills in real patience / state transitions.
+    let dt_ms = compute_dt_ms(ctx, &schedule);
+    let guest_ids: Vec<u64> = ctx.db
+        .active_guest()
+        .iter()
+        .filter(|g| g.restaurant_id == rid)
+        .map(|g| g.id)
+        .collect();
+    for guest_id in guest_ids {
+        tick_guest_state(ctx, guest_id, dt_ms);
+    }
+
     Ok(())
+}
+
+/// Compute elapsed time since the previous tick for this restaurant,
+/// in milliseconds. Used to advance state-machine clocks. Falls back
+/// to the scheduled interval (100 ms) on the first tick after a
+/// restart, since `last_tick_at` won't exist yet.
+fn compute_dt_ms(_ctx: &ReducerContext, _schedule: &RestaurantTickSchedule) -> i64 {
+    // The reducer body itself just upserted restaurant_tick_state
+    // ABOVE this call site; so by the time we read, last_tick_at is
+    // already "now". We instead pin to the configured interval — the
+    // schedule is what guarantees pacing, and any per-tick drift is
+    // sub-millisecond and not worth a more complex bookkeeping field.
+    SIM_TICK_INTERVAL_MICROS / 1_000
+}
+
+/// Advance one guest's state machine by `dt_ms`. Phase B.1 is a stub
+/// — it exists so the master tick has the per-guest dispatch wired
+/// up before B.2 starts filling in real logic.
+///
+/// Even as a stub it's NOT a literal no-op: it advances `state_clock_ms`
+/// + `patience_ms` countdown so client subscribers can already see
+/// the row tick. The actual state transitions (e.g. seated → ordering
+/// after dwell) land in Phase B.2.
+fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return };
+    let new_clock = g.state_clock_ms.saturating_add(dt_ms);
+    // Patience counts DOWN; clamp at zero, transition happens in B.2.
+    let new_patience = (g.patience_ms - dt_ms).max(0);
+    ctx.db.active_guest().id().update(ActiveGuest {
+        state_clock_ms: new_clock,
+        patience_ms: new_patience,
+        ..g
+    });
 }

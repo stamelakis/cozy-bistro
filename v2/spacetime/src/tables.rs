@@ -505,3 +505,130 @@ pub struct RestaurantTickState {
     /// schedule didn't silently stop.
     pub tick_count: u64,
 }
+
+/// Phase B — server-authoritative guest. One row per live customer in
+/// a restaurant from spawn (walking in) through despawn (leaving). The
+/// scheduled `restaurant_tick` advances each row's state machine; the
+/// client (when `serverSim.guests` is on) renders character poses
+/// from the row + lerps body position toward `(target_x, target_z)`.
+///
+/// Same architecture as P5 pedestrians but with a richer state
+/// machine. Pathfinding stays on the client for Phase B — server
+/// publishes only the next destination; the client routes around
+/// placed furniture locally. A future phase can port Pathfinding to
+/// Rust if we need to validate routes server-side.
+///
+/// All struct fields are CONCRETE columns (no JSON blobs) per the
+/// "split it" design review. CustomerTaste's six fields each get
+/// their own column; same for any other nested struct we'd otherwise
+/// have pickled.
+#[table(name = active_guest, public)]
+pub struct ActiveGuest {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+
+    // === Identity / kind ===
+    /// Character GLB id — "guest-v0".."guest-v6". Set at spawn from
+    /// the pedestrian's `variant` so the same body that walked up
+    /// keeps walking in.
+    pub variant: String,
+    /// CustomerArchetype enum value as a string. Drives patience
+    /// scale + order size + tip multiplier. See client
+    /// data/customerArchetypes.ts.
+    pub archetype: String,
+
+    // === CustomerTaste — expanded out of the JSON blob ===
+    /// "food" | "drink" | "both" — hard filter on what they'll order.
+    pub taste_diet: String,
+    /// 0..1, how much nearby decor quality matters to their rating.
+    pub taste_decor_pref: f32,
+    /// 0..1, how much window adjacency matters.
+    pub taste_window_pref: f32,
+    /// Recipe category id ("appetizer", "main", "side", "drink", "dessert")
+    /// they have an affinity for, or "" = no bias.
+    pub taste_cuisine_bias: String,
+    /// 0..1, how forgiving they are of drinks-only options when food
+    /// is what they wanted (and vice versa).
+    pub taste_drink_tolerance: f32,
+    /// Rolled at spawn from the archetype's wcUseChance. True for
+    /// heavy bathroom users — adds the WC detour after seated and
+    /// makes bathroom quality matter to their final rating.
+    pub will_use_toilet: bool,
+
+    // === State machine ===
+    /// One of: "walkingIn", "seated", "ordering", "waitingForFood",
+    /// "eating", "leaving", "waiting" (overflow chair), "wcWalking",
+    /// "wcSitting", "wcWashing", "done". The reducer's
+    /// tick_guest_state transitions between these.
+    pub state: String,
+    /// Time spent in the current state, in milliseconds. Reset on
+    /// each state transition.
+    pub state_clock_ms: i64,
+    /// Patience countdown — milliseconds before this guest gives up
+    /// and leaves angry. Resets at state transitions that re-arm it
+    /// (e.g. seated → ordering).
+    pub patience_ms: i64,
+
+    // === Seat assignment (nullable until they actually sit) ===
+    /// Furniture uid of the assigned seat, or "" if waitlisted.
+    pub seat_uid: String,
+    pub seat_x: f32,
+    pub seat_z: f32,
+    pub seat_facing_y: f32,
+    pub seat_floor: u32,
+    /// True when the assigned seat lives at a bar counter (vs a
+    /// regular dining/coffee table). Routes their order request to
+    /// a barman instead of a waiter.
+    pub seat_at_bar: bool,
+    /// World plate position on the table — where the served dish
+    /// renders. Computed at seat-assignment time from the seat slot.
+    pub plate_x: f32,
+    pub plate_z: f32,
+
+    // === Body (position the client lerps toward target_*) ===
+    pub x: f32,
+    pub z: f32,
+    pub floor: u32,
+    pub target_x: f32,
+    pub target_z: f32,
+    pub target_floor: u32,
+
+    // === Order ===
+    /// Comma-separated recipe ids in the order the guest wants them
+    /// served. Empty until ordering completes.
+    pub order_recipes: String,
+    /// Index of the course currently being cooked / delivered /
+    /// eaten. 0 until the first ticket is created.
+    pub order_index: u32,
+    /// Ticket id from active_ticket for the current course, or None
+    /// between courses.
+    pub ticket_id: Option<u64>,
+    /// CSV of tier numbers (u32 each) for plates / glasses already
+    /// reserved by this guest. Index N is the tier of the plate
+    /// reserved for course N. Capped at 5 entries (one per course).
+    pub reserved_dish_tiers: String,
+
+    // === Overflow waitlist (nullable until they're waitlisted) ===
+    /// Furniture uid of the yellow overflow chair they're parked at,
+    /// or "" when not waitlisted.
+    pub waiting_chair_uid: String,
+    /// Milliseconds left before a waitlisted guest gives up. Counts
+    /// down only while state == "waiting".
+    pub waiting_timeout_ms: i64,
+
+    // === Bookkeeping ===
+    /// Money this guest will pay (accumulates as courses are served).
+    /// Stored in cents to avoid f32 drift over a long meal.
+    pub total_paid_cents: i64,
+    /// Cumulative satisfaction × 100 across courses; final rating
+    /// averages this. Same i32 × 100 trick as elsewhere.
+    pub total_satisfaction_x100: i32,
+    /// True once settleGuestDishes-equivalent has run server-side.
+    /// Mirrors the dishesSettled idempotency flag on the client's
+    /// ActiveGuest — every despawn path checks it.
+    pub dishes_settled: bool,
+    pub spawned_at: Timestamp,
+}

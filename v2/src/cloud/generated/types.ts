@@ -18,6 +18,47 @@ export const AchievementUnlock = __t.object("AchievementUnlock", {
 });
 export type AchievementUnlock = __Infer<typeof AchievementUnlock>;
 
+export const ActiveGuest = __t.object("ActiveGuest", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  variant: __t.string(),
+  archetype: __t.string(),
+  tasteDiet: __t.string(),
+  tasteDecorPref: __t.f32(),
+  tasteWindowPref: __t.f32(),
+  tasteCuisineBias: __t.string(),
+  tasteDrinkTolerance: __t.f32(),
+  willUseToilet: __t.bool(),
+  state: __t.string(),
+  stateClockMs: __t.i64(),
+  patienceMs: __t.i64(),
+  seatUid: __t.string(),
+  seatX: __t.f32(),
+  seatZ: __t.f32(),
+  seatFacingY: __t.f32(),
+  seatFloor: __t.u32(),
+  seatAtBar: __t.bool(),
+  plateX: __t.f32(),
+  plateZ: __t.f32(),
+  x: __t.f32(),
+  z: __t.f32(),
+  floor: __t.u32(),
+  targetX: __t.f32(),
+  targetZ: __t.f32(),
+  targetFloor: __t.u32(),
+  orderRecipes: __t.string(),
+  orderIndex: __t.u32(),
+  ticketId: __t.option(__t.u64()),
+  reservedDishTiers: __t.string(),
+  waitingChairUid: __t.string(),
+  waitingTimeoutMs: __t.i64(),
+  totalPaidCents: __t.i64(),
+  totalSatisfactionX100: __t.i32(),
+  dishesSettled: __t.bool(),
+  spawnedAt: __t.timestamp(),
+});
+export type ActiveGuest = __Infer<typeof ActiveGuest>;
+
 export const AuthRecord = __t.object("AuthRecord", {
   username: __t.string(),
   identity: __t.identity(),
