@@ -16,6 +16,7 @@
 
 import type { Game } from "../game/Game";
 import type { SaveSystem } from "../game/SaveSystem";
+import type { SaveGameState } from "../data/types";
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
 
@@ -884,10 +885,30 @@ export class SpacetimeClient {
    * future; player_save is the one the visit code reads from. */
   cloudSaveNow(): void {
     if (!this.conn) return;
-    let json: string | undefined;
+    // Snapshot must run on the main thread (touches live Game state),
+    // but the heavy stringify goes to the save worker. publishCloud is
+    // the tail that runs once the JSON is back — reducer call + per-
+    // identity publish. Fire-and-forget; nothing here awaits.
+    let state: SaveGameState;
     try {
-      const state = this.saver.snapshotForCloud();
-      json = JSON.stringify(state);
+      state = this.saver.snapshotForCloud();
+    } catch (e) {
+      console.warn("[SpacetimeDB] cloud snapshot failed", e);
+      return;
+    }
+    this.saver.serializeAsync(state).then(
+      (json) => this.publishCloud(json),
+      (e) => console.warn("[SpacetimeDB] cloud serialize failed", e),
+    );
+  }
+
+  /** Tail of {@link cloudSaveNow} — runs once the worker hands the JSON
+   * string back. Skips the upload if it's too large, otherwise pushes
+   * to the legacy restaurant-keyed table (if we have an id) AND the
+   * per-identity player_save table (visit mode reads this one). */
+  private publishCloud(json: string): void {
+    if (!this.conn) return;
+    try {
       if (json.length > 256 * 1024) {
         console.warn(`[SpacetimeDB] save too large to upload (${json.length} bytes)`);
         return;

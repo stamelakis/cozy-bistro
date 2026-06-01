@@ -990,8 +990,10 @@ export class Engine {
       }
     });
 
-    // Save on tab close.
-    window.addEventListener("beforeunload", () => this.saver.saveNow());
+    // Save on tab close. saveNowSync uses the main-thread JSON.stringify
+    // path — the page may close before the save worker round-trip
+    // completes, so we can't rely on the async path here.
+    window.addEventListener("beforeunload", () => this.saver.saveNowSync());
     window.addEventListener("resize", this.handleResize);
   }
 

@@ -7,6 +7,15 @@ import type { FurnitureRegistry } from "./FurnitureRegistry";
  * snapshotted to whatever the active slot is (1-3 by default).
  * Switching slots writes the active id to localStorage and reloads,
  * giving the player parallel timelines.
+ *
+ * Performance: `JSON.stringify` on a mature save costs 5-15 ms which,
+ * stacked on top of the per-frame budget, surfaced as a periodic
+ * micro-stutter at the autosave cadence. The serialize step is now
+ * pushed onto a Web Worker (saveWorker.ts); the main thread only owns
+ * the snapshot extraction (must read live game state) and the actual
+ * localStorage write (browser API isn't worker-visible). For the
+ * `beforeunload` path a synchronous fallback stays on the main thread
+ * — the page might close before a worker round-trip completes.
  */
 
 const STORAGE_PREFIX = "cozy-bistro-3d-save";
@@ -34,6 +43,11 @@ export interface SlotInfo {
   lastSavedAt?: number;
 }
 
+/** Response shape from the save worker — kept in sync with saveWorker.ts. */
+type WorkerResponse =
+  | { id: number; ok: true; json: string }
+  | { id: number; ok: false; error: string };
+
 export class SaveSystem {
   private readonly game: Game;
   /** Optional — Engine sets this after the registry is constructed. */
@@ -48,9 +62,74 @@ export class SaveSystem {
   private lastSaveOk = true;
   private lastSaveError = "";
 
+  /** Off-thread serializer. Constructed once at boot and reused for the
+   * lifetime of the page. Falls back to main-thread stringify if the
+   * worker can't be created (e.g. unsupported environment). */
+  private worker: Worker | null = null;
+  private nextReqId = 1;
+  private readonly pending = new Map<number, (res: WorkerResponse) => void>();
+  /** Set while an async save is in flight so back-to-back autosave timers
+   * don't pile up multiple snapshots ahead of the worker. */
+  private saveInFlight = false;
+
   constructor(game: Game) {
     this.game = game;
     this.activeSlot = readActiveSlot();
+    this.initWorker();
+  }
+
+  /** Boot the save serializer worker. Best-effort: on failure we silently
+   * keep the main-thread stringify path so the game never gets stuck
+   * "unable to save". */
+  private initWorker(): void {
+    try {
+      // Vite resolves the URL at build time and bundles the worker as a
+      // separate chunk; this is the canonical module-worker pattern.
+      this.worker = new Worker(new URL("../workers/saveWorker.ts", import.meta.url), { type: "module" });
+      this.worker.addEventListener("message", (ev: MessageEvent<WorkerResponse>) => {
+        const cb = this.pending.get(ev.data.id);
+        if (!cb) return;
+        this.pending.delete(ev.data.id);
+        cb(ev.data);
+      });
+      this.worker.addEventListener("error", (e) => {
+        console.warn("[SaveSystem] worker error event:", e.message || e);
+      });
+    } catch (e) {
+      console.warn("[SaveSystem] worker init failed — using main-thread serialize:", e);
+      this.worker = null;
+    }
+  }
+
+  /** Serialize the snapshot off-thread. Resolves to the JSON string the
+   * caller can hand to `localStorage.setItem` (or a network call).
+   * Falls back to a main-thread `JSON.stringify` if the worker isn't
+   * available. */
+  serializeAsync(state: SaveGameState): Promise<string> {
+    if (!this.worker) {
+      try {
+        return Promise.resolve(JSON.stringify(state));
+      } catch (e) {
+        return Promise.reject(e);
+      }
+    }
+    const id = this.nextReqId++;
+    return new Promise<string>((resolve, reject) => {
+      this.pending.set(id, (res) => {
+        if (res.ok) resolve(res.json);
+        else reject(new Error(res.error));
+      });
+      try {
+        this.worker!.postMessage({ id, state });
+      } catch (e) {
+        this.pending.delete(id);
+        // Failed structuredClone or similar — drop back to sync.
+        try { resolve(JSON.stringify(state)); }
+        catch (e2) { reject(e2); }
+        // Suppress unused-variable lint without losing the original.
+        void e;
+      }
+    });
   }
 
   getActiveSlot(): number { return this.activeSlot; }
@@ -128,7 +207,10 @@ export class SaveSystem {
     try { localStorage.removeItem(slotKey(slot)); } catch (e) { console.warn(e); }
   }
 
-  /** Manually trigger a save right now (e.g. on `beforeunload`). */
+  /** Manually trigger a save right now. Async path — the stringify runs
+   * on a worker so the main thread keeps rendering. Use {@link saveNowSync}
+   * for `beforeunload` / `pagehide` where the page may close before the
+   * round-trip completes. */
   saveNow(): void {
     if (typeof localStorage === "undefined") {
       this.lastSaveOk = false;
@@ -136,6 +218,37 @@ export class SaveSystem {
       console.warn("[Save] localStorage not available — save skipped");
       return;
     }
+    // Coalesce: drop this autosave tick if the previous one is still in
+    // the worker. The next tick will catch up. Avoids piling up snapshots
+    // when the worker can't keep pace (worst case: a very slow machine).
+    if (this.saveInFlight) return;
+    let state: SaveGameState;
+    try {
+      state = this.snapshot();
+    } catch (e) {
+      this.lastSaveOk = false;
+      this.lastSaveError = `snapshot error: ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[Save] snapshot failed:", e);
+      return;
+    }
+    this.saveInFlight = true;
+    this.serializeAsync(state).then(
+      (json) => { this.saveInFlight = false; this.writeJson(json); },
+      (err) => {
+        this.saveInFlight = false;
+        this.lastSaveOk = false;
+        this.lastSaveError = `serialize failed: ${err instanceof Error ? err.message : String(err)}`;
+        console.error("[Save] serialize failed:", err);
+      },
+    );
+  }
+
+  /** Synchronous save — for `beforeunload` / `pagehide` where the page
+   * may close before a worker postMessage round-trip completes. Same
+   * stringify cost as before this file was workerified, but only runs on
+   * the rare exit path. */
+  saveNowSync(): void {
+    if (typeof localStorage === "undefined") return;
     let json: string;
     try {
       const state = this.snapshot();
@@ -143,9 +256,16 @@ export class SaveSystem {
     } catch (e) {
       this.lastSaveOk = false;
       this.lastSaveError = `snapshot error: ${e instanceof Error ? e.message : String(e)}`;
-      console.error("[Save] snapshot/serialize failed:", e);
+      console.error("[Save] sync snapshot/serialize failed:", e);
       return;
     }
+    this.writeJson(json);
+  }
+
+  /** Common tail of {@link saveNow} and {@link saveNowSync} — write the
+   * serialized string to localStorage + update the stats. Split out so
+   * both the async (worker) and sync (beforeunload) paths share it. */
+  private writeJson(json: string): void {
     try {
       localStorage.setItem(slotKey(this.activeSlot), json);
       this.saveCount += 1;
