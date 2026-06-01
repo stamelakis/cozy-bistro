@@ -4032,6 +4032,32 @@ export class WorldScene {
     }
   }
 
+  /** Toggle the sun's shadow casting wholesale. Cheaper than keeping
+   * shadows on with no casters — three.js still pays render-target
+   * setup costs even when no objects opt in to castShadow. Engine
+   * calls this from the quality preset AND every frame based on
+   * camera zoom (no shadows when zoomed out past the exterior
+   * threshold; the player can't see them at that scale anyway). */
+  setSunShadowsEnabled(enabled: boolean): void {
+    if (!this.sunLight) return;
+    if (this.sunLight.castShadow === enabled) return;
+    this.sunLight.castShadow = enabled;
+  }
+
+  /** Walk a single model + its descendants and toggle every mesh's
+   * castShadow flag. Used by Engine.applyGraphicsQuality to flip
+   * furniture (loaded via ModelLoader, which defaults castShadow
+   * to true on every mesh) without disturbing the hand-built
+   * scene geometry whose shadow policies were tuned in their
+   * own factory functions. */
+  setShadowCastingOnSubtree(root: THREE.Object3D, enabled: boolean): void {
+    root.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        (obj as THREE.Mesh).castShadow = enabled;
+      }
+    });
+  }
+
   /** Force Three.js to compile shader programs for every material in
    * the scene RIGHT NOW, including objects that are currently hidden
    * (upper storeys, the mansard roof, balconies, etc).

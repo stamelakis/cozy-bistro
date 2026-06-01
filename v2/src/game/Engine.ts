@@ -47,6 +47,12 @@ import { BuildingPickModal } from "../ui/BuildingPickModal";
 import { ChatPanel } from "../ui/ChatPanel";
 import { PlayerRosterPanel } from "../ui/PlayerRosterPanel";
 import { makeDraggableResizable } from "../ui/PanelDragResize";
+import {
+  type GraphicsQuality,
+  GRAPHICS_PRESETS,
+  getSavedGraphicsQuality,
+  setSavedGraphicsQuality,
+} from "./GraphicsQuality";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
 export class Engine {
@@ -122,6 +128,14 @@ export class Engine {
   private running = false;
   private lastResizeCheckAt = 0;
   private hudAccumulator = 0;
+  /** Current player-facing graphics quality preset. Captured at
+   * construct from localStorage, mutated by applyGraphicsQuality. */
+  private currentQuality: GraphicsQuality = "medium";
+  /** Whether the sun is currently casting shadows. Tracked so the
+   * per-frame zoom-based toggle in tick() doesn't repeatedly re-set
+   * the same flag (which would otherwise force three.js to clear
+   * the shadow render target every frame). */
+  private sunShadowOn = false;
   /** Multiplier applied to dt before sim updates. 1 = real-time, 2 = 2x, etc.
    * Rendering is unaffected (so paused still re-renders camera moves). */
   private timeScale = 1;
@@ -136,6 +150,47 @@ export class Engine {
   setPaused(paused: boolean): void {
     this.paused = paused;
   }
+
+  /** Return the currently-active quality preset so the sidebar
+   * dropdown can render its initial selected state correctly. */
+  getGraphicsQuality(): GraphicsQuality {
+    return this.currentQuality;
+  }
+
+  /** Apply a new graphics-quality preset live (no reload required).
+   * Pixel ratio + sun-shadow toggle take effect immediately;
+   * furniture-shadow flag is walked across every placed model so a
+   * mid-session change reaches existing furniture too. The change
+   * is persisted to localStorage so it survives the next session.
+   *
+   * Cheap: the furniture walk is typically <500 meshes, and the
+   * pixel-ratio update just re-sizes the renderer's framebuffer
+   * (no shader recompilation). The next render frame picks up the
+   * new state automatically. */
+  applyGraphicsQuality(q: GraphicsQuality): void {
+    if (q === this.currentQuality) return;
+    this.currentQuality = q;
+    setSavedGraphicsQuality(q);
+    const preset = GRAPHICS_PRESETS[q];
+    // Pixel ratio — biggest knob, applied to the renderer + frame
+    // buffer immediately. setSize() also re-derives the framebuffer
+    // dimensions so the new pixel ratio actually takes effect.
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.pixelRatio));
+    this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+    // Re-evaluate sun shadow on next tick — the zoom-based gate in
+    // tick() reads the preset flag, so we just need to drop the
+    // tracked-state guard so it re-applies even at the same zoom.
+    this.sunShadowOn = !preset.sunShadows; // force a delta next tick
+    // Furniture castShadow flip — walk every placed model and toggle
+    // its meshes. The building structure (walls / floors / mansard /
+    // scenery / lamps / trees) is NOT touched here; those have their
+    // own castShadow policies set at construction.
+    if (this.registry) {
+      this.registry.forEachPlacedModel((model) => {
+        this.scene.setShadowCastingOnSubtree(model, preset.furnitureShadows);
+      });
+    }
+  }
   isPaused(): boolean {
     return this.paused;
   }
@@ -149,11 +204,16 @@ export class Engine {
       // Small perf hit on integrated GPUs but invaluable for tooling.
       preserveDrawingBuffer: true,
     });
-    // Cap at 1.5 (was 2). 2× on a retina/4K display means 4× the
-    // fragment work per frame — the single biggest perf knob in the
-    // engine. 1.5 keeps text + thin edges crisp while cutting the
-    // pixel count by ~44% vs 2.0. On a 1× display this is a no-op.
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // Pixel ratio cap from the player's saved graphics quality. On a
+    // 1× display this is a no-op regardless of the preset; on a
+    // retina / 4K display each step (1.0 → 1.5 → 2.0) roughly
+    // doubles fragment cost per frame, which is the single biggest
+    // perf knob in the engine. The dropdown in the sidebar flips
+    // this at runtime via applyGraphicsQuality().
+    this.currentQuality = getSavedGraphicsQuality();
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, GRAPHICS_PRESETS[this.currentQuality].pixelRatio),
+    );
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
@@ -294,6 +354,7 @@ export class Engine {
     // Visible to ALL players (not gated to admin) — this is the
     // standard "delete account" affordance. Lives down here so it
     // can't be misclicked from the busy modal-icon row at the top.
+    this.installGraphicsSection();
     this.installResetSaveSection();
     // Hook the floor-reassign UI: when the player switches a member's
     // home storey, move their 3D character to the new floor's slab
@@ -579,6 +640,14 @@ export class Engine {
         // perimeter wall so the gaps reflect where they actually
         // live now.
         this.scene.rebuildAllPerimeterWalls(this.allPerimeterOpenings());
+        // Apply the current graphics-quality preset to the restored
+        // furniture. Without this the Low preset's furnitureShadows=false
+        // wouldn't reach pieces loaded from a save (they ship with
+        // castShadow=true from ModelLoader.prepareScene).
+        const preset = GRAPHICS_PRESETS[this.currentQuality];
+        this.registry.forEachPlacedModel((model) => {
+          this.scene.setShadowCastingOnSubtree(model, preset.furnitureShadows);
+        });
       });
     }
     this.saver.registry = this.registry;
@@ -1437,6 +1506,85 @@ export class Engine {
     }, 5000);
   }
 
+  /** Build the Graphics-quality picker row near the bottom of the
+   * sidebar. Three radio-style buttons (Low / Medium / High) flip
+   * the saved preset; the engine re-applies pixel ratio + shadow
+   * settings immediately so the player can preview the change
+   * without reloading.
+   *
+   * Layout: small "🖥 Graphics" header + three pill buttons in a
+   * row. Active button highlighted. The chosen value is persisted
+   * via setSavedGraphicsQuality so the next session boots on the
+   * right preset. */
+  private installGraphicsSection(): void {
+    this.sidebar.addSeparator();
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      display: "flex", flexDirection: "column", gap: "4px",
+      marginBottom: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const header = document.createElement("div");
+    header.textContent = "🖥 GRAPHICS";
+    Object.assign(header.style, {
+      fontSize: "10px", fontWeight: "700",
+      letterSpacing: "0.06em", opacity: "0.7",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(header);
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(row);
+    const buttons: { q: GraphicsQuality; btn: HTMLButtonElement }[] = [];
+    const TIERS: { q: GraphicsQuality; label: string; tooltip: string }[] = [
+      { q: "low", label: "Low",
+        tooltip: "Best performance. 1× pixel ratio, no dynamic shadows, " +
+                 "no furniture shadows. Use on laptops with integrated " +
+                 "GPUs or when other tabs are hogging the system." },
+      { q: "medium", label: "Medium",
+        tooltip: "Balanced (default). 1.5× pixel ratio, dynamic sun shadows on, " +
+                 "furniture casts shadows. Recommended for most setups." },
+      { q: "high", label: "High",
+        tooltip: "Best visuals. 2× pixel ratio, dynamic sun shadows on, " +
+                 "furniture casts shadows. Use on a desktop GPU." },
+    ];
+    const refresh = (): void => {
+      const cur = this.getGraphicsQuality();
+      for (const b of buttons) {
+        const active = b.q === cur;
+        b.btn.style.background = active
+          ? "rgba(255, 210, 120, 0.35)"
+          : "rgba(120, 180, 200, 0.14)";
+        b.btn.style.borderColor = active
+          ? "rgba(255, 220, 150, 0.75)"
+          : "rgba(255,245,220,0.20)";
+        b.btn.style.fontWeight = active ? "700" : "600";
+      }
+    };
+    for (const tier of TIERS) {
+      const btn = document.createElement("button");
+      btn.textContent = tier.label;
+      btn.title = tier.tooltip;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "5px 4px",
+        background: "rgba(120, 180, 200, 0.14)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.20)",
+        borderRadius: "4px", cursor: "pointer",
+        font: "inherit", fontSize: "11px", fontWeight: "600",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => {
+        this.applyGraphicsQuality(tier.q);
+        refresh();
+      };
+      row.appendChild(btn);
+      buttons.push({ q: tier.q, btn });
+    }
+    refresh();
+    this.sidebar.body.appendChild(wrap);
+  }
+
   /** Build the always-bottom Reset-Save section. Lives in its own
    * sidebar-bottom slot (after StaffPanel) so it's visually
    * separated from gameplay actions and can't be misclicked from
@@ -1825,9 +1973,23 @@ export class Engine {
     // focus, and the SFX bus mutes. Above the threshold the normal
     // see-through interior view returns. Driven from the same frame
     // tick as the wall ghost rule so they always agree.
-    const exterior = this.camera.getZoomPercent() < 0.40;
+    const zoomPercent = this.camera.getZoomPercent();
+    const exterior = zoomPercent < 0.40;
     this.scene.setExteriorMode(exterior);
     this.sfx.setExteriorMuted(exterior);
+    // Zoom-based sun-shadow toggle. Past the exterior threshold the
+    // shadow streak under each piece of furniture is a few pixels
+    // tall and visually meaningless; skipping the shadow pass at
+    // that zoom is a free perf win. Inside the threshold we
+    // respect the saved-quality preset (Low disables shadows even
+    // when zoomed in). Only writes the flag when it CHANGES — three.js
+    // clears the shadow render target on every state flip otherwise.
+    const presetWantsShadows = GRAPHICS_PRESETS[this.currentQuality].sunShadows;
+    const desiredSunShadow = presetWantsShadows && zoomPercent >= 0.45;
+    if (desiredSunShadow !== this.sunShadowOn) {
+      this.sunShadowOn = desiredSunShadow;
+      this.scene.setSunShadowsEnabled(desiredSunShadow);
+    }
     // Swap which two exterior walls render as transparent glass based
     // on which side the camera is currently on. Cheap enough to run
     // every frame, and we want it to track right through a camera drag.

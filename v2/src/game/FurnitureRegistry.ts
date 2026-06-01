@@ -1048,6 +1048,15 @@ export class FurnitureRegistry {
    * latte, etc. The defId + model fields let WorldScene pin a
    * per-variant visual effect (flame, toaster glow, coffee steam, etc.)
    * to each station model. */
+  /** Yield every placed furniture's root model for callers that
+   * need to walk descendants (e.g. the graphics-quality toggle
+   * that flips castShadow on every placed mesh). Kept as a
+   * function rather than exposing the items array so callers
+   * can't accidentally mutate the registry's state. */
+  forEachPlacedModel(cb: (model: THREE.Object3D) => void): void {
+    for (const it of this.items) cb(it.model);
+  }
+
   getCookStations(): { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number; floor: number }[] {
     const out: { uid: string; defId: string; model: THREE.Object3D; provides: string; x: number; z: number; rotY: number; floor: number }[] = [];
     for (const it of this.items) {
