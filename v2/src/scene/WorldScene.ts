@@ -1027,6 +1027,249 @@ export class WorldScene {
     }
   }
 
+  /** Build the city's street planters — square / round / long
+   * concrete boxes scattered along every avenue's pavement, SLOTTED
+   * BETWEEN the lamp posts so the two grids interlock instead of
+   * overlapping. Three styles cycle in sequence (square → round →
+   * long → square …) so a single pavement run reads as a curated
+   * garden strip, not a copy-pasted row.
+   *
+   * All meshes use InstancedMesh keyed on style so the entire grid
+   * (~50 planters per style) costs ~3-4 draw calls per style. None
+   * cast shadows — same reasoning as the lamps (the InstancedMesh
+   * union bounding box spans the whole map so per-instance frustum
+   * culling can't kick in, and a small concrete-box shadow is
+   * imperceptible at iso distance anyway). */
+  private addStreetPlanters(): void {
+    const PAVEMENT_HALF = 5.5;
+    // Same perp position as the lamps (4 m off centerline = ~1 m
+    // from curb, ~1.5 m from outer pavement edge). Stagger ALONG
+    // the avenue: lamps step every 18 m starting at -130 → planters
+    // step every 18 m starting at -121 (= -130 + 9). End result:
+    // lamp · planter · lamp · planter · …
+    const PERP = 4.0;
+    const STEP = 18;
+    const PHASE_OFFSET = 9;
+    const HALF = 130;
+    // Same intersection-aware skip the lamps use — otherwise a
+    // planter would land on the cross-street's asphalt.
+    const onPerpCrossing = (x: number, z: number, axis: "ew" | "ns"): boolean => {
+      if (axis === "ew") {
+        for (const ax of WorldScene.NS_AVENUES) {
+          if (Math.abs(x - ax) < PAVEMENT_HALF + 0.5) return true;
+        }
+      } else {
+        for (const az of WorldScene.EW_AVENUES) {
+          if (Math.abs(z - az) < PAVEMENT_HALF + 0.5) return true;
+        }
+      }
+      return false;
+    };
+
+    type PlanterStyle = "square" | "round" | "long";
+    type Placement = { x: number; z: number; rotY: number };
+    const placements: Record<PlanterStyle, Placement[]> = {
+      square: [], round: [], long: [],
+    };
+    const cycleStyle = (i: number): PlanterStyle => ([
+      "square", "round", "long",
+    ] as const)[i % 3];
+
+    // EW avenues — planters line up along X on both pavements.
+    for (const az of WorldScene.EW_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const z = az + side * PERP;
+        const rotY = side > 0 ? Math.PI : 0;
+        let cycle = 0;
+        for (let x = -HALF + PHASE_OFFSET; x <= HALF + 0.001; x += STEP) {
+          if (onPerpCrossing(x, z, "ew")) continue;
+          placements[cycleStyle(cycle)].push({ x, z, rotY });
+          cycle += 1;
+        }
+      }
+    }
+    // NS avenues — same idea, axes swapped.
+    for (const ax of WorldScene.NS_AVENUES) {
+      for (const side of [-1, +1] as const) {
+        const x = ax + side * PERP;
+        const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+        let cycle = 0;
+        for (let z = -HALF + PHASE_OFFSET; z <= HALF + 0.001; z += STEP) {
+          if (onPerpCrossing(x, z, "ns")) continue;
+          placements[cycleStyle(cycle)].push({ x, z, rotY });
+          cycle += 1;
+        }
+      }
+    }
+
+    // Shared materials — warm beige concrete to harmonize with the
+    // pavement tone, dark soil that matches the player's own garden
+    // patch east of the restaurant.
+    const concrete = new THREE.MeshStandardMaterial({
+      color: 0xb3a890, roughness: 0.85, metalness: 0.05,
+    });
+    const soil = new THREE.MeshStandardMaterial({
+      color: 0x3a2818, roughness: 0.95,
+    });
+
+    if (placements.square.length > 0) this.buildSquarePlanters(placements.square, concrete, soil);
+    if (placements.round.length > 0) this.buildRoundPlanters(placements.round, concrete, soil);
+    if (placements.long.length > 0) this.buildLongPlanters(placements.long, concrete, soil);
+  }
+
+  /** Square concrete planter with a single bushy plant on top. ~0.9 m
+   * box, 0.45 m tall. */
+  private buildSquarePlanters(
+    placements: { x: number; z: number; rotY: number }[],
+    concrete: THREE.MeshStandardMaterial,
+    soil: THREE.MeshStandardMaterial,
+  ): void {
+    const bushMat = new THREE.MeshStandardMaterial({
+      color: 0x4a8a4a, roughness: 0.85,
+    });
+    const boxGeo = new THREE.BoxGeometry(0.9, 0.45, 0.9);
+    boxGeo.translate(0, 0.225, 0);
+    const soilGeo = new THREE.BoxGeometry(0.78, 0.04, 0.78);
+    soilGeo.translate(0, 0.46, 0);
+    const bushGeo = new THREE.SphereGeometry(0.42, 10, 8);
+    bushGeo.translate(0, 0.78, 0);
+
+    const count = placements.length;
+    const box = new THREE.InstancedMesh(boxGeo, concrete, count);
+    const soilM = new THREE.InstancedMesh(soilGeo, soil, count);
+    const bush = new THREE.InstancedMesh(bushGeo, bushMat, count);
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < count; i += 1) {
+      const p = placements[i];
+      tmp.position.set(p.x, 0, p.z);
+      tmp.rotation.set(0, p.rotY, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      box.setMatrixAt(i, tmp.matrix);
+      soilM.setMatrixAt(i, tmp.matrix);
+      bush.setMatrixAt(i, tmp.matrix);
+    }
+    this.worldRoot.add(box, soilM, bush);
+  }
+
+  /** Round concrete planter holding a small tree. ~0.55 m radius, 0.5 m
+   * tall, with a trunk + cone canopy on top. */
+  private buildRoundPlanters(
+    placements: { x: number; z: number; rotY: number }[],
+    concrete: THREE.MeshStandardMaterial,
+    soil: THREE.MeshStandardMaterial,
+  ): void {
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x5a3a22, roughness: 0.9,
+    });
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0x3a7a3a, roughness: 0.85,
+    });
+    const tubGeo = new THREE.CylinderGeometry(0.55, 0.50, 0.50, 14);
+    tubGeo.translate(0, 0.25, 0);
+    const soilGeo = new THREE.CylinderGeometry(0.46, 0.46, 0.04, 12);
+    soilGeo.translate(0, 0.51, 0);
+    const trunkGeo = new THREE.CylinderGeometry(0.07, 0.10, 0.85, 8);
+    trunkGeo.translate(0, 0.93, 0);
+    const canopyGeo = new THREE.ConeGeometry(0.50, 1.10, 8);
+    canopyGeo.translate(0, 1.92, 0);
+
+    const count = placements.length;
+    const tub = new THREE.InstancedMesh(tubGeo, concrete, count);
+    const soilM = new THREE.InstancedMesh(soilGeo, soil, count);
+    const trunk = new THREE.InstancedMesh(trunkGeo, trunkMat, count);
+    const canopy = new THREE.InstancedMesh(canopyGeo, canopyMat, count);
+    const tmp = new THREE.Object3D();
+    for (let i = 0; i < count; i += 1) {
+      const p = placements[i];
+      tmp.position.set(p.x, 0, p.z);
+      tmp.rotation.set(0, p.rotY, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      tub.setMatrixAt(i, tmp.matrix);
+      soilM.setMatrixAt(i, tmp.matrix);
+      trunk.setMatrixAt(i, tmp.matrix);
+      canopy.setMatrixAt(i, tmp.matrix);
+    }
+    this.worldRoot.add(tub, soilM, trunk, canopy);
+  }
+
+  /** Long rectangular trough with a row of three flowers across the
+   * top. Rotated to lie ALONG the avenue (not across it) so the
+   * silhouette reads as a planter rather than a kerb obstacle. Flowers
+   * cycle through three warm colours per planter so the city has a
+   * little floral variety. */
+  private buildLongPlanters(
+    placements: { x: number; z: number; rotY: number }[],
+    concrete: THREE.MeshStandardMaterial,
+    soil: THREE.MeshStandardMaterial,
+  ): void {
+    // Long planters point ALONG the avenue. EW pavements: long axis
+    // is X (rotY = 0 / π). NS pavements: long axis is Z (rotY = ±π/2).
+    // The original placement loop already passes a rotY that points
+    // toward the road for the lamps; we OVERRIDE here so the trough
+    // sits parallel to the kerb instead of across it.
+    const FLOWER_COLORS = [0xff6f8c, 0xffd06f, 0xa8e2a8] as const;
+    const flowerMats = FLOWER_COLORS.map((c) => new THREE.MeshStandardMaterial({
+      color: c, roughness: 0.6,
+      emissive: c, emissiveIntensity: 0.10,
+    }));
+
+    const boxGeo = new THREE.BoxGeometry(1.7, 0.35, 0.5);
+    boxGeo.translate(0, 0.175, 0);
+    const soilGeo = new THREE.BoxGeometry(1.55, 0.04, 0.36);
+    soilGeo.translate(0, 0.36, 0);
+    // Flower = small sphere (poppy-style) at ~0.10 m radius. Three per
+    // trough at x = -0.6, 0, +0.6. Stem omitted at this distance.
+    const flowerGeo = new THREE.SphereGeometry(0.11, 10, 8);
+
+    const count = placements.length;
+    const box = new THREE.InstancedMesh(boxGeo, concrete, count);
+    const soilM = new THREE.InstancedMesh(soilGeo, soil, count);
+    // One flower-mesh per colour, holding all the flowers OF THAT
+    // colour across every long planter (3 flowers per planter).
+    const flowerCount = count * 3;
+    const flowers = flowerMats.map((mat) => new THREE.InstancedMesh(flowerGeo, mat, Math.ceil(flowerCount / FLOWER_COLORS.length) + 1));
+    const flowerCursors = [0, 0, 0]; // next free slot in each colour bucket
+    const tmp = new THREE.Object3D();
+    const flowerTmp = new THREE.Object3D();
+    for (let i = 0; i < count; i += 1) {
+      const p = placements[i];
+      // Long axis runs along the avenue — for an EW-side row the
+      // placement rotY is 0 or π (planter faces ±Z which means the
+      // long box currently extends ±X, perfect). For NS-side rows
+      // rotY is ±π/2 so the box's local X (length) rotates to be
+      // along world Z — also along the avenue. Either way the
+      // length-axis ends up parallel to the avenue, no override
+      // needed.
+      tmp.position.set(p.x, 0, p.z);
+      tmp.rotation.set(0, p.rotY, 0);
+      tmp.scale.set(1, 1, 1);
+      tmp.updateMatrix();
+      box.setMatrixAt(i, tmp.matrix);
+      soilM.setMatrixAt(i, tmp.matrix);
+      // Flowers — three per planter at x = -0.55, 0, +0.55 (local).
+      // Pick a colour by planter index so neighbouring troughs alternate.
+      const colourIdx = i % FLOWER_COLORS.length;
+      for (const localX of [-0.55, 0, 0.55]) {
+        // Position each flower in the planter's LOCAL frame then bake
+        // through the planter's world transform.
+        flowerTmp.position.set(localX, 0.49, 0);
+        flowerTmp.rotation.set(0, 0, 0);
+        flowerTmp.scale.set(1, 1, 1);
+        flowerTmp.updateMatrix();
+        const m = new THREE.Matrix4().multiplyMatrices(tmp.matrix, flowerTmp.matrix);
+        const cursor = flowerCursors[colourIdx];
+        flowers[colourIdx].setMatrixAt(cursor, m);
+        flowerCursors[colourIdx] = cursor + 1;
+      }
+    }
+    // Trim each flower InstancedMesh to its actual used count so the
+    // renderer doesn't draw unset zero-matrix instances at origin.
+    for (let k = 0; k < flowers.length; k += 1) flowers[k].count = flowerCursors[k];
+    this.worldRoot.add(box, soilM, ...flowers);
+  }
+
   /** Per-frame: ramp every lamp bulb's emissive with the current
    * night amount (cheap — one shared material), then reposition the
    * pool of point lights to the N closest lamps to the camera so the
@@ -2363,6 +2606,11 @@ export class WorldScene {
     // night. Lights themselves are a small pool that follows the
     // camera — see updateStreetLamps for how the pool gets routed.
     this.addStreetLamps();
+    // Street planters — concrete boxes / cylinders / troughs scattered
+    // along the same pavements, slotted BETWEEN lamps. Three styles
+    // cycled so the pavement reads as a curated little garden strip
+    // instead of an empty grey slab.
+    this.addStreetPlanters();
   }
 
   /** City avenue grid laid out so every plot row lines a street:
