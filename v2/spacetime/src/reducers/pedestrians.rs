@@ -3,14 +3,20 @@
 //!
 //! Avenues (centerlines, world coords — match WorldScene.EW_AVENUES /
 //! NS_AVENUES on the client):
-//!   EW: z = -36, +13.5, +62
+//!   EW: z = -34, +14, +62
 //!   NS: x = -70, +70
 //!
-//! Each pedestrian walks along one of those avenues on ONE pavement
-//! side (north/south for EW, west/east for NS), from one end of the
-//! visible city span (~±112 m) to the other. Speed is fixed at
-//! ~1.0 m/s so the full ~225 m trip takes ~225 s — gives the city
-//! enough density without overloading the table.
+//! Routing policy: every pedestrian walks ALONG one pavement of one
+//! avenue. Their trajectory is a near-straight line at a fixed perp
+//! offset from the avenue centerline — no diagonals across the road
+//! or grass. Plot-bound walkers (the ones who'll convert into
+//! customers) spawn on the pavement CLOSEST to their target plot so
+//! they can walk a straight line right to its front face. Ambient
+//! walkers pick any pavement + direction and walk it end-to-end.
+//!
+//! Walk speed is fixed at ~1.0 m/s; the full ~225 m trip takes
+//! ~225 s, which keeps the city looking busy without overloading
+//! the table.
 
 use spacetimedb::{rand::Rng, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{building, pedestrian, pedestrian_tick_schedule, player_save, visit_event, Building, Pedestrian, PedestrianTickSchedule};
@@ -29,10 +35,23 @@ const WALK_SPEED_MPS: f32 = 1.0;
 /// end. Matches WorldScene.AVENUE_WALK_HALF_LEN on the client.
 const STREET_HALF: f32 = 112.0;
 
-/// Perpendicular pavement offset from the avenue centerline — the
-/// pedestrian walks along one of two pavements, not on the asphalt.
-/// Matches AVENUE_PAVEMENT_OFFSET in PedestrianSpawner.ts.
-const PAVEMENT_OFFSET: f32 = 8.0;
+/// Perpendicular distance from the avenue centerline to where the
+/// pedestrian's walking line sits. The rendered pavement plane spans
+/// perp [3, 8] from the centerline; this range (4.5 → 5.5) keeps
+/// walkers cleanly between the road-side lamps/planters (perp 4)
+/// and the scenery house facades (perp 5.55+). Randomised per-walker
+/// so a busy pavement reads as a slight spread, not a single tight
+/// conga line.
+const PAVEMENT_OFFSET_MIN: f32 = 4.5;
+const PAVEMENT_OFFSET_MAX: f32 = 5.5;
+
+/// How far the plot-bound walker steps perpendicular OFF the pavement
+/// at the end of their trip — toward the plot's front face. Combined
+/// with the pavement perp this puts the despawn point right at the
+/// south wall for the typical h=12 plot; smaller plots see the
+/// walker disappear 1-2 m short of the wall, then the customer
+/// teleports to the actual door inside.
+const PLOT_APPROACH_NUDGE: f32 = 3.0;
 
 const EW_AVENUES: &[f32] = &[-34.0, 14.0, 62.0]; // matches WorldScene.EW_AVENUES
 const NS_AVENUES: &[f32] = &[-70.0, 70.0];
@@ -112,70 +131,67 @@ pub fn bootstrap_pedestrian_schedule(ctx: &ReducerContext) -> Result<(), String>
 
 fn spawn_one(ctx: &ReducerContext) {
     let mut rng = ctx.rng();
-    let is_ew = rng.gen_bool(0.6);
-    let side: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
-    let dir: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
-    // Pavement start point — same for both variants below (with or
-    // without a plot target). The end either runs to the OTHER end
-    // of the avenue (ambient walker) or to a chosen plot's door
-    // (potential customer).
-    let (start_x, start_z);
-    if is_ew {
-        let avenue_z = EW_AVENUES[rng.gen_range(0..EW_AVENUES.len())];
-        start_x = dir * -STREET_HALF;
-        start_z = avenue_z + side * PAVEMENT_OFFSET;
-    } else {
-        let avenue_x = NS_AVENUES[rng.gen_range(0..NS_AVENUES.len())];
-        start_x = avenue_x + side * PAVEMENT_OFFSET;
-        start_z = dir * -STREET_HALF;
-    }
+    let variant = VARIANTS[rng.gen_range(0..VARIANTS.len())].to_string();
+    // Per-walker perp jitter so multiple pedestrians on the same
+    // pavement spread across its width instead of stacking on the
+    // exact same line.
+    let pavement_perp = PAVEMENT_OFFSET_MIN
+        + rng.gen::<f32>() * (PAVEMENT_OFFSET_MAX - PAVEMENT_OFFSET_MIN);
 
-    // ~35% chance this walker is a potential customer headed to a
-    // specific claimed plot. Pick a claimed plot near the spawn
-    // point — biases the picks toward plots the walker would
-    // realistically reach, instead of cross-city marathons.
-    let mut target_plot_id: u64 = 0;
-    let (end_x, end_z);
+    // ~35% chance this walker is a potential customer. Pick TARGET
+    // BEFORE picking spawn so we can put them on the right pavement
+    // and walk a straight line — the old code picked spawn first
+    // and got diagonal cross-road trajectories whenever the spawn
+    // pavement didn't match the target plot's row.
     if rng.gen_bool(0.35) {
-        if let Some(plot) = pick_target_plot(ctx, &mut rng, start_x, start_z) {
-            // Door sits on the +Z (south) face of the building's
-            // shell. Approach 1.5 m south of the door so the
-            // despawn looks like "stepping inside" instead of
-            // teleporting into the wall.
-            target_plot_id = plot.id;
-            end_x = plot.plot_x as f32;
-            end_z = plot.plot_z as f32 + (plot.plot_h as f32) / 2.0 + 1.5;
-            let dx = end_x - start_x;
-            let dz = end_z - start_z;
-            let length = (dx * dx + dz * dz).sqrt().max(1.0);
-            let duration_secs = length / WALK_SPEED_MPS;
-            let variant = VARIANTS[rng.gen_range(0..VARIANTS.len())];
-            ctx.db.pedestrian().insert(Pedestrian {
-                id: 0, // auto_inc
-                start_x,
-                start_z,
-                end_x,
-                end_z,
-                spawn_at: ctx.timestamp,
-                duration_micros: (duration_secs * 1_000_000.0) as i64,
-                variant: variant.to_string(),
-                target_plot_id,
-            });
+        if let Some(plot) = pick_target_plot(ctx, &mut rng, 0.0, 0.0) {
+            spawn_plot_bound(ctx, &mut rng, &plot, variant, pavement_perp);
             return;
         }
         // No claimed plots yet — fall through to ambient walker.
     }
-    // Ambient walker — runs the full ±STREET_HALF avenue strip.
-    if is_ew {
-        end_x = -start_x;
-        end_z = start_z;
-    } else {
-        end_x = start_x;
-        end_z = -start_z;
-    }
-    let length = 2.0 * STREET_HALF;
+
+    spawn_ambient(ctx, &mut rng, variant, pavement_perp);
+}
+
+/// Plot-bound walker: spawn on the pavement of the EW avenue closest
+/// to the target plot, on the SIDE of that avenue facing the plot,
+/// and walk along the pavement to the X (or Z) of the plot — then
+/// step a short perpendicular distance toward the plot's front face
+/// at the very end so the despawn looks like "stepping inside" not
+/// "vanishing on the pavement".
+fn spawn_plot_bound(
+    ctx: &ReducerContext,
+    rng: &mut impl Rng,
+    plot: &Building,
+    variant: String,
+    pavement_perp: f32,
+) {
+    let plot_x = plot.plot_x as f32;
+    let plot_z = plot.plot_z as f32;
+    // All city plots sit in EW rows (z = -48 / 0 / +48), so the
+    // closest avenue is always EW. Walk that avenue's pavement.
+    let avenue_z = closest_value(EW_AVENUES, plot_z);
+    // plot_z < avenue_z → plot is on the negative-Z (lower-z) side
+    // of the avenue, so the walker uses the pavement at perp -.
+    let side: f32 = if plot_z < avenue_z { -1.0 } else { 1.0 };
+    let pavement_z = avenue_z + side * pavement_perp;
+    // Random direction along the avenue.
+    let dir: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
+    let start_x = dir * STREET_HALF;
+    let start_z = pavement_z;
+    let end_x = plot_x;
+    // Step toward the plot's front face at the end. For h=12 plots
+    // this lands the walker right at the south wall; smaller plots
+    // see them disappear 1-2 m short, which is fine (the customer
+    // teleports to the actual door inside the building anyway).
+    let end_z = pavement_z + side * PLOT_APPROACH_NUDGE;
+
+    let dx = end_x - start_x;
+    let dz = end_z - start_z;
+    let length = (dx * dx + dz * dz).sqrt().max(1.0);
     let duration_secs = length / WALK_SPEED_MPS;
-    let variant = VARIANTS[rng.gen_range(0..VARIANTS.len())];
+
     ctx.db.pedestrian().insert(Pedestrian {
         id: 0, // auto_inc
         start_x,
@@ -184,9 +200,69 @@ fn spawn_one(ctx: &ReducerContext) {
         end_z,
         spawn_at: ctx.timestamp,
         duration_micros: (duration_secs * 1_000_000.0) as i64,
-        variant: variant.to_string(),
-        target_plot_id,
+        variant,
+        target_plot_id: plot.id,
     });
+}
+
+/// Ambient walker: picks any avenue + pavement side + direction and
+/// walks the full visible-city strip end-to-end. Stays on the
+/// pavement the whole trip — no diagonals.
+fn spawn_ambient(
+    ctx: &ReducerContext,
+    rng: &mut impl Rng,
+    variant: String,
+    pavement_perp: f32,
+) {
+    let is_ew = rng.gen_bool(0.6);
+    let side: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
+    let dir: f32 = if rng.gen_bool(0.5) { -1.0 } else { 1.0 };
+
+    let (start_x, start_z, end_x, end_z);
+    if is_ew {
+        let avenue_z = EW_AVENUES[rng.gen_range(0..EW_AVENUES.len())];
+        let pavement_z = avenue_z + side * pavement_perp;
+        start_x = dir * -STREET_HALF;
+        start_z = pavement_z;
+        end_x = dir * STREET_HALF;
+        end_z = pavement_z;
+    } else {
+        let avenue_x = NS_AVENUES[rng.gen_range(0..NS_AVENUES.len())];
+        let pavement_x = avenue_x + side * pavement_perp;
+        start_x = pavement_x;
+        start_z = dir * -STREET_HALF;
+        end_x = pavement_x;
+        end_z = dir * STREET_HALF;
+    }
+    let length = 2.0 * STREET_HALF;
+    let duration_secs = length / WALK_SPEED_MPS;
+    ctx.db.pedestrian().insert(Pedestrian {
+        id: 0, // auto_inc
+        start_x,
+        start_z,
+        end_x,
+        end_z,
+        spawn_at: ctx.timestamp,
+        duration_micros: (duration_secs * 1_000_000.0) as i64,
+        variant,
+        target_plot_id: 0,
+    });
+}
+
+/// Pick the value from `values` closest to `target`. Used to find
+/// the EW avenue nearest a given plot's z coordinate so the walker
+/// uses the right avenue's pavement.
+fn closest_value(values: &[f32], target: f32) -> f32 {
+    let mut best = values[0];
+    let mut best_dist = (best - target).abs();
+    for &v in values.iter().skip(1) {
+        let d = (v - target).abs();
+        if d < best_dist {
+            best_dist = d;
+            best = v;
+        }
+    }
+    best
 }
 
 /// Pick a claimed plot to target, weighted by the owner's published
