@@ -577,6 +577,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "wine-wall",       name: "Wine Wall",         category: "decoration",
     modelPath: "proc:wine-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 550, style: 6, ratingBonus: 0.06, attractionBonus: 3,
     tier: 4, placement: "wall" },
+  // Wood wall paneling — Kenney's `paneling.glb`. A flat panel that
+  // attaches to a wall like art, but covers a larger area + lends a
+  // warmer "finished-room" feel. Cheap T1 entry so a starter dining
+  // room can feel less like bare drywall.
+  { id: "wall-paneling",   name: "Wall Paneling",     category: "decoration",
+    modelPath: "assets/kenney/paneling.glb", scale: 1.0, size: { width: 1, depth: 1 }, cost: 35, style: 2, comfort: 1, ratingBonus: 0.01,
+    tier: 1, placement: "wall" },
 
   // Plants — explicit targetHeight per variant so Small / Medium /
   // Tall actually read as a height progression instead of all landing
@@ -599,6 +606,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "bookcase-open",  name: "Open Bookcase",   category: "decoration",
     modelPath: "assets/kenney/bookcaseOpen.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 2, ratingBonus: 0.01,
     tier: 2, targetHeight: 1.65, surfaceSlots: [{ dx: 0, dz: 0 }] },
+  // 2-wide closed bookcase. Holds more visual mass on the wall — bigger
+  // style + attraction bump than the 1x1 closed bookcase. Two surface
+  // slots so the player can prop books / a lamp / a small plant on top.
+  { id: "bookcase-wide",  name: "Wide Bookcase",   category: "decoration",
+    modelPath: "assets/kenney/bookcaseClosedWide.glb", scale: S_DECOR, size: { width: 2, depth: 1 }, cost: 170, style: 4, attractionBonus: 3, ratingBonus: 0.03,
+    tier: 2, targetHeight: 1.65, stretchFootprint: true,
+    surfaceSlots: [{ dx: -0.5, dz: 0 }, { dx: 0.5, dz: 0 }] },
   { id: "coat-rack",      name: "Coat Rack",       category: "decoration",
     modelPath: "assets/kenney/coatRackStanding.glb", scale: S_DECOR, size: { width: 1, depth: 1 }, cost: 22, style: 1,
     tier: 1, targetHeight: 1.7 },
@@ -628,6 +642,11 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
     tier: 1, placement: "ceiling" },
   { id: "table-lamp",     name: "Table Lamp",        category: "lamp",
     modelPath: "assets/kenney/lampSquareTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 20, style: 2,
+    tier: 1, placement: "surface", targetHeight: 0.4 },
+  // Round-shade table lamp — same surface placement + height as the
+  // square one, gives the decorator a second silhouette for variety.
+  { id: "table-lamp-round", name: "Round Table Lamp", category: "lamp",
+    modelPath: "assets/kenney/lampRoundTable.glb", scale: S_LAMP, size: { width: 1, depth: 1 }, cost: 22, style: 2,
     tier: 1, placement: "surface", targetHeight: 0.4 },
   // Kenney lampWall.glb authors the visible bulb on the +Z face; our
   // wall-mount rotation puts the model's −Z toward the room, so without
@@ -779,6 +798,14 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "kitchen-upper-l", name: "Upper Cabinet Low", category: "storage",
     modelPath: "assets/kenney/kitchenCabinetUpperLow.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 60, style: 1,
     tier: 1, stockCapacity: 2, dishCapacity: 4, targetHeight: 0.55, placement: "wall-shelf", rotationOffset: Math.PI },
+  // Upper-cabinet corner piece — slots into the inside corner where two
+  // walls meet so an L-shaped upper run reads as continuous. Wall-shelf
+  // like the other upper cabinets; a small premium over the straight
+  // upper because the corner geometry is what makes a kitchen feel
+  // "built-in" instead of "boxes on a wall".
+  { id: "kitchen-upper-corner", name: "Upper Cabinet Corner", category: "storage",
+    modelPath: "assets/kenney/kitchenCabinetUpperCorner.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 100, style: 2,
+    tier: 2, stockCapacity: 2, dishCapacity: 6, placement: "wall-shelf", rotationOffset: Math.PI },
   // Corner cabinets are FULL-HEIGHT base units (counter line), not
   // upper wall-shelf cabinets — they fit at the corner of a counter
   // run on the floor. Surface slot on top so the player can put a
