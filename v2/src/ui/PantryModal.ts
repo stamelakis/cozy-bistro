@@ -4,9 +4,18 @@ import { GLASS_SETS, PLATE_SETS, type DishwareSetDef } from "../data/dishwareCat
 import { ingredientIcon } from "./foodIcons";
 
 /**
- * Pantry browser — full list of stocked ingredients with Ingredient /
- * Unit Cost / Stock columns. Includes the Auto-shop toggle + the
- * inventory-value total. Opens from the HUD's 🧺 icon.
+ * Pantry browser — two-tab interface:
+ *
+ *   Ingredients tab: full list of stocked ingredients (cost, stock,
+ *                    used-today), Auto-shop toggle, stock-target
+ *                    selector, and inventory-value total.
+ *   Dishware tab:    summary, per-tier STOCK readout for plates +
+ *                    glasses, and the BUY grid for purchasing new
+ *                    sets at each tier.
+ *
+ * Opens from the HUD's 🧺 icon. The tab strip is rendered once;
+ * switching tabs just flips display:block on the two content
+ * groups so DOM rebuilds aren't required.
  */
 export class PantryModal {
   private readonly game: Game;
@@ -34,6 +43,16 @@ export class PantryModal {
   private lastSeenAutoShopMs = 0;
   /** Interval handle for the live refresh while the modal is visible. */
   private refreshTimer: number | null = null;
+
+  /** Currently visible tab. Toggling flips display on the two
+   * content blocks; the tab buttons restyle to highlight the active
+   * one. Defaults to ingredients (the original landing screen). */
+  private activeTab: "ingredients" | "dishware" = "ingredients";
+  /** Tab content wrappers — built in the constructor and toggled
+   * by setActiveTab. */
+  private ingredientsPane?: HTMLElement;
+  private dishwarePane?: HTMLElement;
+  private tabBtns: Map<"ingredients" | "dishware", HTMLButtonElement> = new Map();
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -86,6 +105,45 @@ export class PantryModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
+    // Tab strip — two equal-width buttons that flip display on
+    // the ingredient + dishware panes below. Sized for thumb-tap
+    // friendliness, even though this is a desktop UI.
+    const tabRow = document.createElement("div");
+    Object.assign(tabRow.style, {
+      display: "flex", gap: "4px",
+      marginBottom: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(tabRow);
+    const buildTabBtn = (id: "ingredients" | "dishware", label: string): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      Object.assign(btn.style, {
+        flex: "1",
+        padding: "8px 6px",
+        background: "rgba(255,245,220,0.06)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.18)",
+        borderRadius: "6px",
+        cursor: "pointer",
+        font: "inherit", fontSize: "12px", fontWeight: "700",
+        letterSpacing: "0.04em",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => this.setActiveTab(id);
+      tabRow.appendChild(btn);
+      this.tabBtns.set(id, btn);
+      return btn;
+    };
+    buildTabBtn("ingredients", "🧺 Ingredients");
+    buildTabBtn("dishware", "🍽️ Dishware");
+
+    // === Ingredients pane ===
+    this.ingredientsPane = document.createElement("div");
+    Object.assign(this.ingredientsPane.style, {
+      display: "flex", flexDirection: "column",
+      flex: "1", minHeight: "0",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.ingredientsPane);
+
     // Column headers. First column is a 22 px icon strip; the visible
     // "Ingredient" header sits in the second column above the names.
     const headerRow = document.createElement("div");
@@ -103,11 +161,11 @@ export class PantryModal {
       marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
     headerRow.innerHTML = `<span></span><span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span>`;
-    body.appendChild(headerRow);
+    this.ingredientsPane.appendChild(headerRow);
 
     this.list = document.createElement("div");
     Object.assign(this.list.style, { flex: "1", overflowY: "auto" } as Partial<CSSStyleDeclaration>);
-    body.appendChild(this.list);
+    this.ingredientsPane.appendChild(this.list);
 
     // Auto-shop toggle.
     this.toggle = document.createElement("button");
@@ -123,7 +181,7 @@ export class PantryModal {
       width: "100%",
     } as Partial<CSSStyleDeclaration>);
     this.toggle.onclick = () => { this.game.autoShopEnabled = !this.game.autoShopEnabled; this.refresh(); };
-    body.appendChild(this.toggle);
+    this.ingredientsPane.appendChild(this.toggle);
 
     // Per-ingredient stock-target selector (min 3, default 5). The auto-shop
     // refills toward this many units per ingredient.
@@ -161,14 +219,14 @@ export class PantryModal {
     targetRow.appendChild(this.targetValueEl);
     this.targetPlusBtn = mkBumpBtn("+", +1);
     targetRow.appendChild(this.targetPlusBtn);
-    body.appendChild(targetRow);
+    this.ingredientsPane.appendChild(targetRow);
 
     this.totalLine = document.createElement("div");
     Object.assign(this.totalLine.style, {
       marginTop: "6px", fontSize: "11px", opacity: "0.75",
       textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
-    body.appendChild(this.totalLine);
+    this.ingredientsPane.appendChild(this.totalLine);
 
     // Last-restock summary — flashes when a new auto-shop fires.
     this.restockLine = document.createElement("div");
@@ -177,10 +235,49 @@ export class PantryModal {
       padding: "4px 6px", borderRadius: "4px",
       transition: "background-color 0.4s ease",
     } as Partial<CSSStyleDeclaration>);
-    body.appendChild(this.restockLine);
+    this.ingredientsPane.appendChild(this.restockLine);
 
-    // === Dishware section — plates + glasses bought in sets of 4 ===
-    this.buildDishwareSection(body);
+    // === Dishware pane — plates + glasses Stock + Buy ===
+    this.dishwarePane = document.createElement("div");
+    Object.assign(this.dishwarePane.style, {
+      display: "none", // hidden until the player clicks the Dishware tab
+      flexDirection: "column",
+      flex: "1", minHeight: "0",
+      overflowY: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(this.dishwarePane);
+    this.buildDishwareSection(this.dishwarePane);
+
+    // Apply the initial tab styling.
+    this.setActiveTab(this.activeTab);
+  }
+
+  /** Flip which pane is visible + restyle the tab buttons to track
+   * the active one. Both panes already exist in the DOM; we just
+   * swap display:flex / display:none. */
+  private setActiveTab(id: "ingredients" | "dishware"): void {
+    this.activeTab = id;
+    if (this.ingredientsPane) {
+      this.ingredientsPane.style.display = id === "ingredients" ? "flex" : "none";
+    }
+    if (this.dishwarePane) {
+      this.dishwarePane.style.display = id === "dishware" ? "flex" : "none";
+    }
+    for (const [tabId, btn] of this.tabBtns) {
+      const active = tabId === id;
+      btn.style.background = active
+        ? "rgba(255, 210, 120, 0.35)"
+        : "rgba(255,245,220,0.06)";
+      btn.style.borderColor = active
+        ? "rgba(255, 220, 150, 0.75)"
+        : "rgba(255,245,220,0.18)";
+      btn.style.color = active ? "#fffff0" : "#fff5dc";
+    }
+    // The dishware pane only refreshes when it's visible (and the
+    // tick is throttled), so trigger one immediate refresh on tab
+    // switch so freshly-bought sets don't look stale until the next
+    // tick fires.
+    if (id === "dishware") this.refreshDishware();
   }
 
   // === Dishware shop UI ===
@@ -191,21 +288,46 @@ export class PantryModal {
 
   private dishStatLine?: HTMLElement;
   private dishRowEls: Map<string, { tierLine: HTMLElement; buyBtn: HTMLButtonElement }> = new Map();
+  /** Per-set Stock readout cells (the "you own ×N at this tier" lines).
+   * Refilled by refreshDishware on every tick the Dishware tab is open. */
+  private dishStockEls: Map<string, HTMLElement> = new Map();
 
   private buildDishwareSection(parent: HTMLElement): void {
-    const heading = document.createElement("div");
-    heading.textContent = "🍽️ DISHWARE";
-    Object.assign(heading.style, {
-      marginTop: "14px", fontSize: "12px", fontWeight: "700",
-      letterSpacing: "0.04em", textAlign: "center", opacity: "0.85",
-    } as Partial<CSSStyleDeclaration>);
-    parent.appendChild(heading);
-
+    // Aggregate summary stays at the top — quick at-a-glance count of
+    // clean / dirty / stored across both kinds. Per-tier counts live
+    // in the Stock section below for granularity.
     this.dishStatLine = document.createElement("div");
     Object.assign(this.dishStatLine.style, {
-      marginTop: "2px", fontSize: "10px", textAlign: "center", opacity: "0.75",
+      marginTop: "4px", fontSize: "11px", textAlign: "center", opacity: "0.75",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.dishStatLine);
+
+    // === STOCK — what we currently own per tier ===
+    const stockHeading = document.createElement("div");
+    stockHeading.textContent = "STOCK";
+    Object.assign(stockHeading.style, {
+      marginTop: "14px", fontSize: "11px", fontWeight: "700",
+      letterSpacing: "0.06em", opacity: "0.7",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(stockHeading);
+
+    const stockGrid = document.createElement("div");
+    Object.assign(stockGrid.style, {
+      display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px",
+      marginTop: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(stockGrid);
+    stockGrid.appendChild(this.buildStockColumn("Plates", PLATE_SETS));
+    stockGrid.appendChild(this.buildStockColumn("Glasses", GLASS_SETS));
+
+    // === BUY — purchase new sets at each tier ===
+    const buyHeading = document.createElement("div");
+    buyHeading.textContent = "BUY";
+    Object.assign(buyHeading.style, {
+      marginTop: "14px", fontSize: "11px", fontWeight: "700",
+      letterSpacing: "0.06em", opacity: "0.7",
+    } as Partial<CSSStyleDeclaration>);
+    parent.appendChild(buyHeading);
 
     // Side-by-side plate + glass columns.
     const grid = document.createElement("div");
@@ -217,6 +339,59 @@ export class PantryModal {
 
     grid.appendChild(this.buildDishwareColumn("Plates", PLATE_SETS));
     grid.appendChild(this.buildDishwareColumn("Glasses", GLASS_SETS));
+  }
+
+  /** Read-only column showing the player's per-tier inventory of one
+   * kind (plates or glasses). Each set in the catalog gets a row with
+   * a tier badge + name + a live "clean × N / dirty × M" cell. */
+  private buildStockColumn(label: string, sets: readonly DishwareSetDef[]): HTMLElement {
+    const col = document.createElement("div");
+    Object.assign(col.style, {
+      display: "flex", flexDirection: "column", gap: "3px",
+      padding: "6px 8px",
+      background: "rgba(255,245,220,0.04)",
+      border: "1px solid rgba(255,245,220,0.14)",
+      borderRadius: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const header = document.createElement("div");
+    header.textContent = label;
+    Object.assign(header.style, {
+      fontSize: "10px", fontWeight: "700", opacity: "0.85",
+      letterSpacing: "0.04em",
+    } as Partial<CSSStyleDeclaration>);
+    col.appendChild(header);
+    for (const set of sets) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "grid", gridTemplateColumns: "26px 1fr 80px",
+        alignItems: "center", gap: "4px",
+        padding: "2px 2px",
+        borderBottom: "1px solid rgba(255,245,220,0.05)",
+      } as Partial<CSSStyleDeclaration>);
+      const tierBadge = document.createElement("span");
+      tierBadge.textContent = `T${set.tier}`;
+      Object.assign(tierBadge.style, {
+        fontSize: "10px", fontWeight: "700", opacity: "0.7", textAlign: "center",
+      } as Partial<CSSStyleDeclaration>);
+      const nameEl = document.createElement("span");
+      nameEl.textContent = set.name;
+      Object.assign(nameEl.style, {
+        fontSize: "10px", lineHeight: "1.2",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+      } as Partial<CSSStyleDeclaration>);
+      const countEl = document.createElement("span");
+      countEl.textContent = "—";
+      Object.assign(countEl.style, {
+        fontSize: "10px", lineHeight: "1.2", textAlign: "right",
+        fontVariantNumeric: "tabular-nums",
+      } as Partial<CSSStyleDeclaration>);
+      row.appendChild(tierBadge);
+      row.appendChild(nameEl);
+      row.appendChild(countEl);
+      col.appendChild(row);
+      this.dishStockEls.set(set.id, countEl);
+    }
+    return col;
   }
 
   private buildDishwareColumn(label: string, sets: readonly DishwareSetDef[]): HTMLElement {
@@ -335,6 +510,30 @@ export class PantryModal {
       this.dishStatLine.textContent =
         `${plateClean} plates clean · ${glassClean} glasses clean · ${stored}/${cap} stored${dirtyStr}`;
     }
+    // === Per-tier STOCK rows ===
+    // getTierBreakdown returns the live { tier, clean, dirty } for
+    // each tier the player has bought into. Sets the player doesn't
+    // own yet show "—" so the row still reads consistently against
+    // the BUY column below.
+    const plateBreakdown = dish.getTierBreakdown("plate");
+    const glassBreakdown = dish.getTierBreakdown("glass");
+    const fillStockRow = (set: DishwareSetDef, breakdown: Array<{ tier: number; clean: number; dirty: number }>): void => {
+      const cell = this.dishStockEls.get(set.id);
+      if (!cell) return;
+      const row = breakdown.find((r) => r.tier === set.tier);
+      if (!row || (row.clean === 0 && row.dirty === 0)) {
+        cell.textContent = "—";
+        cell.style.color = "rgba(255,245,220,0.4)";
+        cell.style.fontWeight = "400";
+        return;
+      }
+      const dirtyTag = row.dirty > 0 ? ` (${row.dirty} dirty)` : "";
+      cell.textContent = `×${row.clean}${dirtyTag}`;
+      cell.style.color = row.dirty > 0 && row.clean === 0 ? "#ffb070" : "#a8e2a8";
+      cell.style.fontWeight = "700";
+    };
+    for (const set of PLATE_SETS) fillStockRow(set, plateBreakdown);
+    for (const set of GLASS_SETS) fillStockRow(set, glassBreakdown);
     const playerTier = this.game.getLuxuryTier();
     for (const set of [...PLATE_SETS, ...GLASS_SETS]) {
       const entry = this.dishRowEls.get(set.id);
