@@ -159,6 +159,20 @@ export const Restaurant = __t.object("Restaurant", {
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
+export const RestaurantTickSchedule = __t.object("RestaurantTickSchedule", {
+  id: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+  restaurantId: __t.u64(),
+});
+export type RestaurantTickSchedule = __Infer<typeof RestaurantTickSchedule>;
+
+export const RestaurantTickState = __t.object("RestaurantTickState", {
+  restaurantId: __t.u64(),
+  lastTickAt: __t.timestamp(),
+  tickCount: __t.u64(),
+});
+export type RestaurantTickState = __Infer<typeof RestaurantTickState>;
+
 export const SaveSnapshot = __t.object("SaveSnapshot", {
   restaurantId: __t.u64(),
   data: __t.string(),

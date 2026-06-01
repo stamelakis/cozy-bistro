@@ -85,6 +85,7 @@ import PedestrianRow from "./pedestrian_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
+import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
 import VisitEventRow from "./visit_event_table";
 import WeatherStateRow from "./weather_state_table";
@@ -292,6 +293,17 @@ const tablesSchema = __schema({
       { name: 'restaurant_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, RestaurantRow),
+  restaurant_tick_state: __table({
+    name: 'restaurant_tick_state',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'restaurant_tick_state_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'restaurant_tick_state_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
+    ],
+  }, RestaurantTickStateRow),
   save_snapshot: __table({
     name: 'save_snapshot',
     indexes: [
