@@ -4281,13 +4281,13 @@ export class WorldScene {
       // Essential appliances — stove + sink along the back wall.
       { id: "stove",        x:  0, z: -4 },
       { id: "sink",         x: -1, z: -4 },
-      // Starter bar counter — 2-wide on the back wall to the right
-      // of the kitchen line. Half-integer anchor (x=2.5) spans tiles
-      // 2 and 3. No stools yet — the player buys them when they're
-      // ready to hire a barman (tier 2 unlock). The counter alone
-      // gives the kitchen visual presence without prematurely
-      // surfacing the bar role.
-      { id: "bar-counter",  x:  2.5, z: -4, rotY: 0, tier: 1 },
+      // Starter kitchen counter — single 1×1 tile to the right of
+      // the stove, gives the player a workspace appliance from day
+      // one (a few recipes use the "counter" provides slot for
+      // prep). Bar-counter was here previously but the bar role
+      // doesn't unlock until tier 2 — leading with a regular counter
+      // matches the kitchen-first starter loop better.
+      { id: "counter",      x:  2,   z: -4, rotY: 0, tier: 1 },
       // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Chairs go
       // in the four corner-adjacent cells (pinwheel pattern) so each
       // chair sits AT a tile center rather than straddling tile
