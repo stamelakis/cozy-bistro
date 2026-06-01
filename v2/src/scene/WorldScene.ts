@@ -2788,18 +2788,20 @@ export class WorldScene {
   }
 
   /** Paint zebra-stripe pedestrian crossings at every EW × NS
-   * intersection. Each intersection has FOUR arms — one for each
-   * cardinal direction — where the pavement of one avenue currently
-   * extends across the road of the other, creating a confusing
-   * beige-on-asphalt patch. We hide that patch behind a proper
-   * crosswalk: stripes painted ON the asphalt, running parallel to
-   * the road being crossed (which is the standard real-world layout).
+   * intersection AND cover the beige pavement-crossing patches
+   * underneath with asphalt-colored rectangles so the road reads
+   * uniformly dark through the intersection.
    *
-   * Geometry strategy: all stripes for all crossings are baked into
-   * ONE merged BufferGeometry → ONE Mesh → ONE draw call. With
-   * 3 EW × 2 NS = 6 intersections × 4 arms × 5 stripes = 120 stripe
-   * planes total — without the merge that'd be 120 draw calls just
-   * for crosswalk paint. */
+   * Without the asphalt patches the pavement plane is still
+   * visible BETWEEN the white stripes (the pavement plane runs
+   * continuously across the road in 5-m wide strips). Layer order
+   * is: pavement (y=0) → asphalt patch (y=0.005, covers the beige)
+   * → zebra stripes (y=0.025, the only paint that should show).
+   *
+   * Geometry strategy: ALL of it goes into two merged
+   * BufferGeometries (one for asphalt patches, one for stripes),
+   * each rendered as a single Mesh → two draw calls total for
+   * every crosswalk in the city. */
   private addPedestrianCrossings(): void {
     const STRIPE_COUNT = 5;
     const STRIPE_WIDTH = 0.50;   // dimension PERPENDICULAR to walking direction
@@ -2809,8 +2811,18 @@ export class WorldScene {
     // z-fight with the asphalt below. 0.025 is below the curb top
     // (0.12), so the stripes still tuck under the visible curbing.
     const STRIPE_Y = 0.025;
+    // Asphalt-patch layer — sits ABOVE the pavement plane (y=0)
+    // so the beige doesn't bleed through, but BELOW the stripes
+    // (y=0.025) so the white paint reads on top.
+    const ASPHALT_Y = 0.005;
+    // Dimensions of each arm's pavement-on-road patch. The patch
+    // sits where EW pavement (5 m wide perp to EW road) crosses
+    // the NS road (6 m wide along Z), and vice versa.
+    const PATCH_ROAD_WIDTH = 6;     // road width at the crossing
+    const PATCH_PAVEMENT_WIDTH = 5; // pavement strip width
 
-    const geos: THREE.BufferGeometry[] = [];
+    const asphaltGeos: THREE.BufferGeometry[] = [];
+    const stripeGeos: THREE.BufferGeometry[] = [];
 
     /** Build STRIPE_COUNT stripe geometries for one arm of one
      * intersection. `stripeAxis` says which axis the stripe is LONG
@@ -2819,7 +2831,7 @@ export class WorldScene {
      * Centered at (centerX, centerZ): for the north arm of an
      * intersection, that's (ax, az + 5.5); the stripes are then
      * laid out symmetrically across the road they're painted on. */
-    const buildArmGeometries = (
+    const buildArmStripes = (
       centerX: number, centerZ: number,
       stripeAxis: "alongX" | "alongZ",
     ): void => {
@@ -2842,8 +2854,25 @@ export class WorldScene {
         }
         geo.rotateX(-Math.PI / 2);           // lay flat on XZ plane
         geo.translate(px, STRIPE_Y, pz);     // anchor in world coords
-        geos.push(geo);
+        stripeGeos.push(geo);
       }
+    };
+
+    /** Build the asphalt patch that covers ONE arm's beige pavement-
+     * on-road rectangle. `armAxis` says which orientation the patch
+     * has: "northSouth" arms (EW pavement crossing NS road) are 6 m
+     * wide × 5 m deep; "eastWest" arms (NS pavement crossing EW
+     * road) are 5 m wide × 6 m deep. */
+    const buildArmPatch = (
+      centerX: number, centerZ: number,
+      armAxis: "northSouth" | "eastWest",
+    ): void => {
+      const w = armAxis === "northSouth" ? PATCH_ROAD_WIDTH : PATCH_PAVEMENT_WIDTH;
+      const d = armAxis === "northSouth" ? PATCH_PAVEMENT_WIDTH : PATCH_ROAD_WIDTH;
+      const geo = new THREE.PlaneGeometry(w, d);
+      geo.rotateX(-Math.PI / 2);
+      geo.translate(centerX, ASPHALT_Y, centerZ);
+      asphaltGeos.push(geo);
     };
 
     for (const az of WorldScene.EW_AVENUES) {
@@ -2852,37 +2881,67 @@ export class WorldScene {
         // offset from each avenue's centerline is 5.5 m (matches the
         // pavement plane in makeCityAvenue).
         //
-        // North arm: EW pavement crosses NS road. Pedestrians cross
-        // east-west, so stripes are parallel to the NS road (long in Z).
-        buildArmGeometries(ax, az + 5.5, "alongZ");
-        buildArmGeometries(ax, az - 5.5, "alongZ");
-        // East/west arm: NS pavement crosses EW road. Pedestrians
-        // cross north-south, so stripes are parallel to the EW road
-        // (long in X).
-        buildArmGeometries(ax + 5.5, az, "alongX");
-        buildArmGeometries(ax - 5.5, az, "alongX");
+        // First: asphalt patch covers the beige pavement-on-road
+        // rectangle at this arm. Then: zebra stripes on top.
+        //
+        // North/south arms: EW pavement crosses NS road. Patch is
+        // 6 m wide (NS road) × 5 m deep (EW pavement strip).
+        // Pedestrians cross east-west, so stripes are parallel to
+        // the NS road (long in Z).
+        buildArmPatch(ax, az + 5.5, "northSouth");
+        buildArmStripes(ax, az + 5.5, "alongZ");
+        buildArmPatch(ax, az - 5.5, "northSouth");
+        buildArmStripes(ax, az - 5.5, "alongZ");
+        // East/west arms: NS pavement crosses EW road. Patch is
+        // 5 m wide (NS pavement strip) × 6 m deep (EW road).
+        // Pedestrians cross north-south, so stripes are parallel
+        // to the EW road (long in X).
+        buildArmPatch(ax + 5.5, az, "eastWest");
+        buildArmStripes(ax + 5.5, az, "alongX");
+        buildArmPatch(ax - 5.5, az, "eastWest");
+        buildArmStripes(ax - 5.5, az, "alongX");
       }
     }
 
-    if (geos.length === 0) return;
-    const merged = mergeBufferGeometries(geos, false);
-    // mergeBufferGeometries duplicates the vertex data into a new
-    // buffer; the source geometries are safe to dispose immediately.
-    for (const g of geos) g.dispose();
-    if (!merged) {
+    // === Layer 1 — asphalt patches that mask the beige pavement ===
+    if (asphaltGeos.length > 0) {
+      const merged = mergeBufferGeometries(asphaltGeos, false);
+      for (const g of asphaltGeos) g.dispose();
+      if (merged) {
+        // Same dark grey + roughness as the road plane in
+        // makeCityAvenue so the patch blends seamlessly. Lit
+        // material (MeshStandardMaterial) so the patch responds
+        // to sun + ambient identically to the surrounding asphalt.
+        const asphaltMat = new THREE.MeshStandardMaterial({
+          color: 0x3a3a3c, roughness: 0.95, metalness: 0,
+        });
+        const asphaltMesh = new THREE.Mesh(merged, asphaltMat);
+        asphaltMesh.receiveShadow = true;
+        this.worldRoot.add(asphaltMesh);
+      } else {
+        console.warn("[WorldScene] failed to merge intersection asphalt patches");
+      }
+    }
+
+    // === Layer 2 — zebra stripes painted on top ===
+    if (stripeGeos.length === 0) return;
+    const stripeMerged = mergeBufferGeometries(stripeGeos, false);
+    for (const g of stripeGeos) g.dispose();
+    if (!stripeMerged) {
       console.warn("[WorldScene] failed to merge pedestrian-crossing stripes");
       return;
     }
     // MeshBasicMaterial — crosswalk paint is unlit (it'd look weird
     // for stripes to shade based on the sun angle). Slight off-white
     // so they read as weathered paint instead of clinical pure white.
-    const mat = new THREE.MeshBasicMaterial({ color: 0xf2ead6 });
-    const mesh = new THREE.Mesh(merged, mat);
-    mesh.receiveShadow = false;
-    // High render order so the stripes draw on top of both the road
-    // and the overlapping pavement patches without z-fighting.
-    mesh.renderOrder = 1;
-    this.worldRoot.add(mesh);
+    const stripeMat = new THREE.MeshBasicMaterial({ color: 0xf2ead6 });
+    const stripeMesh = new THREE.Mesh(stripeMerged, stripeMat);
+    stripeMesh.receiveShadow = false;
+    // High render order so the stripes draw on top of everything
+    // beneath (asphalt patch + pavement + road plane) without
+    // z-fighting on the shared y-axis.
+    stripeMesh.renderOrder = 1;
+    this.worldRoot.add(stripeMesh);
   }
 
   /** Procedural NPC scenery — ~60 background houses + shops
