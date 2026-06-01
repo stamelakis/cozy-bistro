@@ -1305,13 +1305,18 @@ export class BuildMenu {
    * partition (registry, placement="edge") or one of the building's
    * exterior walls — and return a mount anchor + rotation for a
    * wall-mounted item. The mount picks the FACE of the wall the cursor
-   * is on, so the same wall can hold items on both sides. Returns null
-   * if nothing is within maxDist. */
+   * is on for interior partitions (both sides are valid rooms). For
+   * exterior shell walls the mount is FORCED to the building's interior
+   * face — the exterior face is street/garden and decorating it would
+   * be useless and visually confusing. Returns null if nothing is
+   * within maxDist. */
   private findNearestWall(x: number, z: number, maxDist: number): { x: number; z: number; rotY: number } | null {
     let bestDistSq = maxDist * maxDist;
     // Best hit: anchor (mount point on the wall plane) + rotY (the wall's
     // own orientation, which we use to derive its normals below).
-    let best: { x: number; z: number; rotY: number } | null = null;
+    // isExterior flips the side-pick logic from "cursor side" to "always
+    // interior side" so decor on outer walls always faces the room.
+    let best: { x: number; z: number; rotY: number; isExterior: boolean } | null = null;
 
     // 1) Player-placed partition walls (registry items with placement
     //    "edge"). These are anchored at their own centers — a single
@@ -1324,7 +1329,7 @@ export class BuildMenu {
       const d2 = dx * dx + dz * dz;
       if (d2 < bestDistSq) {
         bestDistSq = d2;
-        best = { x: it.x, z: it.z, rotY: it.rotY };
+        best = { x: it.x, z: it.z, rotY: it.rotY, isExterior: false };
       }
     }
 
@@ -1342,19 +1347,35 @@ export class BuildMenu {
       const d2 = dx * dx + dz * dz;
       if (d2 < bestDistSq) {
         bestDistSq = d2;
-        best = { x: px, z: pz, rotY: seg.rotY };
+        best = { x: px, z: pz, rotY: seg.rotY, isExterior: true };
       }
     }
 
     if (!best) return null;
 
     // Wall's two normals: rotY=0 wall extends along X with normals on
-    // ±Z; rotY=π/2 wall extends along Z with normals on ±X. Pick the
-    // side the cursor is on.
+    // ±Z; rotY=π/2 wall extends along Z with normals on ±X.
     const wallNormalX = Math.sin(best.rotY);
     const wallNormalZ = Math.cos(best.rotY);
-    const proj = (x - best.x) * wallNormalX + (z - best.z) * wallNormalZ;
-    const sign = proj >= 0 ? 1 : -1;
+    // Pick the side the mount should face.
+    //  - Interior partitions: pick the side the cursor is on (so the same
+    //    wall can hold items on both sides — useful for a partition with
+    //    a kitchen on one side and a dining room on the other).
+    //  - Exterior shell walls: ALWAYS face the building's interior. The
+    //    outside face looks onto the street/garden — letting the player
+    //    mount art there silently is useless and confusing. The building
+    //    centre is at (~0.5, ~0.5) (midpoint of the [-4.5, 5.5] × [-4.5,
+    //    5.5] shell footprint); the normal that points toward it is the
+    //    one with a POSITIVE dot product with (centre - wallPoint).
+    let sign: number;
+    if (best.isExterior) {
+      const cx = 0.5, cz = 0.5;
+      const towardCentre = (cx - best.x) * wallNormalX + (cz - best.z) * wallNormalZ;
+      sign = towardCentre >= 0 ? 1 : -1;
+    } else {
+      const proj = (x - best.x) * wallNormalX + (z - best.z) * wallNormalZ;
+      sign = proj >= 0 ? 1 : -1;
+    }
     const mountNX = wallNormalX * sign;
     const mountNZ = wallNormalZ * sign;
     // Push the item PAST the wall surface, not just away from the wall
