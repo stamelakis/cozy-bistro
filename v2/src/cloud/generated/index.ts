@@ -43,6 +43,7 @@ import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
+import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
@@ -374,6 +375,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
+  __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),

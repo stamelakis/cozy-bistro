@@ -17,6 +17,28 @@ use crate::tables::{
     ActiveGuest, RestaurantTickSchedule, RestaurantTickState,
 };
 
+/// Manual backfill — install a tick schedule for every existing
+/// restaurant that doesn't have one yet. lifecycle::init runs ONLY
+/// on first publish, so when this feature lands on an already-
+/// deployed module the existing restaurants are stranded with no
+/// schedule rows. Call this once after each publish that adds new
+/// per-restaurant scheduled work:
+///
+///     spacetime call cozy-bistro-andre bootstrap_sim_schedules
+///
+/// Idempotent — ensure_tick_schedule skips restaurants that already
+/// have a row.
+#[reducer]
+pub fn bootstrap_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
+    let rids: Vec<u64> = ctx.db.restaurant().iter().map(|r| r.id).collect();
+    let count = rids.len();
+    for rid in rids {
+        ensure_tick_schedule(ctx, rid);
+    }
+    log::info!("bootstrap_sim_schedules: ensured tick schedule for {} restaurants", count);
+    Ok(())
+}
+
 // === Phase B state-machine constants ===
 
 /// Initial patience for a guest in walkingIn / seated / ordering /
