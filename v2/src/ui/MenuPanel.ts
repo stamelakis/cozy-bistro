@@ -83,23 +83,22 @@ export class MenuPanel {
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
     this.root = document.createElement("div");
-    // 580 max (was 760) — narrower so the panel matches its
-    // ACTUAL content width. The recipe rows pack from the left
-    // with `justify-content: flex-start`, leaving empty room at
-    // the right end of every row; at 760 that was ~180 px of
-    // dead pixels between the price chip and the right edge.
-    // The summary panel still claims a fixed 180 px column, the
-    // recipe list shrinks to ~360 px (enough for the 3-4-row
-    // recipe text without a wasted gap), gap stays 10 px. On a
-    // narrower viewport the formula floor still kicks in so the
-    // panel can shrink further to clear the sidebar + chat.
+    // 500 max (was 580 → 760 historically). The panel is centered
+    // horizontally, so on common laptop viewports (~1500 px wide)
+    // 580 still bled into the chat at left:280 by ~80 px even
+    // though the menu's own content fit fine. Dropping the max to
+    // 500 pushes the left edge ~40 px further right when centered;
+    // the recipe column shrinks from ~360 → ~280 (still readable
+    // for the longest recipe text), summary panel keeps its 180 px
+    // column, 10 px gap stays. Calc floor still lets the panel
+    // shrink further on narrow viewports.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "50%",
       transform: "translateX(-50%)",
       bottom: "12px",
-      maxWidth: "580px",
-      width: "min(580px, calc(100vw - 480px))",
+      maxWidth: "500px",
+      width: "min(500px, calc(100vw - 480px))",
       padding: "8px 12px",
       background: "rgba(20, 14, 10, 0.78)",
       color: "#fff5dc",
