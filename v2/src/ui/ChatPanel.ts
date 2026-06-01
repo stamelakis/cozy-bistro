@@ -576,16 +576,48 @@ interface SessionMessage {
 // ============================================================
 
 function renderMessageRow(m: { senderName: string; senderHex: string; text: string; sentAtMs: number; isMine: boolean }): HTMLElement {
+  // Chat-bubble layout: own messages right-aligned with a green
+  // tint, other people's messages left-aligned with an amber tint.
+  // Replaces the old "flat list of name/time/text triples" which
+  // visually ran two consecutive messages together because the
+  // separator was a barely-visible dotted line.
   const row = document.createElement("div");
   Object.assign(row.style, {
-    display: "flex", flexDirection: "column",
-    padding: "2px 0",
-    borderBottom: "1px dotted rgba(255,245,220,0.06)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: m.isMine ? "flex-end" : "flex-start",
+    marginBottom: "6px",
   } as Partial<CSSStyleDeclaration>);
+
+  // The bubble itself — colored background + border so each message
+  // is clearly its own unit, no matter how short or long.
+  const bubble = document.createElement("div");
+  Object.assign(bubble.style, {
+    maxWidth: "82%",
+    minWidth: "0", // allow flex children to truncate
+    padding: "4px 8px 5px 8px",
+    borderRadius: "8px",
+    background: m.isMine
+      ? "rgba(120, 200, 120, 0.18)"
+      : "rgba(255, 217, 134, 0.10)",
+    border: m.isMine
+      ? "1px solid rgba(120, 200, 120, 0.35)"
+      : "1px solid rgba(255, 217, 134, 0.22)",
+    display: "flex",
+    flexDirection: "column",
+    gap: "1px",
+  } as Partial<CSSStyleDeclaration>);
+
+  // Head row — name on one side, timestamp on the other. Both small
+  // and de-emphasized so the message TEXT is the visual focus.
   const head = document.createElement("div");
   Object.assign(head.style, {
-    display: "flex", justifyContent: "space-between", alignItems: "baseline",
-    gap: "8px", fontSize: "10px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: "10px",
+    fontSize: "10px",
+    lineHeight: "1.2",
   } as Partial<CSSStyleDeclaration>);
   const name = document.createElement("span");
   name.textContent = m.isMine ? "You" : m.senderName;
@@ -596,16 +628,27 @@ function renderMessageRow(m: { senderName: string; senderHex: string; text: stri
   head.appendChild(name);
   const time = document.createElement("span");
   time.textContent = formatShortTime(m.sentAtMs);
-  Object.assign(time.style, { opacity: "0.5" } as Partial<CSSStyleDeclaration>);
+  Object.assign(time.style, {
+    opacity: "0.55",
+    fontVariantNumeric: "tabular-nums",
+  } as Partial<CSSStyleDeclaration>);
   head.appendChild(time);
-  row.appendChild(head);
+  bubble.appendChild(head);
+
+  // The message text. Always on its own row inside the bubble so a
+  // one-word reply still reads as a chat message and not as "name
+  // followed by inline content".
   const text = document.createElement("div");
   text.textContent = m.text;
   Object.assign(text.style, {
-    fontSize: "12px", lineHeight: "1.35",
-    wordBreak: "break-word", whiteSpace: "pre-wrap",
+    fontSize: "12px",
+    lineHeight: "1.35",
+    wordBreak: "break-word",
+    whiteSpace: "pre-wrap",
   } as Partial<CSSStyleDeclaration>);
-  row.appendChild(text);
+  bubble.appendChild(text);
+
+  row.appendChild(bubble);
   return row;
 }
 
