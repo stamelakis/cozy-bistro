@@ -708,6 +708,13 @@ export class Engine {
       }
       return { queued, cooking, ready, delivering };
     };
+    // Per-chef backlog accessor — StaffPanel reads this every HUD
+    // tick to show "🍳 N" next to each chef's name. Returns 0 when
+    // the router isn't ready yet (pre-staffReady) or the chef has
+    // no work in their queue.
+    this.game.getChefBacklog = (chefMemberId: string) => {
+      return this.router?.getChefBacklog?.(chefMemberId) ?? 0;
+    };
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     this.buildMenu = buildMenu;

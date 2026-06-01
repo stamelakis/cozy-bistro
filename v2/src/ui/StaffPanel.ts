@@ -144,7 +144,14 @@ export class StaffPanel {
     // tier (gates the active floor buttons), the member list (id +
     // current home floor). If two consecutive ticks produce the
     // same string, the existing DOM is correct as-is.
-    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}`).join(",");
+    // Signature also includes the per-chef backlog so the row
+    // rebuilds whenever any backlog changes (otherwise the badge
+    // would stay stale at the original value). Non-chef members
+    // contribute a constant "0" so adding waiters / barmen / errands
+    // doesn't churn the sig on unrelated state.
+    const backlogFor = (m: { id: string }): number =>
+      role === "chef" ? (this.game.getChefBacklog?.(m.id) ?? 0) : 0;
+    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}`).join(",");
     if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
       return;
     }
@@ -166,6 +173,39 @@ export class StaffPanel {
         whiteSpace: "nowrap", opacity: "0.9",
       } as Partial<CSSStyleDeclaration>);
       row.appendChild(name);
+      // Per-chef backlog badge. Counts queued + cooking tickets
+      // assigned to this specific chef. Shown only for chefs (waiters
+      // / barmen / errands don't have per-individual backlogs). Color
+      // ramps with load so a glance tells the player who's drowning:
+      //   0     — hidden (idle chef, nothing to draw attention to)
+      //   1-2   — green / fine
+      //   3-4   — amber / catching up
+      //   5+    — red / hire help
+      if (role === "chef") {
+        const backlog = this.game.getChefBacklog?.(member.id) ?? 0;
+        if (backlog > 0) {
+          const badge = document.createElement("span");
+          badge.textContent = `🍳 ${backlog}`;
+          badge.title = `${backlog} tickets in this chef's backlog (queued + cooking). Hire another chef if this stays high — waiters spill to other floors when same-floor chefs hit 4+.`;
+          const bg = backlog >= 5
+            ? "rgba(220, 80, 80, 0.55)"
+            : backlog >= 3
+              ? "rgba(220, 170, 80, 0.45)"
+              : "rgba(120, 200, 120, 0.35)";
+          Object.assign(badge.style, {
+            fontSize: "10px",
+            fontWeight: "700",
+            padding: "1px 5px",
+            borderRadius: "3px",
+            background: bg,
+            color: "#fff5dc",
+            marginRight: "4px",
+            flex: "0 0 auto",
+            fontVariantNumeric: "tabular-nums",
+          } as Partial<CSSStyleDeclaration>);
+          row.appendChild(badge);
+        }
+      }
       if (showFloorButtons) {
         const current = member.homeFloor ?? 0;
         for (let idx = 0; idx < numStoreys; idx += 1) {

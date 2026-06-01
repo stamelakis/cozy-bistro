@@ -282,6 +282,11 @@ export class Game {
    * · Y cooking" so the player can see throughput when staff happens to
    * be idle right now. */
   getTicketStats?: () => { queued: number; cooking: number; ready: number; delivering: number };
+  /** Per-chef backlog accessor — count of queued + cooking tickets
+   * routed to this specific chef. StaffPanel shows it as a small
+   * badge next to each chef's name so the player can see who's
+   * drowning and decide whether to hire another chef. */
+  getChefBacklog?: (chefMemberId: string) => number;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */

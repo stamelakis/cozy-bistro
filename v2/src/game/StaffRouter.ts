@@ -80,6 +80,18 @@ export interface Ticket {
    * marked "ready" for the waiter to pick up. Defaults to false for
    * tickets created before this field existed. */
   seatAtBar?: boolean;
+  /** Per-chef backlog routing: which chef this ticket is reserved
+   * for. Set by the waiter when they call enqueueOrder — the waiter
+   * picks the chef with the shortest backlog on the seat's floor,
+   * spilling over to other floors only when every same-floor chef
+   * is at HIGH_DEMAND_BACKLOG or more.
+   *
+   * Null = legacy / unassigned (e.g. the chef who owned this ticket
+   * got fired). The chef idle handler treats null-assigned tickets
+   * as "anyone can cook" — same behaviour as before per-chef backlog
+   * existed. Bar tickets are always null (barmen don't have
+   * per-individual backlogs). */
+  assignedChefId?: string | null;
 }
 
 /** A seated guest who hasn't placed their order yet. GuestSpawner
@@ -732,7 +744,30 @@ export class StaffRouter {
   }
 
   removeChef(): AnimatedCharacter | null {
-    return this.popPreferIdle(this.chefs);
+    // Grab the actor BEFORE the splice so we still know their
+    // memberId — needed to release any queued tickets they had
+    // pending in their backlog. popPreferIdle picks the actual
+    // chef (prefer-idle policy) and runs all the cleanup; we just
+    // need to know who they were.
+    const target = this.chefs.find((a) => a.state === "idle") ?? this.chefs[this.chefs.length - 1];
+    const id = target?.memberId ?? null;
+    const removed = this.popPreferIdle(this.chefs);
+    if (id) this.releaseBacklogForChef(id);
+    return removed;
+  }
+
+  /** Drop the chef's claim on every queued ticket in their backlog
+   * — sets assignedChefId=null on each so the chef idle handler
+   * picks them up as orphan tickets via the same-floor / cross-
+   * floor fallback. Tickets the chef was actively COOKING get
+   * released separately by popPreferIdle (stove freed, ticket
+   * bounced back to queued). */
+  private releaseBacklogForChef(chefMemberId: string): void {
+    for (const t of this.tickets) {
+      if (t.assignedChefId === chefMemberId && t.state === "queued") {
+        t.assignedChefId = null;
+      }
+    }
   }
   /** Pop a barman out of the pool. Same pattern as removeChef —
    * prefers idle members so an in-flight drink doesn't get stranded
@@ -755,7 +790,15 @@ export class StaffRouter {
   removeMemberById(memberId: string): AnimatedCharacter | null {
     for (const pool of [this.chefs, this.waiters, this.barmen]) {
       const idx = pool.findIndex((a) => a.memberId === memberId);
-      if (idx >= 0) return this.popPreferIdle(pool, idx);
+      if (idx >= 0) {
+        const wasChef = pool === this.chefs;
+        const removed = this.popPreferIdle(pool, idx);
+        // Release any tickets the chef had pending in their
+        // backlog so other chefs (or the orphan-fallback in the
+        // idle handler) can pick them up.
+        if (wasChef) this.releaseBacklogForChef(memberId);
+        return removed;
+      }
     }
     return null;
   }
@@ -978,15 +1021,79 @@ export class StaffRouter {
     seatAtBar: boolean = false,
   ): string {
     const id = `t-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    // Pre-assign a chef so this ticket lands in someone's specific
+    // backlog. Bar tickets go to the barman pool by appliance filter,
+    // so we leave assignedChefId null for those. Non-bar tickets get
+    // routed to the chef with the shortest backlog on the seat's
+    // floor (strong preference), spilling to other floors only when
+    // every same-floor chef is loaded past HIGH_DEMAND_BACKLOG.
+    const assignedChefId = (appliance === "bar")
+      ? null
+      : this.pickChefForTicket(seatFloor);
     this.tickets.push({
       id, guestId, recipeId, state: "queued",
       seatPos: seatPos.clone(), clock: 0,
       baseCookSeconds: cookSeconds,
       cookSeconds, appliance, seatFloor,
       seatAtBar,
+      assignedChefId,
     });
-    console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook) — ${this.tickets.length} ticket(s) total, ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
+    console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook, chef=${assignedChefId ?? "any"}) — ${this.tickets.length} ticket(s), ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
     return id;
+  }
+
+  /** Number of queued+cooking tickets currently in a chef's backlog.
+   * Engine + StaffPanel read this for the per-row indicator that
+   * lets the player see who's drowning. O(N) over the ticket list,
+   * which is fine — the list is short (≤ N seats). */
+  getChefBacklog(chefMemberId: string): number {
+    let count = 0;
+    for (const t of this.tickets) {
+      if (t.assignedChefId !== chefMemberId) continue;
+      if (t.state === "queued" || t.state === "cooking") count += 1;
+    }
+    return count;
+  }
+
+  /** Pick which chef gets a freshly-enqueued ticket. Policy:
+   *   1. Filter to chefs whose homeFloor matches the seat's floor.
+   *   2. Sort by their current backlog (queued+cooking assigned to
+   *      them), ascending. Tiebreak: insertion order (stable sort).
+   *   3. Return the same-floor chef with the shortest backlog —
+   *      UNLESS every same-floor chef is at or above
+   *      HIGH_DEMAND_BACKLOG, in which case look at all chefs and
+   *      pick the shortest overall.
+   *   4. If no chef is on the seat's floor at all, fall back to the
+   *      globally shortest backlog.
+   *   5. Returns null when there are zero chefs hired (ticket
+   *      remains unassigned; chef idle handler accepts null-
+   *      assigned tickets as a legacy fallback). */
+  private pickChefForTicket(seatFloor: number): string | null {
+    if (this.chefs.length === 0) return null;
+    const HIGH_DEMAND_BACKLOG = 4;
+    const sameFloor = this.chefs.filter((c) => c.homeFloor === seatFloor);
+    if (sameFloor.length > 0) {
+      // Same-floor chefs sorted by current backlog, shortest first.
+      const sorted = sameFloor
+        .map((c) => ({ id: c.memberId, n: this.getChefBacklog(c.memberId) }))
+        .sort((a, b) => a.n - b.n);
+      const shortestOnFloor = sorted[0];
+      if (shortestOnFloor.n < HIGH_DEMAND_BACKLOG) {
+        return shortestOnFloor.id;
+      }
+      // High demand on this floor — spill to whichever chef anywhere
+      // has the lightest queue right now.
+      const allSorted = this.chefs
+        .map((c) => ({ id: c.memberId, n: this.getChefBacklog(c.memberId) }))
+        .sort((a, b) => a.n - b.n);
+      return allSorted[0].id;
+    }
+    // No chef on the seat's floor at all — assign to whoever's
+    // lightest overall.
+    const allSorted = this.chefs
+      .map((c) => ({ id: c.memberId, n: this.getChefBacklog(c.memberId) }))
+      .sort((a, b) => a.n - b.n);
+    return allSorted[0].id;
   }
 
   /** GuestSpawner calls this when a guest leaves (angry / table sold /
@@ -1133,25 +1240,44 @@ export class StaffRouter {
         // Without the appliance filter a chef would call
         // claimFreeStation("bar") and happily cook a drink at a bar
         // counter, defeating the "drinks require a barman" rule.
-        // sortByUrgency reorders the candidate list so the most-
-        // impatient customer gets cooked for first.
-        const isChefTicket = (t: Ticket): boolean =>
-          t.state === "queued" && t.appliance !== "bar";
-        const homeTickets = this.sortByUrgency(this.tickets.filter((t) => isChefTicket(t) && t.seatFloor === c.homeFloor));
-        if (homeTickets.length > 0) {
+        // Per-chef backlog: this chef ONLY cooks tickets assigned to
+        // them (or unassigned legacy tickets — see fallback below).
+        // Other chefs' assigned tickets are off-limits, even if this
+        // chef is idle and the other chef is busy — that's the whole
+        // point of the per-chef queue.
+        const isMyTicket = (t: Ticket): boolean =>
+          t.state === "queued"
+          && t.appliance !== "bar"
+          && t.assignedChefId === c.memberId;
+        // sortByUrgency reorders so the most-impatient customer goes
+        // first inside this chef's backlog.
+        const myTickets = this.sortByUrgency(this.tickets.filter(isMyTicket));
+        if (myTickets.length > 0) {
           c.homeWorkWaitClock = 0;
-          if (this.tryClaimCookForChef(c, homeTickets)) break;
+          if (this.tryClaimCookForChef(c, myTickets)) break;
+          break;
+        }
+        // Fallback: cook UNASSIGNED tickets (a chef got fired and
+        // their pending tickets had their assignedChefId reset to
+        // null in handleStaffMemberFired). Prefer same-floor first,
+        // then anywhere after the cross-floor wait — same logic the
+        // legacy chef idle loop used.
+        const isOrphan = (t: Ticket): boolean =>
+          t.state === "queued"
+          && t.appliance !== "bar"
+          && (t.assignedChefId == null || !this.chefs.some((cc) => cc.memberId === t.assignedChefId));
+        const homeOrphans = this.sortByUrgency(this.tickets.filter((t) => isOrphan(t) && t.seatFloor === c.homeFloor));
+        if (homeOrphans.length > 0) {
+          c.homeWorkWaitClock = 0;
+          if (this.tryClaimCookForChef(c, homeOrphans)) break;
           break;
         }
         c.homeWorkWaitClock += dt;
         if (c.homeWorkWaitClock < CROSS_FLOOR_WAIT_SECONDS) break;
-        // Cross-floor pass — skip any candidate where an idle home-
-        // floor chef exists. Same anti-poach rule as the waiter pool
-        // (see hasIdleHomeWaiter comment for the race).
-        const anyTickets = this.sortByUrgency(this.tickets.filter((t) =>
-          isChefTicket(t) && !this.hasIdleHomeChef(t.seatFloor, c)));
-        if (anyTickets.length > 0) {
-          this.tryClaimCookForChef(c, anyTickets);
+        const anyOrphans = this.sortByUrgency(this.tickets.filter((t) =>
+          isOrphan(t) && !this.hasIdleHomeChef(t.seatFloor, c)));
+        if (anyOrphans.length > 0) {
+          this.tryClaimCookForChef(c, anyOrphans);
         }
         break;
       }
@@ -1204,12 +1330,13 @@ export class StaffRouter {
         break;
       }
       case "returningHome": {
-        // Same interrupt as the waiter: if a queued home-floor ticket
-        // matches a free station, abort the loiter walk and start
-        // cooking from where we are. Bar tickets are excluded here
-        // too — chef never picks them up, ever.
+        // Same interrupt as the waiter: if a queued ticket assigned
+        // to THIS chef is sitting in their backlog, abort the loiter
+        // walk and start cooking from where we are. Bar tickets are
+        // excluded — chef never touches them. Per-chef backlog rule
+        // applies here too — no poaching from another chef's queue.
         const interruptTickets = this.sortByUrgency(this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance !== "bar" && t.seatFloor === c.homeFloor));
+          t.state === "queued" && t.appliance !== "bar" && t.assignedChefId === c.memberId));
         if (interruptTickets.length > 0 && this.tryClaimCookForChef(c, interruptTickets)) {
           break;
         }
