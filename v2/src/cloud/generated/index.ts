@@ -116,6 +116,9 @@ const tablesSchema = __schema({
   active_guest: __table({
     name: 'active_guest',
     indexes: [
+      { accessor: 'client_temp_id', name: 'active_guest_client_temp_id_idx_btree', algorithm: 'btree', columns: [
+        'clientTempId',
+      ] },
       { accessor: 'id', name: 'active_guest_id_idx_btree', algorithm: 'btree', columns: [
         'id',
       ] },

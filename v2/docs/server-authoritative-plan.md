@@ -545,6 +545,45 @@ subsystem. Final cutover only happens when every subsystem is on.
 
 ---
 
+## Lessons learned (deploy operations)
+
+### Adding a column to a populated table
+
+SpacetimeDB's macros only accept `#[default(...)]` for values that
+are evaluable at compile time. Primitive defaults (`#[default(true)]`,
+`#[default(0)]`, `#[default(None)]`) work. `#[default(String::new())]`
+or `#[default("".to_string())]` do **not** — they require runtime
+heap allocation and the macro rejects them.
+
+This matters because adding a non-defaulted column to an already-
+populated table on Maincloud requires `--delete-data`, which the
+publish CLI applies **to the entire module's data, not just the
+affected table.** The first time we hit this we wiped the whole
+DB (6 restaurants, all save_snapshots, all auth_records,
+achievements, leaderboards, friendships, chat history).
+
+**Rule going forward** — any new column on a public table that
+might already hold rows on Maincloud MUST be one of:
+
+1. `Option<T>` with `#[default(None)]` (works for any T, including
+   String), so the migration is non-destructive.
+2. A primitive with a const-evaluable `#[default(...)]`.
+
+Never use `--delete-data=on-conflict` on Maincloud unless the
+intent is genuinely to nuke the module. Use a fresh local
+module (`spacetime publish --server local ...`) for destructive
+testing instead.
+
+### Init reducer runs once
+
+`#[reducer(init)]` fires only on the FIRST publish of a module —
+not on subsequent re-publishes. Any one-time setup that needs to
+backfill new infrastructure for existing rows (e.g., the
+restaurant_tick_schedule rows added in Phase A4) needs a manual
+"bootstrap" reducer the operator can invoke once after the
+publish. Phase A4 had this bug; `bootstrap_sim_schedules` is the
+fix pattern.
+
 ## Open invitation for review
 
 Before I start Phase A3, give this doc a read and push back on:

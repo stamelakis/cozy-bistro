@@ -12,6 +12,7 @@ import {
 
 export default {
   restaurantId: __t.u64(),
+  clientTempId: __t.string(),
   variant: __t.string(),
   archetype: __t.string(),
   tasteDiet: __t.string(),

@@ -21,6 +21,7 @@ export type AchievementUnlock = __Infer<typeof AchievementUnlock>;
 export const ActiveGuest = __t.object("ActiveGuest", {
   id: __t.u64(),
   restaurantId: __t.u64(),
+  clientTempId: __t.string(),
   variant: __t.string(),
   archetype: __t.string(),
   tasteDiet: __t.string(),

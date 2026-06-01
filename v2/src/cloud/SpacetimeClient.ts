@@ -324,6 +324,7 @@ export class SpacetimeClient {
    * Returns [] when not connected or when no restaurant is known yet. */
   listActiveGuests(): {
     id: bigint;
+    clientTempId: string;
     state: string;
     variant: string;
     archetype: string;
@@ -345,6 +346,7 @@ export class SpacetimeClient {
         if (g.restaurantId !== rid) continue;
         out.push({
           id: g.id,
+          clientTempId: g.clientTempId,
           state: g.state,
           variant: g.variant,
           archetype: g.archetype,
@@ -369,6 +371,7 @@ export class SpacetimeClient {
    * the existing data/customerArchetypes.ts logic (B.3b wires the
    * call site). */
   spawnGuest(args: {
+    clientTempId: string;
     variant: string;
     archetype: string;
     tasteDiet: string;
@@ -385,6 +388,7 @@ export class SpacetimeClient {
     try {
       this.conn.reducers.spawnGuest({
         restaurantId: this.restaurantId,
+        clientTempId: args.clientTempId,
         variant: args.variant,
         archetype: args.archetype,
         tasteDiet: args.tasteDiet,
@@ -400,6 +404,24 @@ export class SpacetimeClient {
     } catch (e) {
       console.warn("[Cloud] spawnGuest failed:", e);
     }
+  }
+
+  /** Find a server-side active_guest row by the client's temp id. The
+   * client passes its local guest id (e.g. "guest-7") to spawnGuest;
+   * after the row lands in the subscription cache, this method
+   * resolves it back to the auto-inc u64 id used by other reducers.
+   * Returns null until the row appears (typical latency 50-150 ms). */
+  findActiveGuestIdByClientTempId(clientTempId: string): bigint | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      for (const g of this.conn.db.active_guest.iter()) {
+        if (g.restaurantId === rid && g.clientTempId === clientTempId) {
+          return g.id;
+        }
+      }
+    } catch { /* ignore */ }
+    return null;
   }
 
   /** Transition a guest to state="leaving" — the tick reducer deletes

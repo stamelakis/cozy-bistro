@@ -13,6 +13,7 @@ import {
 export default __t.row({
   id: __t.u64().primaryKey(),
   restaurantId: __t.u64().name("restaurant_id"),
+  clientTempId: __t.string().name("client_temp_id"),
   variant: __t.string(),
   archetype: __t.string(),
   tasteDiet: __t.string().name("taste_diet"),

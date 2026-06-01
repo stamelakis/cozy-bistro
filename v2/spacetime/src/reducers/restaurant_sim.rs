@@ -262,6 +262,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
 pub fn spawn_guest(
     ctx: &ReducerContext,
     restaurant_id: u64,
+    client_temp_id: String,
     variant: String,
     archetype: String,
     taste_diet: String,
@@ -286,6 +287,7 @@ pub fn spawn_guest(
     ctx.db.active_guest().insert(ActiveGuest {
         id: 0, // auto_inc
         restaurant_id,
+        client_temp_id,
         // Identity
         variant,
         archetype,

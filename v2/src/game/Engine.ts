@@ -1020,7 +1020,9 @@ export class Engine {
     //   cozyBistro.featureFlags       → current serverSim flag state
     (window as unknown as { cozyBistro?: unknown }).cozyBistro = {
       spawnTestGuest: () => {
+        const clientTempId = `dev-guest-${Date.now()}`;
         this.cloud.spawnGuest({
+          clientTempId,
           variant: "guest-v0",
           archetype: "regular",
           tasteDiet: "both",
@@ -1031,7 +1033,7 @@ export class Engine {
           willUseToilet: false,
           doorX: 0, doorZ: 5.45, doorFloor: 0,
         });
-        console.log("[Dev] spawn_guest fired — check the cozy-bistro-andre dashboard");
+        console.log(`[Dev] spawn_guest fired (clientTempId=${clientTempId})`);
       },
       listGuests: () => {
         const rows = this.cloud.listActiveGuests();

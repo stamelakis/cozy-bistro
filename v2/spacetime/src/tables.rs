@@ -530,6 +530,22 @@ pub struct ActiveGuest {
     #[index(btree)]
     pub restaurant_id: u64,
 
+    /// Client-side correlation id. The local GuestSpawner generates
+    /// these as "guest-N"; the client passes this through spawn_guest
+    /// so it can later find its own row in the subscription cache
+    /// without a server round-trip to learn the auto-inc id. Indexed
+    /// for the matching read pattern. Phase B.3b (mirror mode) uses
+    /// this; later phases that go fully server-authoritative can
+    /// retire it once the server owns spawn timing.
+    ///
+    /// (No #[default] — String defaults aren't const-evaluable by the
+    /// macro. Adding this column required `spacetime publish
+    /// --delete-data=on-conflict` once. Future column additions on
+    /// active_guest with default-able primitive types should use
+    /// #[default(...)] instead.)
+    #[index(btree)]
+    pub client_temp_id: String,
+
     // === Identity / kind ===
     /// Character GLB id — "guest-v0".."guest-v6". Set at spawn from
     /// the pedestrian's `variant` so the same body that walked up
