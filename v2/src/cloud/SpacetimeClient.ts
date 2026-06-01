@@ -309,6 +309,127 @@ export class SpacetimeClient {
     return n;
   }
 
+  // =====================================================================
+  //                Phase B — active_guest helpers
+  // =====================================================================
+  // Thin wrappers around the active_guest table accessors + the spawn /
+  // mark-leaving / update-position reducers. GuestSpawner (in B.3b) will
+  // call these behind the `isServerSim("guests")` flag instead of
+  // mutating its local guests[] array. Right now they're unused —
+  // adding the surface area first so the GuestSpawner diff stays
+  // smaller when it lands.
+
+  /** Snapshot of every active_guest row belonging to my restaurant.
+   * Cheap: in-memory iteration on the SpacetimeDB subscription cache.
+   * Returns [] when not connected or when no restaurant is known yet. */
+  listActiveGuests(): {
+    id: bigint;
+    state: string;
+    variant: string;
+    archetype: string;
+    stateClockMs: bigint;
+    patienceMs: bigint;
+    x: number;
+    z: number;
+    floor: number;
+    targetX: number;
+    targetZ: number;
+    targetFloor: number;
+    seatUid: string;
+  }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: ReturnType<SpacetimeClient["listActiveGuests"]> = [];
+    const rid = this.restaurantId;
+    try {
+      for (const g of this.conn.db.active_guest.iter()) {
+        if (g.restaurantId !== rid) continue;
+        out.push({
+          id: g.id,
+          state: g.state,
+          variant: g.variant,
+          archetype: g.archetype,
+          stateClockMs: g.stateClockMs,
+          patienceMs: g.patienceMs,
+          x: g.x,
+          z: g.z,
+          floor: g.floor,
+          targetX: g.targetX,
+          targetZ: g.targetZ,
+          targetFloor: g.targetFloor,
+          seatUid: g.seatUid,
+        });
+      }
+    } catch { /* table not yet wired (pre-publish or old build) */ }
+    return out;
+  }
+
+  /** Insert a new active_guest server-side. The owner-only auth check
+   * lives in the Rust reducer; this wrapper just forwards. taste*,
+   * archetype, will_use_toilet come from the client-side roll using
+   * the existing data/customerArchetypes.ts logic (B.3b wires the
+   * call site). */
+  spawnGuest(args: {
+    variant: string;
+    archetype: string;
+    tasteDiet: string;
+    tasteDecorPref: number;
+    tasteWindowPref: number;
+    tasteCuisineBias: string;
+    tasteDrinkTolerance: number;
+    willUseToilet: boolean;
+    doorX: number;
+    doorZ: number;
+    doorFloor: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.spawnGuest({
+        restaurantId: this.restaurantId,
+        variant: args.variant,
+        archetype: args.archetype,
+        tasteDiet: args.tasteDiet,
+        tasteDecorPref: args.tasteDecorPref,
+        tasteWindowPref: args.tasteWindowPref,
+        tasteCuisineBias: args.tasteCuisineBias,
+        tasteDrinkTolerance: args.tasteDrinkTolerance,
+        willUseToilet: args.willUseToilet,
+        doorX: args.doorX,
+        doorZ: args.doorZ,
+        doorFloor: args.doorFloor,
+      });
+    } catch (e) {
+      console.warn("[Cloud] spawnGuest failed:", e);
+    }
+  }
+
+  /** Transition a guest to state="leaving" — the tick reducer deletes
+   * the row after LEAVING_DWELL_MS so the client can play the walk-out
+   * animation. Idempotent server-side; safe to spam. */
+  markGuestLeaving(guestId: bigint): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.markGuestLeaving({ guestId });
+    } catch (e) {
+      console.warn("[Cloud] markGuestLeaving failed:", e);
+    }
+  }
+
+  /** Stream body position + next target up to the server. Called by
+   * GuestSpawner's per-frame walker — throttled to ~5 Hz by the
+   * caller. Targets feed any future "render this guest from another
+   * client's view" path (P4 visit mode + co-owner mirroring). */
+  updateGuestPosition(guestId: bigint, x: number, z: number, floor: number,
+                      targetX: number, targetZ: number, targetFloor: number): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.updateGuestPosition({
+        guestId, x, z, floor, targetX, targetZ, targetFloor,
+      });
+    } catch (e) {
+      console.warn("[Cloud] updateGuestPosition failed:", e);
+    }
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */

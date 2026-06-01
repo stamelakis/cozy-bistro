@@ -41,6 +41,7 @@ import { Pathfinding } from "./Pathfinding";
 import { SeatMarkers } from "../scene/SeatMarkers";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
+import { featureFlags } from "./featureFlags";
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { LoginModal } from "../ui/LoginModal";
 import { BuildingPickModal } from "../ui/BuildingPickModal";
@@ -1006,6 +1007,39 @@ export class Engine {
     // path — the page may close before the save worker round-trip
     // completes, so we can't rely on the async path here.
     window.addEventListener("beforeunload", () => this.saver.saveNowSync());
+
+    // Phase B dev hooks — let the developer poke at the server-
+    // authoritative migration from devtools without writing code.
+    // Wired even in production; the flag default of all-OFF means
+    // calling these has no effect on the live sim until you flip
+    // `?serverSim=guests` and reload.
+    //
+    // Usage from the browser console:
+    //   cozyBistro.spawnTestGuest()   → fires a sample spawn_guest reducer
+    //   cozyBistro.listGuests()       → prints every active_guest row
+    //   cozyBistro.featureFlags       → current serverSim flag state
+    (window as unknown as { cozyBistro?: unknown }).cozyBistro = {
+      spawnTestGuest: () => {
+        this.cloud.spawnGuest({
+          variant: "guest-v0",
+          archetype: "regular",
+          tasteDiet: "both",
+          tasteDecorPref: 0.5,
+          tasteWindowPref: 0.5,
+          tasteCuisineBias: "",
+          tasteDrinkTolerance: 0.5,
+          willUseToilet: false,
+          doorX: 0, doorZ: 5.45, doorFloor: 0,
+        });
+        console.log("[Dev] spawn_guest fired — check the cozy-bistro-andre dashboard");
+      },
+      listGuests: () => {
+        const rows = this.cloud.listActiveGuests();
+        console.table(rows);
+        return rows;
+      },
+      get featureFlags() { return featureFlags; },
+    };
     window.addEventListener("resize", this.handleResize);
   }
 
