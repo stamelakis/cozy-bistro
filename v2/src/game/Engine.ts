@@ -842,6 +842,10 @@ export class Engine {
       this.spawner.sfx = this.sfx;
       this.spawner.registry = this.registry;
       this.spawner.pathfind = this.pathfind;
+      // Phase B.3b — when isServerSim("guests") is on, GuestSpawner
+      // mirrors guest lifecycle to the active_guest cloud table.
+      // No-op when flag off (default).
+      this.spawner.cloud = this.cloud;
       // P5.7 — let SpacetimeClient.cloudSaveNow read the live restaurant
       // open / free-seats state so server-side attraction can skip
       // closed + full plots.

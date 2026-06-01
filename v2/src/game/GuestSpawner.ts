@@ -3,6 +3,7 @@ import { CharacterLoader } from "../assets/CharacterLoader";
 import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
+import { isServerSim } from "./featureFlags";
 import type { FloatingText } from "../ui/FloatingText";
 import type { SfxPlayer } from "../ui/SfxPlayer";
 import type { FurnitureRegistry, ResolvedSeatSlot } from "./FurnitureRegistry";
@@ -401,6 +402,14 @@ interface ActiveGuest {
    * transition into beginNextCourse — without this latch the seated
    * block would try to build the order on its own timer fallback. */
   orderTaken?: boolean;
+  /** Phase B.3b — server-side mirror id, once resolved. Populated by
+   * mirrorGuestSpawn after a short delay (the spawn_guest reducer
+   * round-trip is ~50-150 ms; the helper polls
+   * findActiveGuestIdByClientTempId until the row appears). Null
+   * until the cloud row materialises; mirror-leave skips when still
+   * null (the cloud row's patience countdown will despawn it on its
+   * own). */
+  serverMirrorId?: bigint;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -675,6 +684,19 @@ export class GuestSpawner {
    * through floors below" bug. */
   getStoreyMount?: (floor: number) => THREE.Object3D;
 
+  /** Phase B.3b — when the `serverSim.guests` flag is on, GuestSpawner
+   * MIRRORS local guest lifecycle events to the SpacetimeDB
+   * active_guest table via this cloud client. The local sim still
+   * drives gameplay; the cloud row exists so other clients (P4 visit
+   * mode, future co-owner views) can render the same customer set.
+   * Set by Engine after construction; null in tests / pre-cloud
+   * boot paths. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+
+  /** Per-frame accumulator used to throttle position publish calls to
+   * roughly 1 Hz — see streamGuestPositionsToCloud. */
+  private cloudPositionAccum = 0;
+
   constructor(
     scene: THREE.Scene,
     characterLoader: CharacterLoader,
@@ -826,6 +848,12 @@ export class GuestSpawner {
     // is what lets the restaurant recover on its own after long sessions.
     this.reconcileOccupancy();
     this.logSpawnDiagnosticIfDue();
+    // Phase B.3b — mirror live guest positions to the cloud at ~1 Hz
+    // so the active_guest row tracks where the rendered model is.
+    // Cheap (one reducer call per guest per second) and useful for
+    // P4 visit mode + future co-owner mirroring. No-op when the
+    // serverSim.guests flag is off.
+    this.streamGuestPositionsToCloud(dt);
   }
 
   /** Drop seat-occupancy entries that don't correspond to any live guest,
@@ -1719,6 +1747,7 @@ export class GuestSpawner {
         this.claimedWaitingChairs.set(waitingChair.uid, id);
       }
       this.guests.push(guest);
+      this.mirrorGuestSpawn(guest);
     } catch (err) {
       console.warn(`Could not spawn ${variantId}:`, err);
       if (seatId) this.occupiedSeats.delete(seatId);
@@ -1731,8 +1760,94 @@ export class GuestSpawner {
     }
   }
 
+  // ======================================================================
+  //                Phase B.3b — server-mirror helpers
+  // ======================================================================
+  // When isServerSim("guests") is on, the local sim still drives everything
+  // but we ALSO write a parallel record to the cloud's active_guest table.
+  // Three integration points: spawn (insert), despawn (mark leaving),
+  // and per-frame position stream. All bail silently when the flag is
+  // off OR when the cloud client isn't wired (tests, pre-auth boot).
+
+  /** Fire the spawn_guest reducer with the just-spawned local guest's
+   * taste + body so the cloud row materialises. The auto-inc server id
+   * is resolved a few frames later via findActiveGuestIdByClientTempId
+   * — keeping that lookup async means spawn doesn't block on the
+   * network round-trip. */
+  private mirrorGuestSpawn(g: ActiveGuest): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    this.cloud.spawnGuest({
+      clientTempId: g.id,
+      variant: g.variantId,
+      archetype: g.archetype.id,
+      tasteDiet: g.taste.diet,
+      tasteDecorPref: g.taste.decorAffinity,
+      tasteWindowPref: g.taste.windowAffinity,
+      tasteCuisineBias: typeof g.taste.preferredCategory === "string"
+        ? g.taste.preferredCategory : "",
+      // No 1:1 client field for drink tolerance — leave at 0 for now.
+      tasteDrinkTolerance: 0,
+      willUseToilet: g.willUseToilet ?? false,
+      doorX: g.character.groundPos.x,
+      doorZ: g.character.groundPos.y,
+      doorFloor: g.currentFloor,
+    });
+    // Resolve the server-side auto-inc id once the subscription cache
+    // catches up. 250 ms is comfortably above the typical reducer
+    // round-trip; if we miss the window we'll just lose mirror-leave
+    // for THIS guest (the cloud's patience timer will despawn the
+    // row regardless).
+    window.setTimeout(() => {
+      if (!this.cloud) return;
+      const id = this.cloud.findActiveGuestIdByClientTempId(g.id);
+      if (id != null) g.serverMirrorId = id;
+    }, 250);
+  }
+
+  /** Push state="leaving" to the cloud row so its dwell-then-delete
+   * timer matches our local despawn. Idempotent server-side. */
+  private mirrorGuestLeaving(g: ActiveGuest): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    // Late resolve in case the 250 ms timeout above didn't land in
+    // time (very-short visits — patience-out before subscription
+    // caught up).
+    if (g.serverMirrorId == null) {
+      g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
+    }
+    if (g.serverMirrorId == null) return;
+    this.cloud.markGuestLeaving(g.serverMirrorId);
+  }
+
+  /** Throttled per-frame: every ~1 s, push each guest's body coords +
+   * current target to the server so subscribed clients (visit mode,
+   * future co-owner views) can lerp the same body in their own scene.
+   * Skip guests whose serverMirrorId hasn't been resolved yet — the
+   * spawn-side polling timeout owns that handshake. */
+  private streamGuestPositionsToCloud(dt: number): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    this.cloudPositionAccum += dt;
+    if (this.cloudPositionAccum < 1.0) return;
+    this.cloudPositionAccum = 0;
+    for (const g of this.guests) {
+      if (g.serverMirrorId == null) continue;
+      this.cloud.updateGuestPosition(
+        g.serverMirrorId,
+        g.character.groundPos.x,
+        g.character.groundPos.y,
+        g.currentFloor,
+        g.target.x,
+        g.target.y,
+        g.currentFloor,
+      );
+    }
+  }
+
   private despawnGuest(idx: number): void {
     const g = this.guests[idx];
+    // Phase B.3b — mirror the leaving event to the cloud row before
+    // we tear down the local guest. Async fire-and-forget; helper
+    // bails silently when the flag is off or no cloud row was created.
+    this.mirrorGuestLeaving(g);
     // Safety net — if some upstream path forgot to reconcile the
     // reservations (or a future state transition is added without one),
     // this catches them here. settleGuestDishes is idempotent so calling
