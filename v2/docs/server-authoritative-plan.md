@@ -144,7 +144,14 @@ pub struct ActiveGuest {
     // Identity / kind
     pub variant: String,         // "guest-v0".."guest-v6"
     pub archetype: String,       // CustomerArchetype enum as string
-    pub taste_blob: String,      // JSON for the CustomerTaste struct
+    // CustomerTaste — expanded out of the JSON blob into real columns
+    // (review feedback: prefer queryable over compact).
+    pub taste_diet: String,      // "food" | "drink" | "both"
+    pub taste_decor_pref: f32,   // 0..1, how much decor quality matters
+    pub taste_window_pref: f32,
+    pub taste_cuisine_bias: String, // recipe-category id, "" = no bias
+    pub taste_drink_tolerance: f32,
+    pub taste_wc_use_chance: f32, // rolled here vs derived
     // State machine
     pub state: String,           // enum: walkingIn/seated/ordering/...
     pub state_clock_ms: i64,     // elapsed in this state, milliseconds
@@ -227,7 +234,12 @@ pub struct StaffActor {
     // Role-specific (nulls / empty strings when N/A)
     pub assigned_stove_uid: String,
     pub last_stove_uid: String,
-    pub wash_trip_blob: String,  // JSON for WashTrip when active
+    // WashTrip — expanded into real columns. Active when
+    // wash_target_uid != "". Mutually exclusive with ticket_id +
+    // take_order_guest_id.
+    pub wash_target_uid: String,    // station the waiter is washing at
+    pub wash_dirty_id: i64,         // dirty piece they're carrying, -1 = none yet
+    pub wash_phase: String,         // "" | "pickup" | "scrub" | "drop"
     pub take_order_guest_id: Option<u64>,
 }
 
@@ -299,34 +311,91 @@ pub struct PreparedServing {
     pub count: u32,
 }
 
-// === Restaurant runtime state (singletons, not pools) ===
-#[table(name = restaurant_state, public)]
-pub struct RestaurantState {
+// === Restaurant runtime state — SPLIT into focused tables ===
+// Original draft had a single restaurant_state row; review feedback
+// said "split it". Each table below holds one logical concept so a
+// money change doesn't push a day_number subscription update etc.
+
+// Economy: money + daily revenue/expense running totals.
+#[table(name = economy_state, public)]
+pub struct EconomyState {
     #[primary_key]
     pub restaurant_id: u64,
-    // Money + day state
-    pub money_cents: i64,        // multiplied by 100 to avoid floats
-    pub day_number: u32,
-    pub day_progress_x10000: u32,// 0..10000 for 4-decimal precision
+    pub money_cents: i64,         // × 100 to avoid floats
     pub daily_revenue_cents: i64,
     pub daily_expenses_cents: i64,
+}
+
+// Day clock + per-day counters that reset at day end.
+#[table(name = day_state, public)]
+pub struct DayState {
+    #[primary_key]
+    pub restaurant_id: u64,
+    pub day_number: u32,
+    pub day_progress_x10000: u32, // 0..10000 for 4-decimal precision
     pub daily_served: u32,
     pub daily_lost: u32,
     pub rent_elapsed_ms: i64,
     pub total_play_ms: i64,
-    // Reputation
-    pub rating_total_x100: i64,  // sum × 100 (rating values are 0..5)
+}
+
+// Reputation running totals. Rating history goes in a sibling table
+// (one row per finished day) so the history can grow without
+// re-publishing the running totals.
+#[table(name = reputation_state, public)]
+pub struct ReputationState {
+    #[primary_key]
+    pub restaurant_id: u64,
+    pub rating_total_x100: i64,   // sum × 100 (rating values 0..5)
     pub rating_count: u32,
-    pub rating_history_blob: String, // JSON of last N day ratings
-    // Restaurant config
+}
+
+#[table(name = rating_history_entry, public)]
+pub struct RatingHistoryEntry {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub day_number: u32,
+    pub rating_x100: i32,
+}
+
+// Player-set configuration. Sign-style struct was a JSON blob in the
+// first draft; split into proper columns.
+#[table(name = restaurant_config, public)]
+pub struct RestaurantConfig {
+    #[primary_key]
+    pub restaurant_id: u64,
     pub is_open: bool,
     pub auto_shop: bool,
     pub stock_target: u32,
-    pub theme_id: String,
-    pub theme_by_floor_blob: String, // JSON
+    pub ground_theme_id: String,  // Floor 0 theme; upper floors live in theme_per_floor
     pub restaurant_name: String,
-    pub sign_style_blob: String, // JSON
-    // Misc bookkeeping
+    pub sign_font: String,
+    pub sign_text_color: String,
+    pub sign_plaque_style: String,
+}
+
+// Per-floor theme override. One row per (restaurant_id, floor)
+// keying. Absent rows fall back to RestaurantConfig.ground_theme_id.
+#[table(name = theme_per_floor, public)]
+pub struct ThemePerFloor {
+    /// "{restaurant_id}:{floor}"
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub floor: u32,
+    pub theme_id: String,
+}
+
+// Master tick bookkeeping — when the last tick fired for this
+// restaurant. Used by the scheduled reducer to compute dt.
+#[table(name = restaurant_tick_state, public)]
+pub struct RestaurantTickState {
+    #[primary_key]
+    pub restaurant_id: u64,
     pub last_tick_at: Timestamp,
 }
 
