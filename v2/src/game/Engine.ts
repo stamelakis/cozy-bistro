@@ -374,7 +374,11 @@ export class Engine {
     this.pantryModal = new PantryModal(container, this.game);
     this.menuPanel = new MenuPanel(container, this.game);
     makeDraggableResizable({
-      storageKey: "cozy-bistro.panel.menu.v2",
+      // v3 — old saved widths from when the panel's maxWidth was 760
+      // overrode the new 500-max via PanelDragResize.applyLayout, which
+      // sets explicit width + maxWidth:none. Bumping the key drops the
+      // stale wider layout so new sessions get the intended 500-px box.
+      storageKey: "cozy-bistro.panel.menu.v3",
       root: this.menuPanel.root,
       handle: this.menuPanel.titleEl,
       collapseSentinel: this.menuPanel.body,
@@ -1693,6 +1697,7 @@ export class Engine {
       localStorage.removeItem("cozy-bistro.panel.build.v2");
       localStorage.removeItem("cozy-bistro.panel.menu.v2");
       localStorage.removeItem("cozy-bistro.panel.chat.v2");
+      localStorage.removeItem("cozy-bistro.panel.menu.v3");
       // Don't wipe the auth token — keep them logged in for the new pick.
     } catch { /* ignore */ }
     window.location.reload();

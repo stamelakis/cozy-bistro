@@ -404,16 +404,7 @@ export class MenuPanel {
     Object.assign(row.style, {
       display: "flex",
       alignItems: "center",
-      // Tighter inter-column gap (was 8) — keeps the price chip
-      // visually close to the ingredient line instead of floating
-      // off in the right margin.
       gap: "10px",
-      // justify-content default (flex-start) + left's `flex: 0 1
-      // auto` means the row packs everything from the left with
-      // only the configured gap between elements. Any leftover
-      // horizontal space sits at the row's far right, not BETWEEN
-      // the description and the price.
-      justifyContent: "flex-start",
       padding: "4px 6px",
       borderBottom: "1px solid rgba(255,245,220,0.06)",
       opacity: usable ? "1" : "0.45",
@@ -455,12 +446,14 @@ export class MenuPanel {
     row.appendChild(cb);
 
     const left = document.createElement("div");
-    // flex: 0 1 auto (shrink to content, no grow) — was flex: 1 which
-    // expanded the description column to fill ALL remaining row
-    // width, pushing the price chip to the far-right edge with a
-    // huge empty gap between. Now the price sits ~10 px from the
-    // ingredient line.
-    Object.assign(left.style, { flex: "0 1 auto", minWidth: "0" } as Partial<CSSStyleDeclaration>);
+    // flex: 1 1 auto — description column grows to fill the row so the
+    // price chip sits flush against the row's right edge (which is also
+    // the summary-panel border). An earlier attempt used flex: 0 1 auto
+    // to "tighten" a gap between description and price, but the real
+    // gap-fix is shrinking the panel box itself (see maxWidth: 500 +
+    // storage-key bump to v3). Without `flex: 1` the price drifts left
+    // and leaves empty space on the right inside the panel.
+    Object.assign(left.style, { flex: "1 1 auto", minWidth: "0" } as Partial<CSSStyleDeclaration>);
     const nameRow = document.createElement("div");
     Object.assign(nameRow.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
     // Plate icon — gives the player an immediate visual cue for what
