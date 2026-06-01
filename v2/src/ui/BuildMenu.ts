@@ -1147,6 +1147,17 @@ export class BuildMenu {
       if (needsWall && this.isOnPerimeterWall(e.x, e.z)) {
         e.rotY = this.perimeterInteriorRotY(e.x, e.z);
       }
+      // Interior partitions (int-wall, int-wall-half, int-doorway,
+      // int-window) must sit between two interior cells. Without this
+      // the player can drag a wall onto a lawn-side edge — the snap
+      // would happily land at, say, (x=5.5, z=2) (right perimeter)
+      // and place a redundant interior wall coinciding with the
+      // exterior shell. needsPerimeter / needsWall code paths above
+      // already handle the door + window categories, so we only need
+      // to gate everything ELSE.
+      if (!needsPerimeter && !needsWall && !this.isEdgeInsideBuilding(e.x, e.z)) {
+        return { quality: "blocked", x: e.x, z: e.z, rotY: e.rotY };
+      }
       // No tile-overlap check — walls don't claim a tile.
       return { quality: "ok", x: e.x, z: e.z, rotY: e.rotY };
     }
@@ -1189,6 +1200,15 @@ export class BuildMenu {
       // Enumerate every cell the cabinet would cover (1×1, 2×1, etc.)
       // and verify each one is clear or hosts a short-enough item.
       const cells = footprintCells({ x: anchorX, z: anchorZ, rotY: host.rotY }, def);
+      // Reject if any covered cell sits outside the building shell —
+      // a wall-shelf hanging out into the garden has nothing to mount
+      // over visually and lets the player extend the kitchen line past
+      // the perimeter wall.
+      for (const cell of cells) {
+        if (!this.isCellInsideBuilding(cell.x, cell.z)) {
+          return { quality: "blocked", x: anchorX, z: anchorZ, rotY: host.rotY };
+        }
+      }
       const excludeUid = this.holdingUid ?? undefined;
       for (const cell of cells) {
         const below = this.registry.findAt(cell.x, cell.z, excludeUid, this.currentFloor());
@@ -1266,7 +1286,11 @@ export class BuildMenu {
         // for a seat the click could never actually land on.
         const slotCellX = Math.round(slot.x);
         const slotCellZ = Math.round(slot.z);
-        if (!this.registry.isCellBlocked(slotCellX, slotCellZ, excludeUid, "tile", slot.floor)) {
+        // Defensive — a seat slot for a table placed near a perimeter
+        // wall can project ONE cell past the building shell. Reject
+        // that case so the chair never lands on the lawn.
+        if (this.isCellInsideBuilding(slotCellX, slotCellZ)
+            && !this.registry.isCellBlocked(slotCellX, slotCellZ, excludeUid, "tile", slot.floor)) {
           return {
             quality: "snap-perfect",
             x: slot.x, z: slot.z,
@@ -1284,13 +1308,21 @@ export class BuildMenu {
     // table inside its 0.6 tolerance and report "blocked" even though
     // the table sat in the sofa's open elbow (mask = 0).
     const layer: "tile" | "ceiling" = def.placement === "ceiling" ? "ceiling" : "tile";
+    // Bounds check applies to BOTH flat and non-flat items — a rug or
+    // a chair placed past x=5 or z=5 sits on the lawn, which is never
+    // valid even if it doesn't claim a tile in the occupancy grid.
+    const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
+    for (const cell of previewCells) {
+      if (!this.isCellInsideBuilding(cell.x, cell.z)) {
+        return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+      }
+    }
     // Flat ground decor (rugs) skips the occupancy check entirely so a
     // rug can land under any furniture or another rug. The reverse
     // direction (other items placing ON a rug) is handled in
     // FurnitureRegistry.isCellBlocked, which skips flat items in its
     // blocker scan.
     if (!def.flat) {
-      const previewCells = footprintCells({ x: cellX, z: cellZ, rotY: this.rotationY }, def);
       const floor = this.currentFloor();
       for (const cell of previewCells) {
         if (this.registry.isCellBlocked(cell.x, cell.z, excludeUid, layer, floor)) {
@@ -1447,6 +1479,46 @@ export class BuildMenu {
       x: best.x, z: best.z, rotY: best.rotY,
       hostUid: best.hostUid, slotIndex: best.slotIndex, hostTopY: best.hostTopY,
     };
+  }
+
+  /** Building interior cell bounds. The shell walls live at x = ±4.5/5.5
+   * and z = ±4.5/5.5, so the integer-tile cells INSIDE the building
+   * span x ∈ [-4..5] and z ∈ [-4..5] (10×10 = 100 cells). Anything
+   * outside that range is on the lawn / pavement / street and must
+   * never accept furniture placement. Matches Pathfinding.ts's
+   * GRID_MIN/MAX so movement and placement share one source of truth. */
+  private static readonly INTERIOR_CELL_MIN_X = -4;
+  private static readonly INTERIOR_CELL_MAX_X =  5;
+  private static readonly INTERIOR_CELL_MIN_Z = -4;
+  private static readonly INTERIOR_CELL_MAX_Z =  5;
+
+  /** True if the cell at (cellX, cellZ) sits inside the building shell.
+   * Used by every tile / ceiling / wall-shelf placement to reject
+   * footprints that extend out past the perimeter walls. */
+  private isCellInsideBuilding(cellX: number, cellZ: number): boolean {
+    return cellX >= BuildMenu.INTERIOR_CELL_MIN_X
+        && cellX <= BuildMenu.INTERIOR_CELL_MAX_X
+        && cellZ >= BuildMenu.INTERIOR_CELL_MIN_Z
+        && cellZ <= BuildMenu.INTERIOR_CELL_MAX_Z;
+  }
+
+  /** True if an edge at (edgeX, edgeZ) sits between two interior cells.
+   * Used by partition / interior-doorway / interior-window placement
+   * to stop the player extending an interior wall out into the lawn.
+   * One axis of the coord is half-integer (the perpendicular wall
+   * axis); the other is integer. Perimeter edges (one cell outside,
+   * one inside) are reserved for the front door + windows and rejected
+   * here — those items take a different code path that allows them. */
+  private isEdgeInsideBuilding(edgeX: number, edgeZ: number): boolean {
+    const xIsHalf = Math.abs(edgeX - Math.round(edgeX)) > 0.1;
+    if (xIsHalf) {
+      // Wall runs along Z, between cells at floor(edgeX) and ceil(edgeX).
+      return this.isCellInsideBuilding(Math.floor(edgeX), edgeZ)
+          && this.isCellInsideBuilding(Math.ceil(edgeX),  edgeZ);
+    }
+    // Wall runs along X, between cells at floor(edgeZ) and ceil(edgeZ).
+    return this.isCellInsideBuilding(edgeX, Math.floor(edgeZ))
+        && this.isCellInsideBuilding(edgeX, Math.ceil(edgeZ));
   }
 
   /** True if a snapped edge anchor (x, z) sits on one of the exterior
