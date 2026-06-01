@@ -1335,16 +1335,23 @@ export class Engine {
       this.refreshCityBuildings();
       // Pre-compile shaders for hidden storeys + roof so the first
       // click on Floor 1+ doesn't stall the renderer compiling fresh
-      // material programs on the reveal frame. Defer one frame so
-      // refreshCityBuildings' async shell spawning gets a chance to
-      // populate the scene; missed materials on later tier upgrades
-      // are caught on the next floor click anyway (the second reveal
-      // is already cached so it's fast). Without this the player
-      // gets a 50-300 ms freeze when they click an upper floor for
-      // the first time on a cold session.
-      window.setTimeout(() => {
+      // material programs on the reveal frame. renderer.compile() can
+      // burn 50-300 ms walking the scene graph, so we schedule it via
+      // requestIdleCallback — the browser picks a frame when the main
+      // thread is idle and the player never feels the cost. The
+      // setTimeout fallback covers Safari + old browsers without
+      // requestIdleCallback. A 2 s timeout cap makes sure the compile
+      // happens even if the page never goes idle (e.g. a frantic
+      // first session). Missed materials on later tier upgrades are
+      // caught on the next floor click anyway (second reveal is
+      // already cached so it's fast).
+      const runPrecompile = (): void => {
         this.scene.precompileShaders(this.renderer, this.camera.threeCamera);
-      }, 0);
+      };
+      type IdleCB = (cb: () => void, opts?: { timeout: number }) => number;
+      const ric = (window as unknown as { requestIdleCallback?: IdleCB }).requestIdleCallback;
+      if (typeof ric === "function") ric(runPrecompile, { timeout: 2000 });
+      else window.setTimeout(runPrecompile, 0);
       // First-visit welcome pop. Deferred to here (instead of the
       // Engine constructor) so it can't flash for a moment behind
       // the login modal on a cold load. Only first-time players
