@@ -558,16 +558,16 @@ export class StaffRouter {
    * claim the northmost). Falls back to the legacy stove pool when
    * the requested appliance is "stove" but the cook-stations
    * callback hasn't been wired — keeps old save compat alive. */
-  private claimFreeStation(appliance: string, homeFloor = 0, originPos?: THREE.Vector2): StationInfo | null {
+  private claimFreeStation(appliance: string, homeFloor = 0, originPos?: THREE.Vector2, allowCrossFloor = false): StationInfo | null {
     if (this.getCookStations) {
+      // Pass 1: same-floor preferred. The chef's home floor is the
+      // first pick so we avoid unnecessary cross-floor walks.
       let bestStation: StationInfo | null = null;
       let bestDist = Infinity;
       for (const s of this.getCookStations()) {
         if (s.provides !== appliance) continue;
         if (s.floor !== homeFloor) continue;
         if (this.busyStoveUids.has(s.uid)) continue;
-        // No origin → first-match (preserves legacy behaviour for
-        // callers that don't care about distance).
         if (!originPos) { bestStation = s; break; }
         const standPos = this.chefStandPosFor(s);
         const dist = Math.hypot(standPos.x - originPos.x, standPos.y - originPos.y);
@@ -576,6 +576,27 @@ export class StaffRouter {
       if (bestStation) {
         this.busyStoveUids.add(bestStation.uid);
         return bestStation;
+      }
+      // Pass 2: any floor — only when the caller opted in (orphan-
+      // pickup cross-floor branch). Without this, a chef on Floor 0
+      // can't reach a Floor 1 toaster even when nobody else can cook
+      // it. Cross-floor adds a ~20s round-trip walk (stair climb,
+      // cook, walk back) so we gate it behind the wait timer that
+      // the orphan branch already enforces.
+      if (allowCrossFloor) {
+        bestDist = Infinity;
+        for (const s of this.getCookStations()) {
+          if (s.provides !== appliance) continue;
+          if (this.busyStoveUids.has(s.uid)) continue;
+          if (!originPos) { bestStation = s; break; }
+          const standPos = this.chefStandPosFor(s);
+          const dist = Math.hypot(standPos.x - originPos.x, standPos.y - originPos.y);
+          if (dist < bestDist) { bestStation = s; bestDist = dist; }
+        }
+        if (bestStation) {
+          this.busyStoveUids.add(bestStation.uid);
+          return bestStation;
+        }
       }
     }
     // Last-ditch fallback for "stove" specifically — keeps the chef
@@ -1584,7 +1605,12 @@ export class StaffRouter {
         const anyOrphans = this.sortByUrgency(this.tickets.filter((t) =>
           isOrphan(t) && !this.hasIdleHomeChef(t.seatFloor, c)));
         if (anyOrphans.length > 0) {
-          this.tryClaimCookForChef(c, anyOrphans);
+          // allowCrossFloor=true so a chef on Floor 0 can claim a
+          // Floor 1 toaster when the orphan ticket needs one and no
+          // chef has a toaster on their home floor. Without this the
+          // ticket sits forever even after the orphan-pickup branch
+          // grabs it.
+          this.tryClaimCookForChef(c, anyOrphans, /* allowCrossFloor */ true);
         }
         break;
       }
@@ -1915,10 +1941,10 @@ export class StaffRouter {
    * to the next candidate instead of giving up. Without iteration,
    * one toaster-needs-no-toaster ticket at position 0 would freeze
    * the chef even when position 1's stove ticket was ready to go. */
-  private tryClaimCookForChef(c: StaffActor, candidates: readonly Ticket[]): boolean {
+  private tryClaimCookForChef(c: StaffActor, candidates: readonly Ticket[], allowCrossFloor = false): boolean {
     for (const ticket of candidates) {
       const needed = ticket.appliance || "stove";
-      const station = this.claimFreeStation(needed, c.homeFloor, c.character.groundPos);
+      const station = this.claimFreeStation(needed, c.homeFloor, c.character.groundPos, allowCrossFloor);
       let target: THREE.Vector2;
       if (station) {
         c.assignedStoveUid = station.uid;
