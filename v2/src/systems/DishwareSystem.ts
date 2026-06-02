@@ -165,6 +165,17 @@ export class DishwareSystem {
       this.log("restoreFromCloud → no cloud rows, keeping local hydrate state");
       return;
     }
+    // Safety guard for Phase H default-on: if the cloud has fewer
+    // total pieces than localStorage, treat cloud as stale and skip
+    // the wipe. Push local up via mirrorAllPools instead so the
+    // cloud converges to the (richer) local state.
+    const cloudPieces = pools.reduce((sum, p) => sum + p.clean + p.dirty, 0);
+    const localPieces = this.getOwned("plate") + this.getOwned("glass");
+    if (cloudPieces < localPieces) {
+      this.log(`restoreFromCloud: cloud has ${cloudPieces} pieces but local has ${localPieces} — keeping local (cloud likely stale). Mirroring local up.`);
+      this.mirrorAllPools();
+      return;
+    }
     this.suppressMirrorForReload = true;
     try {
       this.plates.clear();

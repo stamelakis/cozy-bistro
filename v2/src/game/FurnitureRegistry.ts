@@ -1148,6 +1148,24 @@ export class FurnitureRegistry {
     if (!this.cloud) return;
     const rows = this.cloud.listPlacedFurniture();
     if (rows.length === 0) return;
+    // Safety guard for the Phase H default-on flip: if the cloud has
+    // FEWER items than localStorage already loaded, the cloud is
+    // probably stale (e.g. user populated cloud once a long time
+    // ago, then kept building in localStorage with the flag off).
+    // Keeping the larger of the two protects against the user
+    // logging in and losing their latest layout. The mirror writes
+    // from this session will subsequently update cloud to match
+    // local, so future logins read consistent data.
+    if (rows.length < this.items.length) {
+      console.log(`[FurnitureRegistry] restoreFromCloud: cloud has ${rows.length} rows but local has ${this.items.length} — local wins (cloud likely stale). Local will push to cloud via mirror writes.`);
+      // Push every local item up to the cloud so the cloud catches
+      // up. The mirror loop normally fires per-mutation; here we
+      // fire a one-shot replay so the cloud row count converges
+      // with local before the subscription starts apply'ing live
+      // diff events.
+      for (const it of this.items) this.mirrorFurniturePlace(it);
+      return;
+    }
     // Wipe local state. Detach models from the scene; the new restore
     // call will reload each item from scratch with a fresh model
     // instance (cheaper than diffing what we'd keep).
