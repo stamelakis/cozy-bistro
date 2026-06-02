@@ -715,3 +715,78 @@ pub struct ActiveTicket {
 
     pub created_at: Timestamp,
 }
+
+/// Phase D — server-authoritative staff actor. One row per hired
+/// member currently dispatched into a restaurant — chefs, waiters,
+/// barmen, and the single errand helper. Persists across guests +
+/// tickets; deleted on hire-reverse (fire) or restaurant deletion.
+///
+/// The local StaffRouter's `StaffActor` shape has 25+ fields driven
+/// by tight per-frame logic. This server row captures the
+/// SUBSCRIBABLE subset — the state-machine label, the position the
+/// client lerps toward, the ticket / station / wash references —
+/// without re-implementing the per-frame routing. Phase D mirrors
+/// from the local sim; the full server-side state machine port lands
+/// when Phases D.4+ rewrites the routing logic in Rust.
+///
+/// member_id is the primary key because that's the stable id the
+/// client's HiredStaffMember already uses; mapping back from a
+/// server row to its local actor is a direct string match (no
+/// auto_inc correlation needed).
+#[table(name = staff_actor, public)]
+pub struct StaffActor {
+    /// Matches HiredStaffMember.id on the client. Stable across the
+    /// member's lifetime, so we use it as the PK instead of an
+    /// auto-inc id (no client_temp_id correlation needed here).
+    #[primary_key]
+    pub member_id: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+
+    /// "chef" | "waiter" | "barman" | "errand"
+    pub role: String,
+    /// Storey this actor is assigned to. Chefs only claim stations on
+    /// this floor; waiters only deliver to seats on this floor.
+    pub home_floor: u32,
+    pub home_x: f32,
+    pub home_z: f32,
+
+    /// "idle" | "movingToWork" | "working" | "returningHome"
+    pub state: String,
+    /// Per-state timer (ms). Reset on transition.
+    pub state_clock_ms: i64,
+    /// Ticket they're currently bound to, or None when idle / returning.
+    pub ticket_id: Option<u64>,
+
+    // === Body ===
+    pub x: f32,
+    pub z: f32,
+    pub floor: u32,
+    pub target_x: f32,
+    pub target_z: f32,
+    pub target_floor: u32,
+
+    // === Role-specific (empty strings / nulls when N/A) ===
+    /// Chef / barman only: uid of the stove / bar station they're
+    /// reserving. "" = unreserved.
+    pub assigned_stove_uid: String,
+    /// Chef only: most recently used stove uid, for their idle-loiter
+    /// anchor. "" = never cooked.
+    pub last_stove_uid: String,
+
+    // === Waiter wash trip (expanded from the WashTrip blob) ===
+    /// Furniture uid of the wash station the waiter is heading for,
+    /// or "" when not on a wash trip.
+    pub wash_target_uid: String,
+    /// Id of the dirty piece they're carrying, or -1 when no wash trip
+    /// OR when the trip is in the "go pick up the dirty" leg.
+    pub wash_dirty_id: i64,
+    /// "" | "pickup" | "scrub" | "drop"
+    pub wash_phase: String,
+
+    /// Waiter only: guest_id they're walking to in order to take an
+    /// order, or None when not on a take-order trip.
+    pub take_order_guest_id: Option<u64>,
+
+    pub spawned_at: Timestamp,
+}

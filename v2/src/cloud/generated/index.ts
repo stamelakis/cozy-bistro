@@ -99,6 +99,7 @@ import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
+import StaffActorRow from "./staff_actor_table";
 import VisitEventRow from "./visit_event_table";
 import WeatherStateRow from "./weather_state_table";
 
@@ -364,6 +365,20 @@ const tablesSchema = __schema({
       { name: 'save_snapshot_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
     ],
   }, SaveSnapshotRow),
+  staff_actor: __table({
+    name: 'staff_actor',
+    indexes: [
+      { accessor: 'member_id', name: 'staff_actor_member_id_idx_btree', algorithm: 'btree', columns: [
+        'memberId',
+      ] },
+      { accessor: 'restaurant_id', name: 'staff_actor_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'staff_actor_member_id_key', constraint: 'unique', columns: ['memberId'] },
+    ],
+  }, StaffActorRow),
   visit_event: __table({
     name: 'visit_event',
     indexes: [

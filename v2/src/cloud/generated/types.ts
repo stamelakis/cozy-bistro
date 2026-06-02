@@ -249,6 +249,32 @@ export const SaveSnapshot = __t.object("SaveSnapshot", {
 });
 export type SaveSnapshot = __Infer<typeof SaveSnapshot>;
 
+export const StaffActor = __t.object("StaffActor", {
+  memberId: __t.string(),
+  restaurantId: __t.u64(),
+  role: __t.string(),
+  homeFloor: __t.u32(),
+  homeX: __t.f32(),
+  homeZ: __t.f32(),
+  state: __t.string(),
+  stateClockMs: __t.i64(),
+  ticketId: __t.option(__t.u64()),
+  x: __t.f32(),
+  z: __t.f32(),
+  floor: __t.u32(),
+  targetX: __t.f32(),
+  targetZ: __t.f32(),
+  targetFloor: __t.u32(),
+  assignedStoveUid: __t.string(),
+  lastStoveUid: __t.string(),
+  washTargetUid: __t.string(),
+  washDirtyId: __t.i64(),
+  washPhase: __t.string(),
+  takeOrderGuestId: __t.option(__t.u64()),
+  spawnedAt: __t.timestamp(),
+});
+export type StaffActor = __Infer<typeof StaffActor>;
+
 export const VisitEvent = __t.object("VisitEvent", {
   id: __t.u64(),
   visitor: __t.identity(),

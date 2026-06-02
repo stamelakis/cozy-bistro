@@ -14,8 +14,9 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
     active_guest, active_ticket, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state,
+    restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, RestaurantTickSchedule, RestaurantTickState,
+    StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -159,9 +160,6 @@ pub fn restaurant_tick(
 
     // Phase C.1 — same pattern for tickets. Iterate this restaurant's
     // active_ticket rows + step each one's state-clock + cook timer.
-    // tick_ticket_state is a stub until C.2 wires real transitions
-    // (cooking → ready when state_clock_ms reaches cook_seconds_ms,
-    // delivered → delete after a small dwell).
     let ticket_ids: Vec<u64> = ctx.db
         .active_ticket()
         .iter()
@@ -172,7 +170,35 @@ pub fn restaurant_tick(
         tick_ticket_state(ctx, ticket_id, dt_ms);
     }
 
+    // Phase D.1 — same pattern for staff actors. Mirror mode (the
+    // client owns transitions and pushes them via reducers); the
+    // server's per-tick work is just position smoothing in the
+    // stub. D.4+ will add server-side state-machine logic once the
+    // pathfinder + station registry are also server-side.
+    let actor_ids: Vec<String> = ctx.db
+        .staff_actor()
+        .iter()
+        .filter(|a| a.restaurant_id == rid)
+        .map(|a| a.member_id.clone())
+        .collect();
+    for actor_id in actor_ids {
+        tick_staff_actor(ctx, &actor_id, dt_ms);
+    }
+
     Ok(())
+}
+
+/// Phase D.1 stub. Advances state_clock_ms so subscribers see the
+/// row evolve, and (when later phases land server-side movement)
+/// lerps body position toward (target_x, target_z). For D.1 we keep
+/// position client-driven via update_staff_actor_position; this stub
+/// just keeps the clock alive.
+fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
+    let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state_clock_ms: a.state_clock_ms.saturating_add(dt_ms),
+        ..a
+    });
 }
 
 /// Compute elapsed time since the previous tick for this restaurant,
