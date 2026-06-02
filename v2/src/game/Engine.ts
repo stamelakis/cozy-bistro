@@ -1058,6 +1058,30 @@ export class Engine {
         console.table(rows);
         return rows;
       },
+      /** Aggregate snapshot of every server-side table this restaurant
+       * has authored. Use to verify the write-side mirror is actually
+       * publishing data when the corresponding ?serverSim=... flag is
+       * on. Prints one console.table per system + a summary line. */
+      cloudReport: () => {
+        const guests   = this.cloud.listActiveGuests();
+        const tickets  = this.cloud.listActiveTickets();
+        const staff    = this.cloud.listStaffActors();
+        const furniture = this.cloud.listPlacedFurniture();
+        console.group("[cozyBistro.cloudReport]");
+        console.log(`Active guests:  ${guests.length} row(s)`);
+        if (guests.length)   console.table(guests);
+        console.log(`Active tickets: ${tickets.length} row(s)`);
+        if (tickets.length)  console.table(tickets);
+        console.log(`Staff actors:   ${staff.length} row(s)`);
+        if (staff.length)    console.table(staff);
+        console.log(`Placed furniture: ${furniture.length} row(s)`);
+        if (furniture.length) console.table(furniture);
+        console.log(`(Dishware pool + dishwasher batches are queryable`
+          + ` via spacetime sql; not shown here to keep the report short.)`);
+        console.log("Flags:", featureFlags);
+        console.groupEnd();
+        return { guests, tickets, staff, furniture };
+      },
       get featureFlags() { return featureFlags; },
     };
     window.addEventListener("resize", this.handleResize);
