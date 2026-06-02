@@ -452,6 +452,145 @@ export class SpacetimeClient {
     }
   }
 
+  // =====================================================================
+  //                Phase C — active_ticket helpers
+  // =====================================================================
+  // Matching wrappers for the place_order / claim_ticket / finish_cooking
+  // / pickup_ticket / deliver_ticket / cancel_ticket reducers. StaffRouter
+  // (Phase C.3b) calls these behind the isServerSim("tickets") flag to
+  // mirror its local Ticket lifecycle to the server's active_ticket
+  // table. Same pattern + correlation strategy as active_guest:
+  //   - client passes its local Ticket id as client_temp_id
+  //   - after a brief await the resolved server u64 id is stashed
+  //     on the local Ticket for subsequent transition calls.
+
+  /** Snapshot every active_ticket row belonging to my restaurant. */
+  listActiveTickets(): {
+    id: bigint;
+    clientTempId: string;
+    guestId: bigint;
+    recipeId: string;
+    state: string;
+    stateClockMs: bigint;
+    cookSeconds: bigint;
+    assignedChefId: string;
+    seatX: number;
+    seatZ: number;
+    seatFloor: number;
+    seatAtBar: boolean;
+    pickupX: number;
+    pickupZ: number;
+    pickupFloor: number;
+  }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: ReturnType<SpacetimeClient["listActiveTickets"]> = [];
+    const rid = this.restaurantId;
+    try {
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId !== rid) continue;
+        out.push({
+          id: t.id,
+          clientTempId: t.clientTempId,
+          guestId: t.guestId,
+          recipeId: t.recipeId,
+          state: t.state,
+          stateClockMs: t.stateClockMs,
+          cookSeconds: t.cookSecondsMs,
+          assignedChefId: t.assignedChefId,
+          seatX: t.seatX,
+          seatZ: t.seatZ,
+          seatFloor: t.seatFloor,
+          seatAtBar: t.seatAtBar,
+          pickupX: t.pickupX,
+          pickupZ: t.pickupZ,
+          pickupFloor: t.pickupFloor,
+        });
+      }
+    } catch { /* table not wired yet (pre-publish build) */ }
+    return out;
+  }
+
+  /** Resolve a server-side ticket id from the client's correlation id.
+   * Returns null until the row materialises after spawn (50-150 ms). */
+  findActiveTicketIdByClientTempId(clientTempId: string): bigint | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId === rid && t.clientTempId === clientTempId) {
+          return t.id;
+        }
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** Open a new ticket bound to a specific server-side guest. */
+  placeOrder(args: {
+    guestId: bigint;
+    clientTempId: string;
+    recipeId: string;
+    baseCookSecondsMs: bigint;
+    appliance: string;
+    seatX: number;
+    seatZ: number;
+    seatFloor: number;
+    seatAtBar: boolean;
+  }): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.placeOrder({
+        guestId: args.guestId,
+        clientTempId: args.clientTempId,
+        recipeId: args.recipeId,
+        baseCookSecondsMs: args.baseCookSecondsMs,
+        appliance: args.appliance,
+        seatX: args.seatX,
+        seatZ: args.seatZ,
+        seatFloor: args.seatFloor,
+        seatAtBar: args.seatAtBar,
+      });
+    } catch (e) {
+      console.warn("[Cloud] placeOrder failed:", e);
+    }
+  }
+
+  claimTicket(ticketId: bigint, chefMemberId: string, cookSecondsMs: bigint): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.claimTicket({ ticketId, chefMemberId, cookSecondsMs });
+    } catch (e) {
+      console.warn("[Cloud] claimTicket failed:", e);
+    }
+  }
+
+  finishCooking(ticketId: bigint, pickupX: number, pickupZ: number, pickupFloor: number): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.finishCooking({ ticketId, pickupX, pickupZ, pickupFloor });
+    } catch (e) {
+      console.warn("[Cloud] finishCooking failed:", e);
+    }
+  }
+
+  pickupTicket(ticketId: bigint): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.pickupTicket({ ticketId }); }
+    catch (e) { console.warn("[Cloud] pickupTicket failed:", e); }
+  }
+
+  deliverTicket(ticketId: bigint): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.deliverTicket({ ticketId }); }
+    catch (e) { console.warn("[Cloud] deliverTicket failed:", e); }
+  }
+
+  cancelTicket(ticketId: bigint): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.cancelTicket({ ticketId }); }
+    catch (e) { console.warn("[Cloud] cancelTicket failed:", e); }
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */
