@@ -856,6 +856,14 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
         // The state_clock_ms is the elapsed dwell.
         "seated" if new_clock >= SEATED_DWELL_MS => Some(("ordering".to_string(), 0)),
+        // waitingForFood → eating when ANY active_ticket bound to this
+        // guest has state "delivered" (H.8 waiter set it on arrival
+        // at the seat). The plate has landed, customer starts eating.
+        // ticket cascade handles the post-eating cleanup; for now the
+        // eating → leaving transition stays client-side (needs order
+        // count for multi-course handling).
+        "waitingForFood" if has_delivered_ticket_for_guest(ctx, g.id) =>
+            Some(("eating".to_string(), 0)),
         // wcWalking → wcSitting on arrival at the toilet.
         "wcWalking" if arrived => Some(("wcSitting".to_string(), 0)),
         // wcSitting → wcWashing after WC_USE_MS — the toilet trip.
@@ -868,10 +876,8 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         "wcWashing" if new_clock >= WC_WASH_MS => Some(("seated".to_string(), 0)),
         // No other server-driven transitions yet. ordering →
         // waitingForFood depends on waiter take-order which is
-        // client-driven; waitingForFood → eating depends on ticket
-        // delivery, mostly server-driven via H.8 but the eating
-        // state transition lives client-side until the next
-        // migration step.
+        // client-driven; eating → leaving needs order count (not
+        // currently in the cloud schema).
         _ => None,
     };
     let (final_state, final_clock) = match transition {
@@ -901,6 +907,23 @@ const SEATED_DWELL_MS: i64 = 4_000;
 const WC_USE_MS: i64 = 6_000;
 /// Time the guest dwells at the sink before returning to seat.
 const WC_WASH_MS: i64 = 3_000;
+
+/// True if the given guest has any active_ticket row in state
+/// "delivered" — i.e. a plate has just landed at their seat. H.10
+/// uses this to flip waitingForFood → eating server-side.
+///
+/// active_guest.ticket_id is also set by client mirroring (eventually)
+/// but the more reliable signal is on the ticket side: active_ticket.
+/// guest_id is set at place_order and never changes. We walk the
+/// (short) ticket list filtered by guest_id and look for "delivered".
+fn has_delivered_ticket_for_guest(ctx: &ReducerContext, guest_id: u64) -> bool {
+    for t in ctx.db.active_ticket().iter() {
+        if t.guest_id == guest_id && t.state == "delivered" {
+            return true;
+        }
+    }
+    false
+}
 
 /// Guest walking speed in m/s. Matches the client-side default that
 /// drives in-restaurant character movement. One value covers every
