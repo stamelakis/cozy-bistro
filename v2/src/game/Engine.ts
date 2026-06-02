@@ -1440,6 +1440,15 @@ export class Engine {
           this.registry.subscribeToCloudChanges();
         });
       }
+      // Phase E read-side flip — when isServerSim("dishware") is on,
+      // adopt the cloud's pool + dishwasher_batch rows as the truth.
+      // Same ordering as furniture: restore (synchronous — no GLB
+      // loads, just Map writes) then subscribe so the cache replay
+      // hits the idempotency guard in applyPoolRow.
+      if (featureFlags.dishware) {
+        this.game.dishware.restoreFromCloud();
+        this.game.dishware.subscribeToCloudChanges();
+      }
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as
       // multiplayer even before we ship per-other-restaurant

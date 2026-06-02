@@ -34,6 +34,27 @@ export interface PlacedFurnitureRow {
   slotIndex: number;
   localRotY: number;
 }
+
+/** Public shape of one dishware_pool row — one entry per (kind, tier)
+ * with current clean + dirty counts. Server compacts the row when both
+ * counts hit zero. */
+export interface DishwarePoolRow {
+  kind: "plate" | "glass";
+  tier: number;
+  clean: number;
+  dirty: number;
+}
+
+/** Public shape of one dishwasher_batch row — mid-cycle state for one
+ * placed dishwasher (keyed by furnitureUid). cycleTimeRemainingMs is
+ * the milliseconds left until the batch flushes to the clean pool. */
+export interface DishwasherBatchRow {
+  furnitureUid: string;
+  defId: string;
+  plates: number;
+  glasses: number;
+  cycleTimeRemainingMs: bigint;
+}
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
 
@@ -868,6 +889,139 @@ export class SpacetimeClient {
       });
     } catch (e) {
       console.warn("[Cloud] updateDishwarePool failed:", e);
+    }
+  }
+
+  /** Read every dishware_pool row for the current restaurant. Used by
+   * DishwareSystem.restoreFromCloud on auth. Returns an empty list if
+   * the cloud isn't wired yet. */
+  listDishwarePools(): DishwarePoolRow[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: DishwarePoolRow[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const p of this.conn.db.dishware_pool.iter()) {
+        if (p.restaurantId !== rid) continue;
+        const kind = p.kind as "plate" | "glass";
+        if (kind !== "plate" && kind !== "glass") continue;
+        out.push({ kind, tier: p.tier, clean: p.clean, dirty: p.dirty });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  /** Read every dishwasher_batch row for the current restaurant.
+   * One row per placed dishwasher currently mid-cycle. */
+  listDishwasherBatches(): DishwasherBatchRow[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: DishwasherBatchRow[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const b of this.conn.db.dishwasher_batch.iter()) {
+        if (b.restaurantId !== rid) continue;
+        out.push({
+          furnitureUid: b.furnitureUid,
+          defId: b.defId,
+          plates: b.plates,
+          glasses: b.glasses,
+          cycleTimeRemainingMs: b.cycleTimeRemainingMs,
+        });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  /** Subscribe to live dishware_pool changes for the current restaurant.
+   * DishwareSystem consumes these for cross-device sync of plate /
+   * glass counts. Same restaurant-id filter pattern as the furniture
+   * subscription — server-side cache surfaces every restaurant's rows
+   * and we only want our own.
+   *
+   * Caller is responsible for the "did I already apply this locally"
+   * check — own-write echoes flow through after our OWN reducer call. */
+  subscribeDishwarePoolChanges(handlers: {
+    onInsert?: (row: DishwarePoolRow) => void;
+    onUpdate?: (row: DishwarePoolRow) => void;
+    /** No row for delete events — server only provides the key the
+     * SDK saw, which is the composite "kind#tier#restaurant" string.
+     * We surface the kind + tier so the local pool can be cleared. */
+    onDelete?: (kind: "plate" | "glass", tier: number) => void;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type ServerRow = { key: string; restaurantId: bigint; kind: string; tier: number; clean: number; dirty: number };
+    const toClientRow = (r: ServerRow): DishwarePoolRow | null => {
+      const kind = r.kind as "plate" | "glass";
+      if (kind !== "plate" && kind !== "glass") return null;
+      return { kind, tier: r.tier, clean: r.clean, dirty: r.dirty };
+    };
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.dishware_pool.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          const r = toClientRow(row);
+          if (r) handlers.onInsert!(r);
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.dishware_pool.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          const r = toClientRow(newRow);
+          if (r) handlers.onUpdate!(r);
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.dishware_pool.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          const kind = row.kind as "plate" | "glass";
+          if (kind !== "plate" && kind !== "glass") return;
+          handlers.onDelete!(kind, row.tier);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeDishwarePoolChanges failed:", e);
+    }
+  }
+
+  /** Subscribe to live dishwasher_batch changes for the current
+   * restaurant. Lets a second device watch a wash cycle tick down
+   * even when its local sim isn't driving the clock. */
+  subscribeDishwasherBatchChanges(handlers: {
+    onInsert?: (row: DishwasherBatchRow) => void;
+    onUpdate?: (row: DishwasherBatchRow) => void;
+    onDelete?: (furnitureUid: string) => void;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type ServerRow = { furnitureUid: string; restaurantId: bigint; defId: string; plates: number; glasses: number; cycleTimeRemainingMs: bigint };
+    const toClientRow = (r: ServerRow): DishwasherBatchRow => ({
+      furnitureUid: r.furnitureUid,
+      defId: r.defId,
+      plates: r.plates,
+      glasses: r.glasses,
+      cycleTimeRemainingMs: r.cycleTimeRemainingMs,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.dishwasher_batch.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.dishwasher_batch.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.dishwasher_batch.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.furnitureUid);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeDishwasherBatchChanges failed:", e);
     }
   }
 

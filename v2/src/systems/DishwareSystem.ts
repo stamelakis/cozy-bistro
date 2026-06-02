@@ -110,6 +110,7 @@ export class DishwareSystem {
    * non-zero clean/dirty and deletes the row when both reach zero so
    * the pool table doesn't accumulate empties. */
   private mirrorPool(kind: DishKind, tier: number): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("dishware") || !this.cloud) return;
     const pool = this.poolFor(kind);
     const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
@@ -120,6 +121,7 @@ export class DishwareSystem {
    * bulk operations (hydrate from save, adminWashAll) where we'd
    * otherwise have to fire mirrorPool inside the inner loops. */
   private mirrorAllPools(): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("dishware") || !this.cloud) return;
     for (const [tier] of this.plates) this.mirrorPool("plate", tier);
     for (const [tier] of this.glasses) this.mirrorPool("glass", tier);
@@ -128,6 +130,7 @@ export class DishwareSystem {
   /** Push the current state of one dishwasher's batch to the cloud.
    * Same delete-on-zero semantics — empty cycles drop the row. */
   private mirrorBatch(uid: string): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("dishware") || !this.cloud) return;
     const batch = this.dishwasherBatches.get(uid);
     if (!batch) {
@@ -143,6 +146,142 @@ export class DishwareSystem {
       batch.glasses,
       BigInt(Math.round(batch.cycleTimeRemaining * 1000)),
     );
+  }
+
+  /** Latch set during restoreFromCloud / applyCloud* so the per-mutation
+   * mirror doesn't bounce the cloud-driven update straight back to the
+   * server. Same idea as FurnitureRegistry.suppressMirrorForReload. */
+  private suppressMirrorForReload = false;
+
+  /** Phase E read-side flip — adopt the cloud's pool + dishwasher
+   * batch rows as the truth when a second device logs in. Wipes local
+   * pools (set on cold boot to STARTER counts via hydrate) and replaces
+   * them with whatever the cloud holds. Idempotent. */
+  restoreFromCloud(): void {
+    if (!isServerSim("dishware") || !this.cloud) return;
+    const pools = this.cloud.listDishwarePools();
+    const batches = this.cloud.listDishwasherBatches();
+    if (pools.length === 0 && batches.length === 0) {
+      this.log("restoreFromCloud → no cloud rows, keeping local hydrate state");
+      return;
+    }
+    this.suppressMirrorForReload = true;
+    try {
+      this.plates.clear();
+      this.glasses.clear();
+      for (const p of pools) {
+        const target = p.kind === "plate" ? this.plates : this.glasses;
+        target.set(p.tier, { clean: p.clean, dirty: p.dirty });
+      }
+      // Lifetime totals are the SOURCE of truth for the leak-recovery
+      // logic; we rebuild from the loaded pools because we don't persist
+      // lifetime in the cloud (it's a save-file-only derived number).
+      this.lifetimeAddedPlate = this.getOwned("plate");
+      this.lifetimeAddedGlass = this.getOwned("glass");
+      this.dishwasherBatches.clear();
+      for (const b of batches) {
+        this.dishwasherBatches.set(b.furnitureUid, {
+          defId: b.defId,
+          plates: b.plates,
+          glasses: b.glasses,
+          cycleTimeRemaining: Number(b.cycleTimeRemainingMs) / 1000,
+        });
+      }
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+    this.log(`restoreFromCloud → ${pools.length} pool entries, ${batches.length} batches`);
+  }
+
+  /** Subscribe to live dishware row changes. Wired by Engine after
+   * restoreFromCloud completes. Subsequent cloud-side updates (another
+   * device's wash, a tick that flushed the batch) apply immediately so
+   * the player sees the count change without a refresh. */
+  subscribeToCloudChanges(): void {
+    if (!isServerSim("dishware") || !this.cloud) return;
+    this.cloud.subscribeDishwarePoolChanges({
+      onInsert: (row) => this.applyPoolRow(row),
+      onUpdate: (row) => this.applyPoolRow(row),
+      onDelete: (kind, tier) => this.applyPoolDelete(kind, tier),
+    });
+    this.cloud.subscribeDishwasherBatchChanges({
+      onInsert: (row) => this.applyBatchRow(row),
+      onUpdate: (row) => this.applyBatchRow(row),
+      onDelete: (uid) => this.applyBatchDelete(uid),
+    });
+  }
+
+  /** Apply one (kind, tier) pool update from the cloud. Skips when the
+   * local value already matches — own-write echo, no work to do. */
+  private applyPoolRow(row: import("../cloud/SpacetimeClient").DishwarePoolRow): void {
+    const pool = this.poolFor(row.kind);
+    const cur = pool.get(row.tier);
+    if (cur && cur.clean === row.clean && cur.dirty === row.dirty) return;
+    this.suppressMirrorForReload = true;
+    try {
+      pool.set(row.tier, { clean: row.clean, dirty: row.dirty });
+      // Lifetime self-heals — bump it up if the cloud knows about more
+      // pieces than our local total. Never shrink (lifetime is monotonic
+      // and a cloud-side state with fewer pieces than ours means the
+      // OTHER device served / leaked, not "we never owned them").
+      const owned = this.getOwned(row.kind);
+      if (row.kind === "plate" && owned > this.lifetimeAddedPlate) {
+        this.lifetimeAddedPlate = owned;
+      } else if (row.kind === "glass" && owned > this.lifetimeAddedGlass) {
+        this.lifetimeAddedGlass = owned;
+      }
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+  }
+
+  /** Apply a dishware_pool delete (server compacted a zero-count row).
+   * Local pool follows by clearing the (kind, tier) entry. */
+  private applyPoolDelete(kind: "plate" | "glass", tier: number): void {
+    const pool = this.poolFor(kind);
+    if (!pool.has(tier)) return;
+    this.suppressMirrorForReload = true;
+    try {
+      pool.delete(tier);
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+  }
+
+  /** Apply one dishwasher_batch row from the cloud. Captures the
+   * current cycle-remaining straight from the server — local cycle
+   * decay in update() will continue from this snapshot. */
+  private applyBatchRow(row: import("../cloud/SpacetimeClient").DishwasherBatchRow): void {
+    const cur = this.dishwasherBatches.get(row.furnitureUid);
+    const newRemaining = Number(row.cycleTimeRemainingMs) / 1000;
+    if (cur && cur.plates === row.plates && cur.glasses === row.glasses
+        && Math.abs(cur.cycleTimeRemaining - newRemaining) < 0.05
+        && cur.defId === row.defId) {
+      return;
+    }
+    this.suppressMirrorForReload = true;
+    try {
+      this.dishwasherBatches.set(row.furnitureUid, {
+        defId: row.defId,
+        plates: row.plates,
+        glasses: row.glasses,
+        cycleTimeRemaining: newRemaining,
+      });
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+  }
+
+  /** Apply a dishwasher_batch delete (cycle finished server-side or
+   * dishwasher was sold). */
+  private applyBatchDelete(uid: string): void {
+    if (!this.dishwasherBatches.has(uid)) return;
+    this.suppressMirrorForReload = true;
+    try {
+      this.dishwasherBatches.delete(uid);
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
   }
 
   /** Internal logging helper — keeps the log() callsites tidy and
