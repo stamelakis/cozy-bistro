@@ -305,6 +305,7 @@ export const StaffActor = __t.object("StaffActor", {
   washDirtyId: __t.i64(),
   washPhase: __t.string(),
   takeOrderGuestId: __t.option(__t.u64()),
+  deliveryPhase: __t.option(__t.string()),
   spawnedAt: __t.timestamp(),
 });
 export type StaffActor = __Infer<typeof StaffActor>;

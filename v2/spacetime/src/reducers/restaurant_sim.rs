@@ -1093,6 +1093,7 @@ pub fn update_guest_position(
     target_x: f32,
     target_z: f32,
     target_floor: u32,
+    state: String,
 ) -> Result<(), String> {
     let g = ctx.db.active_guest().id().find(guest_id)
         .ok_or_else(|| format!("Guest {guest_id} not found"))?;
@@ -1101,8 +1102,22 @@ pub fn update_guest_position(
     if r.owner != ctx.sender {
         return Err("Only the owner can move their guests".into());
     }
+    // Reset state_clock when the state label actually flips so the
+    // server tick's countdown (eating timer, ordering wait) starts
+    // from zero on the transition rather than carrying the prior
+    // state's elapsed time forward.
+    let state_changed = g.state != state;
+    let new_clock = if state_changed { 0 } else { g.state_clock_ms };
+    // Bar transition to "leaving" via this reducer — that one stays
+    // owned by mark_guest_leaving so the LEAVING_DWELL countdown is
+    // canonical. Any client trying to mirror "leaving" here gets
+    // bounced to the existing reducer's semantics by silently
+    // skipping the state write.
+    let new_state = if state == "leaving" { g.state.clone() } else { state };
     ctx.db.active_guest().id().update(ActiveGuest {
         x, z, floor, target_x, target_z, target_floor,
+        state: new_state,
+        state_clock_ms: new_clock,
         ..g
     });
     Ok(())

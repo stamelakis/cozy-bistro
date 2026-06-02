@@ -1907,6 +1907,7 @@ export class GuestSpawner {
         g.target.x,
         g.target.y,
         g.currentFloor,
+        g.state,
       );
       if (changed) g.lastMirrorFingerprint = fingerprint;
     }

@@ -18,4 +18,5 @@ export default {
   targetX: __t.f32(),
   targetZ: __t.f32(),
   targetFloor: __t.u32(),
+  state: __t.string(),
 };

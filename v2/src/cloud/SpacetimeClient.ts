@@ -539,11 +539,12 @@ export class SpacetimeClient {
    * caller. Targets feed any future "render this guest from another
    * client's view" path (P4 visit mode + co-owner mirroring). */
   updateGuestPosition(guestId: bigint, x: number, z: number, floor: number,
-                      targetX: number, targetZ: number, targetFloor: number): void {
+                      targetX: number, targetZ: number, targetFloor: number,
+                      state: string): void {
     if (!this.conn) return;
     try {
       this.conn.reducers.updateGuestPosition({
-        guestId, x, z, floor, targetX, targetZ, targetFloor,
+        guestId, x, z, floor, targetX, targetZ, targetFloor, state,
       });
     } catch (e) {
       console.warn("[Cloud] updateGuestPosition failed:", e);
