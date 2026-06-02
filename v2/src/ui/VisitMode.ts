@@ -316,18 +316,18 @@ export class VisitMode {
     // Hide the placeholder shell so the loaded interior is visible
     // (otherwise the Paris-style facade walls occlude the furniture).
     this.hideVisitedShell(plot);
+    // Live subscriptions BEFORE the static interior render. The
+    // subscription's cache replay fires onInsert events synchronously
+    // for every existing row, so by the time loadVisitedInterior's
+    // async spawnVisitorActivity reaches the ghost-staff spawn,
+    // this.liveStaffCharacters is already populated (if any data
+    // exists). spawnVisitorActivity then SKIPS the ghost staff spawn
+    // — no doubling.
+    this.startLiveStaffSubscription(plot);
+    this.startLiveTicketSubscription(plot);
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
-    // Live staff render — subscribe to the host's staff_actor table
-    // and animate every actor in real time. Bails when the cloud
-    // isn't wired (e.g. local dev tests) or when the host's
-    // restaurant row isn't in the subscription cache yet. The static
-    // ghost-activity spawn in loadVisitedInterior still runs as a
-    // fallback so the scene reads as populated either way.
-    this.startLiveStaffSubscription(plot);
-    // Live ticket counts overlay in the kitchen-activity chip.
-    this.startLiveTicketSubscription(plot);
     // P5.8 — let the host's client know they have a visitor. The
     // host then surfaces a toast via its visit_event subscription.
     this.recordVisit?.(plot.ownerHex);
@@ -731,15 +731,25 @@ export class VisitMode {
     };
     const counterCursor: Record<string, number> = {};
     const staffPromises: Promise<void>[] = [];
-    for (const role of roles) {
-      const pool = stationByRole[role] ?? counters;
-      let slot: PlacementSlot | undefined;
-      if (pool.length > 0) {
-        const idx = (counterCursor[role] ?? 0) % pool.length;
-        counterCursor[role] = idx + 1;
-        slot = pool[idx];
+    // Skip ghost-staff spawn if the host has live data — the
+    // subscription has already populated liveStaffCharacters with the
+    // server's actual chefs / waiters / barmen (which actually walk).
+    // Without this check we'd double up: one static ghost AND one
+    // live actor for every staff member.
+    const hasLiveStaff = this.liveStaffCharacters.size > 0;
+    if (hasLiveStaff) {
+      console.log(`[Visit] static ghost-staff spawn skipped — ${this.liveStaffCharacters.size} live actor(s) already rendering`);
+    } else {
+      for (const role of roles) {
+        const pool = stationByRole[role] ?? counters;
+        let slot: PlacementSlot | undefined;
+        if (pool.length > 0) {
+          const idx = (counterCursor[role] ?? 0) % pool.length;
+          counterCursor[role] = idx + 1;
+          slot = pool[idx];
+        }
+        staffPromises.push(this.spawnGhostCharacter(role, slot, "idle", targetPlotId, /* isStaff */ true));
       }
-      staffPromises.push(this.spawnGhostCharacter(role, slot, "idle", targetPlotId, /* isStaff */ true));
     }
 
     // === Spawn the seated ghost customers ===

@@ -551,6 +551,15 @@ export class DishwareSystem {
    * via washOne() the moment the waiter finishes scrubbing — those
    * never touch this tick. */
   update(dt: number): void {
+    // Phase H cutover — when isServerSim("dishware") is on, the server
+    // owns the cycle countdown (H.4 added tick_dishwasher_batch to
+    // restaurant_tick). Skip the local countdown entirely so the
+    // cloud row's cycle_time_remaining_ms is the only source of truth.
+    // The subscription's applyBatchRow updates our local dishwasherBatches
+    // map to match each server tick, including the auto-flush on
+    // expiry — so the UI / sound effects driven off
+    // getDishwasherBatch keep working without local arithmetic.
+    if (isServerSim("dishware")) return;
     // Throttle the per-tick batch-time stream to ~1 Hz. Pool updates
     // already fire on every washOne call below, but the batch's
     // cycle_time_remaining_ms otherwise wouldn't update server-side
