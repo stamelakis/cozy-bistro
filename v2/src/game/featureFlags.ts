@@ -137,6 +137,49 @@ function computeFlags(): ServerSimFlags {
  * to the same shape. */
 export const featureFlags: Readonly<ServerSimFlags> = Object.freeze(computeFlags());
 
+/** Subsystems with incomplete server-side cutover. Turning these on
+ * via `?serverSim=...` routes the local sim into stub paths that may
+ * not behave correctly until the matching server-side state machines
+ * land. Listed here so warnUnsafeFlags() can surface a console
+ * warning at startup — saves the next debugger 30 minutes of
+ * "why aren't customers spawning?".
+ *
+ * Cutover-ready subsystems (safe to flag on):
+ *   - furniture: full read + write + live-diff (commit 6552b31 etc.)
+ *   - dishware: full read + write + live-diff + server-side cycle (H.4)
+ *
+ * Partial-cutover (UNSAFE — known regressions):
+ *   - guests: GuestSpawner.update() short-circuits when on; server-side
+ *             auto-spawn from pedestrian arrivals not implemented.
+ *             Customer spawning STOPS.
+ *   - tickets: H.6 auto-claim ships but pairs with H.7 release; flag-on
+ *              should be tested against published module first.
+ *   - staff: position step + state flips ship, but client doesn't yet
+ *            adopt server position (still races with local mirror).
+ */
+const UNSAFE_FLAGS: ReadonlySet<keyof ServerSimFlags> = new Set([
+  "guests", "tickets", "staff",
+]);
+
+/** Loud console warning at module import when an unsafe flag is on.
+ * Better than the user spending an hour debugging "no customers". */
+function warnUnsafeFlags(flags: ServerSimFlags): void {
+  const on: string[] = [];
+  for (const k of UNSAFE_FLAGS) {
+    if (flags[k]) on.push(k);
+  }
+  if (on.length === 0) return;
+  try {
+    console.warn(
+      `[featureFlags] UNSAFE serverSim flag(s) on: ${on.join(", ")}.\n`
+      + "These subsystems have INCOMPLETE Phase H cutover and may break the local game.\n"
+      + "Known regression for 'guests': customer spawning stops.\n"
+      + "Use ?serverSim=off in the URL to recover.",
+    );
+  } catch { /* console unavailable */ }
+}
+warnUnsafeFlags(featureFlags);
+
 /** Convenience predicate. Equivalent to `featureFlags[subsystem]`
  * but reads better at call sites:
  *
