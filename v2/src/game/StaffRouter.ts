@@ -1079,7 +1079,7 @@ export class StaffRouter {
     // every same-floor chef is loaded past HIGH_DEMAND_BACKLOG.
     const assignedChefId = (appliance === "bar")
       ? null
-      : this.pickChefForTicket(seatFloor);
+      : this.pickChefForTicket(seatFloor, appliance);
     const ticket: Ticket = {
       id, guestId, recipeId, state: "queued",
       seatPos: seatPos.clone(), clock: 0,
@@ -1201,10 +1201,31 @@ export class StaffRouter {
    *   5. Returns null when there are zero chefs hired (ticket
    *      remains unassigned; chef idle handler accepts null-
    *      assigned tickets as a legacy fallback). */
-  private pickChefForTicket(seatFloor: number): string | null {
+  private pickChefForTicket(seatFloor: number, appliance: string = "stove"): string | null {
     if (this.chefs.length === 0) return null;
     const HIGH_DEMAND_BACKLOG = 4;
-    const sameFloor = this.chefs.filter((c) => c.homeFloor === seatFloor);
+    // Filter chefs to those who can ACTUALLY claim a station for this
+    // recipe — i.e. a station of `appliance` exists on their home
+    // floor. claimFreeStation enforces `s.floor === homeFloor`, so a
+    // chef on floor 0 assigned to a recipe whose only matching station
+    // is on floor 1 would sit forever waiting to claim. Pre-flight
+    // that filter here so the assignment can't deadlock.
+    //
+    // No getCookStations callback (legacy boot path) → fall back to
+    // the original "any chef" behaviour. Same for appliance values
+    // we can't resolve.
+    const cookableChefIds = this.cookableChefIdsFor(appliance);
+    const eligible = cookableChefIds === null
+      ? this.chefs
+      : this.chefs.filter((c) => cookableChefIds.has(c.memberId));
+    if (eligible.length === 0) {
+      // No chef can reach this appliance — leave the ticket unassigned
+      // so the orphan-pickup fallback (chef idle handler) considers
+      // it. Better than locking the ticket to a chef who can't cook
+      // it.
+      return null;
+    }
+    const sameFloor = eligible.filter((c) => c.homeFloor === seatFloor);
     if (sameFloor.length > 0) {
       // Same-floor chefs sorted by current backlog, shortest first.
       const sorted = sameFloor
@@ -1214,19 +1235,45 @@ export class StaffRouter {
       if (shortestOnFloor.n < HIGH_DEMAND_BACKLOG) {
         return shortestOnFloor.id;
       }
-      // High demand on this floor — spill to whichever chef anywhere
-      // has the lightest queue right now.
-      const allSorted = this.chefs
+      // High demand on this floor — spill to whichever (eligible)
+      // chef anywhere has the lightest queue right now.
+      const allSorted = eligible
         .map((c) => ({ id: c.memberId, n: this.getChefBacklog(c.memberId) }))
         .sort((a, b) => a.n - b.n);
       return allSorted[0].id;
     }
-    // No chef on the seat's floor at all — assign to whoever's
-    // lightest overall.
-    const allSorted = this.chefs
+    // No eligible chef on the seat's floor — assign to whoever's
+    // lightest overall (still restricted to chefs who CAN claim the
+    // appliance).
+    const allSorted = eligible
       .map((c) => ({ id: c.memberId, n: this.getChefBacklog(c.memberId) }))
       .sort((a, b) => a.n - b.n);
     return allSorted[0].id;
+  }
+
+  /** Set of chef memberIds whose home floor has at least one station
+   * providing the given appliance. Returns null when getCookStations
+   * isn't wired (legacy / test boot) so callers can fall back to
+   * the unfiltered chef list. */
+  private cookableChefIdsFor(appliance: string): Set<string> | null {
+    if (!this.getCookStations) return null;
+    const stations = this.getCookStations();
+    // Set of floors that have any matching station.
+    const floorsWithApp = new Set<number>();
+    for (const s of stations) {
+      if (s.provides === appliance) floorsWithApp.add(s.floor);
+    }
+    // Legacy fallback: "stove" appliance also matches getStoves() —
+    // claimFreeStation has the same fallback at line 583.
+    if (appliance === "stove" && this.getStoves) {
+      for (const s of this.getStoves()) floorsWithApp.add(s.floor);
+    }
+    if (floorsWithApp.size === 0) return new Set(); // nobody can cook
+    const out = new Set<string>();
+    for (const c of this.chefs) {
+      if (floorsWithApp.has(c.homeFloor)) out.add(c.memberId);
+    }
+    return out;
   }
 
   /** GuestSpawner calls this when a guest leaves (angry / table sold /
@@ -1446,6 +1493,19 @@ export class StaffRouter {
   private recoverStalledTickets(dt: number): void {
     for (const t of this.tickets) {
       t.clock += dt;
+      // Queued for >10s with no chef having picked it up — the
+      // pre-assigned chef likely can't reach a matching station
+      // (cross-floor appliance gap). Null out assignedChefId so the
+      // orphan-pickup fallback in the chef idle handler considers it
+      // for cross-floor pickup after CROSS_FLOOR_WAIT_SECONDS.
+      // Bar tickets are skipped — they intentionally have null
+      // assignedChefId and route via the barman pool.
+      if (t.state === "queued" && t.appliance !== "bar"
+          && t.assignedChefId != null && t.clock > 10) {
+        console.warn(`[Router] ticket ${t.id} queued >10s under chef ${t.assignedChefId} — unassigning so orphan pickup kicks in`);
+        t.assignedChefId = null;
+        t.clock = 0;
+      }
       // Cooking should finish within cookSeconds + ~5s slop. If it's been
       // way longer (no chef holding the assignment), boot it back to queued.
       if (t.state === "cooking" && t.clock > t.cookSeconds + 12) {
