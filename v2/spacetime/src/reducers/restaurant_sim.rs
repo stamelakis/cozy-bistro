@@ -445,6 +445,42 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         return;
     }
 
+    // Phase H.5 — overflow-chair waiting timeout. Guests parked on a
+    // yellow waiting chair use a SEPARATE clock from the patience
+    // timer (which represents in-seat impatience). waiting_timeout_ms
+    // counts down only while state == "waiting"; when it hits zero
+    // the guest leaves in disgust. Same client-side transition the
+    // local GuestSpawner runs today; mirroring it here keeps the
+    // two devices in sync when the player switches mid-meal.
+    if g.state == "waiting" && g.waiting_timeout_ms > 0 {
+        let new_wait = (g.waiting_timeout_ms - dt_ms).max(0);
+        if new_wait == 0 {
+            ctx.db.active_guest().id().update(ActiveGuest {
+                state: "leaving".to_string(),
+                state_clock_ms: 0,
+                patience_ms: 0,
+                waiting_timeout_ms: 0,
+                ..g
+            });
+            log::info!("guest {} gave up at overflow chair — transitioning to leaving", g.id);
+            return;
+        }
+        // Mid-wait: just decrement the waiting clock alongside the
+        // standard clock advance. Flow through to the position step
+        // below in case the client moved the guest's body separately
+        // (e.g. they shuffled to a different overflow chair).
+        let (new_x, new_z) = (g.x, g.z); // anchored to the chair
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state_clock_ms: new_clock,
+            patience_ms: new_patience,
+            waiting_timeout_ms: new_wait,
+            x: new_x,
+            z: new_z,
+            ..g
+        });
+        return;
+    }
+
     // Phase H.2 — server steps the guest's body toward target_x/z
     // at GUEST_SPEED. Same model as tick_staff_actor: snap on arrival,
     // cap step to max_step to avoid overshoot. Skipped for "seated" /
