@@ -872,9 +872,17 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // target_x/z would just match position. Cheap to do unconditionally
     // (dist == 0 → no move), so we keep the branch tight by checking
     // the obvious anchored states once.
+    // Audit fix — "waiting" removed from the anchored list. The
+    // client's local sim may shuffle a waiting guest between
+    // overflow chairs (relocateGuestToBetterChair etc.); without
+    // the position step running, server's row stayed pinned to
+    // the FIRST chair's coords. The H.5 waiting_timeout_ms branch
+    // above already early-returns for "waiting" guests, so this
+    // branch only fires for in-restaurant states that aren't yet
+    // waiting — position step is a no-op anyway when target ≈ x.
     let anchored = matches!(
         g.state.as_str(),
-        "seated" | "ordering" | "eating" | "wcSitting" | "wcWashing" | "waiting"
+        "seated" | "ordering" | "eating" | "wcSitting" | "wcWashing"
     );
     let (new_x, new_z) = if anchored {
         (g.x, g.z)
@@ -1079,11 +1087,26 @@ fn is_seat_providing_def(def_id: &str) -> bool {
 fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32, f32, u32)> {
     let rid = g.restaurant_id;
     // Build set of taken seat uids (other guests' seat_uid).
-    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut taken_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Audit fix (B.5) — also collect other guests' walking targets.
+    // The client's local seat pick sets target_x/z to the chair but
+    // doesn't mirror seat_uid (no field in update_guest_position).
+    // Without this, the server would re-assign a chair the local sim
+    // already chose. We treat any (target_x, target_z) within
+    // SEAT_OCCUPANCY_RADIUS_SQ of a chair as "taken too".
+    const SEAT_OCCUPANCY_RADIUS_SQ: f32 = 0.25; // 0.5m radius
+    let mut taken_targets: Vec<(f32, f32)> = Vec::new();
     for other in ctx.db.active_guest().iter() {
         if other.restaurant_id != rid { continue; }
         if other.id == g.id { continue; }
-        if !other.seat_uid.is_empty() { taken.insert(other.seat_uid.clone()); }
+        if !other.seat_uid.is_empty() {
+            taken_uids.insert(other.seat_uid.clone());
+        } else if other.state == "walkingIn" {
+            // Walking-in guest with no explicit seat assignment
+            // (probably picked locally; cloud row's seat_uid lags
+            // until/unless we add it to the mirror reducer).
+            taken_targets.push((other.target_x, other.target_z));
+        }
     }
     // Find the closest free table.
     let mut best: Option<(String, f32, f32, u32)> = None;
@@ -1091,7 +1114,15 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
     for f in ctx.db.placed_furniture().iter() {
         if f.restaurant_id != rid { continue; }
         if !is_seat_providing_def(&f.def_id) { continue; }
-        if taken.contains(&f.uid) { continue; }
+        if taken_uids.contains(&f.uid) { continue; }
+        // Skip chairs another guest is walking toward (catches the
+        // local-pick race).
+        let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
+            let dx = f.x - tx;
+            let dz = f.z - tz;
+            dx * dx + dz * dz < SEAT_OCCUPANCY_RADIUS_SQ
+        });
+        if occupied_by_target { continue; }
         let dx = f.x - g.x;
         let dz = f.z - g.z;
         let dist = dx * dx + dz * dz;
@@ -1393,12 +1424,19 @@ pub fn update_guest_position(
     // state's elapsed time forward.
     let state_changed = g.state != state;
     let new_clock = if state_changed { 0 } else { g.state_clock_ms };
-    // Bar transition to "leaving" via this reducer — that one stays
-    // owned by mark_guest_leaving so the LEAVING_DWELL countdown is
-    // canonical. Any client trying to mirror "leaving" here gets
-    // bounced to the existing reducer's semantics by silently
-    // skipping the state write.
-    let new_state = if state == "leaving" { g.state.clone() } else { state };
+    // Audit fix (B.3) — "leaving" writes via this reducer USED to
+    // be silently blocked under the theory that mark_guest_leaving
+    // owned the LEAVING_DWELL countdown. But client paths that flip
+    // state to "leaving" without going through mark_guest_leaving
+    // (the markLostAndExit / "all courses done" branches) relied on
+    // the position mirror to push the transition. Blocking it left
+    // those guests permanently stuck in their pre-leaving state on
+    // the cloud row. We now allow the write — when the state truly
+    // changes to "leaving", new_clock=0 above gives us a fresh
+    // LEAVING_DWELL countdown anyway. Subsequent same-state mirror
+    // writes preserve the clock (state_changed=false), so duplicate
+    // pushes don't reset the despawn timer.
+    let new_state = state;
     ctx.db.active_guest().id().update(ActiveGuest {
         x, z, floor, target_x, target_z, target_floor,
         state: new_state,
