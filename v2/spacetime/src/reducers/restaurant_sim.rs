@@ -187,7 +187,115 @@ pub fn restaurant_tick(
         tick_staff_actor(ctx, &actor_id, dt_ms);
     }
 
+    // Phase H.4 — dishwasher batch cycle countdown. Each loaded
+    // dishwasher's cycle clock ticks down by dt_ms; when it hits
+    // zero the loaded plates / glasses flush back to the dirty pool
+    // as CLEAN, and the batch row is deleted. Client mirror beats
+    // the server to this transition every frame in mirror mode, but
+    // once the dishware sim cuts over the server alone owns the
+    // cycle — no client-side update() needed for that subsystem.
+    let batch_uids: Vec<String> = ctx.db
+        .dishwasher_batch()
+        .iter()
+        .filter(|b| b.restaurant_id == rid)
+        .map(|b| b.furniture_uid.clone())
+        .collect();
+    for uid in batch_uids {
+        tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
+    }
+
     Ok(())
+}
+
+/// Phase H.4 — step one dishwasher batch's cycle clock. When the
+/// clock reaches zero, flush every loaded plate / glass back to the
+/// CLEAN pool at the highest-tier slot that currently holds dirty
+/// stock (or tier 1 as a last resort, matching the client's washOne
+/// fallback for an empty dirty pool). Deletes the batch row when
+/// flushed so an empty dishwasher doesn't keep ticking.
+fn tick_dishwasher_batch(ctx: &ReducerContext, furniture_uid: &str, restaurant_id: u64, dt_ms: i64) {
+    let Some(b) = ctx.db.dishwasher_batch().furniture_uid().find(furniture_uid.to_string()) else { return };
+    let new_remaining = b.cycle_time_remaining_ms.saturating_sub(dt_ms);
+    if new_remaining > 0 {
+        // Mid-cycle — just update the clock.
+        ctx.db.dishwasher_batch().furniture_uid().update(DishwasherBatch {
+            cycle_time_remaining_ms: new_remaining,
+            ..b
+        });
+        return;
+    }
+    // Cycle finished — convert each loaded piece to a clean pool entry,
+    // then delete the batch row.
+    for _ in 0..b.plates { flush_one_dish(ctx, restaurant_id, "plate"); }
+    for _ in 0..b.glasses { flush_one_dish(ctx, restaurant_id, "glass"); }
+    ctx.db.dishwasher_batch().furniture_uid().delete(furniture_uid.to_string());
+    log::info!(
+        "dishwasher {} cycle finished: flushed {} plate(s) + {} glass(es) to clean pool",
+        furniture_uid, b.plates, b.glasses,
+    );
+}
+
+/// Convert one dirty piece of the given kind into a clean piece in
+/// the same restaurant. Walks the pool rows newest-tier-first
+/// looking for a dirty count > 0; on hit, decrements dirty +
+/// increments clean. Falls back to tier 1 clean +1 (no dirty
+/// adjustment) if every pool has dirty == 0 — matches the client's
+/// washOne behaviour when the dirty pool is empty (a paranoid
+/// "make a clean plate from thin air" path that keeps inventory
+/// consistent across edge cases). Mirrors update_dishware_pool's
+/// delete-on-zero semantics: we never insert "0/0" rows, but the
+/// flush always produces at least 1 clean so a row exists post-call.
+fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str) {
+    // Find the highest-tier row with dirty > 0.
+    let mut candidate: Option<(String, u32, u32)> = None; // (key, tier, clean)
+    let mut best_tier = 0u32;
+    for p in ctx.db.dishware_pool().iter() {
+        if p.restaurant_id != restaurant_id { continue; }
+        if p.kind != kind { continue; }
+        if p.dirty == 0 { continue; }
+        if p.tier >= best_tier {
+            best_tier = p.tier;
+            candidate = Some((p.key.clone(), p.tier, p.clean));
+        }
+    }
+    if let Some((key, tier, clean)) = candidate {
+        // Need fresh row for the update since the local fields can drift.
+        let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) else { return };
+        let new_clean = clean.saturating_add(1);
+        let new_dirty = p.dirty.saturating_sub(1);
+        if new_clean == 0 && new_dirty == 0 {
+            ctx.db.dishware_pool().key().delete(key);
+        } else {
+            ctx.db.dishware_pool().key().update(DishwarePool {
+                clean: new_clean, dirty: new_dirty, ..p
+            });
+        }
+        log::info!(
+            "flush_one_dish: {} tier {} → clean +1 (now {}), dirty -1 (now {})",
+            kind, tier, new_clean, new_dirty,
+        );
+        return;
+    }
+    // No dirty inventory — bump tier 1 clean as a safety net.
+    let key = pool_key(restaurant_id, kind, 1);
+    if let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) {
+        ctx.db.dishware_pool().key().update(DishwarePool {
+            clean: p.clean.saturating_add(1), ..p
+        });
+    } else {
+        ctx.db.dishware_pool().insert(DishwarePool {
+            key,
+            restaurant_id,
+            kind: kind.to_string(),
+            tier: 1,
+            clean: 1,
+            dirty: 0,
+        });
+    }
+    log::info!(
+        "flush_one_dish: no dirty {} found for restaurant {}, materialised one clean at tier 1",
+        kind, restaurant_id,
+    );
 }
 
 /// Per-role base walking speed in meters per second. Mirrors the
