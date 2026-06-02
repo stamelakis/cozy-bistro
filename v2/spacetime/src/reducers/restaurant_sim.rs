@@ -190,14 +190,65 @@ pub fn restaurant_tick(
     Ok(())
 }
 
-/// Phase D.1 stub. Advances state_clock_ms so subscribers see the
-/// row evolve, and (when later phases land server-side movement)
-/// lerps body position toward (target_x, target_z). For D.1 we keep
-/// position client-driven via update_staff_actor_position; this stub
-/// just keeps the clock alive.
+/// Per-role base walking speed in meters per second. Mirrors the
+/// client-side CHEF_SPEED / WAITER_SPEED constants so cloud-driven
+/// movement looks identical to the legacy client sim. Pulled into a
+/// helper so future per-actor speed bonuses (training, perks) have
+/// one place to override.
+fn speed_for_role(role: &str) -> f32 {
+    match role {
+        // Waiters do all the long walks (table runs, take-order); they
+        // need to feel fast so service rate keeps up.
+        "waiter" => 2.4,
+        // Chef + barman shuffle around their stations — slow on purpose.
+        _ => 1.2,
+    }
+}
+
+/// Phase H.1 — server-side body step. Each tick advances (x, z)
+/// toward (target_x, target_z) at the role's walking speed, capped so
+/// we never overshoot the target. When the actor arrives (distance <
+/// SNAP_EPS meters) we snap position to target so the next tick's
+/// distance is 0 and the actor reads as "at rest" to the client.
+///
+/// Position only — the actor's STATE (idle / movingToWork / working /
+/// returningHome) is still client-driven via update_staff_actor. The
+/// client decides when to set a new target; the server is now in
+/// charge of actually walking there.
+///
+/// Run regardless of feature flag — when the client is the only
+/// writer the cloud row's x/z gets clobbered by the next ~1 Hz
+/// streamActorsToCloud call anyway, so this is a no-op in mirror
+/// mode. When isServerSim("staff") flips on for the owner (Phase
+/// H.3), the client stops mirroring position and the server takes
+/// full ownership.
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
+    /// Distance below which we snap to target instead of stepping. One
+    /// pathfinder grid cell is 1 m; an eighth of that reads as "arrived"
+    /// without floating-point chatter.
+    const SNAP_EPS: f32 = 0.125;
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    let dt_sec = (dt_ms as f32) / 1000.0;
+    let max_step = speed_for_role(&a.role) * dt_sec;
+    let dx = a.target_x - a.x;
+    let dz = a.target_z - a.z;
+    let dist = (dx * dx + dz * dz).sqrt();
+    let (new_x, new_z) = if dist <= SNAP_EPS {
+        // Already at target — keep the row identical except for the
+        // state-clock bump so the update still emits.
+        (a.target_x, a.target_z)
+    } else if dist <= max_step {
+        // Last step of this leg — land exactly on target.
+        (a.target_x, a.target_z)
+    } else {
+        // Normalised step toward target. Avoid `f32::clamp` here so the
+        // arithmetic stays in registers + readable.
+        let scale = max_step / dist;
+        (a.x + dx * scale, a.z + dz * scale)
+    };
     ctx.db.staff_actor().member_id().update(StaffActor {
+        x: new_x,
+        z: new_z,
         state_clock_ms: a.state_clock_ms.saturating_add(dt_ms),
         ..a
     });
