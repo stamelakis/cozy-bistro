@@ -56,8 +56,10 @@ import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import MarkGuestLeavingReducer from "./mark_guest_leaving_reducer";
+import MoveFurnitureReducer from "./move_furniture_reducer";
 import PickupTicketReducer from "./pickup_ticket_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
+import PlaceFurnitureReducer from "./place_furniture_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
@@ -66,6 +68,7 @@ import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
+import SellFurnitureReducer from "./sell_furniture_reducer";
 import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
@@ -97,6 +100,7 @@ import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
 import PedestrianRow from "./pedestrian_table";
+import PlacedFurnitureRow from "./placed_furniture_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RestaurantRow from "./restaurant_table";
@@ -310,6 +314,20 @@ const tablesSchema = __schema({
       { name: 'pedestrian_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, PedestrianRow),
+  placed_furniture: __table({
+    name: 'placed_furniture',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'placed_furniture_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+      { accessor: 'uid', name: 'placed_furniture_uid_idx_btree', algorithm: 'btree', columns: [
+        'uid',
+      ] },
+    ],
+    constraints: [
+      { name: 'placed_furniture_uid_key', constraint: 'unique', columns: ['uid'] },
+    ],
+  }, PlacedFurnitureRow),
   player: __table({
     name: 'player',
     indexes: [
@@ -436,8 +454,10 @@ const reducersSchema = __reducers(
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("mark_guest_leaving", MarkGuestLeavingReducer),
+  __reducerSchema("move_furniture", MoveFurnitureReducer),
   __reducerSchema("pickup_ticket", PickupTicketReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
+  __reducerSchema("place_furniture", PlaceFurnitureReducer),
   __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
@@ -446,6 +466,7 @@ const reducersSchema = __reducers(
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
+  __reducerSchema("sell_furniture", SellFurnitureReducer),
   __reducerSchema("send_chat_global", SendChatGlobalReducer),
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),

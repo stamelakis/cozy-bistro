@@ -712,6 +712,88 @@ export class SpacetimeClient {
     catch (e) { console.warn("[Cloud] unregisterStaffActor failed:", e); }
   }
 
+  // =====================================================================
+  //                Phase F — placed_furniture helpers
+  // =====================================================================
+  // Three thin wrappers around place / move / sell. The client owns
+  // uids directly (no client_temp_id correlation needed) — same
+  // pattern as staff_actor.member_id.
+
+  listPlacedFurniture(): {
+    uid: string;
+    defId: string;
+    x: number;
+    z: number;
+    rotY: number;
+    floor: number;
+    parentUid: string;
+    slotIndex: number;
+    localRotY: number;
+  }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: ReturnType<SpacetimeClient["listPlacedFurniture"]> = [];
+    const rid = this.restaurantId;
+    try {
+      for (const f of this.conn.db.placed_furniture.iter()) {
+        if (f.restaurantId !== rid) continue;
+        out.push({
+          uid: f.uid,
+          defId: f.defId,
+          x: f.x, z: f.z, rotY: f.rotY, floor: f.floor,
+          parentUid: f.parentUid,
+          slotIndex: f.slotIndex,
+          localRotY: f.localRotY,
+        });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  placeFurniture(args: {
+    uid: string;
+    defId: string;
+    x: number; z: number; rotY: number; floor: number;
+    parentUid: string;
+    slotIndex: number;
+    localRotY: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.placeFurniture({
+        restaurantId: this.restaurantId,
+        uid: args.uid,
+        defId: args.defId,
+        x: args.x, z: args.z, rotY: args.rotY, floor: args.floor,
+        parentUid: args.parentUid,
+        slotIndex: args.slotIndex,
+        localRotY: args.localRotY,
+      });
+    } catch (e) {
+      console.warn("[Cloud] placeFurniture failed:", e);
+    }
+  }
+
+  moveFurniture(args: {
+    uid: string;
+    x: number; z: number; rotY: number; floor: number;
+    parentUid: string;
+    slotIndex: number;
+    localRotY: number;
+  }): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.moveFurniture(args);
+    } catch (e) {
+      console.warn("[Cloud] moveFurniture failed:", e);
+    }
+  }
+
+  sellFurniture(uid: string): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.sellFurniture({ uid }); }
+    catch (e) { console.warn("[Cloud] sellFurniture failed:", e); }
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */

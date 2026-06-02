@@ -194,6 +194,20 @@ export const PedestrianTickSchedule = __t.object("PedestrianTickSchedule", {
 });
 export type PedestrianTickSchedule = __Infer<typeof PedestrianTickSchedule>;
 
+export const PlacedFurniture = __t.object("PlacedFurniture", {
+  uid: __t.string(),
+  restaurantId: __t.u64(),
+  defId: __t.string(),
+  x: __t.f32(),
+  z: __t.f32(),
+  rotY: __t.f32(),
+  floor: __t.u32(),
+  parentUid: __t.string(),
+  slotIndex: __t.i32(),
+  localRotY: __t.f32(),
+});
+export type PlacedFurniture = __Infer<typeof PlacedFurniture>;
+
 export const Player = __t.object("Player", {
   identity: __t.identity(),
   name: __t.string(),

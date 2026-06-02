@@ -13,10 +13,10 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
-    active_guest, active_ticket, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, staff_actor,
-    ActiveGuest, ActiveTicket, RestaurantTickSchedule, RestaurantTickState,
-    StaffActor,
+    active_guest, active_ticket, placed_furniture, restaurant,
+    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
+    ActiveGuest, ActiveTicket, PlacedFurniture, RestaurantTickSchedule,
+    RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -844,5 +844,98 @@ pub fn unregister_staff_actor(ctx: &ReducerContext, member_id: String) -> Result
         return Err("Only the owner can unregister their staff".into());
     }
     ctx.db.staff_actor().member_id().delete(member_id);
+    Ok(())
+}
+
+// =============================================================
+//                        Phase F reducers
+// =============================================================
+// Placed furniture lifecycle. No tick logic — furniture has no
+// per-frame state, so we never enter `restaurant_tick` for it.
+// Three operations: place, move, sell. The client owns uid
+// generation so mirror correlation is trivial.
+
+/// Place a new furniture item into a restaurant. Re-placing the
+/// same uid is treated as a "move" — useful when a save reload
+/// re-inserts the row with a fresh seat / surface assignment.
+#[reducer]
+pub fn place_furniture(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    uid: String,
+    def_id: String,
+    x: f32,
+    z: f32,
+    rot_y: f32,
+    floor: u32,
+    parent_uid: String,
+    slot_index: i32,
+    local_rot_y: f32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can place furniture".into());
+    }
+    let row = PlacedFurniture {
+        uid: uid.clone(),
+        restaurant_id,
+        def_id,
+        x, z, rot_y, floor,
+        parent_uid, slot_index, local_rot_y,
+    };
+    if ctx.db.placed_furniture().uid().find(uid).is_some() {
+        ctx.db.placed_furniture().uid().update(row);
+    } else {
+        ctx.db.placed_furniture().insert(row);
+    }
+    Ok(())
+}
+
+/// Move (or otherwise mutate) an existing placement. Same field
+/// list as place — caller passes the full row each time. Auth
+/// re-checks because the client should never trust its own
+/// restaurant_id cache for someone else's item.
+#[reducer]
+pub fn move_furniture(
+    ctx: &ReducerContext,
+    uid: String,
+    x: f32,
+    z: f32,
+    rot_y: f32,
+    floor: u32,
+    parent_uid: String,
+    slot_index: i32,
+    local_rot_y: f32,
+) -> Result<(), String> {
+    let existing = ctx.db.placed_furniture().uid().find(uid.clone())
+        .ok_or_else(|| format!("Furniture {uid} not found"))?;
+    let r = ctx.db.restaurant().id().find(existing.restaurant_id)
+        .ok_or_else(|| "Item's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can move their furniture".into());
+    }
+    ctx.db.placed_furniture().uid().update(PlacedFurniture {
+        x, z, rot_y, floor,
+        parent_uid, slot_index, local_rot_y,
+        ..existing
+    });
+    Ok(())
+}
+
+/// Delete a placement. Idempotent — missing item is a no-op so
+/// fast double-clicks on the sell button don't error.
+#[reducer]
+pub fn sell_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
+    let existing = match ctx.db.placed_furniture().uid().find(uid.clone()) {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+    let r = ctx.db.restaurant().id().find(existing.restaurant_id)
+        .ok_or_else(|| "Item's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can sell their furniture".into());
+    }
+    ctx.db.placed_furniture().uid().delete(uid);
     Ok(())
 }

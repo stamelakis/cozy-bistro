@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef, scaledCost, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
 import { fitFurniture, placementY, snapToAdjacentWall } from "../assets/fitFurniture";
+import { isServerSim } from "./featureFlags";
 
 /**
  * Tracks furniture the player has placed at runtime. Owns the model
@@ -127,6 +128,12 @@ export class FurnitureRegistry {
    * renders at world Y = placementY + 2 × storeyHeight. */
   private readonly storeyHeight: number;
 
+  /** Phase F — Engine wires this so the registry's place/move/sell
+   * paths can mirror the corresponding placed_furniture cloud reducer
+   * when isServerSim("furniture") is on. Null in tests / pre-cloud
+   * boot. Helpers below bail silently when unset. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+
   constructor(
     scene: THREE.Scene,
     loader: ModelLoader,
@@ -187,7 +194,50 @@ export class FurnitureRegistry {
       }
     }
     this.items.push(item);
+    this.mirrorFurniturePlace(item);
     return uid;
+  }
+
+  // ======================================================================
+  //                Phase F.3 — server-mirror helpers
+  // ======================================================================
+  // When isServerSim("furniture") is on, every place/move/sell on the
+  // local registry also fires the matching reducer so the cloud's
+  // placed_furniture table tracks the same layout. All three helpers
+  // bail silently when the flag is off OR cloud isn't wired.
+
+  private mirrorFurniturePlace(item: PlacedFurnitureItem): void {
+    if (!isServerSim("furniture") || !this.cloud) return;
+    this.cloud.placeFurniture({
+      uid: item.uid,
+      defId: item.defId,
+      x: item.x,
+      z: item.z,
+      rotY: item.rotY,
+      floor: item.floor,
+      parentUid: item.parentUid ?? "",
+      slotIndex: item.slotIndex ?? -1,
+      localRotY: item.localRotY ?? 0,
+    });
+  }
+
+  private mirrorFurnitureMove(item: PlacedFurnitureItem): void {
+    if (!isServerSim("furniture") || !this.cloud) return;
+    this.cloud.moveFurniture({
+      uid: item.uid,
+      x: item.x,
+      z: item.z,
+      rotY: item.rotY,
+      floor: item.floor,
+      parentUid: item.parentUid ?? "",
+      slotIndex: item.slotIndex ?? -1,
+      localRotY: item.localRotY ?? 0,
+    });
+  }
+
+  private mirrorFurnitureSell(uid: string): void {
+    if (!isServerSim("furniture") || !this.cloud) return;
+    this.cloud.sellFurniture(uid);
   }
 
   /** Indices into a host's surfaceSlots that are currently occupied by
@@ -360,6 +410,7 @@ export class FurnitureRegistry {
     item.model.removeFromParent();
     this.items.splice(idx, 1);
     this.surfaceExtentCache.delete(item.uid);
+    this.mirrorFurnitureSell(item.uid);
     const def = getFurnitureDef(item.defId);
     if (!def) return { defId: item.defId, refund: 0 };
     // Mirror of 2D's value formula, scaled down to roughly 50%-of-cost-plus-stats.
@@ -393,12 +444,14 @@ export class FurnitureRegistry {
     item.model.position.y += dy;
     const newParent = this.mountFor(newFloor);
     if (item.model.parent !== newParent) newParent.add(item.model);
+    this.mirrorFurnitureMove(item);
     // Cascade to surface children — keep them riding along.
     for (const child of this.items) {
       if (child.parentUid !== uid) continue;
       child.floor = newFloor;
       child.model.position.y += dy;
       if (child.model.parent !== newParent) newParent.add(child.model);
+      this.mirrorFurnitureMove(child);
     }
     return true;
   }
@@ -425,6 +478,7 @@ export class FurnitureRegistry {
     // If this item is a host (has children with parentUid === uid),
     // ride its surface-placed items along to the new pose.
     this.reseatSurfaceChildren(uid);
+    this.mirrorFurnitureMove(item);
     return true;
   }
 
@@ -468,6 +522,11 @@ export class FurnitureRegistry {
     // cascaded surface children so the map doesn't grow unbounded.
     this.surfaceExtentCache.delete(uid);
     for (const child of children) this.surfaceExtentCache.delete(child.uid);
+    // Mirror the cascade-sell — every child uid first (so the order
+    // matches the local splice order), then the host. cancel/idempotent
+    // semantics server-side handle re-runs safely.
+    for (const child of children) this.mirrorFurnitureSell(child.uid);
+    this.mirrorFurnitureSell(uid);
     const def = getFurnitureDef(item.defId);
     return { defId: item.defId, refund: (def ? scaledCost(def) : 0) + totalChildRefund };
   }
@@ -508,6 +567,7 @@ export class FurnitureRegistry {
     item.model.position.set(x, item.model.position.y, z);
     // Cascade surface children to the new host pose.
     this.reseatSurfaceChildren(uid);
+    this.mirrorFurnitureMove(item);
     return true;
   }
 

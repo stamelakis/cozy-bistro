@@ -591,6 +591,10 @@ export class Engine {
       (floor) => this.scene.getStoreyMount(floor),
       WorldScene.getStoreyHeight(),
     );
+    // Phase F.3 — when isServerSim("furniture") is on, every
+    // place/move/sell on the local registry also fires the matching
+    // placed_furniture reducer. No-op when flag off.
+    this.registry.cloud = this.cloud;
     // Pathfinder reads the live registry each query — we don't have to
     // rebuild a grid when furniture is placed/moved/sold. PlacedFurnitureItem
     // has defId/x/z plus extras, so it satisfies the PathfinderItem shape

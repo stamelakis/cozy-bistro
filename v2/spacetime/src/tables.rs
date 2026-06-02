@@ -790,3 +790,44 @@ pub struct StaffActor {
 
     pub spawned_at: Timestamp,
 }
+
+/// Phase F — server-authoritative placed furniture. One row per item
+/// the player has built into a restaurant. Persists indefinitely
+/// (until sold) — no per-tick state, so no tick dispatch needed.
+///
+/// uid is the primary key directly: the client generates a stable
+/// id at placement time (UUID-ish string) and uses it for every
+/// subsequent reference. Same pattern as staff_actor.member_id —
+/// no client_temp_id correlation needed because the client owns
+/// the id from the moment it fires `place_furniture`.
+///
+/// parent_uid + slot_index + local_rot_y track the surface-host
+/// link for items that sit ON other items (toasters on counters,
+/// books on shelves). Empty string / -1 when free-standing.
+#[table(name = placed_furniture, public)]
+pub struct PlacedFurniture {
+    /// Client-supplied unique id. Stable across the placement's
+    /// lifetime; the client uses the same uid in localStorage saves.
+    #[primary_key]
+    pub uid: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+
+    /// Catalog id from data/furnitureCatalog.ts (e.g. "counter",
+    /// "stove", "int-wall").
+    pub def_id: String,
+    pub x: f32,
+    pub z: f32,
+    pub rot_y: f32,
+    pub floor: u32,
+
+    /// uid of the host item this one sits ON, or "" when free-
+    /// standing. Surface placement (toasters, lamps) only.
+    pub parent_uid: String,
+    /// Slot index within the host's surfaceSlots array, or -1 when
+    /// not on a surface.
+    pub slot_index: i32,
+    /// Local rotation offset relative to the host's facing. Lets a
+    /// player press R on a toaster to turn it 90° on the counter.
+    pub local_rot_y: f32,
+}
