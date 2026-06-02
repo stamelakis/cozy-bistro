@@ -723,9 +723,10 @@ export class SpacetimeClient {
     onInsert?: (row: StaffActorRow) => void;
     onUpdate?: (row: StaffActorRow) => void;
     onDelete?: (memberId: string) => void;
-  }): void {
-    if (!this.conn || this.restaurantId == null) return;
-    const rid = this.restaurantId;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
     type ServerRow = {
       memberId: string; restaurantId: bigint; role: string; state: string;
       x: number; z: number; floor: number;
@@ -774,9 +775,10 @@ export class SpacetimeClient {
     onInsert?: (row: ActiveTicketRow) => void;
     onUpdate?: (row: ActiveTicketRow) => void;
     onDelete?: (id: bigint) => void;
-  }): void {
-    if (!this.conn || this.restaurantId == null) return;
-    const rid = this.restaurantId;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
     type ServerRow = {
       id: bigint; restaurantId: bigint; clientTempId: string; guestId: bigint;
       recipeId: string; state: string; stateClockMs: bigint;
@@ -974,9 +976,10 @@ export class SpacetimeClient {
     onInsert?: (row: PlacedFurnitureRow) => void;
     onUpdate?: (row: PlacedFurnitureRow) => void;
     onDelete?: (uid: string) => void;
-  }): void {
-    if (!this.conn || this.restaurantId == null) return;
-    const rid = this.restaurantId;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
     type ServerRow = { uid: string; defId: string; restaurantId: bigint;
         x: number; z: number; rotY: number; floor: number;
         parentUid: string; slotIndex: number; localRotY: number };
@@ -1081,9 +1084,10 @@ export class SpacetimeClient {
      * SDK saw, which is the composite "kind#tier#restaurant" string.
      * We surface the kind + tier so the local pool can be cleared. */
     onDelete?: (kind: "plate" | "glass", tier: number) => void;
-  }): void {
-    if (!this.conn || this.restaurantId == null) return;
-    const rid = this.restaurantId;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
     type ServerRow = { key: string; restaurantId: bigint; kind: string; tier: number; clean: number; dirty: number };
     const toClientRow = (r: ServerRow): DishwarePoolRow | null => {
       const kind = r.kind as "plate" | "glass";
@@ -1125,9 +1129,10 @@ export class SpacetimeClient {
     onInsert?: (row: DishwasherBatchRow) => void;
     onUpdate?: (row: DishwasherBatchRow) => void;
     onDelete?: (furnitureUid: string) => void;
-  }): void {
-    if (!this.conn || this.restaurantId == null) return;
-    const rid = this.restaurantId;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
     type ServerRow = { furnitureUid: string; restaurantId: bigint; defId: string; plates: number; glasses: number; cycleTimeRemainingMs: bigint };
     const toClientRow = (r: ServerRow): DishwasherBatchRow => ({
       furnitureUid: r.furnitureUid,
