@@ -839,14 +839,68 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         step_toward_target(g.x, g.z, g.target_x, g.target_z, GUEST_SPEED, dt_ms)
     };
 
+    // Phase H.9 — server-side guest state-machine transitions. Each
+    // branch returns the new (state, state_clock) pair. None means
+    // "no transition, advance the clock". Mirror-mode safety: every
+    // branch rechecks the precondition; if the client already
+    // transitioned via update_guest_position the cloud's state will
+    // already be the next one and the branch skips.
+    let arrived = (g.target_x - new_x).abs() < 0.01
+        && (g.target_z - new_z).abs() < 0.01;
+    let transition: Option<(String, i64)> = match g.state.as_str() {
+        // walkingIn → seated when the guest reaches their seat. The
+        // client has already populated target_x/z = seat position via
+        // update_guest_position; arrival = state flip.
+        "walkingIn" if arrived => Some(("seated".to_string(), 0)),
+        // seated → ordering after a brief dwell (the guest reads the
+        // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
+        // The state_clock_ms is the elapsed dwell.
+        "seated" if new_clock >= SEATED_DWELL_MS => Some(("ordering".to_string(), 0)),
+        // wcWalking → wcSitting on arrival at the toilet.
+        "wcWalking" if arrived => Some(("wcSitting".to_string(), 0)),
+        // wcSitting → wcWashing after WC_USE_MS — the toilet trip.
+        "wcSitting" if new_clock >= WC_USE_MS => Some(("wcWashing".to_string(), 0)),
+        // wcWashing → seated after WC_WASH_MS — back to the seat.
+        // (Walking back is a separate state in the client; here we
+        // collapse it into a direct return since the client's local
+        // sim handles the walk model. Server-side this means
+        // wcWashing → seated and the client picks up rendering.)
+        "wcWashing" if new_clock >= WC_WASH_MS => Some(("seated".to_string(), 0)),
+        // No other server-driven transitions yet. ordering →
+        // waitingForFood depends on waiter take-order which is
+        // client-driven; waitingForFood → eating depends on ticket
+        // delivery, mostly server-driven via H.8 but the eating
+        // state transition lives client-side until the next
+        // migration step.
+        _ => None,
+    };
+    let (final_state, final_clock) = match transition {
+        Some((new_state, new_clk)) => {
+            log::info!("guest {} {} → {}", g.id, g.state, new_state);
+            (new_state, new_clk)
+        }
+        None => (g.state.clone(), new_clock),
+    };
+
     ctx.db.active_guest().id().update(ActiveGuest {
-        state_clock_ms: new_clock,
+        state: final_state,
+        state_clock_ms: final_clock,
         patience_ms: new_patience,
         x: new_x,
         z: new_z,
         ..g
     });
 }
+
+/// Time the guest dwells in "seated" before transitioning to
+/// "ordering". Matches the client's TIME_TO_ORDER constant
+/// (config/customer-config.ts). 4 seconds = the customer pretends to
+/// read the menu before flagging the waiter.
+const SEATED_DWELL_MS: i64 = 4_000;
+/// Time the guest dwells on the toilet before washing hands.
+const WC_USE_MS: i64 = 6_000;
+/// Time the guest dwells at the sink before returning to seat.
+const WC_WASH_MS: i64 = 3_000;
 
 /// Guest walking speed in m/s. Matches the client-side default that
 /// drives in-restaurant character movement. One value covers every
