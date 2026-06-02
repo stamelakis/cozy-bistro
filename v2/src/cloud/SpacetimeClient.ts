@@ -2018,6 +2018,33 @@ export class SpacetimeClient {
     this.conn.reducers.unfriend({ other });
   }
 
+  /** All staff_actor rows in the local subscription cache, regardless
+   * of which restaurant they belong to. Used by VisitMode + dev
+   * diagnostics that need to inspect another host's staff state.
+   * Returns the row with its restaurantId tagged so the caller can
+   * filter for the host they care about. */
+  listAllStaffActors(): { restaurantId: bigint; row: StaffActorRow }[] {
+    if (!this.conn) return [];
+    const out: { restaurantId: bigint; row: StaffActorRow }[] = [];
+    try {
+      for (const a of this.conn.db.staff_actor.iter()) {
+        out.push({
+          restaurantId: a.restaurantId,
+          row: {
+            memberId: a.memberId, role: a.role, state: a.state,
+            x: a.x, z: a.z, floor: a.floor,
+            targetX: a.targetX, targetZ: a.targetZ, targetFloor: a.targetFloor,
+            ticketId: a.ticketId ?? null,
+            assignedStoveUid: a.assignedStoveUid,
+            washTargetUid: a.washTargetUid,
+            washPhase: a.washPhase,
+          },
+        });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
   /** Find the restaurant_id that belongs to the given owner identity
    * (passed as a hex string). Used by VisitMode to wire live-state
    * subscriptions on the visited host's rid. Returns null when no

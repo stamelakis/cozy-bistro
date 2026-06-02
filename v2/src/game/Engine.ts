@@ -1069,6 +1069,50 @@ export class Engine {
        * has authored. Use to verify the write-side mirror is actually
        * publishing data when the corresponding ?serverSim=... flag is
        * on. Prints one console.table per system + a summary line. */
+      /** Inspect what live data exists on the server for a host the
+       * player can visit. Pass `ownerHex` (the hex identity of the
+       * other player) OR call with no args to print a summary across
+       * every restaurant the visitor's cache knows about. Use this
+       * when visit mode shows "no movement" to figure out whether
+       * the host actually has staff_actor rows populated. */
+      visitDebug: (ownerHex?: string) => {
+        console.group("[cozyBistro.visitDebug]");
+        const allStaff = this.cloud.listAllStaffActors();
+        if (allStaff.length === 0) {
+          console.log("⚠ No staff_actor rows in subscription cache for ANY restaurant.");
+          console.log("  → No host has populated staff_actor yet. Needs ?serverSim=staff on the host's session.");
+          console.groupEnd();
+          return { staff: [] };
+        }
+        // Group by restaurant_id.
+        const byRid = new Map<string, typeof allStaff>();
+        for (const s of allStaff) {
+          const key = String(s.restaurantId);
+          const arr = byRid.get(key) ?? [];
+          arr.push(s);
+          byRid.set(key, arr);
+        }
+        console.log(`Staff actors across ${byRid.size} restaurant(s):`);
+        for (const [rid, rows] of byRid) {
+          console.log(`  restaurant ${rid}: ${rows.length} actor(s)`);
+        }
+        if (ownerHex) {
+          const targetRid = this.cloud.findRestaurantIdByOwnerHex(ownerHex);
+          if (targetRid == null) {
+            console.log(`⚠ No restaurant found for owner ${ownerHex}. Either the cache hasn't primed or the player has no restaurant.`);
+          } else {
+            const hostRows = allStaff.filter((s) => s.restaurantId === targetRid);
+            console.log(`Host ${ownerHex} → restaurant ${targetRid}:`);
+            if (hostRows.length === 0) {
+              console.log("  ⚠ No staff_actor rows for this host. They need ?serverSim=staff enabled in their session.");
+            } else {
+              console.table(hostRows.map((s) => s.row));
+            }
+          }
+        }
+        console.groupEnd();
+        return { staff: allStaff };
+      },
       cloudReport: () => {
         const guests   = this.cloud.listActiveGuests();
         const tickets  = this.cloud.listActiveTickets();

@@ -364,18 +364,26 @@ export class VisitMode {
    * liveStaffCharacters map is cleared on every enter() so old
    * entries from the previous visit don't bleed through. */
   private startLiveStaffSubscription(plot: VisitablePlot): void {
-    if (!this.cloud) return;
+    if (!this.cloud) {
+      console.log("[Visit] live staff: cloud not wired — skipping");
+      return;
+    }
     const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
     if (hostRid == null) {
       // Restaurant row hasn't been delivered yet — fall back to the
       // static ghost activity. Could retry on a short timer, but the
       // first visit usually fires after the cache is primed.
+      console.log(`[Visit] live staff: no restaurant_id for owner ${plot.ownerHex} (cache not primed?) — falling back to ghosts`);
       return;
     }
+    console.log(`[Visit] live staff: subscribing to restaurant ${hostRid}`);
     const targetPlotId = plot.id;
+    let firedCount = 0;
     this.cloud.subscribeStaffActorChanges({
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        firedCount += 1;
+        console.log(`[Visit] live staff onInsert #${firedCount}: member=${row.memberId} role=${row.role} state=${row.state} pos=(${row.x.toFixed(1)}, ${row.z.toFixed(1)})`);
         void this.spawnLiveStaffActor(row, targetPlotId);
       },
       onUpdate: (row) => {
@@ -384,9 +392,21 @@ export class VisitMode {
       },
       onDelete: (memberId) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        console.log(`[Visit] live staff onDelete: member=${memberId}`);
         this.removeLiveStaffActor(memberId);
       },
     }, hostRid);
+    // After a moment, surface whether ANY inserts fired. If zero,
+    // it means the host has no staff_actor rows in the cache — they
+    // need to enable ?serverSim=staff and play for a bit.
+    setTimeout(() => {
+      if (this.activePlot?.id !== targetPlotId) return;
+      if (firedCount === 0) {
+        console.log(`[Visit] live staff: no inserts fired for restaurant ${hostRid} after 2s. The host needs to play with ?serverSim=staff enabled to populate staff_actor rows.`);
+      } else {
+        console.log(`[Visit] live staff: ${firedCount} actor(s) spawned for restaurant ${hostRid}`);
+      }
+    }, 2000);
   }
 
   /** Spawn one character model for a server staff_actor row. memberId
