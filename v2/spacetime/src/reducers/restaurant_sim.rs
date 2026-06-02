@@ -288,13 +288,22 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
         return;
     }
 
-    // Cooking tickets advance their state-clock; C.2 will compare
-    // against cook_seconds_ms here and flip to "ready" when due.
-    // For C.1 just keep the clock ticking so subscribers see the
-    // row evolve.
+    // Phase C.2 — cooking tickets advance their state-clock and
+    // auto-transition to "ready" when the clock reaches the chef-
+    // adjusted cook_seconds_ms. The client picks up the "ready"
+    // event via subscription and walks a waiter to pickup_x/z.
     if t.state == "cooking" {
+        let advanced = t.state_clock_ms.saturating_add(dt_ms);
+        if advanced >= t.cook_seconds_ms && t.cook_seconds_ms > 0 {
+            ctx.db.active_ticket().id().update(ActiveTicket {
+                state: "ready".to_string(),
+                state_clock_ms: 0,
+                ..t
+            });
+            return;
+        }
         ctx.db.active_ticket().id().update(ActiveTicket {
-            state_clock_ms: t.state_clock_ms.saturating_add(dt_ms),
+            state_clock_ms: advanced,
             ..t
         });
         return;
@@ -468,5 +477,196 @@ pub fn update_guest_position(
         x, z, floor, target_x, target_z, target_floor,
         ..g
     });
+    Ok(())
+}
+
+// =============================================================
+//                        Phase C reducers
+// =============================================================
+// Client-driven ticket lifecycle. Cook-timer auto-transition (from
+// "cooking" → "ready") happens server-side in tick_ticket_state;
+// every other state flip is initiated by the local StaffRouter
+// because it owns the chef + waiter routing (until Phase D moves
+// that server-side too).
+
+/// Helper: load a ticket and verify the caller owns its restaurant.
+fn require_ticket_owner(
+    ctx: &ReducerContext,
+    ticket_id: u64,
+) -> Result<ActiveTicket, String> {
+    let t = ctx.db.active_ticket().id().find(ticket_id)
+        .ok_or_else(|| format!("Ticket {ticket_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(t.restaurant_id)
+        .ok_or_else(|| "Ticket's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can manage their tickets".into());
+    }
+    Ok(t)
+}
+
+/// A guest just placed their order — create one ticket per course.
+/// The client supplies the recipe + cook-time base (read from its
+/// catalog), the seat position (denormalised so the kitchen can
+/// route without joining), and a client_temp_id for correlation
+/// back to its local Ticket id.
+#[reducer]
+pub fn place_order(
+    ctx: &ReducerContext,
+    guest_id: u64,
+    client_temp_id: String,
+    recipe_id: String,
+    base_cook_seconds_ms: i64,
+    appliance: String,
+    seat_x: f32,
+    seat_z: f32,
+    seat_floor: u32,
+    seat_at_bar: bool,
+) -> Result<(), String> {
+    let g = ctx.db.active_guest().id().find(guest_id)
+        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can place orders".into());
+    }
+    ctx.db.active_ticket().insert(ActiveTicket {
+        id: 0, // auto_inc
+        restaurant_id: g.restaurant_id,
+        guest_id,
+        client_temp_id,
+        recipe_id,
+        state: "queued".to_string(),
+        state_clock_ms: 0,
+        base_cook_seconds_ms,
+        // cook_seconds_ms is set on claim with chef multiplier; 0 here.
+        cook_seconds_ms: 0,
+        appliance,
+        assigned_chef_id: String::new(),
+        seat_x, seat_z, seat_floor, seat_at_bar,
+        pickup_x: 0.0,
+        pickup_z: 0.0,
+        pickup_floor: 0,
+        created_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// A chef just picked this ticket off the queue. Records who's
+/// cooking + the chef-specific cook duration, flips state to
+/// "cooking", and resets the state-machine clock so tick_ticket_state
+/// can start counting toward cook_seconds_ms. Idempotent: claiming
+/// an already-claimed ticket by the SAME chef is a no-op; by a
+/// different chef rejects.
+#[reducer]
+pub fn claim_ticket(
+    ctx: &ReducerContext,
+    ticket_id: u64,
+    chef_member_id: String,
+    cook_seconds_ms: i64,
+) -> Result<(), String> {
+    let t = require_ticket_owner(ctx, ticket_id)?;
+    if t.state == "cooking" {
+        if t.assigned_chef_id == chef_member_id {
+            return Ok(()); // idempotent re-claim
+        }
+        return Err(format!(
+            "Ticket already claimed by {}", t.assigned_chef_id
+        ));
+    }
+    if t.state != "queued" {
+        return Err(format!("Ticket is in state {}, can't claim", t.state));
+    }
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state: "cooking".to_string(),
+        state_clock_ms: 0,
+        cook_seconds_ms,
+        assigned_chef_id: chef_member_id,
+        ..t
+    });
+    Ok(())
+}
+
+/// Chef finished cooking — explicit override of the auto-transition
+/// (which fires on its own when cook_seconds_ms elapse). The client
+/// calls this if its local timer fires first OR to set the pickup
+/// position before the waiter scan looks for a "ready" plate. State
+/// flips to "ready", pickup coords stored for the waiter.
+#[reducer]
+pub fn finish_cooking(
+    ctx: &ReducerContext,
+    ticket_id: u64,
+    pickup_x: f32,
+    pickup_z: f32,
+    pickup_floor: u32,
+) -> Result<(), String> {
+    let t = require_ticket_owner(ctx, ticket_id)?;
+    if t.state == "ready" || t.state == "delivering" || t.state == "delivered" {
+        return Ok(()); // idempotent past the cooking step
+    }
+    if t.state != "cooking" {
+        return Err(format!("Ticket is in state {}, can't finish cooking", t.state));
+    }
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state: "ready".to_string(),
+        state_clock_ms: 0,
+        pickup_x, pickup_z, pickup_floor,
+        ..t
+    });
+    Ok(())
+}
+
+/// Waiter has picked the plate off the pickup spot and is en route
+/// to the seat. "ready" → "delivering". From this point the plate
+/// is in transit; the server doesn't simulate the walk (Phase D
+/// will, when staff actors move server-side).
+#[reducer]
+pub fn pickup_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String> {
+    let t = require_ticket_owner(ctx, ticket_id)?;
+    if t.state == "delivering" || t.state == "delivered" {
+        return Ok(());
+    }
+    if t.state != "ready" {
+        return Err(format!("Ticket is in state {}, can't pick up", t.state));
+    }
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state: "delivering".to_string(),
+        state_clock_ms: 0,
+        ..t
+    });
+    Ok(())
+}
+
+/// Plate landed at the guest. "delivering" → "delivered". The tick
+/// loop's dwell timer then deletes the row after DELIVERED_DWELL_MS
+/// so a final subscription event ships before the row vanishes.
+#[reducer]
+pub fn deliver_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String> {
+    let t = require_ticket_owner(ctx, ticket_id)?;
+    if t.state == "delivered" {
+        return Ok(());
+    }
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state: "delivered".to_string(),
+        state_clock_ms: 0,
+        ..t
+    });
+    Ok(())
+}
+
+/// Drop a ticket outright (e.g. the guest left before their food
+/// arrived). Bypasses the dwell — the chef shouldn't keep an
+/// orphan order on screen. Idempotent: missing ticket is a no-op.
+#[reducer]
+pub fn cancel_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String> {
+    let t = match ctx.db.active_ticket().id().find(ticket_id) {
+        Some(t) => t,
+        None => return Ok(()), // already gone
+    };
+    let r = ctx.db.restaurant().id().find(t.restaurant_id)
+        .ok_or_else(|| "Ticket's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can cancel their tickets".into());
+    }
+    ctx.db.active_ticket().id().delete(t.id);
     Ok(())
 }

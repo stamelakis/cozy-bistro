@@ -45,14 +45,20 @@ import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
+import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
+import ClaimTicketReducer from "./claim_ticket_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
+import DeliverTicketReducer from "./deliver_ticket_reducer";
+import FinishCookingReducer from "./finish_cooking_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
 import MarkGuestLeavingReducer from "./mark_guest_leaving_reducer";
+import PickupTicketReducer from "./pickup_ticket_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
+import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
@@ -401,14 +407,20 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
+  __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
+  __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
+  __reducerSchema("deliver_ticket", DeliverTicketReducer),
+  __reducerSchema("finish_cooking", FinishCookingReducer),
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
   __reducerSchema("mark_guest_leaving", MarkGuestLeavingReducer),
+  __reducerSchema("pickup_ticket", PickupTicketReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
+  __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
