@@ -223,29 +223,12 @@ fn speed_for_role(role: &str) -> f32 {
 /// H.3), the client stops mirroring position and the server takes
 /// full ownership.
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
-    /// Distance below which we snap to target instead of stepping. One
-    /// pathfinder grid cell is 1 m; an eighth of that reads as "arrived"
-    /// without floating-point chatter.
-    const SNAP_EPS: f32 = 0.125;
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
-    let dt_sec = (dt_ms as f32) / 1000.0;
-    let max_step = speed_for_role(&a.role) * dt_sec;
-    let dx = a.target_x - a.x;
-    let dz = a.target_z - a.z;
-    let dist = (dx * dx + dz * dz).sqrt();
-    let (new_x, new_z) = if dist <= SNAP_EPS {
-        // Already at target — keep the row identical except for the
-        // state-clock bump so the update still emits.
-        (a.target_x, a.target_z)
-    } else if dist <= max_step {
-        // Last step of this leg — land exactly on target.
-        (a.target_x, a.target_z)
-    } else {
-        // Normalised step toward target. Avoid `f32::clamp` here so the
-        // arithmetic stays in registers + readable.
-        let scale = max_step / dist;
-        (a.x + dx * scale, a.z + dz * scale)
-    };
+    let (new_x, new_z) = step_toward_target(
+        a.x, a.z, a.target_x, a.target_z,
+        speed_for_role(&a.role),
+        dt_ms,
+    );
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
@@ -332,12 +315,61 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         return;
     }
 
-    // Otherwise, plain clock advance.
+    // Phase H.2 — server steps the guest's body toward target_x/z
+    // at GUEST_SPEED. Same model as tick_staff_actor: snap on arrival,
+    // cap step to max_step to avoid overshoot. Skipped for "seated" /
+    // "ordering" / "eating" — those states pin the guest to a seat and
+    // target_x/z would just match position. Cheap to do unconditionally
+    // (dist == 0 → no move), so we keep the branch tight by checking
+    // the obvious anchored states once.
+    let anchored = matches!(
+        g.state.as_str(),
+        "seated" | "ordering" | "eating" | "wcSitting" | "wcWashing" | "waiting"
+    );
+    let (new_x, new_z) = if anchored {
+        (g.x, g.z)
+    } else {
+        step_toward_target(g.x, g.z, g.target_x, g.target_z, GUEST_SPEED, dt_ms)
+    };
+
     ctx.db.active_guest().id().update(ActiveGuest {
         state_clock_ms: new_clock,
         patience_ms: new_patience,
+        x: new_x,
+        z: new_z,
         ..g
     });
+}
+
+/// Guest walking speed in m/s. Matches the client-side default that
+/// drives in-restaurant character movement. One value covers every
+/// in-restaurant state — the variation customers SEEM to have on
+/// screen is just the pathfinder picking longer / shorter routes, not
+/// per-state speed.
+const GUEST_SPEED: f32 = 1.5;
+
+/// Distance below which a step snaps to the target. One eighth of a
+/// pathfinder cell — far enough below "at rest" to read clean to
+/// subscribers, large enough not to wobble on f32 drift.
+const STEP_SNAP_EPS: f32 = 0.125;
+
+/// Step (x, z) toward (target_x, target_z) at `speed` m/s over `dt_ms`
+/// milliseconds. Returns the new (x, z). Shared by staff + guest body
+/// movement so they snap / cap identically.
+fn step_toward_target(x: f32, z: f32, target_x: f32, target_z: f32, speed: f32, dt_ms: i64) -> (f32, f32) {
+    let dt_sec = (dt_ms as f32) / 1000.0;
+    let max_step = speed * dt_sec;
+    let dx = target_x - x;
+    let dz = target_z - z;
+    let dist = (dx * dx + dz * dz).sqrt();
+    if dist <= STEP_SNAP_EPS {
+        (target_x, target_z)
+    } else if dist <= max_step {
+        (target_x, target_z)
+    } else {
+        let scale = max_step / dist;
+        (x + dx * scale, z + dz * scale)
+    }
 }
 
 /// Phase C.1 — step one ticket's state machine. Stub for now: only
