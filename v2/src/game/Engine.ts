@@ -1067,6 +1067,8 @@ export class Engine {
         const tickets  = this.cloud.listActiveTickets();
         const staff    = this.cloud.listStaffActors();
         const furniture = this.cloud.listPlacedFurniture();
+        const dishPools = this.cloud.listDishwarePools();
+        const dishBatches = this.cloud.listDishwasherBatches();
         console.group("[cozyBistro.cloudReport]");
         console.log(`Active guests:  ${guests.length} row(s)`);
         if (guests.length)   console.table(guests);
@@ -1076,11 +1078,13 @@ export class Engine {
         if (staff.length)    console.table(staff);
         console.log(`Placed furniture: ${furniture.length} row(s)`);
         if (furniture.length) console.table(furniture);
-        console.log(`(Dishware pool + dishwasher batches are queryable`
-          + ` via spacetime sql; not shown here to keep the report short.)`);
+        console.log(`Dishware pools:   ${dishPools.length} row(s)`);
+        if (dishPools.length) console.table(dishPools);
+        console.log(`Dishwasher batches: ${dishBatches.length} row(s)`);
+        if (dishBatches.length) console.table(dishBatches);
         console.log("Flags:", featureFlags);
         console.groupEnd();
-        return { guests, tickets, staff, furniture };
+        return { guests, tickets, staff, furniture, dishPools, dishBatches };
       },
       get featureFlags() { return featureFlags; },
     };
