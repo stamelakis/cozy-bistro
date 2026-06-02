@@ -862,13 +862,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         "waitingForFood" if has_delivered_ticket_for_guest(ctx, g.id) =>
             Some(("eating".to_string(), 0)),
         // eating → next course or leaving after EATING_DURATION_MS.
-        // Counts comma-separated order_recipes; if order_index+1 < count
-        // there's another course, go back to "seated" so the client's
-        // beginNextCourse picks up. Otherwise the guest leaves the
-        // restaurant.
-        // Requires the client to have called set_guest_order so
-        // order_recipes is populated server-side — without that, the
-        // recipe count is 0 and the guest leaves after one course.
+        // (See order_index advance below — server now owns this too.)
         "eating" if new_clock >= EATING_DURATION_MS => {
             let total_courses = if g.order_recipes.is_empty() {
                 0
@@ -876,9 +870,6 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
                 g.order_recipes.split(',').filter(|s| !s.trim().is_empty()).count() as u32
             };
             if g.order_index + 1 < total_courses {
-                // More courses ahead — back to seated; client's
-                // beginNextCourse path enqueues the next ticket.
-                // order_index advance is client-side (TODO migrate).
                 Some(("seated".to_string(), 0))
             } else {
                 Some(("leaving".to_string(), 0))
@@ -900,18 +891,33 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // currently in the cloud schema).
         _ => None,
     };
-    let (final_state, final_clock) = match transition {
+    let (final_state, final_clock) = match &transition {
         Some((new_state, new_clk)) => {
             log::info!("guest {} {} → {}", g.id, g.state, new_state);
-            (new_state, new_clk)
+            (new_state.clone(), *new_clk)
         }
         None => (g.state.clone(), new_clock),
+    };
+
+    // H.11 — server-side order_index advance when transitioning
+    // eating → seated. The client's local sim ALSO advances this on
+    // its own eating→seated path; idempotent because the new
+    // order_index value lines up with what the client would have
+    // set after EATING_DURATION_MS elapsed. Necessary for the
+    // server's "next course or leaving" branch to fire correctly
+    // on subsequent ticks — without bumping it, the server would
+    // re-trigger the same transition indefinitely.
+    let new_order_index = if g.state == "eating" && final_state == "seated" {
+        g.order_index.saturating_add(1)
+    } else {
+        g.order_index
     };
 
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
         state_clock_ms: final_clock,
         patience_ms: new_patience,
+        order_index: new_order_index,
         x: new_x,
         z: new_z,
         ..g
