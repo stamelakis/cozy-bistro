@@ -89,6 +89,23 @@ interface CameraSnapshot {
  * + presentation layer so the player can fly around the city and
  * land on any plot.
  */
+/** Map an active_guest.state to an animator action. Anchored states
+ * (seated at a table, in the bathroom, waiting their turn at the
+ * door) all render as "sit"; in-transit states render as "walk".
+ * Unknown / empty defaults to "idle". */
+function customerActionFor(state: string): CharacterAction {
+  if (state === "seated" || state === "ordering" || state === "eating"
+    || state === "waitingForFood" || state === "wcSitting"
+    || state === "wcWashing" || state === "waiting") {
+    return "sit";
+  }
+  if (state === "walkingIn" || state === "leaving" || state === "wcWalking"
+    || state === "done") {
+    return "walk";
+  }
+  return "idle";
+}
+
 export class VisitMode {
   private readonly camera: IsoCamera;
   private readonly scene: WorldScene;
@@ -161,6 +178,11 @@ export class VisitMode {
    * having to spawn plate meshes. Keyed by ticket id (server u64 as
    * string) so we can re-key on update without double-counting. */
   private liveTicketStates: Map<string, string> = new Map();
+  /** Live customer characters from active_guest subscription, keyed by
+   * the server's guest id (as string). Spawn-on-insert, snap-on-
+   * update, dispose-on-delete — same pattern as liveStaffCharacters. */
+  private liveCustomerCharacters: Map<string, AnimatedCharacter> = new Map();
+  private liveCustomerPendingLoads: Set<string> = new Set();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -325,6 +347,7 @@ export class VisitMode {
     // — no doubling.
     this.startLiveStaffSubscription(plot);
     this.startLiveTicketSubscription(plot);
+    this.startLiveCustomerSubscription(plot);
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
@@ -512,10 +535,116 @@ export class VisitMode {
     }
     this.liveStaffCharacters.clear();
     this.liveStaffPendingLoads.clear();
-    // Reset ticket counts so the next visit starts clean. The
-    // subscription handler is still attached but gated by activePlot
-    // so it won't bleed into the new visit's counts.
+    // Also dispose live customers (same lifecycle — both bound to the
+    // current visit). Reset ticket counts so the next visit starts
+    // clean. The subscription handlers stay attached but gated by
+    // activePlot so they won't bleed into the next visit's data.
+    for (const c of this.liveCustomerCharacters.values()) {
+      this.scene.animator.remove(c.root);
+      c.root.removeFromParent();
+    }
+    this.liveCustomerCharacters.clear();
+    this.liveCustomerPendingLoads.clear();
     this.liveTicketStates.clear();
+    this.refreshLivenessLabel();
+  }
+
+  // ─── Live customer render (active_guest subscription) ────────────
+
+  /** Subscribe to the host's active_guest table and render every row
+   * as an animated character (chair-sitting / walking / etc.). Same
+   * pattern + gating as live staff. */
+  private startLiveCustomerSubscription(plot: VisitablePlot): void {
+    if (!this.cloud) return;
+    const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (hostRid == null) return;
+    const targetPlotId = plot.id;
+    let firedCount = 0;
+    this.cloud.subscribeActiveGuestChanges({
+      onInsert: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        firedCount += 1;
+        void this.spawnLiveCustomerActor(row, targetPlotId);
+      },
+      onUpdate: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.applyLiveCustomerUpdate(row);
+      },
+      onDelete: (id) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.removeLiveCustomerActor(String(id));
+      },
+    }, hostRid);
+    setTimeout(() => {
+      if (this.activePlot?.id !== targetPlotId) return;
+      console.log(`[Visit] live customers: ${firedCount} active_guest row(s) for restaurant ${hostRid}`);
+    }, 2000);
+  }
+
+  /** Spawn one character for an active_guest row. Variant ("guest-vN")
+   * maps directly to a character model id. Action picked from state:
+   * "seated" / "eating" / "ordering" / "waitingForFood" → "sit";
+   * everything else → "walk" (or "idle" for unknown). */
+  private async spawnLiveCustomerActor(
+    row: import("../cloud/SpacetimeClient").ActiveGuestRow,
+    targetPlotId: bigint,
+  ): Promise<void> {
+    const key = String(row.id);
+    if (this.liveCustomerCharacters.has(key)) return;
+    if (this.liveCustomerPendingLoads.has(key)) return;
+    this.liveCustomerPendingLoads.add(key);
+    const modelId = row.variant && row.variant.startsWith("guest-") ? row.variant : "guest-v0";
+    try {
+      const model = await this.scene.characterLoader.load(modelId);
+      if (this.activePlot?.id !== targetPlotId || !this.visitorRoot) {
+        this.liveCustomerPendingLoads.delete(key);
+        return;
+      }
+      const floor = Math.max(0, row.floor);
+      model.position.set(row.x, floor * STOREY_HEIGHT, row.z);
+      const action: CharacterAction = customerActionFor(row.state);
+      const animated: AnimatedCharacter = {
+        root: model,
+        groundPos: new THREE.Vector2(row.x, row.z),
+        facingY: 0,
+        action,
+        phase: Math.random() * 5,
+        // 0.5 m chair lift — same as the existing ghost-customer
+        // spawn so the sitting pose lands on the cushion when state
+        // is "seated" / "eating".
+        seatHeight: 0.5,
+      };
+      this.visitorRoot.add(model);
+      this.scene.animator.add(animated);
+      this.liveCustomerCharacters.set(key, animated);
+      this.liveCustomerCount += 1;
+      this.refreshLivenessLabel();
+    } catch (err) {
+      console.warn(`[Visit] failed to spawn live customer ${modelId}:`, err);
+    } finally {
+      this.liveCustomerPendingLoads.delete(key);
+    }
+  }
+
+  private applyLiveCustomerUpdate(row: import("../cloud/SpacetimeClient").ActiveGuestRow): void {
+    const key = String(row.id);
+    const c = this.liveCustomerCharacters.get(key);
+    if (!c) {
+      void this.spawnLiveCustomerActor(row, this.activePlot?.id ?? 0n);
+      return;
+    }
+    c.groundPos.set(row.x, row.z);
+    const newAction = customerActionFor(row.state);
+    if (c.action !== newAction) c.action = newAction;
+  }
+
+  private removeLiveCustomerActor(key: string): void {
+    const c = this.liveCustomerCharacters.get(key);
+    if (!c) return;
+    this.scene.animator.remove(c.root);
+    c.root.removeFromParent();
+    this.liveCustomerCharacters.delete(key);
+    this.liveCustomerCount = Math.max(0, this.liveCustomerCount - 1);
     this.refreshLivenessLabel();
   }
 
@@ -774,9 +903,17 @@ export class VisitMode {
       [shuffledChairs[i], shuffledChairs[j]] = [shuffledChairs[j], shuffledChairs[i]];
     }
     const customerPromises: Promise<void>[] = [];
-    for (let i = 0; i < targetCustomerCount; i += 1) {
-      const variant = GUEST_VARIANT_IDS[Math.floor(Math.random() * GUEST_VARIANT_IDS.length)];
-      customerPromises.push(this.spawnGhostCharacter(variant, shuffledChairs[i], "sit", targetPlotId, /* isStaff */ false));
+    // Same logic as staff: skip ghost customers when live data exists
+    // for the host so we don't double up real-time customers with
+    // procedurally-placed ghosts.
+    const hasLiveCustomers = this.liveCustomerCharacters.size > 0;
+    if (hasLiveCustomers) {
+      console.log(`[Visit] static ghost-customer spawn skipped — ${this.liveCustomerCharacters.size} live customer(s) already rendering`);
+    } else {
+      for (let i = 0; i < targetCustomerCount; i += 1) {
+        const variant = GUEST_VARIANT_IDS[Math.floor(Math.random() * GUEST_VARIANT_IDS.length)];
+        customerPromises.push(this.spawnGhostCharacter(variant, shuffledChairs[i], "sit", targetPlotId, /* isStaff */ false));
+      }
     }
 
     await Promise.all([...staffPromises, ...customerPromises]);

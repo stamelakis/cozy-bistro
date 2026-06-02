@@ -76,6 +76,25 @@ export interface StaffActorRow {
   washPhase: string;
 }
 
+/** Public shape of one active_guest row — one per live customer in a
+ * restaurant. variant is the character model id ("guest-v3" etc.);
+ * state is the lifecycle label (walkingIn / seated / ordering /
+ * waitingForFood / eating / leaving / etc.). x/z are restaurant-local
+ * world coords; the server steps these toward target_x/z each tick. */
+export interface ActiveGuestRow {
+  id: bigint;
+  state: string;
+  variant: string;
+  archetype: string;
+  x: number;
+  z: number;
+  floor: number;
+  targetX: number;
+  targetZ: number;
+  targetFloor: number;
+  seatUid: string;
+}
+
 /** Public shape of one active_ticket row — one per in-flight order.
  * State is the lifecycle label (queued / waitingChef / cooking / ready
  * / pickedUp / delivered). */
@@ -764,6 +783,54 @@ export class SpacetimeClient {
       }
     } catch (e) {
       console.warn("[Cloud] subscribeStaffActorChanges failed:", e);
+    }
+  }
+
+  /** Subscribe to live active_guest changes for the current restaurant
+   * (or for a different restaurant if `restaurantId` is passed —
+   * visit mode does this to watch a host's customers in real time).
+   * Same row-filter pattern as the others. */
+  subscribeActiveGuestChanges(handlers: {
+    onInsert?: (row: ActiveGuestRow) => void;
+    onUpdate?: (row: ActiveGuestRow) => void;
+    onDelete?: (id: bigint) => void;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
+    type ServerRow = {
+      id: bigint; restaurantId: bigint; state: string; variant: string; archetype: string;
+      x: number; z: number; floor: number;
+      targetX: number; targetZ: number; targetFloor: number;
+      seatUid: string;
+    };
+    const toClientRow = (r: ServerRow): ActiveGuestRow => ({
+      id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
+      x: r.x, z: r.z, floor: r.floor,
+      targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
+      seatUid: r.seatUid,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.active_guest.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.active_guest.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.active_guest.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.id);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeActiveGuestChanges failed:", e);
     }
   }
 
