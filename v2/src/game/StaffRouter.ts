@@ -1299,7 +1299,32 @@ export class StaffRouter {
   /** Accumulator for the ~1 Hz position publish. Same throttle the
    * GuestSpawner uses; one reducer call per actor per second is cheap
    * + keeps the active_guest / active_ticket subscribers in step with
-   * actual movement without flooding the wire. */
+   * actual movement without flooding the wire.
+   *
+   * Phase H cutover (commit 8bff1c1 era): with isServerSim("staff")
+   * on, the server's tick_staff_actor (commit d806c47) steps
+   * positions every 100 ms. The client's ~1 Hz stream then OVERWRITES
+   * the server's interpolated position with the client's locally
+   * computed one — undoing the server's work and creating a small
+   * visual jitter at the mirror tick for any subscriber (visit mode,
+   * cross-device). We now skip the periodic stream entirely under
+   * the flag: per-event mirrorActorUpdate calls (already wired on
+   * state transitions) keep targets fresh, and the server
+   * interpolates between target changes. Net effect: server-driven
+   * smooth motion, no client overrides. */
+  /** Accumulator for the ~1 Hz position publish. Same throttle the
+   * GuestSpawner uses; one reducer call per actor per second is cheap
+   * + keeps the active_guest / active_ticket subscribers in step with
+   * actual movement without flooding the wire.
+   *
+   * Why we still stream under Phase H: the server's tick_staff_actor
+   * (commit d806c47) steps position toward target_x/z, but the
+   * TARGET ONLY moves when the client publishes a new one. Without
+   * the periodic stream the server has no way to learn that the
+   * chef who finished cooking now wants to walk back to home — the
+   * StaffRouter state machine doesn't yet wire per-event mirrors
+   * at every target change. The 1Hz overwrite is the price of
+   * keeping target+state fresh until those per-event hooks land. */
   private cloudActorAccum = 0;
   private streamActorsToCloud(dt: number): void {
     if (!isServerSim("staff") || !this.cloud) return;

@@ -1994,7 +1994,13 @@ export class GuestSpawner {
    * current target to the server so subscribed clients (visit mode,
    * future co-owner views) can lerp the same body in their own scene.
    * Skip guests whose serverMirrorId hasn't been resolved yet — the
-   * spawn-side polling timeout owns that handshake. */
+   * spawn-side polling timeout owns that handshake.
+   *
+   * Still streams under Phase H: the GuestSpawner state machine
+   * doesn't yet fire per-event mirror calls when a guest's target
+   * changes (e.g. moving from door to seat, seat to leaving). Until
+   * those hooks land, the 1Hz stream is the only way the server's
+   * tick_guest_state learns where each guest wants to go. */
   private streamGuestPositionsToCloud(dt: number): void {
     if (!isServerSim("guests") || !this.cloud) return;
     this.cloudPositionAccum += dt;
