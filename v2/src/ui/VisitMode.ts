@@ -993,10 +993,18 @@ export class VisitMode {
       if (state === "cooking") cooking += 1;
       else if (state === "ready") ready += 1;
     }
+    // Distinguish LIVE data (subscription is wired + host has rows)
+    // from FROZEN data (just the static ghost-activity spawn from the
+    // save snapshot). Helps the player tell whether they're seeing
+    // real-time motion or a placeholder scene at a glance.
+    const hasLive = this.liveStaffCharacters.size > 0
+      || this.liveCustomerCharacters.size > 0
+      || this.liveTicketStates.size > 0;
+    const liveBadge = hasLive ? "🔴 LIVE · " : "❄ STATIC · ";
     const baseEmpty = c === 0 && s === 0;
     const kitchenIdle = cooking === 0 && ready === 0;
     if (baseEmpty && kitchenIdle) {
-      this.livenessEl.textContent = "(quiet right now)";
+      this.livenessEl.textContent = `${liveBadge}(quiet right now)`;
       return;
     }
     const parts: string[] = [];
@@ -1004,7 +1012,7 @@ export class VisitMode {
     if (s > 0) parts.push(`👤 ${s} staff`);
     if (cooking > 0) parts.push(`🍳 ${cooking} cooking`);
     if (ready > 0) parts.push(`🛎 ${ready} ready`);
-    this.livenessEl.textContent = parts.join(" · ");
+    this.livenessEl.textContent = liveBadge + parts.join(" · ");
   }
 
   // ─── Top-center "Visiting X · Exit" overlay ─────────────────────
