@@ -207,6 +207,7 @@ export class FurnitureRegistry {
   // bail silently when the flag is off OR cloud isn't wired.
 
   private mirrorFurniturePlace(item: PlacedFurnitureItem): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
     this.cloud.placeFurniture({
       uid: item.uid,
@@ -222,6 +223,7 @@ export class FurnitureRegistry {
   }
 
   private mirrorFurnitureMove(item: PlacedFurnitureItem): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
     this.cloud.moveFurniture({
       uid: item.uid,
@@ -236,6 +238,7 @@ export class FurnitureRegistry {
   }
 
   private mirrorFurnitureSell(uid: string): void {
+    if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
     this.cloud.sellFurniture(uid);
   }
@@ -1127,6 +1130,59 @@ export class FurnitureRegistry {
     }
     return out;
   }
+
+  /** Re-instantiate placements from the cloud's placed_furniture
+   * table. Used by Engine on a second-device login when
+   * isServerSim("furniture") is on — the cloud rows take precedence
+   * over whatever the JSON save_snapshot loaded. Wipes the local
+   * items array first (so we don't end up with duplicates) and then
+   * delegates to the existing restore() path. Idempotent — safe to
+   * call multiple times.
+   *
+   * NOTE: this is the INITIAL load only. Live diff from other
+   * clients (someone else's place / move / sell coming in via the
+   * subscription) is a separate future pass — for now we trust that
+   * a single client is editing at any one moment, and a refresh
+   * picks up changes that happened while the player was away. */
+  async restoreFromCloud(): Promise<void> {
+    if (!this.cloud) return;
+    const rows = this.cloud.listPlacedFurniture();
+    if (rows.length === 0) return;
+    // Wipe local state. Detach models from the scene; the new restore
+    // call will reload each item from scratch with a fresh model
+    // instance (cheaper than diffing what we'd keep).
+    for (const it of this.items) it.model.removeFromParent();
+    this.items.length = 0;
+    this.surfaceExtentCache.clear();
+    // Map cloud rows to the PersistedPlacement shape restore() wants.
+    // restoreFromCloud is also called by Engine ONLY when the flag is
+    // on, so the mirror inside restore()'s downstream paths fires
+    // back — guarded against by suspending mirror callbacks during
+    // the reload (set a flag so register() skips mirrorFurniturePlace).
+    const placements: PersistedPlacement[] = rows.map((r) => {
+      const p: PersistedPlacement = {
+        uid: r.uid, defId: r.defId, x: r.x, z: r.z, rotY: r.rotY,
+      };
+      if (r.parentUid) p.parentUid = r.parentUid;
+      if (r.slotIndex >= 0) p.slotIndex = r.slotIndex;
+      if (r.localRotY !== 0) p.localRotY = r.localRotY;
+      if (r.floor > 0) p.floor = r.floor;
+      return p;
+    });
+    this.suppressMirrorForReload = true;
+    try {
+      await this.restore(placements);
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+    console.log(`[FurnitureRegistry] restoreFromCloud → ${placements.length} items`);
+  }
+
+  /** Latch set during restoreFromCloud so the per-mutation mirror
+   * doesn't re-publish the rows we're loading IN FROM the cloud (which
+   * would be a no-op upsert but burns reducer calls + risks the
+   * default-clobber problem). */
+  private suppressMirrorForReload = false;
 
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). Surface-placed

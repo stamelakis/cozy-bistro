@@ -1417,6 +1417,21 @@ export class Engine {
       // subscribes to the chat_message table during construction).
       // Constructed at most once per Engine lifetime; idempotent.
       this.mountChatPanel(container);
+      // Phase F read-side flip — when isServerSim("furniture") is on
+      // AND the cloud has rows for this restaurant, ADOPT those rows
+      // as the truth. The JSON save_snapshot loaded a moment ago via
+      // game.hydrate gets clobbered for furniture only. Cross-device
+      // login: open on phone, see laptop's layout. Async-loads each
+      // GLB, settles a few hundred ms later.
+      //
+      // Safe-by-default: when the flag is off OR the cloud has no
+      // furniture rows, no-op. When on but only the local has items
+      // (first device claiming this restaurant), the mirror we
+      // installed in Phase F will populate the cloud on the next
+      // save round-trip, so subsequent logins find data to restore.
+      if (featureFlags.furniture) {
+        void this.registry.restoreFromCloud();
+      }
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as
       // multiplayer even before we ship per-other-restaurant
