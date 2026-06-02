@@ -165,14 +165,23 @@ export class DishwareSystem {
       this.log("restoreFromCloud → no cloud rows, keeping local hydrate state");
       return;
     }
-    // Safety guard for Phase H default-on: if the cloud has fewer
-    // total pieces than localStorage, treat cloud as stale and skip
-    // the wipe. Push local up via mirrorAllPools instead so the
-    // cloud converges to the (richer) local state.
-    const cloudPieces = pools.reduce((sum, p) => sum + p.clean + p.dirty, 0);
-    const localPieces = this.getOwned("plate") + this.getOwned("glass");
-    if (cloudPieces < localPieces) {
-      this.log(`restoreFromCloud: cloud has ${cloudPieces} pieces but local has ${localPieces} — keeping local (cloud likely stale). Mirroring local up.`);
+    // Safety guard for Phase H default-on. Only restore from cloud
+    // when local has the STARTER hydrate values — anything beyond
+    // that means the user's localStorage already has gameplay state
+    // and we shouldn't clobber it.
+    //
+    // The "is local just starters?" check: STARTER_PLATE_COUNT clean
+    // plates at tier 1 + STARTER_GLASS_COUNT clean glasses at tier 1,
+    // nothing else owned. Anything beyond that — extra tiers, dirty
+    // pieces, lifetime > starter total — means the user has played
+    // and localStorage is the authoritative state.
+    const starterTotal = STARTER_PLATE_COUNT + STARTER_GLASS_COUNT;
+    const localTotal = this.getOwned("plate") + this.getOwned("glass");
+    const onlyStarter = localTotal <= starterTotal
+        && this.getDirty("plate") === 0 && this.getDirty("glass") === 0
+        && this.plates.size <= 1 && this.glasses.size <= 1;
+    if (!onlyStarter) {
+      this.log(`restoreFromCloud: local has gameplay state (${localTotal} pieces, ${this.getDirty("plate")} dirty plates) — keeping local. Mirroring local up to cloud.`);
       this.mirrorAllPools();
       return;
     }
