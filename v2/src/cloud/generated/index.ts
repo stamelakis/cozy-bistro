@@ -61,6 +61,7 @@ import PingPresenceReducer from "./ping_presence_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
+import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
@@ -75,7 +76,9 @@ import SpawnGuestReducer from "./spawn_guest_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
+import UnregisterStaffActorReducer from "./unregister_staff_actor_reducer";
 import UpdateGuestPositionReducer from "./update_guest_position_reducer";
+import UpdateStaffActorReducer from "./update_staff_actor_reducer";
 import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 
 // Import all procedure arg schemas
@@ -438,6 +441,7 @@ const reducersSchema = __reducers(
   __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
+  __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
@@ -452,7 +456,9 @@ const reducersSchema = __reducers(
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
+  __reducerSchema("unregister_staff_actor", UnregisterStaffActorReducer),
   __reducerSchema("update_guest_position", UpdateGuestPositionReducer),
+  __reducerSchema("update_staff_actor", UpdateStaffActorReducer),
   __reducerSchema("wipe_my_restaurant", WipeMyRestaurantReducer),
 );
 

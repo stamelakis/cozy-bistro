@@ -696,3 +696,153 @@ pub fn cancel_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String>
     ctx.db.active_ticket().id().delete(t.id);
     Ok(())
 }
+
+// =============================================================
+//                        Phase D reducers
+// =============================================================
+// Staff actor lifecycle. Three reducers in D.2: register / update /
+// unregister. The client mirrors its local StaffRouter actors via
+// these calls; the comprehensive update_staff_actor takes the full
+// row's worth of fields so the StaffRouter mirror can stream any
+// combination of changes in a single network call.
+
+/// First registration of an actor into the restaurant. The client
+/// calls this when a hired staff member is dispatched into the
+/// world (just after the GLB character loads). Idempotent against
+/// the same member_id — a re-register updates the existing row's
+/// metadata + resets state to "idle".
+#[reducer]
+pub fn register_staff_actor(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    member_id: String,
+    role: String,
+    home_floor: u32,
+    home_x: f32,
+    home_z: f32,
+    spawn_x: f32,
+    spawn_z: f32,
+    spawn_floor: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can register staff actors".into());
+    }
+    let existing = ctx.db.staff_actor().member_id().find(member_id.clone());
+    if let Some(prev) = existing {
+        // Re-register — refresh metadata + reset state. Useful when
+        // the player rehires the same member after a fire/refresh
+        // round-trip, or when an old session's row lingered.
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            role, home_floor, home_x, home_z,
+            state: "idle".to_string(),
+            state_clock_ms: 0,
+            ticket_id: None,
+            x: spawn_x, z: spawn_z, floor: spawn_floor,
+            target_x: home_x, target_z: home_z, target_floor: home_floor,
+            assigned_stove_uid: String::new(),
+            last_stove_uid: String::new(),
+            wash_target_uid: String::new(),
+            wash_dirty_id: -1,
+            wash_phase: String::new(),
+            take_order_guest_id: None,
+            ..prev
+        });
+        return Ok(());
+    }
+    ctx.db.staff_actor().insert(StaffActor {
+        member_id,
+        restaurant_id,
+        role,
+        home_floor,
+        home_x, home_z,
+        state: "idle".to_string(),
+        state_clock_ms: 0,
+        ticket_id: None,
+        x: spawn_x, z: spawn_z, floor: spawn_floor,
+        target_x: home_x, target_z: home_z, target_floor: home_floor,
+        assigned_stove_uid: String::new(),
+        last_stove_uid: String::new(),
+        wash_target_uid: String::new(),
+        wash_dirty_id: -1,
+        wash_phase: String::new(),
+        take_order_guest_id: None,
+        spawned_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+/// Comprehensive staff actor mutation. The client's StaffRouter
+/// calls this whenever an actor's state-machine state, position,
+/// ticket binding, or role-specific fields change — single network
+/// call covers any combination. Idempotent: identical inputs
+/// produce the same row.
+///
+/// Position fields are passed every call so the server row always
+/// reflects the actor's live pose. State + ticket_id reset their
+/// state_clock_ms when state changes (mirror flag changing); the
+/// server tick advances the clock between mutations.
+#[reducer]
+pub fn update_staff_actor(
+    ctx: &ReducerContext,
+    member_id: String,
+    state: String,
+    ticket_id: Option<u64>,
+    x: f32,
+    z: f32,
+    floor: u32,
+    target_x: f32,
+    target_z: f32,
+    target_floor: u32,
+    assigned_stove_uid: String,
+    last_stove_uid: String,
+    wash_target_uid: String,
+    wash_dirty_id: i64,
+    wash_phase: String,
+    take_order_guest_id: Option<u64>,
+) -> Result<(), String> {
+    let a = ctx.db.staff_actor().member_id().find(member_id.clone())
+        .ok_or_else(|| format!("Staff actor {member_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(a.restaurant_id)
+        .ok_or_else(|| "Actor's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can update their staff actors".into());
+    }
+    // Reset the state-machine clock when the state label actually
+    // flips — otherwise leave it alone so the tick's countdown
+    // continues uninterrupted across a position-only update.
+    let new_clock = if a.state == state { a.state_clock_ms } else { 0 };
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state,
+        state_clock_ms: new_clock,
+        ticket_id,
+        x, z, floor,
+        target_x, target_z, target_floor,
+        assigned_stove_uid,
+        last_stove_uid,
+        wash_target_uid,
+        wash_dirty_id,
+        wash_phase,
+        take_order_guest_id,
+        ..a
+    });
+    Ok(())
+}
+
+/// Drop a staff actor's row (fired / restaurant deleted /
+/// player-explicit despawn). Idempotent: missing actor is a no-op.
+#[reducer]
+pub fn unregister_staff_actor(ctx: &ReducerContext, member_id: String) -> Result<(), String> {
+    let a = match ctx.db.staff_actor().member_id().find(member_id.clone()) {
+        Some(a) => a,
+        None => return Ok(()),
+    };
+    let r = ctx.db.restaurant().id().find(a.restaurant_id)
+        .ok_or_else(|| "Actor's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can unregister their staff".into());
+    }
+    ctx.db.staff_actor().member_id().delete(member_id);
+    Ok(())
+}
