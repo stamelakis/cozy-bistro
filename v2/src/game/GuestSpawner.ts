@@ -410,6 +410,14 @@ interface ActiveGuest {
    * null (the cloud row's patience countdown will despawn it on its
    * own). */
   serverMirrorId?: bigint;
+  /** Compact "state|targetX|targetZ|floor" fingerprint of the last
+   * mirror published to the cloud. streamGuestPositionsToCloud uses
+   * this to fire the updateGuestPosition reducer immediately when
+   * any of those fields change (state transition, new target) and
+   * skip otherwise. Cuts visit-mode lag from < 1 s to < 100 ms.
+   * Undefined until first mirror — guarantees the first publish
+   * always fires. */
+  lastMirrorFingerprint?: string;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -1877,11 +1885,20 @@ export class GuestSpawner {
    * tick_guest_state learns where each guest wants to go. */
   private streamGuestPositionsToCloud(dt: number): void {
     if (!isServerSim("guests") || !this.cloud) return;
+    // Change-detection mirror — same pattern as
+    // StaffRouter.streamActorsToCloud (commit 0f1491c followup).
+    // Fingerprint includes state + target so a guest changing target
+    // (door → seat → leaving) propagates to the server in < 100 ms
+    // instead of waiting up to a second for the periodic tick.
+    // Periodic floor preserved at 1 s for position drift.
     this.cloudPositionAccum += dt;
-    if (this.cloudPositionAccum < 1.0) return;
-    this.cloudPositionAccum = 0;
+    const periodicFire = this.cloudPositionAccum >= 1.0;
+    if (periodicFire) this.cloudPositionAccum = 0;
     for (const g of this.guests) {
       if (g.serverMirrorId == null) continue;
+      const fingerprint = `${g.state}|${g.target.x.toFixed(2)}|${g.target.y.toFixed(2)}|${g.currentFloor}`;
+      const changed = fingerprint !== g.lastMirrorFingerprint;
+      if (!changed && !periodicFire) continue;
       this.cloud.updateGuestPosition(
         g.serverMirrorId,
         g.character.groundPos.x,
@@ -1891,6 +1908,7 @@ export class GuestSpawner {
         g.target.y,
         g.currentFloor,
       );
+      if (changed) g.lastMirrorFingerprint = fingerprint;
     }
   }
 
