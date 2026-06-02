@@ -447,6 +447,38 @@ fn release_chef_from_ticket(ctx: &ReducerContext, chef_member_id: &str) {
     );
 }
 
+/// Audit fix — companion to release_chef_from_ticket for waiters
+/// mid-delivery. Called when the guest-leaving cascade deletes a
+/// ticket that a waiter (H.8 auto-assigned) was carrying or walking
+/// to. Without this, the waiter would keep walking to a now-vanished
+/// seat target and sit there forever in delivery_phase="deliver".
+///
+/// Mirrors release_chef_from_ticket but clears delivery_phase (the
+/// H.8-specific field) instead of assigned_stove_uid.
+fn release_waiter_from_ticket(ctx: &ReducerContext, waiter_member_id: &str) {
+    let Some(w) = ctx.db.staff_actor().member_id().find(waiter_member_id.to_string()) else { return };
+    if w.state == "idle" || w.state == "returningHome" {
+        return;
+    }
+    let home_x = w.home_x;
+    let home_z = w.home_z;
+    let home_floor = w.home_floor;
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state: "returningHome".to_string(),
+        state_clock_ms: 0,
+        ticket_id: None,
+        target_x: home_x,
+        target_z: home_z,
+        target_floor: home_floor,
+        delivery_phase: None,
+        ..w
+    });
+    log::info!(
+        "release_waiter_from_ticket: waiter {} returning home (guest left mid-delivery)",
+        waiter_member_id,
+    );
+}
+
 /// Phase H.4 — step one dishwasher batch's cycle clock. When the
 /// clock reaches zero, flush every loaded plate / glass back to the
 /// CLEAN pool at the highest-tier slot that currently holds dirty
@@ -747,11 +779,37 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
                 .filter(|t| t.guest_id == g.id)
                 .map(|t| (t.id, t.assigned_chef_id.clone()))
                 .collect();
+            // Audit fix — also find waiters mid-delivery with these
+            // ticket ids. The H.8 server auto-pickup binds waiter.
+            // ticket_id to the ticket; without an explicit release
+            // here, a waiter walking a plate to this leaving guest
+            // would arrive at an empty seat, never get state-flipped
+            // by compute_waiter_transition (the ticket lookup fails
+            // → branch to "returningHome", which is fine), but only
+            // IF the waiter arrives. If the guest leaves mid-walk and
+            // the cascade fires first, the ticket vanishes BEFORE
+            // the waiter arrives, leaving the waiter stuck in
+            // movingToWork heading to a dead target.
+            let orphan_tids: std::collections::HashSet<u64> =
+                orphan_pairs.iter().map(|(tid, _)| *tid).collect();
+            let waiters_to_release: Vec<String> = ctx.db
+                .staff_actor()
+                .iter()
+                .filter(|a| a.role == "waiter")
+                .filter(|a| match a.ticket_id {
+                    Some(tid) => orphan_tids.contains(&tid),
+                    None => false,
+                })
+                .map(|a| a.member_id.clone())
+                .collect();
             for (tid, chef_id) in orphan_pairs {
                 ctx.db.active_ticket().id().delete(tid);
                 if !chef_id.is_empty() {
                     release_chef_from_ticket(ctx, &chef_id);
                 }
+            }
+            for waiter_id in waiters_to_release {
+                release_waiter_from_ticket(ctx, &waiter_id);
             }
             ctx.db.active_guest().id().delete(g.id);
             return;
