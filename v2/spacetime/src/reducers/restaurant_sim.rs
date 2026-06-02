@@ -822,6 +822,32 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         return;
     }
 
+    // Phase H.12 — fallback seat assignment. If the guest is still
+    // in walkingIn with no seat_uid after ASSIGN_SEAT_GRACE_MS, the
+    // client's local sim either hasn't picked one (backgrounded tab)
+    // or never will (no local sim at all). Pick the nearest free
+    // table server-side so the guest doesn't stand at the door
+    // forever. Grace period lets the local sim's smarter pick run
+    // first on a foreground tab.
+    let (assigned_seat, assigned_target) =
+        if g.state == "walkingIn" && g.seat_uid.is_empty()
+            && new_clock >= ASSIGN_SEAT_GRACE_MS {
+            match try_assign_seat(ctx, &g) {
+                Some((uid, tx, tz, tf)) => {
+                    log::info!("guest {} assigned table {} (server fallback)", g.id, uid);
+                    (uid, Some((tx, tz, tf)))
+                }
+                None => (g.seat_uid.clone(), None),
+            }
+        } else {
+            (g.seat_uid.clone(), None)
+        };
+    let (effective_target_x, effective_target_z, effective_target_floor) =
+        match assigned_target {
+            Some((tx, tz, tf)) => (tx, tz, tf),
+            None => (g.target_x, g.target_z, g.target_floor),
+        };
+
     // Phase H.2 — server steps the guest's body toward target_x/z
     // at GUEST_SPEED. Same model as tick_staff_actor: snap on arrival,
     // cap step to max_step to avoid overshoot. Skipped for "seated" /
@@ -836,7 +862,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     let (new_x, new_z) = if anchored {
         (g.x, g.z)
     } else {
-        step_toward_target(g.x, g.z, g.target_x, g.target_z, GUEST_SPEED, dt_ms)
+        step_toward_target(g.x, g.z, effective_target_x, effective_target_z, GUEST_SPEED, dt_ms)
     };
 
     // Phase H.9 — server-side guest state-machine transitions. Each
@@ -937,6 +963,13 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         order_index: new_order_index,
         x: new_x,
         z: new_z,
+        // H.12 — apply server fallback seat assignment if it fired.
+        // When assigned_target is None, these read back to the
+        // existing row values (no change).
+        seat_uid: assigned_seat,
+        target_x: effective_target_x,
+        target_z: effective_target_z,
+        target_floor: effective_target_floor,
         ..g
     });
 }
@@ -948,6 +981,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
 /// flight mirror reverts to walkingIn. 500ms covers one client
 /// position-stream tick.
 const WALKING_IN_MIN_MS: i64 = 500;
+/// Grace period before the server's fallback seat assignment fires.
+/// Longer than WALKING_IN_MIN_MS because the client may pick a seat
+/// AFTER the mirror catches up — 1.5s gives the local sim ~15 ticks
+/// to make its choice before the server takes over.
+const ASSIGN_SEAT_GRACE_MS: i64 = 1_500;
 /// Time the guest dwells in "seated" before transitioning to
 /// "ordering". Matches the client's TIME_TO_ORDER constant
 /// (config/customer-config.ts). 4 seconds = the customer pretends to
@@ -977,6 +1015,75 @@ fn has_delivered_ticket_for_guest(ctx: &ReducerContext, guest_id: u64) -> bool {
         }
     }
     false
+}
+
+/// Furniture def_ids the server recognises as guest-seating tables.
+/// Mirrors the entries in v2/src/data/furnitureCatalog.ts that have
+/// category=="table" with seatSlots. Hardcoded because the server
+/// doesn't load the TypeScript catalog. Bar furniture (bar-counter,
+/// bar-end) is excluded — bar seating goes through the barman path
+/// which has different state machine semantics.
+///
+/// New tables added to the client catalog need a corresponding entry
+/// here for the server-side seat-assignment fallback to consider
+/// them. Without an entry, those tables exist but server-side
+/// auto-seating skips them (the local sim still works).
+fn is_seat_providing_def(def_id: &str) -> bool {
+    matches!(def_id,
+        "small-table" | "round-table" | "dining-table" | "fancy-table"
+        | "cloth-table" | "glass-table"
+        | "coffee-table" | "coffee-glass" | "coffee-square" | "coffee-glass-sq"
+    )
+}
+
+/// H.12 — Server-side fallback seat assignment. Called from
+/// tick_guest_state when a guest has been in "walkingIn" for
+/// ASSIGN_SEAT_GRACE_MS without the client having mirrored a seat
+/// target. Picks the closest unoccupied table.
+///
+/// "Unoccupied" = no other active_guest in the same restaurant has
+/// this table's uid in their seat_uid field. Conservative — a guest
+/// who's mid-meal still holds the seat even on their leaving leg
+/// (intentional; prevents instant double-booking when one guest
+/// leaves and another spawns the same tick).
+///
+/// Returns the (uid, x, z, floor) of the assigned table, or None if
+/// no free table exists. Caller is responsible for writing it back
+/// to the guest row.
+///
+/// Limitations vs the client's pickBestSeatForTaste:
+/// - Distance-based pick only; no scoring on decor / window / taste /
+///   diet. The client still owns the "good seat" decision when the
+///   local sim is running; H.12 is a backstop for backgrounded tabs.
+/// - Sets target = table center, not a chair slot. Visit-mode
+///   subscribers see the guest standing at the table centre, not on
+///   a specific chair. The client's local sim, if running, will
+///   override with proper chair coords.
+fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32, f32, u32)> {
+    let rid = g.restaurant_id;
+    // Build set of taken seat uids (other guests' seat_uid).
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for other in ctx.db.active_guest().iter() {
+        if other.restaurant_id != rid { continue; }
+        if other.id == g.id { continue; }
+        if !other.seat_uid.is_empty() { taken.insert(other.seat_uid.clone()); }
+    }
+    // Find the closest free table.
+    let mut best: Option<(String, f32, f32, u32)> = None;
+    let mut best_dist = f32::INFINITY;
+    for f in ctx.db.placed_furniture().iter() {
+        if f.restaurant_id != rid { continue; }
+        if !is_seat_providing_def(&f.def_id) { continue; }
+        if taken.contains(&f.uid) { continue; }
+        let dx = f.x - g.x;
+        let dz = f.z - g.z;
+        let dist = dx * dx + dz * dz;
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some((f.uid.clone(), f.x, f.z, f.floor));
+        }
+    }
+    best
 }
 
 /// Guest walking speed in m/s. Matches the client-side default that
