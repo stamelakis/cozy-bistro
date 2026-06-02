@@ -77,6 +77,7 @@ import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 // Import all table schema definitions
 import AchievementUnlockRow from "./achievement_unlock_table";
 import ActiveGuestRow from "./active_guest_table";
+import ActiveTicketRow from "./active_ticket_table";
 import AuthRecordRow from "./auth_record_table";
 import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
@@ -130,6 +131,26 @@ const tablesSchema = __schema({
       { name: 'active_guest_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ActiveGuestRow),
+  active_ticket: __table({
+    name: 'active_ticket',
+    indexes: [
+      { accessor: 'client_temp_id', name: 'active_ticket_client_temp_id_idx_btree', algorithm: 'btree', columns: [
+        'clientTempId',
+      ] },
+      { accessor: 'guest_id', name: 'active_ticket_guest_id_idx_btree', algorithm: 'btree', columns: [
+        'guestId',
+      ] },
+      { accessor: 'id', name: 'active_ticket_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'active_ticket_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'active_ticket_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ActiveTicketRow),
   auth_record: __table({
     name: 'auth_record',
     indexes: [

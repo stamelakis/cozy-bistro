@@ -13,8 +13,9 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
-    active_guest, restaurant, restaurant_tick_schedule, restaurant_tick_state,
-    ActiveGuest, RestaurantTickSchedule, RestaurantTickState,
+    active_guest, active_ticket, restaurant, restaurant_tick_schedule,
+    restaurant_tick_state,
+    ActiveGuest, ActiveTicket, RestaurantTickSchedule, RestaurantTickState,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -142,10 +143,9 @@ pub fn restaurant_tick(
     // the client sets via reducers (or a server-side config table
     // we add later). For now: no-op past the bookkeeping.
 
-    // Phase B.1 — iterate every active_guest belonging to this
-    // restaurant and step its state machine. tick_guest_state is a
-    // no-op stub in B.1 (just exercise the dispatch + table access);
-    // B.2 fills in real patience / state transitions.
+    // Iterate every active_guest belonging to this restaurant and
+    // step its state machine (patience countdown, leaving dwell,
+    // etc.). Phase B owns this branch.
     let dt_ms = compute_dt_ms(ctx, &schedule);
     let guest_ids: Vec<u64> = ctx.db
         .active_guest()
@@ -155,6 +155,21 @@ pub fn restaurant_tick(
         .collect();
     for guest_id in guest_ids {
         tick_guest_state(ctx, guest_id, dt_ms);
+    }
+
+    // Phase C.1 — same pattern for tickets. Iterate this restaurant's
+    // active_ticket rows + step each one's state-clock + cook timer.
+    // tick_ticket_state is a stub until C.2 wires real transitions
+    // (cooking → ready when state_clock_ms reaches cook_seconds_ms,
+    // delivered → delete after a small dwell).
+    let ticket_ids: Vec<u64> = ctx.db
+        .active_ticket()
+        .iter()
+        .filter(|t| t.restaurant_id == rid)
+        .map(|t| t.id)
+        .collect();
+    for ticket_id in ticket_ids {
+        tick_ticket_state(ctx, ticket_id, dt_ms);
     }
 
     Ok(())
@@ -193,6 +208,18 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         if advanced_clock >= LEAVING_DWELL_MS {
             // Time's up — drop the row. Client subscription receives
             // a Delete event and removes the rendered character.
+            // Cascade: also delete any active_ticket rows still bound
+            // to this guest. The chef shouldn't keep cooking food
+            // for a customer who already left.
+            let orphan_tickets: Vec<u64> = ctx.db
+                .active_ticket()
+                .iter()
+                .filter(|t| t.guest_id == g.id)
+                .map(|t| t.id)
+                .collect();
+            for tid in orphan_tickets {
+                ctx.db.active_ticket().id().delete(tid);
+            }
             ctx.db.active_guest().id().delete(g.id);
             return;
         }
@@ -232,6 +259,50 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         patience_ms: new_patience,
         ..g
     });
+}
+
+/// Phase C.1 — step one ticket's state machine. Stub for now: only
+/// the dwell-then-delete leg of "delivered" tickets is wired so a
+/// completed ticket cleans up automatically. State transitions
+/// driven by the server (cooking → ready when timer elapses) land
+/// in Phase C.2 alongside the place_order / claim_ticket /
+/// finish_cooking / deliver_ticket reducers.
+fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
+    let Some(t) = ctx.db.active_ticket().id().find(ticket_id) else { return };
+
+    // Delivered tickets dwell briefly so the client gets one more
+    // subscription event with the final state, then disappear.
+    // 1 s is enough — much shorter than the leaving-guest dwell
+    // because there's no walk-out animation to play.
+    const DELIVERED_DWELL_MS: i64 = 1_000;
+    if t.state == "delivered" {
+        let advanced = t.state_clock_ms.saturating_add(dt_ms);
+        if advanced >= DELIVERED_DWELL_MS {
+            ctx.db.active_ticket().id().delete(t.id);
+            return;
+        }
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            state_clock_ms: advanced,
+            ..t
+        });
+        return;
+    }
+
+    // Cooking tickets advance their state-clock; C.2 will compare
+    // against cook_seconds_ms here and flip to "ready" when due.
+    // For C.1 just keep the clock ticking so subscribers see the
+    // row evolve.
+    if t.state == "cooking" {
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            state_clock_ms: t.state_clock_ms.saturating_add(dt_ms),
+            ..t
+        });
+        return;
+    }
+
+    // Other states (queued / ready / delivering) are client-driven —
+    // the local StaffRouter calls reducers to transition them.
+    // Nothing to do here per-tick.
 }
 
 // =============================================================

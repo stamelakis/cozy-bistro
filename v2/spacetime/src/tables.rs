@@ -648,3 +648,70 @@ pub struct ActiveGuest {
     pub dishes_settled: bool,
     pub spawned_at: Timestamp,
 }
+
+/// Phase C — server-authoritative cooking ticket. One row per
+/// dish-in-flight from "ordered" through "delivered". The scheduled
+/// restaurant_tick advances cook_seconds; client reducers (claim,
+/// finish, deliver) drive the state transitions the server can't
+/// own on its own (chef assignment, waiter pickup, delivery
+/// confirmation — those live in client-rendered space until the
+/// staff state machine moves server-side in Phase D).
+///
+/// guest_id is a foreign key into active_guest.id; the server side
+/// keeps the relationship explicit so a guest-deleted cascade is
+/// straightforward. The client_temp_id field lets the local
+/// StaffRouter correlate its own ticket id ("ticket-12") with the
+/// server's auto-inc u64.
+#[table(name = active_ticket, public)]
+pub struct ActiveTicket {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    #[index(btree)]
+    pub guest_id: u64,
+    /// Client's temp id (e.g. "ticket-12"). Used to find the
+    /// server's auto-inc id from the subscription cache after spawn.
+    #[index(btree)]
+    pub client_temp_id: String,
+
+    /// Recipe id from the client's recipeCatalog.
+    pub recipe_id: String,
+    /// "queued" | "cooking" | "ready" | "delivering" | "delivered"
+    pub state: String,
+    /// State-machine clock; ms elapsed in the current state. Reset
+    /// on each transition.
+    pub state_clock_ms: i64,
+
+    /// Base cook time from the recipe (ms). Immutable across the
+    /// ticket's lifetime — multipliers apply at chef-claim time and
+    /// get folded into cook_seconds_ms, NOT this.
+    pub base_cook_seconds_ms: i64,
+    /// Effective cook time = base × current chef's multiplier. Set
+    /// on claim. Compared against state_clock_ms while state="cooking"
+    /// to know when the ticket flips to "ready".
+    pub cook_seconds_ms: i64,
+    /// Appliance the recipe needs ("stove", "oven", "counter", ...).
+    pub appliance: String,
+
+    /// Client memberId of the chef currently working this ticket, or
+    /// "" when unclaimed. Per-chef-backlog routing uses this to
+    /// distribute load.
+    pub assigned_chef_id: String,
+
+    /// Seat the plate goes to. Denormalised from the guest row so
+    /// chef + waiter routing can read these without joining.
+    pub seat_x: f32,
+    pub seat_z: f32,
+    pub seat_floor: u32,
+    pub seat_at_bar: bool,
+
+    /// Where the finished plate sits waiting for a waiter. Set on
+    /// state="ready" transition; (0,0,0) until then.
+    pub pickup_x: f32,
+    pub pickup_z: f32,
+    pub pickup_floor: u32,
+
+    pub created_at: Timestamp,
+}

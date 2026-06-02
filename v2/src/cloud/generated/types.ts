@@ -60,6 +60,29 @@ export const ActiveGuest = __t.object("ActiveGuest", {
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
+export const ActiveTicket = __t.object("ActiveTicket", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  guestId: __t.u64(),
+  clientTempId: __t.string(),
+  recipeId: __t.string(),
+  state: __t.string(),
+  stateClockMs: __t.i64(),
+  baseCookSecondsMs: __t.i64(),
+  cookSecondsMs: __t.i64(),
+  appliance: __t.string(),
+  assignedChefId: __t.string(),
+  seatX: __t.f32(),
+  seatZ: __t.f32(),
+  seatFloor: __t.u32(),
+  seatAtBar: __t.bool(),
+  pickupX: __t.f32(),
+  pickupZ: __t.f32(),
+  pickupFloor: __t.u32(),
+  createdAt: __t.timestamp(),
+});
+export type ActiveTicket = __Infer<typeof ActiveTicket>;
+
 export const AuthRecord = __t.object("AuthRecord", {
   username: __t.string(),
   identity: __t.identity(),
