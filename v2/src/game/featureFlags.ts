@@ -48,20 +48,41 @@ export interface ServerSimFlags {
 
 const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
 
-/** Default (build-time) values — every flag OFF means the game
- * runs the legacy client-side simulation exactly as before this
- * file existed. */
+/** Default (build-time) values.
+ *
+ * Phase H flip — every subsystem now defaults ON. The cutover-ready
+ * subsystems (furniture, dishware) drive cross-device sync from the
+ * server entirely; the partial-cutover ones (guests, tickets, staff)
+ * populate their respective tables so visit mode + future-device
+ * resume keep working without per-session URL params.
+ *
+ * Restoring legacy client-only behaviour is still possible per
+ * session via `?serverSim=off` or per subsystem via
+ * `?serverSim=furniture` (only the listed subsystem on, rest off).
+ *
+ * Safe even for users whose cloud has never held data: the read-side
+ * flip in restoreFromCloud() short-circuits when the cloud row count
+ * is zero — local state stays canonical until the first mirror
+ * write populates the cloud. The server then takes over on
+ * subsequent loads. */
 const DEFAULTS: ServerSimFlags = {
-  guests: false,
-  tickets: false,
-  staff: false,
-  dishware: false,
-  furniture: false,
+  guests: true,
+  tickets: true,
+  staff: true,
+  dishware: true,
+  furniture: true,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
- * "all" enables everything; "off" / "none" disables everything. The
- * URL param and localStorage value use the same grammar. */
+ * "all" enables everything; "off" / "none" disables everything;
+ * an explicit subsystem list enables ONLY those (rest forced off).
+ * The URL param and localStorage value use the same grammar.
+ *
+ * Subsystem-list semantics changed with the Phase H default flip:
+ * pre-flip, defaults were all OFF so "furniture" meant "additionally
+ * furniture". Post-flip, defaults are all ON, so the same string
+ * needs to be read as "ONLY furniture, rest off" — otherwise the
+ * URL override is a no-op. */
 function parseFlagList(raw: string | null | undefined): Partial<ServerSimFlags> {
   if (!raw) return {};
   const trimmed = raw.trim().toLowerCase();
@@ -71,7 +92,11 @@ function parseFlagList(raw: string | null | undefined): Partial<ServerSimFlags> 
   if (trimmed === "all" || trimmed === "on" || trimmed === "true") {
     return { guests: true, tickets: true, staff: true, dishware: true, furniture: true };
   }
-  const out: Partial<ServerSimFlags> = {};
+  // Explicit list: start from all-off, then enable the listed
+  // subsystems. Result: only the listed ones are on.
+  const out: ServerSimFlags = {
+    guests: false, tickets: false, staff: false, dishware: false, furniture: false,
+  };
   for (const tok of trimmed.split(",")) {
     const key = tok.trim();
     if (key === "guests" || key === "tickets" || key === "staff"
