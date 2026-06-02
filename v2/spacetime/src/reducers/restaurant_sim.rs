@@ -848,10 +848,19 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     let arrived = (g.target_x - new_x).abs() < 0.01
         && (g.target_z - new_z).abs() < 0.01;
     let transition: Option<(String, i64)> = match g.state.as_str() {
-        // walkingIn → seated when the guest reaches their seat. The
-        // client has already populated target_x/z = seat position via
-        // update_guest_position; arrival = state flip.
-        "walkingIn" if arrived => Some(("seated".to_string(), 0)),
+        // walkingIn → seated when the guest reaches their seat. Two
+        // gates: (1) arrived at target; (2) state_clock_ms >=
+        // WALKING_IN_MIN_MS so a freshly-spawned guest whose spawn
+        // position already equals its target (target_x = door_x at
+        // insert time, until client mirrors the seat position) isn't
+        // instantly "seated" while still rendering the door walk.
+        // Without (2), a server tick fires walkingIn → seated within
+        // 100ms of spawn, the client mirror then re-pushes
+        // state="walkingIn" via update_guest_position, the server's
+        // next arrival check fires again, and the state ping-pongs.
+        // 500 ms is one client mirror-cycle worth of grace.
+        "walkingIn" if arrived && new_clock >= WALKING_IN_MIN_MS =>
+            Some(("seated".to_string(), 0)),
         // seated → ordering after a brief dwell (the guest reads the
         // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
         // The state_clock_ms is the elapsed dwell.
@@ -863,12 +872,20 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             Some(("eating".to_string(), 0)),
         // eating → next course or leaving after EATING_DURATION_MS.
         // (See order_index advance below — server now owns this too.)
-        "eating" if new_clock >= EATING_DURATION_MS => {
-            let total_courses = if g.order_recipes.is_empty() {
-                0
-            } else {
-                g.order_recipes.split(',').filter(|s| !s.trim().is_empty()).count() as u32
-            };
+        //
+        // Race-safety: skip the transition entirely when
+        // order_recipes is empty. The client hasn't yet mirrored
+        // the order CSV (set_guest_order is async after buildOrder),
+        // so total_courses=0 would incorrectly fire "leaving" on
+        // the first course. We'd rather extend the eating dwell a
+        // tick or two than send a paying customer home with a
+        // forgotten order. The local sim's own eating→leaving still
+        // fires at the matching time.
+        "eating" if new_clock >= EATING_DURATION_MS && !g.order_recipes.is_empty() => {
+            let total_courses = g.order_recipes
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .count() as u32;
             if g.order_index + 1 < total_courses {
                 Some(("seated".to_string(), 0))
             } else {
@@ -924,6 +941,13 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     });
 }
 
+/// Minimum time a guest must spend in "walkingIn" before the server
+/// will flip them to "seated" on arrival. Prevents the spawn-tick
+/// ping-pong where a guest spawned at (door, target=door) instantly
+/// arrives, the server flips to seated, and the client's still-in-
+/// flight mirror reverts to walkingIn. 500ms covers one client
+/// position-stream tick.
+const WALKING_IN_MIN_MS: i64 = 500;
 /// Time the guest dwells in "seated" before transitioning to
 /// "ordering". Matches the client's TIME_TO_ORDER constant
 /// (config/customer-config.ts). 4 seconds = the customer pretends to
