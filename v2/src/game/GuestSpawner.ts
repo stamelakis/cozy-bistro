@@ -1116,6 +1116,18 @@ export class GuestSpawner {
     return this.guests.length;
   }
 
+  /** Phase C.3b — resolve a local guest id ("guest-7") to its
+   * mirrored server-side auto-inc u64. Returns undefined when the
+   * guest isn't mirrored (flag off, or pre-resolve window). The
+   * Engine wires this onto StaffRouter so the ticket-mirror flow
+   * can supply the server-side guest_id to placeOrder. */
+  lookupGuestServerId(localGuestId: string): bigint | undefined {
+    for (const g of this.guests) {
+      if (g.id === localGuestId) return g.serverMirrorId;
+    }
+    return undefined;
+  }
+
   /** Stats snapshot for the live sidebar diagnostic strip. Cheap; safe
    * to call every HUD tick. */
   getSpawnerStats(): {

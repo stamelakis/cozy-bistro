@@ -846,6 +846,13 @@ export class Engine {
       // mirrors guest lifecycle to the active_guest cloud table.
       // No-op when flag off (default).
       this.spawner.cloud = this.cloud;
+      // Phase C.3b — same for StaffRouter's ticket lifecycle. Plus
+      // wire the cross-system lookup so placeOrder knows the server-
+      // side guest id for the FK.
+      if (this.router) {
+        this.router.cloud = this.cloud;
+        this.router.lookupGuestServerId = (id) => this.spawner?.lookupGuestServerId(id);
+      }
       // P5.7 — let SpacetimeClient.cloudSaveNow read the live restaurant
       // open / free-seats state so server-side attraction can skip
       // closed + full plots.

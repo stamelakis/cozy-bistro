@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isServerSim } from "./featureFlags";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
@@ -92,6 +93,13 @@ export interface Ticket {
    * existed. Bar tickets are always null (barmen don't have
    * per-individual backlogs). */
   assignedChefId?: string | null;
+  /** Phase C.3b — server-side mirror auto-inc id, once resolved
+   * after a successful place_order reducer call. Populated by
+   * mirrorTicketPlace's setTimeout poll; null until the row appears
+   * in the subscription cache (typical 50-150 ms). Used by the
+   * subsequent lifecycle mirror calls (claim, finish, pickup,
+   * deliver, cancel) to address the right server row. */
+  serverMirrorId?: bigint;
 }
 
 /** A seated guest who hasn't placed their order yet. GuestSpawner
@@ -372,6 +380,19 @@ export class StaffRouter {
    * despawned). Used by the chef / waiter / barman idle handlers
    * to pick the most-urgent ticket instead of the oldest one. */
   getGuestPatience?: (guestId: string) => number | undefined;
+
+  /** Phase C.3b — when isServerSim("tickets") is on, the StaffRouter
+   * MIRRORS its local Ticket lifecycle to the SpacetimeDB
+   * active_ticket table via this cloud client. Engine sets it after
+   * construction; null in tests / pre-cloud boot paths. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+
+  /** Resolves a local guest id ("guest-7") to its server-side
+   * active_guest auto-inc u64. Engine wires this to
+   * GuestSpawner.lookupGuestServerId so placeOrder can supply
+   * the correct guest_id FK. Returns undefined when the guest
+   * isn't (yet) mirrored — the calling mirror helper bails. */
+  lookupGuestServerId?: (localGuestId: string) => bigint | undefined;
 
   private readonly chefs: StaffActor[] = [];
   private readonly waiters: StaffActor[] = [];
@@ -1030,16 +1051,99 @@ export class StaffRouter {
     const assignedChefId = (appliance === "bar")
       ? null
       : this.pickChefForTicket(seatFloor);
-    this.tickets.push({
+    const ticket: Ticket = {
       id, guestId, recipeId, state: "queued",
       seatPos: seatPos.clone(), clock: 0,
       baseCookSeconds: cookSeconds,
       cookSeconds, appliance, seatFloor,
       seatAtBar,
       assignedChefId,
-    });
+    };
+    this.tickets.push(ticket);
     console.log(`[Router] enqueued ${id} for ${guestId} (${recipeId}@${appliance}, ${cookSeconds}s cook, chef=${assignedChefId ?? "any"}) — ${this.tickets.length} ticket(s), ${this.chefs.filter((c) => c.state === "idle").length} idle chef(s)`);
+    this.mirrorTicketPlace(ticket);
     return id;
+  }
+
+  // ======================================================================
+  //                Phase C.3b — server-mirror helpers
+  // ======================================================================
+  // Six helpers, one per lifecycle transition the local Ticket goes
+  // through. All bail silently when isServerSim("tickets") is off OR
+  // when the cloud client isn't wired. mirrorTicketPlace also schedules
+  // a setTimeout poll to resolve the server-side auto-inc id back to
+  // ticket.serverMirrorId so subsequent transitions can address it.
+
+  private mirrorTicketPlace(ticket: Ticket): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    const guestServerId = this.lookupGuestServerId?.(ticket.guestId);
+    if (guestServerId == null) {
+      // The guest hasn't been mirrored yet (flag off, or pre-resolve
+      // window). Skip — we'd otherwise create a ticket with no parent.
+      return;
+    }
+    this.cloud.placeOrder({
+      guestId: guestServerId,
+      clientTempId: ticket.id,
+      recipeId: ticket.recipeId,
+      baseCookSecondsMs: BigInt(Math.round(ticket.baseCookSeconds * 1000)),
+      appliance: ticket.appliance,
+      seatX: ticket.seatPos.x,
+      seatZ: ticket.seatPos.y,
+      seatFloor: ticket.seatFloor,
+      seatAtBar: !!ticket.seatAtBar,
+    });
+    // Resolve the auto-inc id once the row lands. Same 250 ms wait
+    // we use for guest mirroring.
+    window.setTimeout(() => {
+      if (!this.cloud) return;
+      const id = this.cloud.findActiveTicketIdByClientTempId(ticket.id);
+      if (id != null) ticket.serverMirrorId = id;
+    }, 250);
+  }
+
+  private mirrorTicketClaim(ticket: Ticket, chefMemberId: string): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    if (ticket.serverMirrorId == null) {
+      ticket.serverMirrorId = this.cloud
+        .findActiveTicketIdByClientTempId(ticket.id) ?? undefined;
+    }
+    if (ticket.serverMirrorId == null) return;
+    this.cloud.claimTicket(
+      ticket.serverMirrorId,
+      chefMemberId,
+      BigInt(Math.round(ticket.cookSeconds * 1000)),
+    );
+  }
+
+  private mirrorTicketFinish(ticket: Ticket, pickup: THREE.Vector2 | undefined, pickupFloor: number): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    if (ticket.serverMirrorId == null) {
+      ticket.serverMirrorId = this.cloud
+        .findActiveTicketIdByClientTempId(ticket.id) ?? undefined;
+    }
+    if (ticket.serverMirrorId == null) return;
+    const px = pickup?.x ?? ticket.seatPos.x;
+    const pz = pickup?.y ?? ticket.seatPos.y;
+    this.cloud.finishCooking(ticket.serverMirrorId, px, pz, pickupFloor);
+  }
+
+  private mirrorTicketPickup(ticket: Ticket): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    if (ticket.serverMirrorId == null) return;
+    this.cloud.pickupTicket(ticket.serverMirrorId);
+  }
+
+  private mirrorTicketDeliver(ticket: Ticket): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    if (ticket.serverMirrorId == null) return;
+    this.cloud.deliverTicket(ticket.serverMirrorId);
+  }
+
+  private mirrorTicketCancel(ticket: Ticket): void {
+    if (!isServerSim("tickets") || !this.cloud) return;
+    if (ticket.serverMirrorId == null) return;
+    this.cloud.cancelTicket(ticket.serverMirrorId);
   }
 
   /** Number of queued+cooking tickets currently in a chef's backlog.
@@ -1150,6 +1254,7 @@ export class StaffRouter {
       w.clock = 0;
     }
     this.readyStallLogged.delete(ticket.id);
+    this.mirrorTicketCancel(ticket);
     this.tickets.splice(idx, 1);
     console.log(`[Router] cancelTicket ${ticket.id} (guest ${guestId}) — was ${ticket.state}`);
     return true;
@@ -1319,6 +1424,7 @@ export class StaffRouter {
           // at; same floor as the chef (no cross-floor cooking).
           ticket.pickupPos = c.character.groundPos.clone();
           ticket.pickupFloor = c.currentFloor;
+          this.mirrorTicketFinish(ticket, ticket.pickupPos, ticket.pickupFloor);
           this.releaseStove(c);
           c.target = this.pickChefIdleSpot(c);
           this.planPath(c);
@@ -1412,6 +1518,7 @@ export class StaffRouter {
             : undefined;
           if (deliveringTicket) {
             deliveringTicket.state = "delivered";
+            this.mirrorTicketDeliver(deliveringTicket);
             b.ticketId = null;
             b.target = this.pickBarmanIdleSpot(b);
             this.planPath(b);
@@ -1474,8 +1581,13 @@ export class StaffRouter {
           // customers (table seats) get the ticket marked "ready" so
           // the waiter pool picks it up.
           if (ticket.seatAtBar) {
+            // For bar tickets the barman is also the delivery agent,
+            // so the server sees a single "ready→delivering" hop. Fire
+            // both mirror calls to keep the cloud state consistent.
+            this.mirrorTicketFinish(ticket, ticket.pickupPos, ticket.pickupFloor);
             ticket.state = "delivering";
             ticket.clock = 0;
+            this.mirrorTicketPickup(ticket);
             // b.ticketId stays set — the movingToWork branch checks
             // ticket.state === "delivering" to know it's a deliver leg.
             b.target = ticket.seatPos.clone();
@@ -1487,6 +1599,7 @@ export class StaffRouter {
           } else {
             ticket.state = "ready";
             ticket.clock = 0;
+            this.mirrorTicketFinish(ticket, ticket.pickupPos, ticket.pickupFloor ?? 0);
             b.target = this.pickBarmanIdleSpot(b);
             this.planPath(b);
             b.state = "returningHome";
@@ -1554,6 +1667,7 @@ export class StaffRouter {
       ticket.clock = 0;
       const chefMult = this.getChefCookMultiplier?.(b.memberId) ?? 1;
       ticket.cookSeconds = Math.max(1, ticket.baseCookSeconds * chefMult);
+      this.mirrorTicketClaim(ticket, b.memberId);
       b.ticketId = ticket.id;
       b.target = target;
       this.planPath(b);
@@ -1624,6 +1738,7 @@ export class StaffRouter {
       ticket.clock = 0;
       const chefMult = this.getChefCookMultiplier?.(c.memberId) ?? 1;
       ticket.cookSeconds = Math.max(1, ticket.baseCookSeconds * chefMult);
+      this.mirrorTicketClaim(ticket, c.memberId);
       c.ticketId = ticket.id;
       c.target = target;
       this.planPath(c);
@@ -1657,6 +1772,7 @@ export class StaffRouter {
   private startWaiterDelivery(w: StaffActor, ticket: Ticket): void {
     ticket.state = "delivering";
     ticket.clock = 0;
+    this.mirrorTicketPickup(ticket);
     w.ticketId = ticket.id;
     // Walk to the SPECIFIC station the cook stood at when they marked
     // the ticket ready — for bar drinks that's the bar counter, for
@@ -2016,7 +2132,10 @@ export class StaffRouter {
         this.moveActor(w, dt);
         if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
-          if (ticket) ticket.state = "delivered";
+          if (ticket) {
+            ticket.state = "delivered";
+            this.mirrorTicketDeliver(ticket);
+          }
           if (w.heldPlate) w.heldPlate.visible = false;
           w.target = w.home.clone();
           w.targetFloor = w.homeFloor;
