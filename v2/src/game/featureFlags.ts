@@ -137,32 +137,30 @@ function computeFlags(): ServerSimFlags {
  * to the same shape. */
 export const featureFlags: Readonly<ServerSimFlags> = Object.freeze(computeFlags());
 
-/** Subsystems with incomplete server-side cutover. Turning these on
- * via `?serverSim=...` routes the local sim into stub paths that may
- * not behave correctly until the matching server-side state machines
- * land. Listed here so warnUnsafeFlags() can surface a console
- * warning at startup.
+/** Subsystem audit (post-commit 1fba1e7 cleanup):
  *
- * Cutover-ready subsystems (safe to flag on):
- *   - furniture: full read + write + live-diff (commit 6552b31 etc.)
- *   - dishware: full read + write + live-diff + server-side cycle (H.4)
- *   - guests: REWRITTEN — flag-on now means "additionally mirror to
- *             cloud" instead of "use server stub". Local sim always
- *             runs as source of truth. Safe.
+ * All-safe — flag-on is purely additive (mirror-gated writes only):
+ *   - furniture: full read + write + live-diff (commit 6552b31 era)
+ *   - guests: rewritten to additive mirror (1fba1e7); local sim always
+ *             runs as source of truth
+ *   - tickets: every isServerSim check is a mirror-gate inside a
+ *              StaffRouter helper. Local sim runs unchanged
+ *   - staff: same — mirror-gates only, no bailouts
  *
- * Partial-cutover (warn but won't break the game):
- *   - tickets: H.6 server auto-claim ships; pairs with H.7 release.
- *              Flag-on should be tested against published module
- *              first to verify the cycle works.
- *   - staff: position step + state flips ship, but client doesn't yet
- *            adopt server position (still races with local mirror).
+ * Publish-dependent (works when ON if the spacetime module has
+ * H.4 published; without publish the local cycle countdown stops):
+ *   - dishware: flag-on disables the local DishwareSystem.update()
+ *               cycle countdown (intentional cutover to server H.4).
+ *               If you flip this on without publishing the matching
+ *               server changes, dishwasher cycles never complete.
  */
 const UNSAFE_FLAGS: ReadonlySet<keyof ServerSimFlags> = new Set([
-  "tickets", "staff",
+  "dishware",
 ]);
 
-/** Loud console warning at module import when an unsafe flag is on.
- * Better than the user spending an hour debugging "no customers". */
+/** Loud console warning at module import when a publish-dependent
+ * flag is on. Helps surface the cutover dependency before users
+ * report "dishes never get washed". */
 function warnUnsafeFlags(flags: ServerSimFlags): void {
   const on: string[] = [];
   for (const k of UNSAFE_FLAGS) {
@@ -171,9 +169,9 @@ function warnUnsafeFlags(flags: ServerSimFlags): void {
   if (on.length === 0) return;
   try {
     console.warn(
-      `[featureFlags] UNSAFE serverSim flag(s) on: ${on.join(", ")}.\n`
-      + "These subsystems have INCOMPLETE Phase H cutover and may break the local game.\n"
-      + "Known regression for 'guests': customer spawning stops.\n"
+      `[featureFlags] publish-dependent serverSim flag(s) on: ${on.join(", ")}.\n`
+      + "These require the latest spacetime module to be published.\n"
+      + "Without publish the local cycle is disabled but the server isn't taking over yet.\n"
       + "Use ?serverSim=off in the URL to recover.",
     );
   } catch { /* console unavailable */ }
