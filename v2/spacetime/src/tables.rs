@@ -831,3 +831,47 @@ pub struct PlacedFurniture {
     /// player press R on a toaster to turn it 90° on the counter.
     pub local_rot_y: f32,
 }
+
+/// Phase E — server-authoritative dishware pool. One row per
+/// (restaurant, kind, tier) triple. clean + dirty counts mirror the
+/// client's DishwareSystem pools. Reservations held by mid-meal
+/// guests live on active_guest.reserved_dish_tiers — this table is
+/// only the persistent pool, not the in-flight set.
+///
+/// Composite primary key encoded as "{restaurant_id}:{kind}:{tier}"
+/// — single PK lookups + the btree on restaurant_id covers
+/// per-restaurant iteration.
+#[table(name = dishware_pool, public)]
+pub struct DishwarePool {
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// "plate" | "glass"
+    pub kind: String,
+    pub tier: u32,
+    pub clean: u32,
+    pub dirty: u32,
+}
+
+/// Phase E — mid-cycle state of a placed dishwasher. The client's
+/// DishwareSystem.update(dt) ticks the cycle locally; this row is
+/// the snapshot a subscribed client can read to see "this dishwasher
+/// has 8 plates 1.4 s from finishing." Updated on every load + every
+/// time the cycle clock changes meaningfully.
+///
+/// Keyed on the dishwasher's furniture uid (matches the same id used
+/// in placed_furniture) — when the dishwasher is sold the row goes
+/// away alongside it via a separate delete call.
+#[table(name = dishwasher_batch, public)]
+pub struct DishwasherBatch {
+    #[primary_key]
+    pub furniture_uid: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// "dishwasher" | "dishwasher-pro"
+    pub def_id: String,
+    pub plates: u32,
+    pub glasses: u32,
+    pub cycle_time_remaining_ms: i64,
+}

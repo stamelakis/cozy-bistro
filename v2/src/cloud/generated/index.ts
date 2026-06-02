@@ -80,6 +80,8 @@ import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
 import UnregisterStaffActorReducer from "./unregister_staff_actor_reducer";
+import UpdateDishwarePoolReducer from "./update_dishware_pool_reducer";
+import UpdateDishwasherBatchReducer from "./update_dishwasher_batch_reducer";
 import UpdateGuestPositionReducer from "./update_guest_position_reducer";
 import UpdateStaffActorReducer from "./update_staff_actor_reducer";
 import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
@@ -95,6 +97,8 @@ import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
 import ChatMessageRow from "./chat_message_table";
 import CoOwnerRow from "./co_owner_table";
+import DishwarePoolRow from "./dishware_pool_table";
+import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
@@ -238,6 +242,34 @@ const tablesSchema = __schema({
       { name: 'co_owner_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CoOwnerRow),
+  dishware_pool: __table({
+    name: 'dishware_pool',
+    indexes: [
+      { accessor: 'key', name: 'dishware_pool_key_idx_btree', algorithm: 'btree', columns: [
+        'key',
+      ] },
+      { accessor: 'restaurant_id', name: 'dishware_pool_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'dishware_pool_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, DishwarePoolRow),
+  dishwasher_batch: __table({
+    name: 'dishwasher_batch',
+    indexes: [
+      { accessor: 'furniture_uid', name: 'dishwasher_batch_furniture_uid_idx_btree', algorithm: 'btree', columns: [
+        'furnitureUid',
+      ] },
+      { accessor: 'restaurant_id', name: 'dishwasher_batch_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'dishwasher_batch_furniture_uid_key', constraint: 'unique', columns: ['furnitureUid'] },
+    ],
+  }, DishwasherBatchRow),
   friend_request: __table({
     name: 'friend_request',
     indexes: [
@@ -478,6 +510,8 @@ const reducersSchema = __reducers(
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
   __reducerSchema("unregister_staff_actor", UnregisterStaffActorReducer),
+  __reducerSchema("update_dishware_pool", UpdateDishwarePoolReducer),
+  __reducerSchema("update_dishwasher_batch", UpdateDishwasherBatchReducer),
   __reducerSchema("update_guest_position", UpdateGuestPositionReducer),
   __reducerSchema("update_staff_actor", UpdateStaffActorReducer),
   __reducerSchema("wipe_my_restaurant", WipeMyRestaurantReducer),

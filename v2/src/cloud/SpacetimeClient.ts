@@ -794,6 +794,37 @@ export class SpacetimeClient {
     catch (e) { console.warn("[Cloud] sellFurniture failed:", e); }
   }
 
+  // =====================================================================
+  //                Phase E — dishware helpers
+  // =====================================================================
+
+  /** Upsert one (kind, tier) pool entry. Server deletes the row when
+   * clean + dirty are both zero so empty pools don't accumulate. */
+  updateDishwarePool(kind: "plate" | "glass", tier: number, clean: number, dirty: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.updateDishwarePool({
+        restaurantId: this.restaurantId,
+        kind, tier, clean, dirty,
+      });
+    } catch (e) {
+      console.warn("[Cloud] updateDishwarePool failed:", e);
+    }
+  }
+
+  /** Upsert one dishwasher's mid-cycle state. */
+  updateDishwasherBatch(furnitureUid: string, defId: string, plates: number, glasses: number, cycleTimeRemainingMs: bigint): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.updateDishwasherBatch({
+        restaurantId: this.restaurantId,
+        furnitureUid, defId, plates, glasses, cycleTimeRemainingMs,
+      });
+    } catch (e) {
+      console.warn("[Cloud] updateDishwasherBatch failed:", e);
+    }
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */

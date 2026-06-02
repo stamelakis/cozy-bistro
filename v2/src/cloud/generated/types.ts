@@ -136,6 +136,26 @@ export const CoOwner = __t.object("CoOwner", {
 });
 export type CoOwner = __Infer<typeof CoOwner>;
 
+export const DishwarePool = __t.object("DishwarePool", {
+  key: __t.string(),
+  restaurantId: __t.u64(),
+  kind: __t.string(),
+  tier: __t.u32(),
+  clean: __t.u32(),
+  dirty: __t.u32(),
+});
+export type DishwarePool = __Infer<typeof DishwarePool>;
+
+export const DishwasherBatch = __t.object("DishwasherBatch", {
+  furnitureUid: __t.string(),
+  restaurantId: __t.u64(),
+  defId: __t.string(),
+  plates: __t.u32(),
+  glasses: __t.u32(),
+  cycleTimeRemainingMs: __t.i64(),
+});
+export type DishwasherBatch = __Infer<typeof DishwasherBatch>;
+
 export const FriendRequest = __t.object("FriendRequest", {
   id: __t.u64(),
   fromPlayer: __t.identity(),

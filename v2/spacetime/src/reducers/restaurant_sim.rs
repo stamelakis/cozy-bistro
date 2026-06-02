@@ -13,10 +13,12 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 use crate::tables::{
-    active_guest, active_ticket, placed_furniture, restaurant,
-    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
-    ActiveGuest, ActiveTicket, PlacedFurniture, RestaurantTickSchedule,
-    RestaurantTickState, StaffActor,
+    active_guest, active_ticket, dishware_pool, dishwasher_batch,
+    placed_furniture, restaurant, restaurant_tick_schedule,
+    restaurant_tick_state, staff_actor,
+    ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
+    PlacedFurniture, RestaurantTickSchedule, RestaurantTickState,
+    StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -936,6 +938,107 @@ pub fn sell_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
     if r.owner != ctx.sender {
         return Err("Only the owner can sell their furniture".into());
     }
-    ctx.db.placed_furniture().uid().delete(uid);
+    ctx.db.placed_furniture().uid().delete(uid.clone());
+    // Cascade — if the deleted item was a dishwasher, drop its batch
+    // row too so a fresh placement of the same uid starts clean.
+    if ctx.db.dishwasher_batch().furniture_uid().find(uid.clone()).is_some() {
+        ctx.db.dishwasher_batch().furniture_uid().delete(uid);
+    }
+    Ok(())
+}
+
+// =============================================================
+//                        Phase E reducers
+// =============================================================
+// Dishware pool + dishwasher batch mirroring. Upsert semantics
+// everywhere — the local DishwareSystem owns the truth; this side
+// just publishes snapshots for cross-client subscribers.
+
+fn pool_key(restaurant_id: u64, kind: &str, tier: u32) -> String {
+    format!("{}:{}:{}", restaurant_id, kind, tier)
+}
+
+/// Upsert one pool entry. Called by the local DishwareSystem mirror
+/// whenever a (kind, tier) pool's clean OR dirty count changes
+/// (reservation, mark-dirty, wash, buy, settle). Single reducer
+/// covers all those mutations because the inputs map 1:1 to the
+/// row's columns.
+#[reducer]
+pub fn update_dishware_pool(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: String,
+    tier: u32,
+    clean: u32,
+    dirty: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can update dishware pools".into());
+    }
+    if kind != "plate" && kind != "glass" {
+        return Err(format!("Unknown dishware kind: {kind}"));
+    }
+    let key = pool_key(restaurant_id, &kind, tier);
+    let row = DishwarePool {
+        key: key.clone(),
+        restaurant_id, kind, tier, clean, dirty,
+    };
+    // Delete empty pool rows so the table doesn't accumulate zeros.
+    if clean == 0 && dirty == 0 {
+        if ctx.db.dishware_pool().key().find(key.clone()).is_some() {
+            ctx.db.dishware_pool().key().delete(key);
+        }
+        return Ok(());
+    }
+    if ctx.db.dishware_pool().key().find(key).is_some() {
+        ctx.db.dishware_pool().key().update(row);
+    } else {
+        ctx.db.dishware_pool().insert(row);
+    }
+    Ok(())
+}
+
+/// Upsert one dishwasher's mid-cycle state. The client streams this
+/// whenever it loads a piece OR the cycle clock advances by a
+/// meaningful amount (~1 s throttle on the mirror side). When the
+/// batch is empty (cycle finished, all pieces flushed back to the
+/// pool) the row is deleted so we don't accumulate "empty
+/// dishwasher" rows.
+#[reducer]
+pub fn update_dishwasher_batch(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    furniture_uid: String,
+    def_id: String,
+    plates: u32,
+    glasses: u32,
+    cycle_time_remaining_ms: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can update dishwashers".into());
+    }
+    if plates == 0 && glasses == 0 {
+        if ctx.db.dishwasher_batch().furniture_uid().find(furniture_uid.clone()).is_some() {
+            ctx.db.dishwasher_batch().furniture_uid().delete(furniture_uid);
+        }
+        return Ok(());
+    }
+    let row = DishwasherBatch {
+        furniture_uid: furniture_uid.clone(),
+        restaurant_id,
+        def_id,
+        plates,
+        glasses,
+        cycle_time_remaining_ms,
+    };
+    if ctx.db.dishwasher_batch().furniture_uid().find(furniture_uid).is_some() {
+        ctx.db.dishwasher_batch().furniture_uid().update(row);
+    } else {
+        ctx.db.dishwasher_batch().insert(row);
+    }
     Ok(())
 }

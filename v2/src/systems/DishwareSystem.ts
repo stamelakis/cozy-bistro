@@ -6,6 +6,7 @@ import {
   type DishKind,
   type DishwareSetDef,
 } from "../data/dishwareCatalog";
+import { isServerSim } from "../game/featureFlags";
 
 /**
  * Owns the restaurant's plate + glass inventory.
@@ -90,9 +91,58 @@ export class DishwareSystem {
    * call per mutation when on. */
   private logger?: (msg: string) => void;
 
+  /** Phase E — Engine wires this so every pool / batch mutation
+   * mirrors to the cloud's dishware_pool + dishwasher_batch tables
+   * when isServerSim("dishware") is on. Null in tests / pre-cloud
+   * boot. mirrorPool / mirrorBatch helpers below bail silently. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+
   /** Wire (or unwire) the per-mutation logger. Pass undefined to mute. */
   setLogger(fn: ((msg: string) => void) | undefined): void {
     this.logger = fn;
+  }
+
+  // === Phase E — cloud mirror helpers ===
+
+  /** Read the current (kind, tier) entry and push it to the cloud's
+   * dishware_pool table. Called from every mutation site. Bails when
+   * the flag is off OR the cloud isn't wired. Server upserts on
+   * non-zero clean/dirty and deletes the row when both reach zero so
+   * the pool table doesn't accumulate empties. */
+  private mirrorPool(kind: DishKind, tier: number): void {
+    if (!isServerSim("dishware") || !this.cloud) return;
+    const pool = this.poolFor(kind);
+    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
+    this.cloud.updateDishwarePool(kind, tier, entry.clean, entry.dirty);
+  }
+
+  /** Sweep every (kind, tier) pool entry to the cloud. Used after
+   * bulk operations (hydrate from save, adminWashAll) where we'd
+   * otherwise have to fire mirrorPool inside the inner loops. */
+  private mirrorAllPools(): void {
+    if (!isServerSim("dishware") || !this.cloud) return;
+    for (const [tier] of this.plates) this.mirrorPool("plate", tier);
+    for (const [tier] of this.glasses) this.mirrorPool("glass", tier);
+  }
+
+  /** Push the current state of one dishwasher's batch to the cloud.
+   * Same delete-on-zero semantics — empty cycles drop the row. */
+  private mirrorBatch(uid: string): void {
+    if (!isServerSim("dishware") || !this.cloud) return;
+    const batch = this.dishwasherBatches.get(uid);
+    if (!batch) {
+      // Local batch was cleared (cycle finished) — push an empty
+      // update so the server deletes its row too.
+      this.cloud.updateDishwasherBatch(uid, "", 0, 0, BigInt(0));
+      return;
+    }
+    this.cloud.updateDishwasherBatch(
+      uid,
+      batch.defId,
+      batch.plates,
+      batch.glasses,
+      BigInt(Math.round(batch.cycleTimeRemaining * 1000)),
+    );
   }
 
   /** Internal logging helper — keeps the log() callsites tidy and
@@ -220,6 +270,7 @@ export class DishwareSystem {
     entry.clean -= 1;
     if (entry.clean === 0 && entry.dirty === 0) pool.delete(tier);
     this.log(`reserveOne(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.mirrorPool(kind, tier);
     return tier;
   }
 
@@ -231,6 +282,7 @@ export class DishwareSystem {
     entry.dirty += 1;
     pool.set(tier, entry);
     this.log(`markDirty(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.mirrorPool(kind, tier);
   }
 
   /** Wash one dirty piece (any tier — picks the highest-tier dirty so
@@ -252,6 +304,7 @@ export class DishwareSystem {
     entry.clean += 1;
     this.onDishWashed?.(kind, best);
     this.log(`washOne(${kind}, t${best}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.mirrorPool(kind, best);
     return best;
   }
 
@@ -277,6 +330,7 @@ export class DishwareSystem {
     // bumps lifetimeAdded itself so only real purchases inflate the
     // expected total.
     this.log(`addClean(${kind}, t${tier}, +${take}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.mirrorPool(kind, tier);
     return take;
   }
 
@@ -358,11 +412,22 @@ export class DishwareSystem {
    * via washOne() the moment the waiter finishes scrubbing — those
    * never touch this tick. */
   update(dt: number): void {
-    for (const batch of this.dishwasherBatches.values()) {
+    // Throttle the per-tick batch-time stream to ~1 Hz. Pool updates
+    // already fire on every washOne call below, but the batch's
+    // cycle_time_remaining_ms otherwise wouldn't update server-side
+    // until the cycle completed — leaving subscribers reading a
+    // stale "8.4 s remaining" for the entire wash.
+    this.batchStreamAccum += dt;
+    const streamDue = this.batchStreamAccum >= 1.0;
+    if (streamDue) this.batchStreamAccum = 0;
+    for (const [uid, batch] of this.dishwasherBatches) {
       const loaded = batch.plates + batch.glasses;
       if (loaded === 0) continue;
       batch.cycleTimeRemaining -= dt;
-      if (batch.cycleTimeRemaining > 0) continue;
+      if (batch.cycleTimeRemaining > 0) {
+        if (streamDue) this.mirrorBatch(uid);
+        continue;
+      }
       // Cycle complete — all loaded pieces become clean simultaneously.
       // washOne picks the highest-tier dirty piece globally; the
       // dishwasher is abstract about WHICH piece it holds.
@@ -371,8 +436,12 @@ export class DishwareSystem {
       batch.plates = 0;
       batch.glasses = 0;
       batch.cycleTimeRemaining = 0;
+      this.mirrorBatch(uid); // empty → server deletes the row
     }
   }
+
+  /** Accumulator for the ~1 Hz dishwasher cycle-clock stream. */
+  private batchStreamAccum = 0;
 
   // === Dishwasher batch API (called by the waiter wash trip) ===
 
@@ -406,6 +475,7 @@ export class DishwareSystem {
     if (kind === "plate") batch.plates += 1;
     else batch.glasses += 1;
     batch.cycleTimeRemaining += dishwasherWashPerItem(defId);
+    this.mirrorBatch(uid);
     return true;
   }
 
@@ -448,13 +518,15 @@ export class DishwareSystem {
       entry.clean += entry.dirty;
       entry.dirty = 0;
     }
-    for (const batch of this.dishwasherBatches.values()) {
+    for (const [uid, batch] of this.dishwasherBatches) {
       for (let i = 0; i < batch.plates; i += 1) this.washOne("plate");
       for (let i = 0; i < batch.glasses; i += 1) this.washOne("glass");
       batch.plates = 0;
       batch.glasses = 0;
       batch.cycleTimeRemaining = 0;
+      this.mirrorBatch(uid);
     }
+    this.mirrorAllPools();
     this.log(`adminWashAll → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}`);
   }
 
@@ -546,6 +618,10 @@ export class DishwareSystem {
     // the save format so old call sites don't have to change.
     void inFlight;
     this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass}, log entries: ${this.purchaseLog.length}`);
+    // Phase E — push the post-hydrate pool snapshot to the cloud so
+    // subscribers see the loaded restaurant's dish inventory without
+    // waiting for the first per-action mutation.
+    this.mirrorAllPools();
   }
 
   // === Rating bonus ===

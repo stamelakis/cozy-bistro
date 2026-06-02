@@ -929,6 +929,9 @@ export class Engine {
       );
       this.game.dishware.setLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       this.spawner.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));
+      // Phase E — DishwareSystem mirrors pool + batch mutations to
+      // the cloud when isServerSim("dishware") is on. No-op flag-off.
+      this.game.dishware.cloud = this.cloud;
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];
