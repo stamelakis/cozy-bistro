@@ -560,14 +560,25 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             // Cascade: also delete any active_ticket rows still bound
             // to this guest. The chef shouldn't keep cooking food
             // for a customer who already left.
-            let orphan_tickets: Vec<u64> = ctx.db
+            //
+            // Collect (ticket_id, assigned_chef_id) pairs so we can
+            // also release the assigned chef from each ticket — H.6
+            // auto-claimed them, so without an explicit release here
+            // the chef would be stuck "cooking" a ticket that just
+            // got deleted, with H.7's release path never firing
+            // because tick_ticket_state's cooking→ready transition
+            // never runs (the ticket row is gone).
+            let orphan_pairs: Vec<(u64, String)> = ctx.db
                 .active_ticket()
                 .iter()
                 .filter(|t| t.guest_id == g.id)
-                .map(|t| t.id)
+                .map(|t| (t.id, t.assigned_chef_id.clone()))
                 .collect();
-            for tid in orphan_tickets {
+            for (tid, chef_id) in orphan_pairs {
                 ctx.db.active_ticket().id().delete(tid);
+                if !chef_id.is_empty() {
+                    release_chef_from_ticket(ctx, &chef_id);
+                }
             }
             ctx.db.active_guest().id().delete(g.id);
             return;
