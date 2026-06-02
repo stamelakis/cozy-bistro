@@ -1184,6 +1184,103 @@ export class FurnitureRegistry {
    * default-clobber problem). */
   private suppressMirrorForReload = false;
 
+  /** Subscribe to live placed_furniture changes from the cloud. Engine
+   * calls this once after restoreFromCloud completes. From then on,
+   * any other client's place/move/sell shows up in this restaurant
+   * within a fraction of a second — no refresh needed.
+   *
+   * Bails when the flag is off or the cloud isn't wired. Subscriptions
+   * persist for the session (no unsubscribe yet — would only matter
+   * if we let the flag toggle mid-session, which we don't). */
+  subscribeToCloudChanges(): void {
+    if (!isServerSim("furniture") || !this.cloud) return;
+    this.cloud.subscribePlacedFurnitureChanges({
+      onInsert: (row) => { void this.applyCloudInsert(row); },
+      onUpdate: (row) => { this.applyCloudUpdate(row); },
+      onDelete: (uid) => { this.applyCloudDelete(uid); },
+    });
+  }
+
+  /** Insert event from the subscription. Skips when the uid is
+   * already in this.items (i.e., we just created it locally — the
+   * mirror loop bounces the row back through our own subscription).
+   * Otherwise async-loads the GLB and spawns. */
+  private async applyCloudInsert(row: import("../cloud/SpacetimeClient").PlacedFurnitureRow): Promise<void> {
+    if (this.items.some((it) => it.uid === row.uid)) return;
+    const def = getFurnitureDef(row.defId);
+    if (!def) return;
+    try {
+      const model = await this.loader.load(def.modelPath);
+      fitFurniture(model, def);
+      const floor = Math.max(0, row.floor);
+      model.position.set(row.x, placementY(model, def) + this.floorYOffset(floor), row.z);
+      model.rotation.y = row.rotY;
+      snapToAdjacentWall(model, def);
+      this.mountFor(floor).add(model);
+      const item: PlacedFurnitureItem = {
+        uid: row.uid, defId: row.defId,
+        x: row.x, z: row.z, rotY: row.rotY,
+        floor, model,
+      };
+      if (row.parentUid) item.parentUid = row.parentUid;
+      if (row.slotIndex >= 0) item.slotIndex = row.slotIndex;
+      if (row.localRotY !== 0) item.localRotY = row.localRotY;
+      this.items.push(item);
+      // The cascade-reseat for any surface child that landed BEFORE
+      // its host runs in restoreFromCloud's second pass; live inserts
+      // come one at a time so we just reseat this item's children if
+      // it happens to be a host.
+      this.reseatSurfaceChildren(row.uid);
+      console.log(`[FurnitureRegistry] cloud insert → ${row.defId} @ (${row.x}, ${row.z}, F${floor})`);
+    } catch (err) {
+      console.warn(`[FurnitureRegistry] failed to apply cloud insert (${row.defId}):`, err);
+    }
+  }
+
+  /** Update event. Diff against our current row; only apply when the
+   * pose actually changed (server upserts can be no-ops). */
+  private applyCloudUpdate(row: import("../cloud/SpacetimeClient").PlacedFurnitureRow): void {
+    const item = this.items.find((it) => it.uid === row.uid);
+    if (!item) {
+      // Edge case: an update arrives before its matching insert (race
+      // when the subscription cache replays history). Treat as an
+      // insert so we don't drop the row entirely.
+      void this.applyCloudInsert(row);
+      return;
+    }
+    const samePose = item.x === row.x && item.z === row.z
+        && item.rotY === row.rotY && item.floor === row.floor;
+    if (samePose) return;
+    // Use the existing setPose path — handles the cascade reseat for
+    // surface children + the localRotY recompute. The mirror inside
+    // setPose fires another moveFurniture reducer back to the server;
+    // that's a no-op upsert (the row already has these values), so
+    // we suppress it during apply to avoid the round-trip.
+    this.suppressMirrorForReload = true;
+    try {
+      this.setPose(row.uid, row.x, row.z, row.rotY);
+      // setPose doesn't change floor — handle that case separately.
+      if (item.floor !== row.floor) {
+        this.setItemFloor(row.uid, row.floor);
+      }
+    } finally {
+      this.suppressMirrorForReload = false;
+    }
+    console.log(`[FurnitureRegistry] cloud update → ${row.uid} now (${row.x}, ${row.z}, F${row.floor})`);
+  }
+
+  /** Delete event. Skip when the uid isn't here (we already removed
+   * it locally) — same idempotency guard as insert. */
+  private applyCloudDelete(uid: string): void {
+    const idx = this.items.findIndex((it) => it.uid === uid);
+    if (idx < 0) return;
+    const item = this.items[idx];
+    item.model.removeFromParent();
+    this.items.splice(idx, 1);
+    this.surfaceExtentCache.delete(uid);
+    console.log(`[FurnitureRegistry] cloud delete → ${uid}`);
+  }
+
   /** Re-instantiate placements from a save. Resolves once every model
    * is loaded (or skipped if unknown id / load error). Surface-placed
    * items override their Y from the host's measured top after the host

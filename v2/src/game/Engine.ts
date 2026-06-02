@@ -1430,7 +1430,15 @@ export class Engine {
       // installed in Phase F will populate the cloud on the next
       // save round-trip, so subsequent logins find data to restore.
       if (featureFlags.furniture) {
-        void this.registry.restoreFromCloud();
+        // Restore first, then subscribe — order matters: subscribing
+        // before the cache is primed would deliver every existing row
+        // as a fresh "insert" event and re-trigger model loads we just
+        // did via restoreFromCloud. Awaiting the restore ensures
+        // applyCloudInsert's "uid already in items" idempotency guard
+        // catches the cache replay.
+        void this.registry.restoreFromCloud().then(() => {
+          this.registry.subscribeToCloudChanges();
+        });
       }
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as

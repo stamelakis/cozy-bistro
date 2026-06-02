@@ -17,6 +17,23 @@
 import type { Game } from "../game/Game";
 import type { SaveSystem } from "../game/SaveSystem";
 import type { SaveGameState } from "../data/types";
+
+/** Public shape of one placed_furniture row as seen by client
+ * consumers — clean field names + plain JS types, no SpacetimeDB
+ * internals. The cloud-side correlate is the auto-generated
+ * `PlacedFurniture` interface in `cloud/generated`, which uses
+ * camelCase but is otherwise the same. */
+export interface PlacedFurnitureRow {
+  uid: string;
+  defId: string;
+  x: number;
+  z: number;
+  rotY: number;
+  floor: number;
+  parentUid: string;
+  slotIndex: number;
+  localRotY: number;
+}
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
 
@@ -719,19 +736,9 @@ export class SpacetimeClient {
   // uids directly (no client_temp_id correlation needed) — same
   // pattern as staff_actor.member_id.
 
-  listPlacedFurniture(): {
-    uid: string;
-    defId: string;
-    x: number;
-    z: number;
-    rotY: number;
-    floor: number;
-    parentUid: string;
-    slotIndex: number;
-    localRotY: number;
-  }[] {
+  listPlacedFurniture(): PlacedFurnitureRow[] {
     if (!this.conn || this.restaurantId == null) return [];
-    const out: ReturnType<SpacetimeClient["listPlacedFurniture"]> = [];
+    const out: PlacedFurnitureRow[] = [];
     const rid = this.restaurantId;
     try {
       for (const f of this.conn.db.placed_furniture.iter()) {
@@ -792,6 +799,58 @@ export class SpacetimeClient {
     if (!this.conn) return;
     try { this.conn.reducers.sellFurniture({ uid }); }
     catch (e) { console.warn("[Cloud] sellFurniture failed:", e); }
+  }
+
+  /** Subscribe to live placed_furniture row changes for the current
+   * restaurant. Used by FurnitureRegistry to apply other clients'
+   * edits without a refresh. The three callbacks fire for the
+   * matching SDK events; the wrapper filters out rows that aren't
+   * mine (the subscription cache returns rows from every restaurant
+   * the module hosts, but we only render our own here).
+   *
+   * Caller is responsible for the "did I already apply this locally"
+   * check — same row data flows through after our OWN reducer call,
+   * so naive subscribers would double-apply.
+   *
+   * No unsubscribe yet — the listeners persist for the session. Add
+   * if we ever need to flip the flag mid-session. */
+  subscribePlacedFurnitureChanges(handlers: {
+    onInsert?: (row: PlacedFurnitureRow) => void;
+    onUpdate?: (row: PlacedFurnitureRow) => void;
+    onDelete?: (uid: string) => void;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type ServerRow = { uid: string; defId: string; restaurantId: bigint;
+        x: number; z: number; rotY: number; floor: number;
+        parentUid: string; slotIndex: number; localRotY: number };
+    const toClientRow = (r: ServerRow): PlacedFurnitureRow => ({
+      uid: r.uid, defId: r.defId,
+      x: r.x, z: r.z, rotY: r.rotY, floor: r.floor,
+      parentUid: r.parentUid, slotIndex: r.slotIndex, localRotY: r.localRotY,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.placed_furniture.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.placed_furniture.onUpdate((_ctx, _oldRow: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.placed_furniture.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.uid);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribePlacedFurnitureChanges failed:", e);
+    }
   }
 
   // =====================================================================
