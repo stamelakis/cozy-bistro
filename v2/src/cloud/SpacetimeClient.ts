@@ -55,6 +55,47 @@ export interface DishwasherBatchRow {
   glasses: number;
   cycleTimeRemainingMs: bigint;
 }
+
+/** Public shape of one staff_actor row — one per active staff member.
+ * Position is the live world position published by the local sim's
+ * streamActorsToCloud (~1 Hz). Used by visit mode + future Phase H
+ * cutover to render staff from server state. */
+export interface StaffActorRow {
+  memberId: string;
+  role: string;
+  state: string;
+  x: number;
+  z: number;
+  floor: number;
+  targetX: number;
+  targetZ: number;
+  targetFloor: number;
+  ticketId: bigint | null;
+  assignedStoveUid: string;
+  washTargetUid: string;
+  washPhase: string;
+}
+
+/** Public shape of one active_ticket row — one per in-flight order.
+ * State is the lifecycle label (queued / waitingChef / cooking / ready
+ * / pickedUp / delivered). */
+export interface ActiveTicketRow {
+  id: bigint;
+  clientTempId: string;
+  guestId: bigint;
+  recipeId: string;
+  state: string;
+  stateClockMs: bigint;
+  cookSeconds: bigint;
+  assignedChefId: string;
+  seatX: number;
+  seatZ: number;
+  seatFloor: number;
+  seatAtBar: boolean;
+  pickupX: number;
+  pickupZ: number;
+  pickupFloor: number;
+}
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
 
@@ -637,24 +678,13 @@ export class SpacetimeClient {
   // No client_temp_id correlation needed because staff actors use the
   // client's HiredStaffMember.id as the primary key directly.
 
-  listStaffActors(): {
-    memberId: string;
-    role: string;
-    state: string;
-    homeFloor: number;
-    x: number;
-    z: number;
-    floor: number;
-    targetX: number;
-    targetZ: number;
-    targetFloor: number;
-    ticketId: bigint | null;
-    assignedStoveUid: string;
-    washTargetUid: string;
-    washPhase: string;
-  }[] {
+  /** Read every staff_actor row for the current restaurant. Used by
+   * StaffRouter at boot if the staff cutover (Phase H) is on — for
+   * now the local sim seeds actors from the JSON save instead. Visit
+   * mode (P4) reads this to render the visited restaurant's staff. */
+  listStaffActors(): (StaffActorRow & { homeFloor: number })[] {
     if (!this.conn || this.restaurantId == null) return [];
-    const out: ReturnType<SpacetimeClient["listStaffActors"]> = [];
+    const out: (StaffActorRow & { homeFloor: number })[] = [];
     const rid = this.restaurantId;
     try {
       for (const a of this.conn.db.staff_actor.iter()) {
@@ -678,6 +708,111 @@ export class SpacetimeClient {
       }
     } catch { /* table not wired yet */ }
     return out;
+  }
+
+  /** Subscribe to live staff_actor changes for the current restaurant.
+   * Used by P4 visit mode to animate the visited restaurant's staff
+   * in real time. Filters by restaurantId so each visitor only sees
+   * the host they're currently watching.
+   *
+   * NOTE: NOT WIRED YET on the player's own session — both devices
+   * running a local sim would otherwise fight over each actor's
+   * position. Final cutover (Phase H) flips this on for the owner
+   * once the server-side staff state machine takes over the writes. */
+  subscribeStaffActorChanges(handlers: {
+    onInsert?: (row: StaffActorRow) => void;
+    onUpdate?: (row: StaffActorRow) => void;
+    onDelete?: (memberId: string) => void;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type ServerRow = {
+      memberId: string; restaurantId: bigint; role: string; state: string;
+      x: number; z: number; floor: number;
+      targetX: number; targetZ: number; targetFloor: number;
+      ticketId: bigint | undefined;
+      assignedStoveUid: string; washTargetUid: string; washPhase: string;
+    };
+    const toClientRow = (r: ServerRow): StaffActorRow => ({
+      memberId: r.memberId, role: r.role, state: r.state,
+      x: r.x, z: r.z, floor: r.floor,
+      targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
+      ticketId: r.ticketId ?? null,
+      assignedStoveUid: r.assignedStoveUid,
+      washTargetUid: r.washTargetUid,
+      washPhase: r.washPhase,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.staff_actor.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.staff_actor.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.staff_actor.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.memberId);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeStaffActorChanges failed:", e);
+    }
+  }
+
+  /** Subscribe to live active_ticket changes for the current restaurant.
+   * Same deferral as staff: own-restaurant wiring waits for Phase H
+   * cutover. Visit mode uses this to show other players' kitchens
+   * mid-cooking in real time. */
+  subscribeActiveTicketChanges(handlers: {
+    onInsert?: (row: ActiveTicketRow) => void;
+    onUpdate?: (row: ActiveTicketRow) => void;
+    onDelete?: (id: bigint) => void;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type ServerRow = {
+      id: bigint; restaurantId: bigint; clientTempId: string; guestId: bigint;
+      recipeId: string; state: string; stateClockMs: bigint;
+      cookSecondsMs: bigint; assignedChefId: string;
+      seatX: number; seatZ: number; seatFloor: number; seatAtBar: boolean;
+      pickupX: number; pickupZ: number; pickupFloor: number;
+    };
+    const toClientRow = (r: ServerRow): ActiveTicketRow => ({
+      id: r.id, clientTempId: r.clientTempId, guestId: r.guestId,
+      recipeId: r.recipeId, state: r.state, stateClockMs: r.stateClockMs,
+      cookSeconds: r.cookSecondsMs, assignedChefId: r.assignedChefId,
+      seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor, seatAtBar: r.seatAtBar,
+      pickupX: r.pickupX, pickupZ: r.pickupZ, pickupFloor: r.pickupFloor,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.active_ticket.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.active_ticket.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.active_ticket.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.id);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeActiveTicketChanges failed:", e);
+    }
   }
 
   registerStaffActor(args: {
