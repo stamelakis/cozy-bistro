@@ -1078,40 +1078,52 @@ export class Engine {
       visitDebug: (ownerHex?: string) => {
         console.group("[cozyBistro.visitDebug]");
         const allStaff = this.cloud.listAllStaffActors();
-        if (allStaff.length === 0) {
-          console.log("⚠ No staff_actor rows in subscription cache for ANY restaurant.");
-          console.log("  → No host has populated staff_actor yet. Needs ?serverSim=staff on the host's session.");
+        const allGuests = this.cloud.listAllActiveGuests();
+        const allTickets = this.cloud.listAllActiveTickets();
+        // Summary across every restaurant. Helps confirm SOMETHING
+        // is in the cache before drilling into one host.
+        const totalRows = allStaff.length + allGuests.length + allTickets.length;
+        console.log(`Cache totals across all restaurants: ${allStaff.length} staff · ${allGuests.length} guests · ${allTickets.length} tickets`);
+        if (totalRows === 0) {
+          console.log("⚠ No live rows in subscription cache for ANY restaurant.");
+          console.log("  → Either nobody has played yet on the published module, or the module hasn't been published with the latest server-sim tables. Have a host open the game and play for a few seconds to populate.");
           console.groupEnd();
-          return { staff: [] };
+          return { staff: [], guests: [], tickets: [] };
         }
-        // Group by restaurant_id.
-        const byRid = new Map<string, typeof allStaff>();
-        for (const s of allStaff) {
-          const key = String(s.restaurantId);
-          const arr = byRid.get(key) ?? [];
-          arr.push(s);
-          byRid.set(key, arr);
-        }
-        console.log(`Staff actors across ${byRid.size} restaurant(s):`);
-        for (const [rid, rows] of byRid) {
-          console.log(`  restaurant ${rid}: ${rows.length} actor(s)`);
+        // Group counts per restaurant for a quick overview.
+        const perRestaurant = new Map<string, { staff: number; guests: number; tickets: number }>();
+        const bump = (rid: bigint, key: "staff" | "guests" | "tickets") => {
+          const k = String(rid);
+          const entry = perRestaurant.get(k) ?? { staff: 0, guests: 0, tickets: 0 };
+          entry[key] += 1;
+          perRestaurant.set(k, entry);
+        };
+        for (const s of allStaff)   bump(s.restaurantId, "staff");
+        for (const g of allGuests)  bump(g.restaurantId, "guests");
+        for (const t of allTickets) bump(t.restaurantId, "tickets");
+        for (const [rid, counts] of perRestaurant) {
+          console.log(`  restaurant ${rid}: ${counts.staff} staff · ${counts.guests} guests · ${counts.tickets} tickets`);
         }
         if (ownerHex) {
           const targetRid = this.cloud.findRestaurantIdByOwnerHex(ownerHex);
           if (targetRid == null) {
             console.log(`⚠ No restaurant found for owner ${ownerHex}. Either the cache hasn't primed or the player has no restaurant.`);
           } else {
-            const hostRows = allStaff.filter((s) => s.restaurantId === targetRid);
+            const hostStaff   = allStaff  .filter((s) => s.restaurantId === targetRid);
+            const hostGuests  = allGuests .filter((g) => g.restaurantId === targetRid);
+            const hostTickets = allTickets.filter((t) => t.restaurantId === targetRid);
             console.log(`Host ${ownerHex} → restaurant ${targetRid}:`);
-            if (hostRows.length === 0) {
-              console.log("  ⚠ No staff_actor rows for this host. They need ?serverSim=staff enabled in their session.");
+            if (hostStaff.length === 0 && hostGuests.length === 0 && hostTickets.length === 0) {
+              console.log("  ⚠ No live rows for this host. They need to be online (or have been online recently) for their session to populate the tables.");
             } else {
-              console.table(hostRows.map((s) => s.row));
+              if (hostStaff.length)   { console.log(`  ${hostStaff.length} staff:`);   console.table(hostStaff.map((s) => s.row)); }
+              if (hostGuests.length)  { console.log(`  ${hostGuests.length} guests:`); console.table(hostGuests.map((g) => g.row)); }
+              if (hostTickets.length) { console.log(`  ${hostTickets.length} tickets:`); console.table(hostTickets.map((t) => t.row)); }
             }
           }
         }
         console.groupEnd();
-        return { staff: allStaff };
+        return { staff: allStaff, guests: allGuests, tickets: allTickets };
       },
       cloudReport: () => {
         const guests   = this.cloud.listActiveGuests();

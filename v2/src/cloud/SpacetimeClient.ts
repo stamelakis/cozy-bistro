@@ -2085,6 +2085,51 @@ export class SpacetimeClient {
     this.conn.reducers.unfriend({ other });
   }
 
+  /** All active_guest rows in the local subscription cache, regardless
+   * of which restaurant they belong to. Tagged with restaurantId so
+   * the caller can filter. Same role as listAllStaffActors but for
+   * the customer table — used by VisitMode + diagnostic helpers. */
+  listAllActiveGuests(): { restaurantId: bigint; row: ActiveGuestRow }[] {
+    if (!this.conn) return [];
+    const out: { restaurantId: bigint; row: ActiveGuestRow }[] = [];
+    try {
+      for (const g of this.conn.db.active_guest.iter()) {
+        out.push({
+          restaurantId: g.restaurantId,
+          row: {
+            id: g.id, state: g.state, variant: g.variant, archetype: g.archetype,
+            x: g.x, z: g.z, floor: g.floor,
+            targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
+            seatUid: g.seatUid,
+          },
+        });
+      }
+    } catch { /* table not wired */ }
+    return out;
+  }
+
+  /** All active_ticket rows in the local subscription cache, regardless
+   * of which restaurant. Tagged for filtering. */
+  listAllActiveTickets(): { restaurantId: bigint; row: ActiveTicketRow }[] {
+    if (!this.conn) return [];
+    const out: { restaurantId: bigint; row: ActiveTicketRow }[] = [];
+    try {
+      for (const t of this.conn.db.active_ticket.iter()) {
+        out.push({
+          restaurantId: t.restaurantId,
+          row: {
+            id: t.id, clientTempId: t.clientTempId, guestId: t.guestId,
+            recipeId: t.recipeId, state: t.state, stateClockMs: t.stateClockMs,
+            cookSeconds: t.cookSecondsMs, assignedChefId: t.assignedChefId,
+            seatX: t.seatX, seatZ: t.seatZ, seatFloor: t.seatFloor, seatAtBar: t.seatAtBar,
+            pickupX: t.pickupX, pickupZ: t.pickupZ, pickupFloor: t.pickupFloor,
+          },
+        });
+      }
+    } catch { /* table not wired */ }
+    return out;
+  }
+
   /** All staff_actor rows in the local subscription cache, regardless
    * of which restaurant they belong to. Used by VisitMode + dev
    * diagnostics that need to inspect another host's staff state.
