@@ -534,6 +534,23 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.11 — Set the guest's full course list on the server so the
+   * tick reducer can drive the multi-course eating cycle (eating →
+   * seated → ... → leaving). Called by GuestSpawner once per guest
+   * after buildOrder populates g.order. Idempotent.
+   *
+   * recipesCSV is comma-separated recipe ids in serve order. Empty
+   * string clears the order (e.g. when the guest gives up before
+   * ordering). */
+  setGuestOrder(guestId: bigint, recipesCsv: string): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.setGuestOrder({ guestId, recipesCsv });
+    } catch (e) {
+      console.warn("[Cloud] setGuestOrder failed:", e);
+    }
+  }
+
   /** Stream body position + next target up to the server. Called by
    * GuestSpawner's per-frame walker — throttled to ~5 Hz by the
    * caller. Targets feed any future "render this guest from another

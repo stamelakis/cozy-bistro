@@ -1102,6 +1102,10 @@ export class GuestSpawner {
       const surface = this.tableSurfaceForGuest(g);
       g.order = this.buildOrder(g.archetype, surface, g.taste);
     }
+    // H.11 — mirror the full course list to the server so the tick
+    // reducer drives the eating cycle. Idempotent + bails when flag
+    // is off OR the server id isn't resolved yet.
+    this.mirrorGuestOrder(g);
     // Order is in — flip from the order-patience budget to the longer
     // serve-patience budget so the kitchen has its full window to
     // cook + deliver. Without this, a customer whose order was taken
@@ -1872,6 +1876,21 @@ export class GuestSpawner {
     this.cloud.markGuestLeaving(g.serverMirrorId);
   }
 
+  /** H.11 — mirror the guest's full course list to the cloud so
+   * the server's tick reducer can drive the multi-course eating
+   * cycle (eating → seated → ... → leaving). Called once per guest
+   * after their order is built. Cheap O(N) join; bail when the
+   * server mirror id hasn't resolved yet. */
+  private mirrorGuestOrder(g: ActiveGuest): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    if (g.serverMirrorId == null) {
+      g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
+    }
+    if (g.serverMirrorId == null) return;
+    const csv = g.order.map((r) => r.id).join(",");
+    this.cloud.setGuestOrder(g.serverMirrorId, csv);
+  }
+
   /** Throttled per-frame: every ~1 s, push each guest's body coords +
    * current target to the server so subscribed clients (visit mode,
    * future co-owner views) can lerp the same body in their own scene.
@@ -2297,13 +2316,14 @@ export class GuestSpawner {
           // Callback was supposed to populate g.order. Defensive: if
           // it didn't (callback wiring missing) build one here so the
           // guest doesn't get stuck. Same surface-aware build the old
-          // path used.
+          // path used. Also mirror the resulting order to the cloud.
           const surface = this.tableSurfaceForGuest(g);
           g.order = this.buildOrder(g.archetype, surface, g.taste);
           if (g.order.length === 0) {
             this.markLostAndExit(g);
             break;
           }
+          this.mirrorGuestOrder(g);
         }
         if (g.orderTaken && g.order.length > 0) {
           // Try to start the first course. beginNextCourse returns

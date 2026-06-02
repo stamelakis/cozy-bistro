@@ -859,11 +859,31 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // waitingForFood → eating when ANY active_ticket bound to this
         // guest has state "delivered" (H.8 waiter set it on arrival
         // at the seat). The plate has landed, customer starts eating.
-        // ticket cascade handles the post-eating cleanup; for now the
-        // eating → leaving transition stays client-side (needs order
-        // count for multi-course handling).
         "waitingForFood" if has_delivered_ticket_for_guest(ctx, g.id) =>
             Some(("eating".to_string(), 0)),
+        // eating → next course or leaving after EATING_DURATION_MS.
+        // Counts comma-separated order_recipes; if order_index+1 < count
+        // there's another course, go back to "seated" so the client's
+        // beginNextCourse picks up. Otherwise the guest leaves the
+        // restaurant.
+        // Requires the client to have called set_guest_order so
+        // order_recipes is populated server-side — without that, the
+        // recipe count is 0 and the guest leaves after one course.
+        "eating" if new_clock >= EATING_DURATION_MS => {
+            let total_courses = if g.order_recipes.is_empty() {
+                0
+            } else {
+                g.order_recipes.split(',').filter(|s| !s.trim().is_empty()).count() as u32
+            };
+            if g.order_index + 1 < total_courses {
+                // More courses ahead — back to seated; client's
+                // beginNextCourse path enqueues the next ticket.
+                // order_index advance is client-side (TODO migrate).
+                Some(("seated".to_string(), 0))
+            } else {
+                Some(("leaving".to_string(), 0))
+            }
+        },
         // wcWalking → wcSitting on arrival at the toilet.
         "wcWalking" if arrived => Some(("wcSitting".to_string(), 0)),
         // wcSitting → wcWashing after WC_USE_MS — the toilet trip.
@@ -903,6 +923,10 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
 /// (config/customer-config.ts). 4 seconds = the customer pretends to
 /// read the menu before flagging the waiter.
 const SEATED_DWELL_MS: i64 = 4_000;
+/// Time the guest dwells in "eating" before either advancing to the
+/// next course or leaving. Matches the client's TIME_TO_EAT constant.
+/// 8 seconds = generous enough for the plate animation to read.
+const EATING_DURATION_MS: i64 = 8_000;
 /// Time the guest dwells on the toilet before washing hands.
 const WC_USE_MS: i64 = 6_000;
 /// Time the guest dwells at the sink before returning to seat.
@@ -1160,6 +1184,36 @@ pub fn mark_guest_leaving(ctx: &ReducerContext, guest_id: u64) -> Result<(), Str
 /// Throttled by the caller — typical cadence ~5 Hz. The reducer
 /// itself doesn't rate-limit; future hardening can add a min-delta
 /// guard if abuse appears.
+/// H.11 — Client tells the server which recipes the guest ordered so
+/// the server can drive the multi-course eating cycle. Comma-separated
+/// recipe ids; order_index = 0 is the first course.
+///
+/// Idempotent: re-setting the same CSV is a no-op. The client
+/// typically calls this once per guest, right after buildOrder
+/// populates g.order.
+#[reducer]
+pub fn set_guest_order(
+    ctx: &ReducerContext,
+    guest_id: u64,
+    recipes_csv: String,
+) -> Result<(), String> {
+    let g = ctx.db.active_guest().id().find(guest_id)
+        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set guest orders".into());
+    }
+    if g.order_recipes == recipes_csv {
+        return Ok(()); // idempotent
+    }
+    ctx.db.active_guest().id().update(ActiveGuest {
+        order_recipes: recipes_csv,
+        ..g
+    });
+    Ok(())
+}
+
 #[reducer]
 pub fn update_guest_position(
     ctx: &ReducerContext,
