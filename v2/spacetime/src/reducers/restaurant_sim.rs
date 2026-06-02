@@ -1415,7 +1415,17 @@ pub fn update_staff_actor(
     // Reset the state-machine clock when the state label actually
     // flips — otherwise leave it alone so the tick's countdown
     // continues uninterrupted across a position-only update.
-    let new_clock = if a.state == state { a.state_clock_ms } else { 0 };
+    let state_changed = a.state != state;
+    let new_clock = if state_changed { 0 } else { a.state_clock_ms };
+    // H.8 audit fix: clear delivery_phase whenever the state label
+    // changes. The client doesn't know about server-side deliveries,
+    // so it never sends a deliveryPhase value. Preserving it across
+    // state changes via `..a` spread caused a stale "pickup" /
+    // "deliver" to hijack subsequent waiter trips (wash, take-order)
+    // when tick_staff_actor's arrival flip read the leftover phase.
+    // Preserving across same-state updates is fine — the row's just
+    // moving along its current target.
+    let new_delivery_phase = if state_changed { None } else { a.delivery_phase.clone() };
     ctx.db.staff_actor().member_id().update(StaffActor {
         state,
         state_clock_ms: new_clock,
@@ -1428,6 +1438,7 @@ pub fn update_staff_actor(
         wash_dirty_id,
         wash_phase,
         take_order_guest_id,
+        delivery_phase: new_delivery_phase,
         ..a
     });
     Ok(())
@@ -1435,6 +1446,13 @@ pub fn update_staff_actor(
 
 /// Drop a staff actor's row (fired / restaurant deleted /
 /// player-explicit despawn). Idempotent: missing actor is a no-op.
+///
+/// H.8 audit fix: if the actor was mid-delivery (delivery_phase set
+/// on a waiter) OR mid-cook (assigned a ticket on a chef), reset
+/// that ticket back to a state another actor can pick up before
+/// dropping the row. Without this, firing a waiter mid-delivery
+/// leaves the ticket stuck in "delivering" forever — H.8 auto-claim
+/// only re-considers "ready" tickets, so the kitchen jams.
 #[reducer]
 pub fn unregister_staff_actor(ctx: &ReducerContext, member_id: String) -> Result<(), String> {
     let a = match ctx.db.staff_actor().member_id().find(member_id.clone()) {
@@ -1445,6 +1463,30 @@ pub fn unregister_staff_actor(ctx: &ReducerContext, member_id: String) -> Result
         .ok_or_else(|| "Actor's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
         return Err("Only the owner can unregister their staff".into());
+    }
+    // Release any ticket the actor was holding so it's re-pickable.
+    if let Some(tid) = a.ticket_id {
+        if let Some(t) = ctx.db.active_ticket().id().find(tid) {
+            // For waiters mid-delivery: roll back to "ready" so
+            // auto_assign_ready_tickets picks up.
+            // For chefs mid-cook: roll back to "queued" so
+            // auto_claim_queued_tickets picks up — same path
+            // recoverStalledTickets uses on the client.
+            let rollback_state = match a.role.as_str() {
+                "waiter" => "ready",
+                _ => "queued",
+            };
+            ctx.db.active_ticket().id().update(ActiveTicket {
+                state: rollback_state.to_string(),
+                state_clock_ms: 0,
+                assigned_chef_id: String::new(),
+                ..t
+            });
+            log::info!(
+                "unregister_staff_actor: released ticket {} → {} (was held by {} {})",
+                tid, rollback_state, a.role, member_id,
+            );
+        }
     }
     ctx.db.staff_actor().member_id().delete(member_id);
     Ok(())
