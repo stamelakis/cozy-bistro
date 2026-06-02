@@ -141,24 +141,24 @@ export const featureFlags: Readonly<ServerSimFlags> = Object.freeze(computeFlags
  * via `?serverSim=...` routes the local sim into stub paths that may
  * not behave correctly until the matching server-side state machines
  * land. Listed here so warnUnsafeFlags() can surface a console
- * warning at startup — saves the next debugger 30 minutes of
- * "why aren't customers spawning?".
+ * warning at startup.
  *
  * Cutover-ready subsystems (safe to flag on):
  *   - furniture: full read + write + live-diff (commit 6552b31 etc.)
  *   - dishware: full read + write + live-diff + server-side cycle (H.4)
+ *   - guests: REWRITTEN — flag-on now means "additionally mirror to
+ *             cloud" instead of "use server stub". Local sim always
+ *             runs as source of truth. Safe.
  *
- * Partial-cutover (UNSAFE — known regressions):
- *   - guests: GuestSpawner.update() short-circuits when on; server-side
- *             auto-spawn from pedestrian arrivals not implemented.
- *             Customer spawning STOPS.
- *   - tickets: H.6 auto-claim ships but pairs with H.7 release; flag-on
- *              should be tested against published module first.
+ * Partial-cutover (warn but won't break the game):
+ *   - tickets: H.6 server auto-claim ships; pairs with H.7 release.
+ *              Flag-on should be tested against published module
+ *              first to verify the cycle works.
  *   - staff: position step + state flips ship, but client doesn't yet
  *            adopt server position (still races with local mirror).
  */
 const UNSAFE_FLAGS: ReadonlySet<keyof ServerSimFlags> = new Set([
-  "guests", "tickets", "staff",
+  "tickets", "staff",
 ]);
 
 /** Loud console warning at module import when an unsafe flag is on.
