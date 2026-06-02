@@ -656,7 +656,7 @@ export class StaffRouter {
   /** Append a chef to the pool. Their current ground position becomes home. */
   addChef(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.cacheFeetLift(char, homeFloor);
-    this.chefs.push({
+    const actor: StaffActor = {
       character: char,
       role: "chef",
       memberId,
@@ -674,12 +674,14 @@ export class StaffRouter {
       homeWorkWaitClock: 0,
       assignedStoveUid: null,
       lastStoveUid: null,
-    });
+    };
+    this.chefs.push(actor);
+    this.mirrorActorRegister(actor);
   }
 
   addWaiter(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.cacheFeetLift(char, homeFloor);
-    this.waiters.push({
+    const actor: StaffActor = {
       character: char,
       role: "waiter",
       memberId,
@@ -696,7 +698,9 @@ export class StaffRouter {
       replanAccum: 0,
       homeWorkWaitClock: 0,
       washTrip: null,
-    });
+    };
+    this.waiters.push(actor);
+    this.mirrorActorRegister(actor);
   }
 
   /** Append a barman. Behaves like a chef internally (state machine,
@@ -705,7 +709,7 @@ export class StaffRouter {
    * but when they do it's the same slow tend-the-station shuffle. */
   addBarman(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.cacheFeetLift(char, homeFloor);
-    this.barmen.push({
+    const actor: StaffActor = {
       character: char,
       role: "barman",
       memberId,
@@ -723,7 +727,9 @@ export class StaffRouter {
       homeWorkWaitClock: 0,
       assignedStoveUid: null,
       lastStoveUid: null,
-    });
+    };
+    this.barmen.push(actor);
+    this.mirrorActorRegister(actor);
   }
 
   /** Cache the character's raw feet-lift (offset above the floor slab,
@@ -773,7 +779,10 @@ export class StaffRouter {
     const target = this.chefs.find((a) => a.state === "idle") ?? this.chefs[this.chefs.length - 1];
     const id = target?.memberId ?? null;
     const removed = this.popPreferIdle(this.chefs);
-    if (id) this.releaseBacklogForChef(id);
+    if (id) {
+      this.releaseBacklogForChef(id);
+      this.mirrorActorUnregister(id);
+    }
     return removed;
   }
 
@@ -794,10 +803,18 @@ export class StaffRouter {
    * prefers idle members so an in-flight drink doesn't get stranded
    * when the player fires one. */
   removeBarman(): AnimatedCharacter | null {
-    return this.popPreferIdle(this.barmen);
+    const target = this.barmen.find((a) => a.state === "idle") ?? this.barmen[this.barmen.length - 1];
+    const id = target?.memberId ?? null;
+    const removed = this.popPreferIdle(this.barmen);
+    if (id) this.mirrorActorUnregister(id);
+    return removed;
   }
   removeWaiter(): AnimatedCharacter | null {
-    return this.popPreferIdle(this.waiters);
+    const target = this.waiters.find((a) => a.state === "idle") ?? this.waiters[this.waiters.length - 1];
+    const id = target?.memberId ?? null;
+    const removed = this.popPreferIdle(this.waiters);
+    if (id) this.mirrorActorUnregister(id);
+    return removed;
   }
 
   /** Remove a specific staff member by their HiredStaffMember.id —
@@ -818,6 +835,7 @@ export class StaffRouter {
         // backlog so other chefs (or the orphan-fallback in the
         // idle handler) can pick them up.
         if (wasChef) this.releaseBacklogForChef(memberId);
+        this.mirrorActorUnregister(memberId);
         return removed;
       }
     }
@@ -1275,6 +1293,74 @@ export class StaffRouter {
     for (const w of this.waiters) this.tickWaiter(w, dt);
     this.recoverStalledTickets(dt);
     this.logHeartbeatIfDue(dt);
+    this.streamActorsToCloud(dt);
+  }
+
+  /** Accumulator for the ~1 Hz position publish. Same throttle the
+   * GuestSpawner uses; one reducer call per actor per second is cheap
+   * + keeps the active_guest / active_ticket subscribers in step with
+   * actual movement without flooding the wire. */
+  private cloudActorAccum = 0;
+  private streamActorsToCloud(dt: number): void {
+    if (!isServerSim("staff") || !this.cloud) return;
+    this.cloudActorAccum += dt;
+    if (this.cloudActorAccum < 1.0) return;
+    this.cloudActorAccum = 0;
+    for (const pool of [this.chefs, this.waiters, this.barmen]) {
+      for (const a of pool) this.mirrorActorUpdate(a);
+    }
+  }
+
+  private mirrorActorRegister(a: StaffActor): void {
+    if (!isServerSim("staff") || !this.cloud) return;
+    this.cloud.registerStaffActor({
+      memberId: a.memberId,
+      role: a.role,
+      homeFloor: a.homeFloor,
+      homeX: a.home.x,
+      homeZ: a.home.y,
+      spawnX: a.character.groundPos.x,
+      spawnZ: a.character.groundPos.y,
+      spawnFloor: a.currentFloor,
+    });
+  }
+
+  private mirrorActorUnregister(memberId: string): void {
+    if (!isServerSim("staff") || !this.cloud) return;
+    this.cloud.unregisterStaffActor(memberId);
+  }
+
+  private mirrorActorUpdate(a: StaffActor): void {
+    if (!isServerSim("staff") || !this.cloud) return;
+    // Map local Ticket id (string) to the server's u64 via the
+    // matching ticket's serverMirrorId. Cheap O(N) scan — tickets
+    // array is short. Null when not bound or not yet mirrored.
+    let serverTicketId: bigint | null = null;
+    if (a.ticketId) {
+      const t = this.tickets.find((t) => t.id === a.ticketId);
+      serverTicketId = t?.serverMirrorId ?? null;
+    }
+    const trip = a.washTrip ?? null;
+    this.cloud.updateStaffActor({
+      memberId: a.memberId,
+      state: a.state,
+      ticketId: serverTicketId,
+      x: a.character.groundPos.x,
+      z: a.character.groundPos.y,
+      floor: a.currentFloor,
+      targetX: a.target.x,
+      targetZ: a.target.y,
+      targetFloor: a.targetFloor,
+      assignedStoveUid: a.assignedStoveUid ?? "",
+      lastStoveUid: a.lastStoveUid ?? "",
+      washTargetUid: trip?.stationUid ?? "",
+      washDirtyId: BigInt(trip?.dirtyId ?? -1),
+      washPhase: trip?.phase ?? "",
+      takeOrderGuestId: null, // take-order guest_id maps via the lookup
+                              // callback when D.4 server-side state
+                              // machine lands; mirror mode just leaves
+                              // it unset.
+    });
   }
 
   /** Every 5 sim-seconds, dump one line summarizing what the kitchen is

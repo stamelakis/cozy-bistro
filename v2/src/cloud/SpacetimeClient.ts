@@ -591,6 +591,127 @@ export class SpacetimeClient {
     catch (e) { console.warn("[Cloud] cancelTicket failed:", e); }
   }
 
+  // =====================================================================
+  //                Phase D — staff_actor helpers
+  // =====================================================================
+  // Thin wrappers around the register / update / unregister reducers.
+  // StaffRouter (Phase D.3b) calls these behind isServerSim("staff").
+  // No client_temp_id correlation needed because staff actors use the
+  // client's HiredStaffMember.id as the primary key directly.
+
+  listStaffActors(): {
+    memberId: string;
+    role: string;
+    state: string;
+    homeFloor: number;
+    x: number;
+    z: number;
+    floor: number;
+    targetX: number;
+    targetZ: number;
+    targetFloor: number;
+    ticketId: bigint | null;
+    assignedStoveUid: string;
+    washTargetUid: string;
+    washPhase: string;
+  }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: ReturnType<SpacetimeClient["listStaffActors"]> = [];
+    const rid = this.restaurantId;
+    try {
+      for (const a of this.conn.db.staff_actor.iter()) {
+        if (a.restaurantId !== rid) continue;
+        out.push({
+          memberId: a.memberId,
+          role: a.role,
+          state: a.state,
+          homeFloor: a.homeFloor,
+          x: a.x,
+          z: a.z,
+          floor: a.floor,
+          targetX: a.targetX,
+          targetZ: a.targetZ,
+          targetFloor: a.targetFloor,
+          ticketId: a.ticketId ?? null,
+          assignedStoveUid: a.assignedStoveUid,
+          washTargetUid: a.washTargetUid,
+          washPhase: a.washPhase,
+        });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  registerStaffActor(args: {
+    memberId: string;
+    role: string;
+    homeFloor: number;
+    homeX: number;
+    homeZ: number;
+    spawnX: number;
+    spawnZ: number;
+    spawnFloor: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.registerStaffActor({
+        restaurantId: this.restaurantId,
+        memberId: args.memberId,
+        role: args.role,
+        homeFloor: args.homeFloor,
+        homeX: args.homeX,
+        homeZ: args.homeZ,
+        spawnX: args.spawnX,
+        spawnZ: args.spawnZ,
+        spawnFloor: args.spawnFloor,
+      });
+    } catch (e) {
+      console.warn("[Cloud] registerStaffActor failed:", e);
+    }
+  }
+
+  /** One-shot comprehensive update. The caller passes every field; the
+   * server stores them. state_clock_ms is reset by the reducer only
+   * when the state label flips. */
+  updateStaffActor(args: {
+    memberId: string;
+    state: string;
+    ticketId: bigint | null;
+    x: number; z: number; floor: number;
+    targetX: number; targetZ: number; targetFloor: number;
+    assignedStoveUid: string;
+    lastStoveUid: string;
+    washTargetUid: string;
+    washDirtyId: bigint;
+    washPhase: string;
+    takeOrderGuestId: bigint | null;
+  }): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.updateStaffActor({
+        memberId: args.memberId,
+        state: args.state,
+        ticketId: args.ticketId ?? undefined,
+        x: args.x, z: args.z, floor: args.floor,
+        targetX: args.targetX, targetZ: args.targetZ, targetFloor: args.targetFloor,
+        assignedStoveUid: args.assignedStoveUid,
+        lastStoveUid: args.lastStoveUid,
+        washTargetUid: args.washTargetUid,
+        washDirtyId: args.washDirtyId,
+        washPhase: args.washPhase,
+        takeOrderGuestId: args.takeOrderGuestId ?? undefined,
+      });
+    } catch (e) {
+      console.warn("[Cloud] updateStaffActor failed:", e);
+    }
+  }
+
+  unregisterStaffActor(memberId: string): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.unregisterStaffActor({ memberId }); }
+    catch (e) { console.warn("[Cloud] unregisterStaffActor failed:", e); }
+  }
+
   /** Fetch the cached save snapshot for the given identity (returns
    * null if the player hasn't published yet). Used by P4 visit mode
    * to load another player's restaurant state. */
