@@ -769,13 +769,30 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
 
     // === In-restaurant path: advance clock + patience ===
     let new_clock = g.state_clock_ms.saturating_add(dt_ms);
-    let new_patience = (g.patience_ms - dt_ms).max(0);
+    // Audit fix (B.2) — patience only counts down in states where the
+    // guest is genuinely waiting for service (menu / kitchen / seat).
+    // WC trips, leaving variants, and unknown client-emitted
+    // transitional states (walkingToToilet, atToilet, walkingToWait,
+    // walkingToDoor, etc.) DON'T decrement patience — a guest on a
+    // long bathroom break shouldn't time out and be force-flipped to
+    // leaving mid-pee. The "waiting" overflow chair has its own
+    // waiting_timeout_ms clock (Phase H.5) so it's excluded here too.
+    let patience_active = matches!(g.state.as_str(),
+        "walkingIn" | "seated" | "ordering" | "waitingForFood" | "eating"
+    );
+    let new_patience = if patience_active {
+        (g.patience_ms - dt_ms).max(0)
+    } else {
+        g.patience_ms
+    };
 
     // Patience timeout → kick into leaving. Same effect as the
     // client's existing "guest gives up" path, surfaced as a single
     // server-side transition so the timing is consistent across
-    // clients.
-    if new_patience == 0 && g.patience_ms > 0 {
+    // clients. Gated on patience_active so non-impatient states (WC
+    // trips, transitional walks) can't trigger it even if a stale
+    // 0 patience value lingered from a prior state.
+    if patience_active && new_patience == 0 && g.patience_ms > 0 {
         ctx.db.active_guest().id().update(ActiveGuest {
             state: "leaving".to_string(),
             state_clock_ms: 0,

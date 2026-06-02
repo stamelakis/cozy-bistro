@@ -418,6 +418,14 @@ interface ActiveGuest {
    * Undefined until first mirror — guarantees the first publish
    * always fires. */
   lastMirrorFingerprint?: string;
+  /** Audit fix (B.1) — true once the order CSV has been successfully
+   * sent to the cloud via setGuestOrder. The mirror polls the
+   * spawn-side serverMirrorId resolution; if that misses (slow net,
+   * spawn timing), the order is lost and the server can't drive the
+   * eating→leaving transition. streamGuestPositionsToCloud now
+   * retries the order mirror on every 1 Hz periodic tick while
+   * this flag is false, naturally backing off once it succeeds. */
+  orderMirrored?: boolean;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -1879,16 +1887,28 @@ export class GuestSpawner {
   /** H.11 — mirror the guest's full course list to the cloud so
    * the server's tick reducer can drive the multi-course eating
    * cycle (eating → seated → ... → leaving). Called once per guest
-   * after their order is built. Cheap O(N) join; bail when the
-   * server mirror id hasn't resolved yet. */
+   * after their order is built.
+   *
+   * Audit fix (B.1): retries on the periodic position stream while
+   * `orderMirrored` is false. The original single-shot was fragile
+   * — if `serverMirrorId` hadn't resolved by the time
+   * `onWaiterTookOrder` fired (slow net, spawn timing), the call
+   * bailed and the order was lost forever. Now the stream loop
+   * keeps trying until `serverMirrorId` resolves AND the call lands. */
   private mirrorGuestOrder(g: ActiveGuest): void {
     if (!isServerSim("guests") || !this.cloud) return;
+    if (g.orderMirrored) return;
+    if (g.order.length === 0) return;
     if (g.serverMirrorId == null) {
       g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
     }
     if (g.serverMirrorId == null) return;
     const csv = g.order.map((r) => r.id).join(",");
     this.cloud.setGuestOrder(g.serverMirrorId, csv);
+    // Trust the call landed in the reducer queue. setGuestOrder is
+    // idempotent server-side (compares incoming CSV to row's current
+    // value) so an accidental double-send is harmless.
+    g.orderMirrored = true;
   }
 
   /** Throttled per-frame: every ~1 s, push each guest's body coords +
@@ -1929,6 +1949,11 @@ export class GuestSpawner {
         g.state,
       );
       if (changed) g.lastMirrorFingerprint = fingerprint;
+      // Audit fix (B.1) — retry the order CSV mirror on each periodic
+      // tick if it hasn't landed yet. mirrorGuestOrder() short-circuits
+      // when orderMirrored is true, so this is cheap once the first
+      // successful send completes.
+      if (periodicFire) this.mirrorGuestOrder(g);
     }
   }
 
