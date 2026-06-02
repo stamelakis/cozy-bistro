@@ -324,6 +324,46 @@ fn is_cook_station_def(def_id: &str) -> bool {
     def_id == "stove" || def_id == "stove-electric"
 }
 
+/// Phase H.7 — release a chef from their current ticket. Called when
+/// tick_ticket_state auto-flips a ticket from "cooking" to "ready",
+/// and any other path where the server cancels / completes a ticket
+/// that had an assigned chef.
+///
+/// State machine: working/movingToWork → returningHome, target =
+/// home_x/z. The H.3 arrival flip then transitions returningHome →
+/// idle once the body actually reaches home. Clears the ticket_id +
+/// assigned_stove_uid so the chef is available for the next
+/// auto-claim pass.
+///
+/// Skips silently when the chef row no longer exists (was unhired
+/// mid-cook). Idempotent: re-running on an already-idle chef
+/// produces the same row.
+fn release_chef_from_ticket(ctx: &ReducerContext, chef_member_id: &str) {
+    let Some(c) = ctx.db.staff_actor().member_id().find(chef_member_id.to_string()) else { return };
+    // Don't trample a chef who already moved on (e.g. client mirror
+    // raced us and the chef is already idle / returningHome).
+    if c.state == "idle" || c.state == "returningHome" {
+        return;
+    }
+    let home_x = c.home_x;
+    let home_z = c.home_z;
+    let home_floor = c.home_floor;
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state: "returningHome".to_string(),
+        state_clock_ms: 0,
+        ticket_id: None,
+        target_x: home_x,
+        target_z: home_z,
+        target_floor: home_floor,
+        assigned_stove_uid: String::new(),
+        ..c
+    });
+    log::info!(
+        "release_chef_from_ticket: chef {} returning home to ({}, {}, F{})",
+        chef_member_id, home_x, home_z, home_floor,
+    );
+}
+
 /// Phase H.4 — step one dishwasher batch's cycle clock. When the
 /// clock reaches zero, flush every loaded plate / glass back to the
 /// CLEAN pool at the highest-tier slot that currently holds dirty
@@ -689,11 +729,21 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     if t.state == "cooking" {
         let advanced = t.state_clock_ms.saturating_add(dt_ms);
         if advanced >= t.cook_seconds_ms && t.cook_seconds_ms > 0 {
+            let chef_id = t.assigned_chef_id.clone();
             ctx.db.active_ticket().id().update(ActiveTicket {
                 state: "ready".to_string(),
                 state_clock_ms: 0,
                 ..t
             });
+            // Phase H.7 — release the assigned chef when cooking
+            // finishes. Auto-claim (H.6) hooked the chef to this
+            // ticket; without a release, the chef stays in "working"
+            // at the stove forever and never claims the next ticket.
+            // Sends them home_x/z so H.3's auto-flip transitions
+            // them back to "idle" on arrival.
+            if !chef_id.is_empty() {
+                release_chef_from_ticket(ctx, &chef_id);
+            }
             return;
         }
         ctx.db.active_ticket().id().update(ActiveTicket {
