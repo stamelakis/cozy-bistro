@@ -229,10 +229,32 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         speed_for_role(&a.role),
         dt_ms,
     );
+
+    // Phase H.3 — auto state flips on arrival. Two transitions the
+    // server can own without needing any further game knowledge:
+    //   - movingToWork → working when the actor reaches their assigned
+    //     workstation (target_x/z by definition).
+    //   - returningHome → idle when they get back to home_x/z.
+    // The clock resets on transition so per-state UI bars on the
+    // client (e.g. cook time) start from zero. Inert in mirror mode
+    // because the client's StaffRouter beats the server to the same
+    // transition every frame; useful once H.4+ gates the client.
+    let arrived = (a.target_x - new_x).abs() < 0.01 && (a.target_z - new_z).abs() < 0.01;
+    let (new_state, new_clock) = if arrived {
+        match a.state.as_str() {
+            "movingToWork" => ("working".to_string(), 0i64),
+            "returningHome" => ("idle".to_string(), 0i64),
+            _ => (a.state.clone(), a.state_clock_ms.saturating_add(dt_ms)),
+        }
+    } else {
+        (a.state.clone(), a.state_clock_ms.saturating_add(dt_ms))
+    };
+
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
-        state_clock_ms: a.state_clock_ms.saturating_add(dt_ms),
+        state: new_state,
+        state_clock_ms: new_clock,
         ..a
     });
 }
