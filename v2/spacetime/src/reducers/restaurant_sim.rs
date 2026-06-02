@@ -212,6 +212,16 @@ pub fn restaurant_tick(
     // up indefinitely).
     auto_claim_queued_tickets(ctx, rid);
 
+    // Phase H.8 — auto-assign ready tickets to idle waiters. Same
+    // pattern as H.6 but for the delivery side of the kitchen
+    // workflow. Without this, plates would sit at the pickup spot
+    // forever in a backgrounded tab. With it, the server pairs each
+    // ready ticket with an idle waiter, sets their target to the
+    // plate's pickup position, and marks the ticket "delivering".
+    // The two-leg waiter trip (pickup → seat) is encoded in the new
+    // delivery_phase field, which tick_staff_actor reads on arrival.
+    auto_assign_ready_tickets(ctx, rid);
+
     Ok(())
 }
 
@@ -323,6 +333,79 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
 fn is_cook_station_def(def_id: &str) -> bool {
     def_id == "stove" || def_id == "stove-electric"
 }
+
+/// Phase H.8 — server-side waiter auto-pickup. Same shape as H.6 but
+/// for the delivery side: pairs each ready ticket with an idle
+/// waiter, sets the waiter walking toward the plate's pickup spot,
+/// and stamps delivery_phase = "pickup" so tick_staff_actor's arrival
+/// flip knows it's the first leg of a two-leg trip.
+///
+/// Mirror-mode safety: the client's local StaffRouter races us. If
+/// the local picked a ticket first, ticket.state will already be
+/// "delivering" by the time we look — the state check skips it.
+///
+/// Limitation: assigns FIRST idle waiter found, no spatial sorting.
+/// Foreground play still uses the client's distance-weighted picker
+/// (W4/W5/W6 logic in StaffRouter); H.8 only kicks in when the local
+/// sim is too throttled to fire.
+fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
+    let ready_ids: Vec<u64> = ctx.db
+        .active_ticket()
+        .iter()
+        .filter(|t| t.restaurant_id == rid && t.state == "ready")
+        .map(|t| t.id)
+        .collect();
+    if ready_ids.is_empty() { return; }
+
+    // Idle waiters with no current ticket binding.
+    let mut idle_waiters: Vec<StaffActor> = ctx.db
+        .staff_actor()
+        .iter()
+        .filter(|a| a.restaurant_id == rid
+            && a.role == "waiter"
+            && a.state == "idle"
+            && a.ticket_id.is_none())
+        .collect();
+    if idle_waiters.is_empty() { return; }
+
+    for ticket_id in ready_ids {
+        let Some(waiter) = idle_waiters.pop() else { break };
+        let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else { continue };
+        // Recheck — local sim may have raced us.
+        if ticket.state != "ready" { continue; }
+        let pickup_x = ticket.pickup_x;
+        let pickup_z = ticket.pickup_z;
+        let pickup_floor = ticket.pickup_floor;
+        let waiter_member = waiter.member_id.clone();
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            state: "delivering".to_string(),
+            state_clock_ms: 0,
+            ..ticket
+        });
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "movingToWork".to_string(),
+            state_clock_ms: 0,
+            ticket_id: Some(ticket_id),
+            target_x: pickup_x,
+            target_z: pickup_z,
+            target_floor: pickup_floor,
+            delivery_phase: Some("pickup".to_string()),
+            ..waiter
+        });
+        log::info!(
+            "auto-assign: ticket {} (ready) → waiter {} walking to pickup ({}, {}, F{})",
+            ticket_id, waiter_member, pickup_x, pickup_z, pickup_floor,
+        );
+    }
+}
+
+// Pickup + delivery dwells are zero — we advance the waiter to the
+// next leg on the same tick they arrive. The 10 Hz tick period
+// (100 ms) already provides a brief "pause" visible to subscribers
+// since the row stays at pickup coords for one full tick before the
+// next update reroutes them. If we needed visibly longer pauses, a
+// proper holdover state with state_clock_ms accumulator would slot
+// in here (see WAITER_PICKUP_DWELL_MS in the H.8 design notes).
 
 /// Phase H.7 — release a chef from their current ticket. Called when
 /// tick_ticket_state auto-flips a ticket from "cooking" to "ready",
@@ -495,33 +578,123 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         dt_ms,
     );
 
-    // Phase H.3 — auto state flips on arrival. Two transitions the
-    // server can own without needing any further game knowledge:
-    //   - movingToWork → working when the actor reaches their assigned
-    //     workstation (target_x/z by definition).
-    //   - returningHome → idle when they get back to home_x/z.
-    // The clock resets on transition so per-state UI bars on the
-    // client (e.g. cook time) start from zero. Inert in mirror mode
-    // because the client's StaffRouter beats the server to the same
-    // transition every frame; useful once H.4+ gates the client.
+    // Phase H.3 + H.8 — auto state flips on arrival. Base transitions:
+    //   - movingToWork → working when the actor reaches target.
+    //   - returningHome → idle when they get home.
+    // H.8 waiter additions (when delivery_phase is set):
+    //   - working at pickup → after WAITER_PICKUP_DWELL_MS,
+    //     movingToWork again with target = seat (carry leg).
+    //   - working at seat → after WAITER_DELIVERY_DWELL_MS,
+    //     returningHome + ticket flips to "delivered".
     let arrived = (a.target_x - new_x).abs() < 0.01 && (a.target_z - new_z).abs() < 0.01;
-    let (new_state, new_clock) = if arrived {
-        match a.state.as_str() {
-            "movingToWork" => ("working".to_string(), 0i64),
-            "returningHome" => ("idle".to_string(), 0i64),
-            _ => (a.state.clone(), a.state_clock_ms.saturating_add(dt_ms)),
-        }
-    } else {
-        (a.state.clone(), a.state_clock_ms.saturating_add(dt_ms))
-    };
+    let (transition, advance_clock) = compute_waiter_transition(ctx, &a, arrived, dt_ms);
+    let (new_state, new_clock, new_target_x, new_target_z, new_target_floor,
+         new_delivery_phase, new_ticket_id) = transition;
 
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
         state: new_state,
-        state_clock_ms: new_clock,
+        state_clock_ms: if advance_clock {
+            new_clock.saturating_add(dt_ms)
+        } else { new_clock },
+        target_x: new_target_x,
+        target_z: new_target_z,
+        target_floor: new_target_floor,
+        delivery_phase: new_delivery_phase,
+        ticket_id: new_ticket_id,
         ..a
     });
+}
+
+/// Returns the next-tick state + target + delivery_phase + ticket_id
+/// for a staff actor, plus a flag for whether the clock should
+/// advance by dt_ms (false on transitions that reset the clock to 0).
+///
+/// Encapsulates the H.3 arrival flips + the H.8 waiter multi-leg
+/// transitions in one place so tick_staff_actor stays readable.
+type WaiterTransition = (
+    String,           // new state
+    i64,              // new state_clock_ms (BEFORE adding dt if advance flag is true)
+    f32, f32, u32,    // target_x, target_z, target_floor
+    Option<String>,   // delivery_phase
+    Option<u64>,      // ticket_id
+);
+fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool, _dt_ms: i64)
+    -> (WaiterTransition, bool /* advance clock */) {
+    if !arrived {
+        // Mid-walk — keep everything the same, advance clock.
+        return ((
+            a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
+            a.delivery_phase.clone(), a.ticket_id,
+        ), true);
+    }
+
+    // Arrived. Standard H.3 flips first.
+    if a.state == "returningHome" {
+        return ((
+            "idle".to_string(), 0, a.target_x, a.target_z, a.target_floor,
+            None, // clear delivery phase on idle
+            None, // and ticket binding
+        ), false);
+    }
+    if a.state != "movingToWork" {
+        return ((
+            a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
+            a.delivery_phase.clone(), a.ticket_id,
+        ), true);
+    }
+
+    // movingToWork + arrived. Check delivery_phase to pick the next
+    // step. Non-waiters / no delivery in flight → standard flip to
+    // "working" (H.3 chef behaviour).
+    let phase = a.delivery_phase.as_deref().unwrap_or("");
+    if phase != "pickup" && phase != "deliver" {
+        return ((
+            "working".to_string(), 0, a.target_x, a.target_z, a.target_floor,
+            a.delivery_phase.clone(), a.ticket_id,
+        ), false);
+    }
+
+    // We treat the working dwell as zero (arrival fires once per
+    // tick, and the dwell constants are <1 tick so we can advance
+    // immediately). For longer dwells, we'd need a holdover state.
+    let Some(ticket_id) = a.ticket_id else {
+        // Defensive: phase set but no ticket — return home, clear
+        // phase.
+        return ((
+            "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+            None, None,
+        ), false);
+    };
+    let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else {
+        // Ticket gone (cancelled / cleaned up). Send waiter home.
+        return ((
+            "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+            None, None,
+        ), false);
+    };
+    if phase == "pickup" {
+        // Picked up the plate — walk to seat. Ticket stays in
+        // "delivering"; only the waiter's target advances.
+        return ((
+            "movingToWork".to_string(), 0,
+            ticket.seat_x, ticket.seat_z, ticket.seat_floor,
+            Some("deliver".to_string()), Some(ticket_id),
+        ), false);
+    }
+    // phase == "deliver" — at the seat. Flip ticket to "delivered"
+    // (tick_ticket_state will delete after dwell), waiter returns
+    // home.
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state: "delivered".to_string(),
+        state_clock_ms: 0,
+        ..ticket
+    });
+    ((
+        "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+        None, None,
+    ), false)
 }
 
 /// Compute elapsed time since the previous tick for this restaurant,
@@ -1197,6 +1370,7 @@ pub fn register_staff_actor(
         wash_dirty_id: -1,
         wash_phase: String::new(),
         take_order_guest_id: None,
+        delivery_phase: None,
         spawned_at: ctx.timestamp,
     });
     Ok(())
