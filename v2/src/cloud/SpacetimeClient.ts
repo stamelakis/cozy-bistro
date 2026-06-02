@@ -2018,6 +2018,25 @@ export class SpacetimeClient {
     this.conn.reducers.unfriend({ other });
   }
 
+  /** Find the restaurant_id that belongs to the given owner identity
+   * (passed as a hex string). Used by VisitMode to wire live-state
+   * subscriptions on the visited host's rid. Returns null when no
+   * restaurant exists for that owner — the visited player may have
+   * been deleted, or the subscription cache may not have hydrated yet.
+   *
+   * Each player owns exactly one restaurant (P2 building claim
+   * enforces this), so the first match wins. */
+  findRestaurantIdByOwnerHex(ownerHex: string): bigint | null {
+    if (!this.conn) return null;
+    const target = ownerHex.toLowerCase();
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() === target) return r.id;
+      }
+    } catch { /* table not wired yet */ }
+    return null;
+  }
+
   /** Restaurants visible to me — mine, public, and ones I co-own. */
   getRestaurants(): RestaurantRow[] {
     if (!this.conn) return [];

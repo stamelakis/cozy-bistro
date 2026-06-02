@@ -463,6 +463,13 @@ export class Engine {
       // social-themed achievements.
       this.game.bumpPlayerCounter("visitsOut");
     };
+    // Live-state subscription: VisitMode uses this to read the host's
+    // staff_actor rows and render every chef/waiter/barman as an
+    // animated character that walks around the visited restaurant in
+    // real time. Server-side Phase H.1 steps each actor's position
+    // every 100 ms, so the visitor sees actual motion without anyone
+    // having to actively run the host's local sim.
+    this.visitMode.cloud = this.cloud;
     // Inbound side: subscribe to visit_event inserts targeting this
     // identity. Show a small bottom-right toast that auto-fades.
     this.cloud.onVisitedByOther((visitorHex: string) => {

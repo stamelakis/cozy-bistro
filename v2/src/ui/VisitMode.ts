@@ -138,6 +138,23 @@ export class VisitMode {
    * visited player's client can pick up the event and surface a
    * "X is visiting your restaurant" toast. Fire-and-forget. */
   recordVisit?: (hostHex: string) => void;
+  /** Engine wires this to SpacetimeClient so visit mode can stand
+   * up a live subscription on the host's staff_actor rows + render
+   * the host's chefs / waiters / barmen as animated characters
+   * walking around the visited restaurant in real time. Optional —
+   * when null, VisitMode falls back to the static "ghost activity"
+   * spawn that loads from the save snapshot. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  /** Live staff actors fetched from the host's staff_actor table
+   * (keyed by memberId). Subscription handlers spawn / update / remove
+   * entries; exit() disposes them all. Separate from spawnedGhostRoots
+   * because their animation update path is "snap to server pos every
+   * 100ms" not "play the saved idle/sit pose". */
+  private liveStaffCharacters: Map<string, AnimatedCharacter> = new Map();
+  /** memberIds we tried to spawn but the GLB load is still in flight.
+   * Prevents a fast burst of insert events from spawning two characters
+   * for the same memberId before the first load finishes. */
+  private liveStaffPendingLoads: Set<string> = new Set();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -296,6 +313,13 @@ export class VisitMode {
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
+    // Live staff render — subscribe to the host's staff_actor table
+    // and animate every actor in real time. Bails when the cloud
+    // isn't wired (e.g. local dev tests) or when the host's
+    // restaurant row isn't in the subscription cache yet. The static
+    // ghost-activity spawn in loadVisitedInterior still runs as a
+    // fallback so the scene reads as populated either way.
+    this.startLiveStaffSubscription(plot);
     // P5.8 — let the host's client know they have a visitor. The
     // host then surfaces a toast via its visit_event subscription.
     this.recordVisit?.(plot.ownerHex);
@@ -311,9 +335,155 @@ export class VisitMode {
     this.snapshot = null;
     this.activePlot = null;
     this.hideOverlay();
+    this.disposeLiveStaff();
     this.disposeVisitorRoot();
     this.restoreVisitedShell();
     this.onExit?.();
+  }
+
+  // ─── Live staff render (Phase H follow-up) ───────────────────────
+
+  /** Subscribe to the host's staff_actor table and render every row
+   * as an animated character. Called from enter() once we know the
+   * visited plot's ownerHex; bails when the cloud client isn't wired
+   * or when the host's restaurant_id can't be resolved (subscription
+   * cache hasn't hydrated yet, or the host's restaurant was deleted).
+   *
+   * The subscription stays active for the session — current SDK
+   * surface doesn't give us a clean unsubscribe — but the handlers
+   * gate on `this.activePlot` so a fired event for the wrong host
+   * (after the player has switched visits) is a no-op. The
+   * liveStaffCharacters map is cleared on every enter() so old
+   * entries from the previous visit don't bleed through. */
+  private startLiveStaffSubscription(plot: VisitablePlot): void {
+    if (!this.cloud) return;
+    const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (hostRid == null) {
+      // Restaurant row hasn't been delivered yet — fall back to the
+      // static ghost activity. Could retry on a short timer, but the
+      // first visit usually fires after the cache is primed.
+      return;
+    }
+    const targetPlotId = plot.id;
+    this.cloud.subscribeStaffActorChanges({
+      onInsert: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        void this.spawnLiveStaffActor(row, targetPlotId);
+      },
+      onUpdate: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.applyLiveStaffUpdate(row);
+      },
+      onDelete: (memberId) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.removeLiveStaffActor(memberId);
+      },
+    }, hostRid);
+  }
+
+  /** Spawn one character model for a server staff_actor row. memberId
+   * lookup prevents duplicates from re-firing inserts (the SDK cache
+   * fires one onInsert per existing row at subscribe time). Bails
+   * when we already have or are loading this memberId. */
+  private async spawnLiveStaffActor(
+    row: import("../cloud/SpacetimeClient").StaffActorRow,
+    targetPlotId: bigint,
+  ): Promise<void> {
+    if (this.liveStaffCharacters.has(row.memberId)) return;
+    if (this.liveStaffPendingLoads.has(row.memberId)) return;
+    this.liveStaffPendingLoads.add(row.memberId);
+    // Resolve the character model from the row's role. The host's
+    // characterLoader cache is shared with the player's own scene,
+    // so loading the third chef this session reuses the GLB clone.
+    const role = row.role === "chef" || row.role === "waiter"
+        || row.role === "barman" || row.role === "errand"
+      ? row.role : "waiter";
+    try {
+      const model = await this.scene.characterLoader.load(role);
+      // Player exited mid-load — abandon. The pending-loads guard
+      // prevents this slot from ever being re-spawned, which is the
+      // right behaviour: the player isn't watching this plot any more.
+      if (this.activePlot?.id !== targetPlotId) {
+        this.liveStaffPendingLoads.delete(row.memberId);
+        return;
+      }
+      const floor = Math.max(0, row.floor);
+      // Server x/z are restaurant-local (origin at the visited plot's
+      // centre); visitorRoot is parented at that same plot world pos,
+      // so position the model in visitorRoot-local coords.
+      model.position.set(row.x, floor * STOREY_HEIGHT, row.z);
+      const animated: AnimatedCharacter = {
+        root: model,
+        groundPos: new THREE.Vector2(row.x, row.z),
+        facingY: 0,
+        // "walk" lets the animator animate the legs while the
+        // groundPos moves; would otherwise be locked in idle pose.
+        action: row.state === "idle" || row.state === "working" ? "idle" : "walk",
+        phase: Math.random() * 5,
+        seatHeight: 0,
+      };
+      // Visitor root may have been disposed between the load start
+      // and now — bail when it's gone.
+      if (!this.visitorRoot) {
+        this.liveStaffPendingLoads.delete(row.memberId);
+        return;
+      }
+      this.visitorRoot.add(model);
+      this.scene.animator.add(animated);
+      this.liveStaffCharacters.set(row.memberId, animated);
+      this.liveStaffCount += 1;
+      this.refreshLivenessLabel();
+    } catch (err) {
+      console.warn(`[Visit] failed to spawn live staff ${role}:`, err);
+    } finally {
+      this.liveStaffPendingLoads.delete(row.memberId);
+    }
+  }
+
+  /** Apply one row update — snap the character's groundPos to the
+   * server's position. With the server stepping at 10 Hz this gives
+   * an effectively smooth walk; the per-frame animation routine
+   * picks up the moved groundPos and lerps the visible model
+   * position the same way it does for the player's own characters. */
+  private applyLiveStaffUpdate(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
+    const c = this.liveStaffCharacters.get(row.memberId);
+    if (!c) {
+      // Row arrived before its insert was processed (rare; can happen
+      // if the subscription fires events out of order during a fast
+      // restart). Treat as insert.
+      void this.spawnLiveStaffActor(row, this.activePlot?.id ?? 0n);
+      return;
+    }
+    c.groundPos.set(row.x, row.z);
+    // Per-state animation: server publishes "idle" / "working" while
+    // anchored at a station, anything else while in transit. Match
+    // the action so the animator picks the right pose loop.
+    const newAction: CharacterAction = row.state === "idle" || row.state === "working"
+      ? "idle" : "walk";
+    if (c.action !== newAction) c.action = newAction;
+  }
+
+  /** Remove a live staff character — server deleted the row (player
+   * fired the staff member or unregistered the actor). Detach from
+   * the animator + the visitor scene. */
+  private removeLiveStaffActor(memberId: string): void {
+    const c = this.liveStaffCharacters.get(memberId);
+    if (!c) return;
+    this.scene.animator.remove(c.root);
+    c.root.removeFromParent();
+    this.liveStaffCharacters.delete(memberId);
+    this.liveStaffCount = Math.max(0, this.liveStaffCount - 1);
+    this.refreshLivenessLabel();
+  }
+
+  /** Dispose every live staff character. Called from exit(). */
+  private disposeLiveStaff(): void {
+    for (const c of this.liveStaffCharacters.values()) {
+      this.scene.animator.remove(c.root);
+      c.root.removeFromParent();
+    }
+    this.liveStaffCharacters.clear();
+    this.liveStaffPendingLoads.clear();
   }
 
   // ─── Interior render (P4.3) ──────────────────────────────────────
