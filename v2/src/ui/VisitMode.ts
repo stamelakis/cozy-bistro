@@ -155,6 +155,12 @@ export class VisitMode {
    * Prevents a fast burst of insert events from spawning two characters
    * for the same memberId before the first load finishes. */
   private liveStaffPendingLoads: Set<string> = new Set();
+  /** Live ticket counts read from active_ticket subscription. Surface
+   * in the visit overlay so visitors can see "🍳 3 cooking · 🍽 2 ready"
+   * — gives an instant read on how busy the host's kitchen is without
+   * having to spawn plate meshes. Keyed by ticket id (server u64 as
+   * string) so we can re-key on update without double-counting. */
+  private liveTicketStates: Map<string, string> = new Map();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -320,6 +326,8 @@ export class VisitMode {
     // ghost-activity spawn in loadVisitedInterior still runs as a
     // fallback so the scene reads as populated either way.
     this.startLiveStaffSubscription(plot);
+    // Live ticket counts overlay in the kitchen-activity chip.
+    this.startLiveTicketSubscription(plot);
     // P5.8 — let the host's client know they have a visitor. The
     // host then surfaces a toast via its visit_event subscription.
     this.recordVisit?.(plot.ownerHex);
@@ -484,6 +492,41 @@ export class VisitMode {
     }
     this.liveStaffCharacters.clear();
     this.liveStaffPendingLoads.clear();
+    // Reset ticket counts so the next visit starts clean. The
+    // subscription handler is still attached but gated by activePlot
+    // so it won't bleed into the new visit's counts.
+    this.liveTicketStates.clear();
+    this.refreshLivenessLabel();
+  }
+
+  // ─── Live ticket counts (kitchen activity chip) ──────────────────
+
+  /** Subscribe to the host's active_ticket table. Updates the visit
+   * overlay's kitchen-activity counters as tickets transition through
+   * queued / cooking / ready / delivering states. Same activePlot
+   * gate as the staff sub. */
+  private startLiveTicketSubscription(plot: VisitablePlot): void {
+    if (!this.cloud) return;
+    const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (hostRid == null) return;
+    const targetPlotId = plot.id;
+    this.cloud.subscribeActiveTicketChanges({
+      onInsert: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.liveTicketStates.set(String(row.id), row.state);
+        this.refreshLivenessLabel();
+      },
+      onUpdate: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.liveTicketStates.set(String(row.id), row.state);
+        this.refreshLivenessLabel();
+      },
+      onDelete: (id) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.liveTicketStates.delete(String(id));
+        this.refreshLivenessLabel();
+      },
+    }, hostRid);
   }
 
   // ─── Interior render (P4.3) ──────────────────────────────────────
@@ -775,11 +818,26 @@ export class VisitMode {
     if (!this.livenessEl) return;
     const c = this.liveCustomerCount;
     const s = this.liveStaffCount;
-    if (c === 0 && s === 0) {
-      this.livenessEl.textContent = "(quiet right now)";
-    } else {
-      this.livenessEl.textContent = `🍽 ${c} seated · 👤 ${s} staff`;
+    // Kitchen activity from active_ticket rows. Aggregate the four
+    // in-flight states so a visitor reads how busy the host's kitchen
+    // is right now. "delivered" is a transient dwell state, skipped.
+    let cooking = 0, ready = 0;
+    for (const state of this.liveTicketStates.values()) {
+      if (state === "cooking") cooking += 1;
+      else if (state === "ready") ready += 1;
     }
+    const baseEmpty = c === 0 && s === 0;
+    const kitchenIdle = cooking === 0 && ready === 0;
+    if (baseEmpty && kitchenIdle) {
+      this.livenessEl.textContent = "(quiet right now)";
+      return;
+    }
+    const parts: string[] = [];
+    if (c > 0) parts.push(`🍽 ${c} seated`);
+    if (s > 0) parts.push(`👤 ${s} staff`);
+    if (cooking > 0) parts.push(`🍳 ${cooking} cooking`);
+    if (ready > 0) parts.push(`🛎 ${ready} ready`);
+    this.livenessEl.textContent = parts.join(" · ");
   }
 
   // ─── Top-center "Visiting X · Exit" overlay ─────────────────────
