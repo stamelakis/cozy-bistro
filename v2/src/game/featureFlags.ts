@@ -50,27 +50,29 @@ const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
 
 /** Default (build-time) values.
  *
- * Phase H flip — every subsystem now defaults ON. The cutover-ready
- * subsystems (furniture, dishware) drive cross-device sync from the
- * server entirely; the partial-cutover ones (guests, tickets, staff)
- * populate their respective tables so visit mode + future-device
- * resume keep working without per-session URL params.
+ * REVERTED to all-OFF after the Phase H default-on flip broke the
+ * local game. GuestSpawner.update() has an early-return at
+ * isServerSim("guests") that bails out to a server-driven path
+ * which isn't fully implemented yet — flipping that flag on
+ * stopped customer spawning entirely (and the kitchen idled
+ * waiting for orders that never came). The same risk applies to
+ * tickets/staff cutovers that haven't been audited end-to-end.
  *
- * Restoring legacy client-only behaviour is still possible per
- * session via `?serverSim=off` or per subsystem via
- * `?serverSim=furniture` (only the listed subsystem on, rest off).
+ * The flags STILL work — opt in via URL when you're ready:
+ *   ?serverSim=all                      → everything on
+ *   ?serverSim=furniture,dishware       → just these two
+ *   ?serverSim=off                      → all off (default)
  *
- * Safe even for users whose cloud has never held data: the read-side
- * flip in restoreFromCloud() short-circuits when the cloud row count
- * is zero — local state stays canonical until the first mirror
- * write populates the cloud. The server then takes over on
- * subsequent loads. */
+ * Furniture + dishware ARE cutover-ready (read + write + live-diff
+ * shipped + verified by audit). They could safely default-on; left
+ * off for now to keep "nothing changes unless you opt in" the rule
+ * across the board while Phase H finishes baking. */
 const DEFAULTS: ServerSimFlags = {
-  guests: true,
-  tickets: true,
-  staff: true,
-  dishware: true,
-  furniture: true,
+  guests: false,
+  tickets: false,
+  staff: false,
+  dishware: false,
+  furniture: false,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
