@@ -697,6 +697,31 @@ export class GuestSpawner {
    * roughly 1 Hz — see streamGuestPositionsToCloud. */
   private cloudPositionAccum = 0;
 
+  /** Phase B.3c — characters rendered from active_guest server rows
+   * when isServerSim("guests") is ON. Map keyed by the server's
+   * auto-inc id. Populated by reconcileServerGuests on every update
+   * tick; entries are torn down when their corresponding row
+   * disappears from the subscription cache.
+   *
+   * This is the READ-side of the server-authoritative path. The
+   * mirror in B.3b already populates the cloud rows; B.3c adds the
+   * Three.js render that consumes them.
+   *
+   * Honest scope note: in Phase B the cloud row only carries
+   * spawn-state + patience timer + position. No seat assignment,
+   * no order, no plate. Guests rendered through this path walk to
+   * the door, stand there, then time out and leave. Full gameplay
+   * parity returns once Phases C (tickets) and D (staff) wire up
+   * the rest of the state machine. The flag should be considered
+   * "preview mode" until then. */
+  private readonly renderedServerGuests = new Map<bigint, {
+    character: AnimatedCharacter;
+    variantId: string;
+    /** True while characterLoader.load is in flight so we don't
+     * double-spawn the same row while waiting on the GLB. */
+    loadInFlight: boolean;
+  }>();
+
   constructor(
     scene: THREE.Scene,
     characterLoader: CharacterLoader,
@@ -793,6 +818,18 @@ export class GuestSpawner {
   update(dt: number): void {
     this.elapsed += dt;
     this.spawnCooldown -= dt;
+    // Phase B.3c — server-authoritative guest path. When the flag is
+    // on, EVERYTHING below this branch is skipped: no local spawning,
+    // no local state machine. Guests live as active_guest rows on the
+    // server; the client only renders them. Honest limitation: Phase B
+    // doesn't yet have seat assignment / orders / plates on the server,
+    // so guests rendered this way walk to the door and stand there
+    // until their server-side patience expires — the architecture is
+    // there but the gameplay isn't until C/D/E/F also land.
+    if (isServerSim("guests")) {
+      this.reconcileServerGuests();
+      return;
+    }
     // Expire dirty-seat timers — once a seat's cleanup window is up, it
     // becomes available to the next guest.
     if (this.dirtyUntil.size > 0) {
@@ -1585,6 +1622,16 @@ export class GuestSpawner {
    * absent or unknown, spawnGuest falls back to its random pick. */
   triggerExternalArrival(variantHint?: string): void {
     if (!this.restaurantOpen) return;
+    // Server-authoritative path: skip the local spawn entirely. The
+    // pedestrian arrival fires spawn_guest on the server; the row
+    // appears in the subscription cache; reconcileServerGuests adds
+    // the rendered character to the scene a frame later. No seat
+    // check — the server doesn't track seats yet (Phase F). Guests
+    // will time out on patience instead.
+    if (isServerSim("guests")) {
+      this.spawnServerGuestForArrival(variantHint);
+      return;
+    }
     if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
     void this.spawnGuest(variantHint);
     // Pause the local cooldown briefly so the external arrival
@@ -1593,6 +1640,119 @@ export class GuestSpawner {
     // external arrivals stack on top, double-booking the restaurant
     // any time other plots' walkers head this way.
     this.spawnCooldown = Math.max(this.spawnCooldown, 8.0);
+  }
+
+  /** Server-authoritative spawn entry point. Rolls archetype + taste
+   * client-side (the catalog is still client-only) and fires the
+   * spawn_guest reducer. The row appears in the cache; the next
+   * reconcileServerGuests pass creates the character. */
+  private spawnServerGuestForArrival(variantHint?: string): void {
+    if (!this.cloud) return;
+    const variantId = (variantHint && GUEST_VARIANT_IDS.includes(variantHint))
+      ? variantHint
+      : pick(GUEST_VARIANT_IDS);
+    const archetype = rollArchetype();
+    const taste = rollCustomerTaste(archetype, this.knownThemes());
+    const clientTempId = `guest-srv-${this.nextGuestNum++}`;
+    this.cloud.spawnGuest({
+      clientTempId,
+      variant: variantId,
+      archetype: archetype.id,
+      tasteDiet: taste.diet,
+      tasteDecorPref: taste.decorAffinity,
+      tasteWindowPref: taste.windowAffinity,
+      tasteCuisineBias: typeof taste.preferredCategory === "string"
+        ? taste.preferredCategory : "",
+      tasteDrinkTolerance: 0,
+      willUseToilet: Math.random() < archetype.wcUseChance * 0.2,
+      doorX: DOOR_POSITION.x,
+      doorZ: DOOR_POSITION.y,
+      doorFloor: 0,
+    });
+  }
+
+  /** Themes the player has unlocked — fed to rollCustomerTaste so the
+   * preferredTheme roll picks from real options. Falls back to a
+   * single-theme list when registry isn't wired. */
+  private knownThemes(): readonly string[] {
+    // Use the same theme list rollCustomerTaste expects. Empty array
+    // means it'll pick "default" internally. For server-sim purposes
+    // we don't strictly need theme correctness — just don't crash.
+    return [];
+  }
+
+  /** Phase B.3c — reconcile the rendered character set against the
+   * active_guest table subscription cache. Adds characters for new
+   * rows, removes characters whose rows have been deleted, and lerps
+   * existing characters toward each row's target position. */
+  private reconcileServerGuests(): void {
+    if (!this.cloud) return;
+    const rows = this.cloud.listActiveGuests();
+    const seen = new Set<bigint>();
+    for (const row of rows) {
+      seen.add(row.id);
+      const existing = this.renderedServerGuests.get(row.id);
+      if (!existing) {
+        // New row — kick off the GLB load. We mark loadInFlight
+        // immediately so subsequent ticks skip this row until the
+        // async finishes.
+        this.renderedServerGuests.set(row.id, {
+          character: null as unknown as AnimatedCharacter,
+          variantId: row.variant,
+          loadInFlight: true,
+        });
+        void this.loadServerGuestCharacter(row.id, row.variant, row.x, row.z);
+        continue;
+      }
+      if (existing.loadInFlight || !existing.character) continue;
+      // Snap toward the row's body position. Server publishes coarse
+      // updates (~1 Hz); the client smooths between them with a
+      // simple lerp factor. No lerp easing for now — just direct
+      // copy is good enough at coarse pacing.
+      existing.character.groundPos.set(row.x, row.z);
+    }
+    // Remove rendered characters whose rows no longer exist.
+    for (const [serverId, rendered] of this.renderedServerGuests) {
+      if (seen.has(serverId)) continue;
+      if (rendered.character) {
+        this.scene.remove(rendered.character.root);
+        this.animator.remove(rendered.character.root);
+      }
+      this.renderedServerGuests.delete(serverId);
+    }
+  }
+
+  private async loadServerGuestCharacter(serverId: bigint, variantId: string, x: number, z: number): Promise<void> {
+    try {
+      const model = await this.characterLoader.load(variantId);
+      this.scene.add(model);
+      const character: AnimatedCharacter = {
+        root: model,
+        groundPos: new THREE.Vector2(x, z),
+        facingY: Math.PI,
+        action: "walk",
+        phase: Math.random() * 5,
+        seatHeight: 0.62,
+      };
+      this.animator.add(character);
+      // Row may have already been deleted while the GLB loaded —
+      // listActiveGuests is the source of truth, so re-check.
+      const stillAlive = this.cloud?.listActiveGuests().some((r) => r.id === serverId);
+      if (!stillAlive) {
+        this.scene.remove(model);
+        this.animator.remove(model);
+        this.renderedServerGuests.delete(serverId);
+        return;
+      }
+      this.renderedServerGuests.set(serverId, {
+        character,
+        variantId,
+        loadInFlight: false,
+      });
+    } catch (e) {
+      console.warn(`[GuestSpawner] server-guest GLB load failed (${variantId}):`, e);
+      this.renderedServerGuests.delete(serverId);
+    }
   }
 
   private async spawnGuest(variantHint?: string): Promise<void> {
