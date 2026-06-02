@@ -204,7 +204,124 @@ pub fn restaurant_tick(
         tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
     }
 
+    // Phase H.6 — auto-claim queued tickets. Iterates queued tickets
+    // in this restaurant and assigns each to an idle chef + free
+    // stove. Means the kitchen keeps progressing when the host's tab
+    // is backgrounded (the local sim throttles to 1Hz or worse in
+    // background; without server auto-claim the queued tickets pile
+    // up indefinitely).
+    auto_claim_queued_tickets(ctx, rid);
+
     Ok(())
+}
+
+/// Phase H.6 — server-side ticket auto-claim. Iterates queued tickets
+/// + idle chefs in this restaurant and pairs them with an unclaimed
+/// stove. Idempotent in mirror mode: if the client's local sim has
+/// already called claim_ticket for a ticket, its state is no longer
+/// "queued" and this function skips it.
+///
+/// Limitations vs the client's local claim logic:
+/// - Uses a DEFAULT cook time (5 s). The client passes recipe-specific
+///   cook time when it calls claim_ticket; the server doesn't have the
+///   recipe catalog, so we settle for an average. Players who care
+///   about per-recipe timing should keep the foreground tab open.
+/// - Routes all tickets through chef + stove (not barman + bar).
+///   Drinks ordered at the bar should ideally go to a barman, but
+///   that's a per-recipe distinction the server doesn't track yet.
+/// - Picks the FIRST free stove found; no spatial optimisation.
+fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
+    /// Cook time the server assigns when claiming. Average across
+    /// the recipe set — short enough not to feel sluggish, long
+    /// enough that the chef walk + tick advance both happen.
+    const DEFAULT_COOK_SECONDS_MS: i64 = 5_000;
+
+    // Collect queued ticket ids first so we don't iterate while
+    // mutating via update().
+    let queued_ids: Vec<u64> = ctx.db
+        .active_ticket()
+        .iter()
+        .filter(|t| t.restaurant_id == rid && t.state == "queued")
+        .map(|t| t.id)
+        .collect();
+    if queued_ids.is_empty() {
+        return;
+    }
+
+    // Collect idle chefs once per tick — we'll consume them as we
+    // assign. Filter chefs whose state is "idle" + no current ticket.
+    let mut idle_chefs: Vec<StaffActor> = ctx.db
+        .staff_actor()
+        .iter()
+        .filter(|a| a.restaurant_id == rid
+            && a.role == "chef"
+            && a.state == "idle"
+            && a.ticket_id.is_none())
+        .collect();
+    if idle_chefs.is_empty() {
+        return;
+    }
+
+    // Find free stoves — placed_furniture rows with def_id matching a
+    // cookable station + not currently assigned to any staff actor.
+    let occupied_stoves: std::collections::HashSet<String> = ctx.db
+        .staff_actor()
+        .iter()
+        .filter(|a| a.restaurant_id == rid && !a.assigned_stove_uid.is_empty())
+        .map(|a| a.assigned_stove_uid.clone())
+        .collect();
+    let mut free_stoves: Vec<PlacedFurniture> = ctx.db
+        .placed_furniture()
+        .iter()
+        .filter(|f| f.restaurant_id == rid
+            && is_cook_station_def(&f.def_id)
+            && !occupied_stoves.contains(&f.uid))
+        .collect();
+    if free_stoves.is_empty() {
+        return;
+    }
+
+    // Pair up. Walk queued tickets in id order (older first); pop a
+    // chef + stove for each. Stop when either pool empties.
+    for ticket_id in queued_ids {
+        let Some(chef) = idle_chefs.pop() else { break };
+        let Some(stove) = free_stoves.pop() else { break };
+        let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else { continue };
+        // Recheck the ticket state — client may have raced us.
+        if ticket.state != "queued" { continue; }
+        // Atomic claim: update both rows in this tick.
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            state: "cooking".to_string(),
+            state_clock_ms: 0,
+            cook_seconds_ms: DEFAULT_COOK_SECONDS_MS,
+            assigned_chef_id: chef.member_id.clone(),
+            ..ticket
+        });
+        let chef_member_id = chef.member_id.clone();
+        let stove_uid = stove.uid.clone();
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "movingToWork".to_string(),
+            state_clock_ms: 0,
+            ticket_id: Some(ticket_id),
+            target_x: stove.x,
+            target_z: stove.z,
+            target_floor: stove.floor,
+            assigned_stove_uid: stove_uid.clone(),
+            ..chef
+        });
+        log::info!(
+            "auto-claim: ticket {} → chef {} at stove {}",
+            ticket_id, chef_member_id, stove_uid,
+        );
+    }
+}
+
+/// Cook-station defs the server knows about. Matches the client's
+/// "appliance" gates for stoves + the standard burner range. Other
+/// appliances (toaster, coffee machine) require recipe knowledge the
+/// server doesn't have, so we stick to general-purpose stoves.
+fn is_cook_station_def(def_id: &str) -> bool {
+    def_id == "stove" || def_id == "stove-electric"
 }
 
 /// Phase H.4 — step one dishwasher batch's cycle clock. When the
