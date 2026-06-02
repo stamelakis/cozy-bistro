@@ -1946,9 +1946,23 @@ export class StaffRouter {
       const needed = ticket.appliance || "stove";
       const station = this.claimFreeStation(needed, c.homeFloor, c.character.groundPos, allowCrossFloor);
       let target: THREE.Vector2;
+      // Default the target floor to the chef's home — covers both the
+      // same-floor station path AND the legacy stovePos fallback.
+      // Cross-floor stations override below.
+      let targetFloor = c.homeFloor;
       if (station) {
         c.assignedStoveUid = station.uid;
         target = this.chefStandPosFor(station);
+        // Critical for cross-floor cooking: the pathfinder reads
+        // targetFloor to know which storey the destination lives on.
+        // Without this update a chef on Floor 0 claiming a Floor 1
+        // station would pathfind to a (x,z) coord on Floor 0 (target
+        // floor stale = homeFloor), arrive at the wrong storey, and
+        // enter "working" state without actually being at the
+        // station. ticket.pickupFloor would then inherit that wrong
+        // floor and the waiter would walk to nothing. Caught by
+        // post-5c92e96 audit.
+        targetFloor = station.floor;
       } else if (needed === "stove" && this.getStoves && this.getStoves().length === 0) {
         // No stoves placed AND the recipe needs stove — fall back to
         // the legacy shared cooking spot so the kitchen still
@@ -1969,12 +1983,13 @@ export class StaffRouter {
       this.mirrorTicketClaim(ticket, c.memberId);
       c.ticketId = ticket.id;
       c.target = target;
+      c.targetFloor = targetFloor;
       this.planPath(c);
       c.state = "movingToWork";
       c.clock = 0;
       c.character.action = "walk";
       c.homeWorkWaitClock = 0;
-      console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid}` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
+      console.log(`[Router] chef picked up ${ticket.id} (${needed}) → walking to ${station ? `${station.provides} ${station.uid} (F${station.floor})` : "fallback stovePos"} (mult ${chefMult.toFixed(2)})`);
       return true;
     }
     return false;
