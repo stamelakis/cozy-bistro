@@ -865,9 +865,16 @@ export class VisitMode {
     // server's actual chefs / waiters / barmen (which actually walk).
     // Without this check we'd double up: one static ghost AND one
     // live actor for every staff member.
-    const hasLiveStaff = this.liveStaffCharacters.size > 0;
+    //
+    // Check liveStaffPendingLoads (synchronously incremented inside
+    // spawnLiveStaffActor BEFORE the async GLB load) in addition to
+    // liveStaffCharacters (only set post-await). spawnVisitorActivity
+    // can reach this gate while every live spawn is still mid-load,
+    // so checking only liveStaffCharacters.size would race and let
+    // the ghost path fire too — double rendering.
+    const hasLiveStaff = this.liveStaffCharacters.size > 0 || this.liveStaffPendingLoads.size > 0;
     if (hasLiveStaff) {
-      console.log(`[Visit] static ghost-staff spawn skipped — ${this.liveStaffCharacters.size} live actor(s) already rendering`);
+      console.log(`[Visit] static ghost-staff spawn skipped — ${this.liveStaffCharacters.size + this.liveStaffPendingLoads.size} live actor(s) rendering or loading`);
     } else {
       for (const role of roles) {
         const pool = stationByRole[role] ?? counters;
@@ -906,9 +913,13 @@ export class VisitMode {
     // Same logic as staff: skip ghost customers when live data exists
     // for the host so we don't double up real-time customers with
     // procedurally-placed ghosts.
-    const hasLiveCustomers = this.liveCustomerCharacters.size > 0;
+    //
+    // Check pending loads too — the async GLB load race means
+    // liveCustomerCharacters can be empty even when the subscription
+    // has already received N inserts. See the staff equivalent above.
+    const hasLiveCustomers = this.liveCustomerCharacters.size > 0 || this.liveCustomerPendingLoads.size > 0;
     if (hasLiveCustomers) {
-      console.log(`[Visit] static ghost-customer spawn skipped — ${this.liveCustomerCharacters.size} live customer(s) already rendering`);
+      console.log(`[Visit] static ghost-customer spawn skipped — ${this.liveCustomerCharacters.size + this.liveCustomerPendingLoads.size} live customer(s) rendering or loading`);
     } else {
       for (let i = 0; i < targetCustomerCount; i += 1) {
         const variant = GUEST_VARIANT_IDS[Math.floor(Math.random() * GUEST_VARIANT_IDS.length)];

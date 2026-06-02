@@ -1154,22 +1154,28 @@ export class FurnitureRegistry {
     // wins and we push local up to cloud so cross-device sync stays
     // bidirectional.
     //
-    // Why "empty" and not "fewer"? An older heuristic (cloud >=
-    // local) had a foot-gun: if a user's prior testing run had
-    // populated cloud with 50 items, then they wiped + rebuilt to a
-    // current 10-item layout in localStorage, the cloud's 50 > 10
-    // would clobber the new layout with the old. Strict-empty
-    // avoids that — once a session has touched localStorage at all,
-    // local is considered authoritative.
+    // We check expectedItemCount instead of items.length because
+    // Engine fires `void registry.restore(saved).then(...)` and
+    // `restoreFromCloud()` back-to-back; the cloud restore can run
+    // while the local restore is still inside its Promise.all of
+    // GLB loads. items.length === 0 during that window would falsely
+    // pass the guard and clobber localStorage. expectedItemCount is
+    // set SYNCHRONOUSLY at the start of restore() (commit 8bff1c1
+    // follow-up) so it's stable by the time we read it here.
     //
     // True cross-device sync still works for the common case: open
-    // your account on a fresh phone, localStorage is empty,
-    // restoreFromCloud adopts whatever your laptop already pushed.
-    if (this.items.length > 0) {
-      console.log(`[FurnitureRegistry] restoreFromCloud: local already has ${this.items.length} items — keeping local (cross-device sync only fires on a truly empty device). Mirroring local up to cloud.`);
+    // your account on a fresh phone, no save snapshot exists,
+    // expectedItemCount stays 0, restoreFromCloud adopts whatever
+    // your laptop already pushed.
+    if (this.expectedItemCount > 0 || this.items.length > 0) {
+      const localCount = Math.max(this.expectedItemCount, this.items.length);
+      console.log(`[FurnitureRegistry] restoreFromCloud: local has ${localCount} items (${this.items.length} loaded so far) — keeping local. Mirroring local up to cloud once load settles.`);
       // Push every local item up to the cloud so future fresh-device
       // logins find the latest layout. mirrorFurniturePlace is
-      // idempotent (upsert by uid) so re-runs are safe.
+      // idempotent (upsert by uid) so re-runs are safe. If items
+      // are still loading, the per-mutation register() path will
+      // mirror each piece as it lands; we also fire what's already
+      // here so we cover the synchronous window.
       for (const it of this.items) this.mirrorFurniturePlace(it);
       return;
     }
@@ -1208,6 +1214,21 @@ export class FurnitureRegistry {
    * would be a no-op upsert but burns reducer calls + risks the
    * default-clobber problem). */
   private suppressMirrorForReload = false;
+
+  /** Number of items the most recent local restore() was asked to
+   * load. Captured at the START of restore() — i.e. synchronously —
+   * BEFORE the async GLB loads have populated this.items. Used by
+   * restoreFromCloud's stale-cloud guard so a returning user with a
+   * mid-flight local restore (items.length still 0) isn't misread
+   * as "fresh device". Stays at 0 until the first restore() call.
+   *
+   * Why not just check the items array? Engine fires
+   * `void registry.restore(saved).then(...)` and `restoreFromCloud()`
+   * back-to-back. The cloud restore can fire while the local restore
+   * is still inside its Promise.all of GLB loads. items.length === 0
+   * during that window doesn't mean local is empty — it means local
+   * is half-loaded. */
+  private expectedItemCount = 0;
 
   /** Subscribe to live placed_furniture changes from the cloud. Engine
    * calls this once after restoreFromCloud completes. From then on,
@@ -1312,6 +1333,11 @@ export class FurnitureRegistry {
    * loads, since placementY's "floor" default would otherwise drop them
    * to y=0. */
   async restore(saved: PersistedPlacement[]): Promise<void> {
+    // Capture the expected count SYNCHRONOUSLY so restoreFromCloud's
+    // guard can read it before the GLB loads below have resolved.
+    // See expectedItemCount's doc-comment for why items.length isn't
+    // sufficient.
+    this.expectedItemCount = saved.length;
     // Load every item first — order doesn't matter for tile/wall/edge/
     // ceiling items, and the surface re-snap happens AFTER everything
     // is in place so each surface child can look up its host.
