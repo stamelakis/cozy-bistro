@@ -959,6 +959,22 @@ export class Engine {
           this.cloud.setRecipeIngredients(r.id, r.ingredients);
         }
       });
+      // H.38 — same shape for customer_archetype. Server's
+      // try_spawn_arrival_guest picks weighted random archetype from
+      // this table; without it the H.33 fallback uses hardcoded
+      // "regular" with neutral defaults. ~7 archetypes total.
+      void import("../data/customerArchetypes").then(({ customerArchetypes }) => {
+        for (const a of customerArchetypes) {
+          this.cloud.setCustomerArchetype({
+            archetypeId: a.id,
+            weight: a.weight,
+            patienceMultX100: Math.round(a.patienceMultiplier * 100),
+            tipMultX100: Math.round(a.tipMultiplier * 100),
+            orderSizeBias: a.orderSizeBias,
+            wcUseChanceX100: Math.round(a.wcUseChance * 100),
+          });
+        }
+      });
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];

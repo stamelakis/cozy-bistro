@@ -149,6 +149,16 @@ export const CoOwner = __t.object("CoOwner", {
 });
 export type CoOwner = __Infer<typeof CoOwner>;
 
+export const CustomerArchetypeDef = __t.object("CustomerArchetypeDef", {
+  archetypeId: __t.string(),
+  weight: __t.u32(),
+  patienceMultX100: __t.i32(),
+  tipMultX100: __t.i32(),
+  orderSizeBias: __t.i32(),
+  wcUseChanceX100: __t.i32(),
+});
+export type CustomerArchetypeDef = __Infer<typeof CustomerArchetypeDef>;
+
 export const DishwarePool = __t.object("DishwarePool", {
   key: __t.string(),
   restaurantId: __t.u64(),

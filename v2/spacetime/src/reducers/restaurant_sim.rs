@@ -13,10 +13,10 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_ticket, dishware_pool, dishwasher_batch, pantry_stock,
-    placed_furniture, player, recipe_ingredients, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, staff_actor,
-    ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
+    active_guest, active_ticket, customer_archetype, dishware_pool, dishwasher_batch,
+    pantry_stock, placed_furniture, player, recipe_ingredients, restaurant,
+    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
+    ActiveGuest, ActiveTicket, CustomerArchetypeDef, DishwarePool, DishwasherBatch,
     PantryStock, PlacedFurniture, RecipeIngredients, Restaurant,
     RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
@@ -1088,6 +1088,93 @@ pub fn set_recipe_ingredients(
         ctx.db.recipe_ingredients().insert(row);
     }
     Ok(())
+}
+
+/// Phase H.38 — Client seeds the customer_archetype catalog at boot.
+/// Idempotent upsert; repeated identical calls are a no-op.  Catalog
+/// data, not per-player; any authenticated identity may seed (matches
+/// set_recipe_ingredients's rationale).
+#[reducer]
+pub fn set_customer_archetype(
+    ctx: &ReducerContext,
+    archetype_id: String,
+    weight: u32,
+    patience_mult_x100: i32,
+    tip_mult_x100: i32,
+    order_size_bias: i32,
+    wc_use_chance_x100: i32,
+) -> Result<(), String> {
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero {
+        return Err("Must be authenticated".into());
+    }
+    if archetype_id.is_empty() || archetype_id.len() > 32 {
+        return Err("archetype_id must be 1-32 chars".into());
+    }
+    let existing = ctx.db.customer_archetype().archetype_id().find(archetype_id.clone());
+    if let Some(r) = &existing {
+        if r.weight == weight
+            && r.patience_mult_x100 == patience_mult_x100
+            && r.tip_mult_x100 == tip_mult_x100
+            && r.order_size_bias == order_size_bias
+            && r.wc_use_chance_x100 == wc_use_chance_x100 {
+            return Ok(()); // idempotent
+        }
+    }
+    let row = CustomerArchetypeDef {
+        archetype_id,
+        weight,
+        patience_mult_x100,
+        tip_mult_x100,
+        order_size_bias,
+        wc_use_chance_x100,
+    };
+    if existing.is_some() {
+        ctx.db.customer_archetype().archetype_id().update(row);
+    } else {
+        ctx.db.customer_archetype().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.38 — Pick a weighted-random archetype's fields from the
+/// catalog. Returns a 4-tuple of (archetype_id, patience_mult_x100,
+/// wc_use_chance_x100, order_size_bias). Falls back to "regular"
+/// defaults if the catalog hasn't been seeded yet.
+///
+/// `hash` is a per-spawn random value the caller already computed
+/// (see try_spawn_arrival_guest's splitmix64 step) — keeping the RNG
+/// deterministic per guest id so Workflow resume produces the same
+/// archetype on re-run.
+///
+/// Returns a value tuple rather than the row itself because the
+/// SpacetimeDB table struct doesn't derive Clone; we just extract
+/// the fields we need while we still own the iterator's items.
+fn pick_archetype(ctx: &ReducerContext, hash: u64) -> (String, i32, i32, i32) {
+    // First pass: compute total weight + collect just (id, weight)
+    // pairs so we can find which slot the hash lands in.
+    let mut total_weight: u64 = 0;
+    let pairs: Vec<(String, u32)> = ctx.db.customer_archetype().iter()
+        .map(|a| {
+            total_weight += a.weight as u64;
+            (a.archetype_id, a.weight)
+        })
+        .collect();
+    if pairs.is_empty() || total_weight == 0 {
+        return ("regular".to_string(), 100, 40, 0);
+    }
+    let mut pick = hash % total_weight;
+    let mut chosen_id: String = pairs[pairs.len() - 1].0.clone();
+    for (id, w) in &pairs {
+        if (*w as u64) > pick { chosen_id = id.clone(); break; }
+        pick -= *w as u64;
+    }
+    // Second pass: look up the chosen archetype's full row.
+    let row = ctx.db.customer_archetype().archetype_id().find(chosen_id.clone());
+    match row {
+        Some(r) => (r.archetype_id, r.patience_mult_x100, r.wc_use_chance_x100, r.order_size_bias),
+        None => (chosen_id, 100, 40, 0),
+    }
 }
 
 /// Phase H.37 — Look up a recipe's ingredient list. Returns an empty
@@ -2661,12 +2748,18 @@ pub(crate) fn try_spawn_arrival_guest(
     h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
     h ^= h >> 31;
-    let r1 = (h % 1000) as u32;
-    let r2 = ((h >> 16) % 1000) as u32;
-    let will_use_toilet = r1 < 200;             // 20%
-    let will_wash_only = !will_use_toilet && r2 < 300; // 30% of remainder
-    // Patience multiplier 80..120 (= 0.8× .. 1.2× of base).
-    let patience_mult_x100 = 80 + ((h >> 32) % 41) as i32;
+    // H.38 — pick an archetype from the seeded catalog instead of
+    // hardcoding "regular". Patience multiplier + WC-use chance come
+    // from the archetype; previously they were rolled inline.
+    let (archetype_id, archetype_patience_mult, wc_chance_x100, _order_bias)
+        = pick_archetype(ctx, h);
+    let wc_roll = ((h >> 24) % 100) as i32;
+    let will_use_toilet = wc_roll < wc_chance_x100 / 5; // ~20% of wc-prone
+    let will_wash_only = !will_use_toilet && wc_roll < wc_chance_x100 * 4 / 5;
+    // Combine archetype's patience multiplier with a small per-guest
+    // jitter so two casual diners aren't identical.
+    let jitter = ((h >> 40) % 21) as i32 - 10; // ±10
+    let patience_mult_x100 = (archetype_patience_mult + jitter).clamp(40, 200);
 
     let client_temp_id = format!("srv-arrival-{}", h & 0xFFFF_FFFF);
 
@@ -2675,7 +2768,9 @@ pub(crate) fn try_spawn_arrival_guest(
         restaurant_id,
         client_temp_id,
         variant: variant.to_string(),
-        archetype: "regular".to_string(),
+        // H.38 — archetype from the seeded catalog (was hardcoded
+        // "regular"). Falls back to "regular" if catalog is empty.
+        archetype: archetype_id,
         taste_diet: "both".to_string(),
         taste_decor_pref: 0.5,
         taste_window_pref: 0.5,

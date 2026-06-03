@@ -1387,6 +1387,36 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.38 — Seed one row of the customer_archetype catalog.  Same
+   * shape as setRecipeIngredients: idempotent server-side, fire-and-
+   * forget, called once per archetype at boot.  Server's H.33
+   * pedestrian → guest spawn reads this to pick weighted archetype
+   * + apply the patience multiplier and WC-use roll instead of
+   * hardcoding "regular" with neutral defaults. */
+  setCustomerArchetype(args: {
+    archetypeId: string;
+    weight: number;
+    patienceMultX100: number;
+    tipMultX100: number;
+    orderSizeBias: number;
+    wcUseChanceX100: number;
+  }): void {
+    if (!this.conn) return;
+    if (!args.archetypeId) return;
+    try {
+      this.conn.reducers.setCustomerArchetype({
+        archetypeId: args.archetypeId,
+        weight: Math.max(0, Math.round(args.weight)),
+        patienceMultX100: Math.round(args.patienceMultX100),
+        tipMultX100: Math.round(args.tipMultX100),
+        orderSizeBias: Math.round(args.orderSizeBias),
+        wcUseChanceX100: Math.round(args.wcUseChanceX100),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setCustomerArchetype failed:", e);
+    }
+  }
+
   /** H.37 — Seed one row of the recipe_ingredients lookup table.
    * Called once per recipe at boot; idempotent server-side so
    * repeat-on-reconnect is fine. Empty `ingredients` is allowed for

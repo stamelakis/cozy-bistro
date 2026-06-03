@@ -1151,3 +1151,30 @@ pub struct RecipeIngredients {
     pub recipe_id: String,
     pub ingredients: String,
 }
+
+/// Phase H.38 — static customer archetype catalog. One row per
+/// archetype defined in src/data/customerArchetypes.ts; seeded by
+/// the client at boot via set_customer_archetype. The server's
+/// try_spawn_arrival_guest reads it to pick a weighted archetype
+/// (instead of hardcoded "regular") + apply the patience multiplier
+/// and WC-use-chance roll, so a backgrounded-tab guest spawned via
+/// H.33 has the same flavor distribution as a foreground spawn.
+///
+/// All scalars × 100 / × N to stay in integer space:
+///   - weight is the raw integer from the catalog (sums to ~100)
+///   - patience_mult_x100: 100 = 1.0× (server uses scale_patience)
+///   - tip_mult_x100: 100 = 1.0× (informational; server doesn't tip
+///     yet, but mirrored so future work can use it)
+///   - order_size_bias: -1 | 0 | 1
+///   - wc_use_chance_x100: 0..100, probability×100 the guest opts
+///     into a toilet trip
+#[table(name = customer_archetype, public)]
+pub struct CustomerArchetypeDef {
+    #[primary_key]
+    pub archetype_id: String,
+    pub weight: u32,
+    pub patience_mult_x100: i32,
+    pub tip_mult_x100: i32,
+    pub order_size_bias: i32,
+    pub wc_use_chance_x100: i32,
+}

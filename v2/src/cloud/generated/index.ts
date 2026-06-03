@@ -78,6 +78,7 @@ import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
+import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
@@ -109,6 +110,7 @@ import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
 import ChatMessageRow from "./chat_message_table";
 import CoOwnerRow from "./co_owner_table";
+import CustomerArchetypeRow from "./customer_archetype_table";
 import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
@@ -256,6 +258,17 @@ const tablesSchema = __schema({
       { name: 'co_owner_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CoOwnerRow),
+  customer_archetype: __table({
+    name: 'customer_archetype',
+    indexes: [
+      { accessor: 'archetype_id', name: 'customer_archetype_archetype_id_idx_btree', algorithm: 'btree', columns: [
+        'archetypeId',
+      ] },
+    ],
+    constraints: [
+      { name: 'customer_archetype_archetype_id_key', constraint: 'unique', columns: ['archetypeId'] },
+    ],
+  }, CustomerArchetypeRow),
   dishware_pool: __table({
     name: 'dishware_pool',
     indexes: [
@@ -547,6 +560,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
+  __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),
