@@ -274,6 +274,14 @@ pub fn restaurant_tick(
     // up indefinitely).
     auto_claim_queued_tickets(ctx, rid);
 
+    // Phase H.21 — opportunistic dishwasher loading. Best-effort path
+    // that survives backgrounded tabs by moving one dirty piece into a
+    // free dishwasher's batch per tick. Yields to a foreground client
+    // (via the stale-wash-target heuristic inside) so the typical
+    // tab-is-open case doesn't fight the local sim's actual wash
+    // trips. See try_server_wash_load for the gating rules.
+    try_server_wash_load(ctx, rid);
+
     // Phase H.8 — auto-assign ready tickets to idle waiters. Same
     // pattern as H.6 but for the delivery side of the kitchen
     // workflow. Without this, plates would sit at the pickup spot
@@ -599,6 +607,141 @@ fn tick_dishwasher_batch(ctx: &ReducerContext, furniture_uid: &str, restaurant_i
     log::info!(
         "dishwasher {} cycle finished: flushed {} plate(s) + {} glass(es) to clean pool",
         furniture_uid, b.plates, b.glasses,
+    );
+}
+
+/// Phase H.21 — server-side dishwasher loader. Best-effort survival
+/// path: per tick, push at most one dirty piece into a free
+/// dishwasher's batch so the existing H.4 cycle countdown can wash
+/// it back to clean. Only meaningful in backgrounded tabs — when a
+/// foreground client is alive its absolute-write dishware_pool
+/// mirror clobbers anything we do here on the next stream tick.
+///
+/// Gating rules:
+///   1. Foreground guard — if any staff_actor in this restaurant
+///      currently has wash_target_uid set AND state_clock_ms is
+///      small (< 60 s), the local sim is actively running its own
+///      wash trip and we yield. A stuck/stale wash trip (large
+///      state_clock_ms because nothing's clearing the field) is
+///      treated as "client gone, take over" so a backgrounded tab
+///      that left a trip mid-flight still recovers.
+///   2. Must have a dishwasher in placed_furniture for this
+///      restaurant. No washing path otherwise.
+///   3. Must have dirty stock somewhere in dishware_pool.
+///   4. Picked dishwasher must have spare capacity for the kind
+///      we're loading (10 plates / 5 glasses, matching the
+///      client's DISHWASHER_CAPACITY constants).
+///
+/// Throughput: roughly 1 piece per 100 ms tick when active.
+/// Combined with the existing H.4 cycle (~1.5 s per item for a
+/// regular dishwasher), a typical 3-course visit's plates clear
+/// back to clean in well under a minute.
+fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
+    /// Capacity per kind inside one dishwasher. Matches the client's
+    /// DISHWASHER_CAPACITY in DishwareSystem.ts.
+    const PLATE_CAPACITY: u32 = 10;
+    const GLASS_CAPACITY: u32 = 5;
+    /// Per-piece wash cycle extension, by dishwasher tier. Matches
+    /// dishwasherWashPerItem in DishwareSystem.ts.
+    const WASH_MS_REGULAR: i64 = 1_500;
+    const WASH_MS_PRO: i64 = 1_000;
+    /// Stuck threshold for a stale client wash trip. A real
+    /// foreground wash trip transitions through state_clock_ms = 0
+    /// every few seconds (each leg resets the clock); a stuck trip
+    /// just keeps accumulating because nothing clears wash_target_uid.
+    const STALE_WASH_MS: i64 = 60_000;
+
+    // (1) Foreground guard — any non-stale client wash trip in flight?
+    let client_active = ctx.db.staff_actor().iter()
+        .any(|a|
+            a.restaurant_id == rid
+                && !a.wash_target_uid.is_empty()
+                && a.state_clock_ms < STALE_WASH_MS
+        );
+    if client_active { return; }
+
+    // (3) Find one (kind, tier) with dirty > 0. Prefer plate over
+    //     glass and higher tier within the kind — matches the
+    //     client's flush_one_dish preference order so the rendered
+    //     state lines up if the client foregrounds soon.
+    let mut best: Option<DishwarePool> = None;
+    for p in ctx.db.dishware_pool().iter() {
+        if p.restaurant_id != rid { continue; }
+        if p.dirty == 0 { continue; }
+        // Prefer plate; otherwise pick higher tier.
+        let take = match &best {
+            None => true,
+            Some(cur) => match (cur.kind.as_str(), p.kind.as_str()) {
+                ("glass", "plate") => true,
+                ("plate", "glass") => false,
+                _ => p.tier > cur.tier,
+            },
+        };
+        if take { best = Some(p); }
+    }
+    let Some(dirty_row) = best else { return; };
+
+    // (2 + 4) Find a dishwasher with capacity for this kind.
+    let mut dishwasher: Option<PlacedFurniture> = None;
+    for f in ctx.db.placed_furniture().iter() {
+        if f.restaurant_id != rid { continue; }
+        if f.def_id != "dishwasher" && f.def_id != "dishwasher-pro" { continue; }
+        let batch = ctx.db.dishwasher_batch().furniture_uid().find(f.uid.clone());
+        let has_capacity = match &batch {
+            None => true,
+            Some(b) => match dirty_row.kind.as_str() {
+                "plate" => b.plates < PLATE_CAPACITY,
+                "glass" => b.glasses < GLASS_CAPACITY,
+                _ => false,
+            },
+        };
+        if has_capacity { dishwasher = Some(f); break; }
+    }
+    let Some(dw) = dishwasher else { return; };
+
+    // Compute the cycle extension for this piece.
+    let wash_extension_ms = if dw.def_id == "dishwasher-pro" { WASH_MS_PRO } else { WASH_MS_REGULAR };
+
+    // Decrement dirty (delete the row entirely when both clean +
+    // dirty would reach zero, matching update_dishware_pool's
+    // delete-on-empty semantics).
+    let kind = dirty_row.kind.clone();
+    let tier = dirty_row.tier;
+    let key = dirty_row.key.clone();
+    let clean_count = dirty_row.clean;
+    let new_dirty = dirty_row.dirty - 1; // safe: filter above guarantees > 0
+    if new_dirty == 0 && clean_count == 0 {
+        ctx.db.dishware_pool().key().delete(key);
+    } else {
+        ctx.db.dishware_pool().key().update(DishwarePool {
+            dirty: new_dirty,
+            ..dirty_row
+        });
+    }
+
+    // Load into the dishwasher's batch (insert if first piece).
+    if let Some(b) = ctx.db.dishwasher_batch().furniture_uid().find(dw.uid.clone()) {
+        let new_plates = if kind == "plate" { b.plates + 1 } else { b.plates };
+        let new_glasses = if kind == "glass" { b.glasses + 1 } else { b.glasses };
+        ctx.db.dishwasher_batch().furniture_uid().update(DishwasherBatch {
+            plates: new_plates,
+            glasses: new_glasses,
+            cycle_time_remaining_ms: b.cycle_time_remaining_ms.saturating_add(wash_extension_ms),
+            ..b
+        });
+    } else {
+        ctx.db.dishwasher_batch().insert(DishwasherBatch {
+            furniture_uid: dw.uid.clone(),
+            restaurant_id: rid,
+            def_id: dw.def_id.clone(),
+            plates: if kind == "plate" { 1 } else { 0 },
+            glasses: if kind == "glass" { 1 } else { 0 },
+            cycle_time_remaining_ms: wash_extension_ms,
+        });
+    }
+    log::info!(
+        "try_server_wash_load: loaded 1 {} (T{}) into dishwasher {} (rid={})",
+        kind, tier, dw.uid, rid,
     );
 }
 
