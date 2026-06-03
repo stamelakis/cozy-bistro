@@ -713,6 +713,20 @@ pub struct ActiveGuest {
     /// guest's total_satisfaction_x100 on eating-completion.
     #[default(None::<String>)]
     pub order_satisfactions_csv: Option<String>,
+
+    /// Phase H.17 — Archetype patience multiplier × 100. The client's
+    /// customerArchetypes table tags each archetype with a
+    /// patienceMultiplier in the [0.5, 1.5] range (heavy customers wait
+    /// longer; impatient ones leave faster). Stored as ×100 to keep the
+    /// schema in integers; tick_guest_state multiplies the
+    /// ORDER/SERVE base values by this on patience refreshes so a
+    /// backgrounded tab's server-driven impatience matches what the
+    /// local sim would have produced.
+    ///
+    /// Default 100 (= 1.0×) — legacy rows behave like the previous flat
+    /// DEFAULT_PATIENCE_MS path.
+    #[default(100)]
+    pub patience_mult_x100: i32,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per

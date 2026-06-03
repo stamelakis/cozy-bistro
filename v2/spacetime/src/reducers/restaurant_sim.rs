@@ -45,12 +45,25 @@ pub fn bootstrap_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
 
 // === Phase B state-machine constants ===
 
-/// Initial patience for a guest in walkingIn / seated / ordering /
-/// waitingForFood states, in milliseconds. The client today rolls
-/// patience per archetype; for B.2 we use a single baseline. B.3+
-/// will pass the archetype's actual patience scale through
-/// spawn_guest so heavy / patient archetypes feel different again.
-const DEFAULT_PATIENCE_MS: i64 = 90_000; // 90 s
+/// Initial patience pool, in milliseconds. Mirrors the client's
+/// ORDER_PATIENCE_BASE_SECONDS — the window a guest waits for a
+/// waiter to start taking their order. Multiplied by the spawned
+/// patience_mult_x100 (×100 to stay integer; e.g. 150 = 1.5× = 90 s).
+const ORDER_PATIENCE_BASE_MS: i64 = 60_000; // 60 s
+/// Refreshed patience pool used from waiter-takes-order onward
+/// (waitingForFood + eating). Mirrors the client's
+/// SERVE_PATIENCE_BASE_SECONDS. The server bumps patience_ms to this
+/// (× the multiplier) on the ordering → waitingForFood transition AND
+/// at each course boundary (eating → seated), matching the client.
+const SERVE_PATIENCE_BASE_MS: i64 = 90_000; // 90 s
+/// Compute the scaled patience pool from a base value and a guest's
+/// stored multiplier (×100). 150 means 1.5×, so 60000 × 150 / 100 =
+/// 90000 ms. Clamped to a sane floor so a wildly low multiplier
+/// can't produce a 0-patience guest who times out on tick 1.
+fn scale_patience(base_ms: i64, mult_x100: i32) -> i64 {
+    let mult = mult_x100.max(10) as i64; // ≥0.1× floor
+    (base_ms.saturating_mul(mult) / 100).max(5_000)
+}
 
 /// Dwell time in the "leaving" state before the row is deleted.
 /// Lets the client play the walk-out animation before the model
@@ -1248,6 +1261,23 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     let new_total_paid = g.total_paid_cents.saturating_add(added_paid);
     let new_total_sat = g.total_satisfaction_x100.saturating_add(added_sat);
 
+    // H.17 — refresh patience to the SERVE pool × multiplier on the
+    // two transitions the client also refreshes at:
+    //   1. ordering → waitingForFood (waiter just took the order;
+    //      kitchen has from-now to deliver before they walk).
+    //   2. eating → seated (course finished; next course gets a fresh
+    //      budget so a 4-course meal doesn't sum up to a single 90-s
+    //      window).
+    // Other transitions inherit new_patience (decremented above).
+    // patience_active filter prevents WC trips from getting the bump.
+    let patience_refresh = (g.state == "ordering" && final_state == "waitingForFood")
+        || (g.state == "eating" && final_state == "seated");
+    let final_patience = if patience_refresh {
+        scale_patience(SERVE_PATIENCE_BASE_MS, g.patience_mult_x100)
+    } else {
+        new_patience
+    };
+
     // Section A — wcWashing → seated transition clears wc_target_uid
     // and restores target back to the dining seat. The H.9 transition
     // map flipped state to "seated" if the dwell elapsed; if so we
@@ -1279,7 +1309,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
         state_clock_ms: final_clock,
-        patience_ms: new_patience,
+        patience_ms: final_patience,
         order_index: new_order_index,
         x: new_x,
         z: new_z,
@@ -1677,6 +1707,7 @@ pub fn spawn_guest(
     door_x: f32,
     door_z: f32,
     door_floor: u32,
+    patience_mult_x100: i32,
 ) -> Result<(), String> {
     // Auth — only the owning client (or a co-owner, when that lands)
     // can spawn guests into a restaurant. Prevents one client
@@ -1704,7 +1735,12 @@ pub fn spawn_guest(
         // State — they spawn outside, walking toward the door.
         state: "walkingIn".to_string(),
         state_clock_ms: 0,
-        patience_ms: DEFAULT_PATIENCE_MS,
+        // H.17 — initial patience pool matches the client's ORDER
+        // budget × the archetype multiplier. A guest with mult=50
+        // (impatient) gets 30 s; mult=150 (heavy customer) gets 90 s.
+        // Bumped on ordering → waitingForFood to the SERVE pool below
+        // in tick_guest_state.
+        patience_ms: scale_patience(ORDER_PATIENCE_BASE_MS, patience_mult_x100),
         // Seat (unassigned until they arrive at the door)
         seat_uid: String::new(),
         seat_x: 0.0,
@@ -1750,6 +1786,10 @@ pub fn spawn_guest(
         // set_guest_order alongside order_recipes once buildOrder runs.
         order_prices_csv: None,
         order_satisfactions_csv: None,
+        // H.17 — Stored so subsequent patience refreshes
+        // (ordering → waitingForFood, eating → next-course) can
+        // recompute SERVE pool × multiplier.
+        patience_mult_x100,
     });
     Ok(())
 }

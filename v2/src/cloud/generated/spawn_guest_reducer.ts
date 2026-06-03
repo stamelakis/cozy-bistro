@@ -24,4 +24,5 @@ export default {
   doorX: __t.f32(),
   doorZ: __t.f32(),
   doorFloor: __t.u32(),
+  patienceMultX100: __t.i32(),
 };

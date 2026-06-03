@@ -481,6 +481,11 @@ export class SpacetimeClient {
     doorX: number;
     doorZ: number;
     doorFloor: number;
+    /** H.17 — archetype patience multiplier × 100. 100 = 1.0× (server's
+     *  prior flat default); 50 = impatient; 150 = heavy customer.
+     *  Server scales ORDER and SERVE base patience by this so a
+     *  backgrounded tab times out at the same cadence as foreground. */
+    patienceMultX100: number;
   }): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
@@ -498,6 +503,7 @@ export class SpacetimeClient {
         doorX: args.doorX,
         doorZ: args.doorZ,
         doorFloor: args.doorFloor,
+        patienceMultX100: args.patienceMultX100,
       });
     } catch (e) {
       console.warn("[Cloud] spawnGuest failed:", e);

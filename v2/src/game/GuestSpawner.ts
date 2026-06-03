@@ -1857,6 +1857,11 @@ export class GuestSpawner {
       doorX: g.character.groundPos.x,
       doorZ: g.character.groundPos.y,
       doorFloor: g.currentFloor,
+      // H.17 — pass archetype patience scaling (× 100 → integer) so
+      // the server's patience timer matches the client's. Heavy
+      // customers wait longer; impatient ones leave faster. Clamped
+      // server-side too as a defense in depth.
+      patienceMultX100: Math.round(g.archetype.patienceMultiplier * 100),
     });
     // Resolve the server-side auto-inc id once the subscription cache
     // catches up. 250 ms is comfortably above the typical reducer

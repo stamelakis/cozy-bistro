@@ -57,4 +57,5 @@ export default __t.row({
   doorFloor: __t.u32().name("door_floor"),
   orderPricesCsv: __t.option(__t.string()).name("order_prices_csv"),
   orderSatisfactionsCsv: __t.option(__t.string()).name("order_satisfactions_csv"),
+  patienceMultX100: __t.i32().name("patience_mult_x100"),
 });

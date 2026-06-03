@@ -65,6 +65,7 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   doorFloor: __t.u32(),
   orderPricesCsv: __t.option(__t.string()),
   orderSatisfactionsCsv: __t.option(__t.string()),
+  patienceMultX100: __t.i32(),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
