@@ -227,6 +227,26 @@ pub struct Restaurant {
     pub day_elapsed_ms: i64,
     #[default(0u32)]
     pub pending_days_advanced: u32,
+
+    /// Phase H.32 — Live cloud-side mirror of the player's current
+    /// money, in cents. The foreground client pushes its absolute
+    /// economy.getMoney() value via set_cloud_money on a few-second
+    /// cadence; the server's H.22 pending_tips accrual ALSO bumps
+    /// this directly during backgrounded play so visiting friends /
+    /// the leaderboard see a near-current value instead of the
+    /// autosave-stale save_snapshot.money.
+    ///
+    /// Distinct from save_snapshot.money: that column is a
+    /// denormalized field on the JSON-blob save row, updated only
+    /// when the client autosaves (~30 s cadence). cloud_money_cents
+    /// is meant as the live observation channel for other clients +
+    /// for the leaderboard to read without parsing the JSON.
+    ///
+    /// Default 0 — primitive i64, migration-safe end-of-struct add.
+    /// Client's first sync_cloud_money fires shortly after spawn so
+    /// the row stops reading as "$0".
+    #[default(0i64)]
+    pub cloud_money_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

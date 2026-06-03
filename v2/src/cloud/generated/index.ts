@@ -76,6 +76,7 @@ import SellFurnitureReducer from "./sell_furniture_reducer";
 import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
+import SetCloudMoneyReducer from "./set_cloud_money_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
@@ -515,6 +516,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_global", SendChatGlobalReducer),
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
+  __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),

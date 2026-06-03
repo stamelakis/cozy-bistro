@@ -640,6 +640,24 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.32 — Push the current money value to the Restaurant row's
+   * cloud_money_cents column. Called from the Engine update loop on
+   * a few-second cadence in foreground. Visit mode + leaderboard
+   * read this for a live balance instead of the autosave-stale
+   * save_snapshot.money. Idempotent; no-op when the value matches. */
+  syncCloudMoney(moneyDollars: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      const cents = BigInt(Math.round(moneyDollars * 100));
+      this.conn.reducers.setCloudMoney({
+        restaurantId: this.restaurantId,
+        moneyCents: cents,
+      });
+    } catch (e) {
+      console.warn("[Cloud] syncCloudMoney failed:", e);
+    }
+  }
+
   /** H.30 — Periodic yoke of the cloud's day_elapsed_ms to this
    * client's local elapsed-in-day. Called from the Engine update
    * loop on a few-second cadence (default 5 s); prevents

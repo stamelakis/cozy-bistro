@@ -326,6 +326,34 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     });
 }
 
+/// Phase H.32 — Client pushes its absolute current money in cents.
+/// Observational mirror only — does NOT make the server authoritative
+/// for the economy. The intent is to give other clients (visit mode,
+/// leaderboard, social) a near-current value instead of the autosave-
+/// stale save_snapshot.money.
+///
+/// Idempotent — no-op when the row already has this value. Owner-only.
+#[reducer]
+pub fn set_cloud_money(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    money_cents: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set cloud money".into());
+    }
+    if r.cloud_money_cents == money_cents {
+        return Ok(());
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: money_cents,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.30 — Foreground client periodically yokes the cloud's
 /// day_elapsed_ms to its local value so the cloud clock doesn't drift
 /// out from under the player while the tab is alive. Also clears
@@ -907,6 +935,15 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         pending_tips_cents: r.pending_tips_cents.saturating_add(tip_cents),
         pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(rating as i64 * 100),
         pending_rating_count: r.pending_rating_count.saturating_add(1),
+        // H.32 — also credit the tip to cloud_money_cents so other
+        // clients see the running balance climb live during a
+        // backgrounded session. The reconnecting owner's applyPending
+        // path still credits Game.economy.earnMoney(pending) — the
+        // foreground client's NEXT set_cloud_money tick after that
+        // earn lands the local + tips total back on this column, so
+        // the cloud value gets a one-frame "down + back up" blip
+        // rather than double-counting.
+        cloud_money_cents: r.cloud_money_cents.saturating_add(tip_cents),
         ..r
     });
     log::info!(

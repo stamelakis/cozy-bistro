@@ -32,6 +32,9 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // H.30 — day clock starts fresh; client syncs in foreground.
         day_elapsed_ms: 0,
         pending_days_advanced: 0,
+        // H.32 — money mirror starts at zero; client's first
+        // sync_cloud_money fires within seconds of spawn.
+        cloud_money_cents: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

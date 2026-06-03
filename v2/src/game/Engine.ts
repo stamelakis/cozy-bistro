@@ -2114,6 +2114,10 @@ export class Engine {
       const elapsedSec = DAY_LENGTH_SEC - this.game.day.getTimeRemainingSeconds();
       const elapsedMs = Math.max(0, Math.round(elapsedSec * 1000));
       this.cloud.syncDayClock(elapsedMs);
+      // H.32 — also push the live money balance. Same cadence so we
+      // don't multiply network calls. Idempotent server-side; no
+      // write when the value hasn't changed.
+      this.cloud.syncCloudMoney(this.game.economy.getMoney());
     }
     this.router?.update(dt);
     this.errand?.update(dt);
