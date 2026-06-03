@@ -1061,6 +1061,12 @@ export class Engine {
           tasteDrinkTolerance: 0.5,
           willUseToilet: false,
           doorX: 0, doorZ: 5.45, doorFloor: 0,
+          // H.17 / H.24 — neutral defaults for the dev-only test spawn.
+          // Keep this caller in sync with SpacetimeClient.spawnGuest's
+          // signature whenever new fields are mirrored; CI runs `tsc`
+          // and a missing field here blocks the GitHub Pages deploy.
+          patienceMultX100: 100,
+          willWashOnly: false,
         });
         console.log(`[Dev] spawn_guest fired (clientTempId=${clientTempId})`);
       },
