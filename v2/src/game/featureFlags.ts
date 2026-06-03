@@ -72,7 +72,19 @@ const DEFAULTS: ServerSimFlags = {
   tickets: false,
   staff: false,
   dishware: false,
-  furniture: false,
+  // Phase H cutover step 1 — furniture flag flipped default-on
+  // (post-H.35). Comment on the original revert called this one
+  // "cutover-ready (full read + write + live-diff shipped + verified
+  // by audit)"; flipping it now makes the cloud's placed_furniture
+  // table the source of truth for the player's own restaurant in
+  // foreground too, matching what visit mode already does for
+  // others' restaurants. Mutations route through reducers; the
+  // subscription drives the render tree via Engine's
+  // applyCloudInsert / subscribePlacedFurnitureChanges hooks.
+  //
+  // Recovery: ?serverSim=off forces every flag back to false for
+  // one session if this turns out to regress something.
+  furniture: true,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
