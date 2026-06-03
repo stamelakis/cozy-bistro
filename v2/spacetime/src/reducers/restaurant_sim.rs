@@ -974,6 +974,14 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             for waiter_id in waiters_to_release {
                 release_waiter_from_ticket(ctx, &waiter_id);
             }
+            // H.20 — return / dirty-pool the guest's plates BEFORE the
+            // row vanishes. Mirrors client settleGuestDishes; the
+            // dishes_settled gate inside the helper keeps it
+            // idempotent (and a no-op when the client already settled
+            // and pushed `dishes_settled = true`, though that mirror
+            // path doesn't exist yet — for now this is the only
+            // settlement site).
+            settle_guest_dishes(ctx, &g);
             ctx.db.active_guest().id().delete(g.id);
             return;
         }
@@ -1917,6 +1925,151 @@ pub fn set_guest_waiting_chair(
         ..g
     });
     Ok(())
+}
+
+/// H.20 — Client tells the server which dish tiers it reserved for
+/// this guest's courses. CSV of u32 strings parallel to order_recipes
+/// — e.g. "3,3,2" means a 3-course visit where courses 1 + 2 use T3
+/// dishware and course 3 uses T2. The server uses this on despawn
+/// (settle_guest_dishes) to move eaten courses' plates into the
+/// dirty pool and refund any unused reservations back to clean.
+///
+/// Called by GuestSpawner's mirrorGuestReservedTiers — fires after
+/// each `g.reservedDishTiers.push(...)` AND on the periodic stream
+/// while the CSV is growing. Idempotent on the wire.
+///
+/// Empty CSV is a no-op (don't clobber existing data with a stale
+/// "no reservations yet" push that races a successful one).
+#[reducer]
+pub fn set_guest_reserved_tiers(
+    ctx: &ReducerContext,
+    guest_id: u64,
+    tiers_csv: String,
+) -> Result<(), String> {
+    let g = ctx.db.active_guest().id().find(guest_id)
+        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can manage guests".into());
+    }
+    if tiers_csv.is_empty() || g.reserved_dish_tiers == tiers_csv {
+        return Ok(()); // idempotent
+    }
+    ctx.db.active_guest().id().update(ActiveGuest {
+        reserved_dish_tiers: tiers_csv,
+        ..g
+    });
+    Ok(())
+}
+
+/// H.20 — Client tells the server "I already settled this guest's
+/// dishware accounting locally; please skip the server-side path."
+/// Called by GuestSpawner.settleGuestDishes BEFORE it mutates
+/// Game.dishware (which then mirrors absolute pool counts via
+/// updateDishwarePool). The ordering matters: this reducer must land
+/// before the pool mirror so that when the row's despawn dwell later
+/// elapses, `dishes_settled = true` makes the server-side
+/// settle_guest_dishes a no-op — otherwise the same eaten/refunded
+/// plates would be counted twice (once by the client mirror, once
+/// by the server settlement).
+///
+/// Idempotent: re-setting an already-true flag is a no-op.
+#[reducer]
+pub fn mark_guest_dishes_settled(
+    ctx: &ReducerContext,
+    guest_id: u64,
+) -> Result<(), String> {
+    let g = ctx.db.active_guest().id().find(guest_id)
+        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can manage guests".into());
+    }
+    if g.dishes_settled {
+        return Ok(()); // idempotent
+    }
+    ctx.db.active_guest().id().update(ActiveGuest {
+        dishes_settled: true,
+        ..g
+    });
+    Ok(())
+}
+
+/// H.20 — Server-side equivalent of GuestSpawner.settleGuestDishes.
+/// Fired once from the despawn block right before the active_guest
+/// row is deleted. Walks the parallel CSVs (reserved_dish_tiers +
+/// order_appliances) and:
+///
+///   - courses 0..order_index (eaten) → dishware_pool.dirty++ for the
+///     matching (kind, tier).
+///   - courses order_index..end (unused / mid-flight at give-up) →
+///     dishware_pool.clean++ instead.
+///
+/// Kind derives from order_appliances: "bar" → glass, everything else
+/// → plate. Matches the client's `recipe.category === "drink"` test
+/// because mirrorGuestOrder uses "bar" for drinks specifically.
+///
+/// Idempotency: caller checks dishes_settled BEFORE invoking, then
+/// the despawn path deletes the row (so re-entry is impossible). The
+/// dishes_settled flag flip is therefore optional — included as a
+/// defense-in-depth marker in case future code reuses the row.
+fn settle_guest_dishes(ctx: &ReducerContext, g: &ActiveGuest) {
+    if g.dishes_settled { return; }
+    let tiers: Vec<u32> = g.reserved_dish_tiers
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
+    if tiers.is_empty() { return; }
+    let appliance_csv = g.order_appliances.as_deref().unwrap_or("");
+    let appliances: Vec<&str> = appliance_csv.split(',').collect();
+    let order_index = g.order_index as usize;
+    for (i, &tier) in tiers.iter().enumerate() {
+        let appliance = appliances.get(i).copied().unwrap_or("stove");
+        let kind = if appliance == "bar" { "glass" } else { "plate" };
+        let (clean_delta, dirty_delta) = if i < order_index {
+            (0u32, 1u32) // eaten — plate hits the dirty pool
+        } else {
+            (1u32, 0u32) // reservation refund back to clean
+        };
+        bump_dishware(ctx, g.restaurant_id, kind, tier, clean_delta, dirty_delta);
+    }
+    log::info!(
+        "settle_guest_dishes: guest {} ({} reservations, {} eaten)",
+        g.id, tiers.len(), order_index.min(tiers.len()),
+    );
+}
+
+/// Increment a dishware_pool row's clean + dirty counts by the given
+/// deltas, inserting the row if it doesn't exist yet. Shared by
+/// settle_guest_dishes + any future server-side settlement path.
+fn bump_dishware(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: &str,
+    tier: u32,
+    clean_delta: u32,
+    dirty_delta: u32,
+) {
+    if clean_delta == 0 && dirty_delta == 0 { return; }
+    let key = pool_key(restaurant_id, kind, tier);
+    if let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) {
+        ctx.db.dishware_pool().key().update(DishwarePool {
+            clean: p.clean.saturating_add(clean_delta),
+            dirty: p.dirty.saturating_add(dirty_delta),
+            ..p
+        });
+    } else {
+        ctx.db.dishware_pool().insert(DishwarePool {
+            key,
+            restaurant_id,
+            kind: kind.to_string(),
+            tier,
+            clean: clean_delta,
+            dirty: dirty_delta,
+        });
+    }
 }
 
 /// Client-driven position update — replaces the body coords on a

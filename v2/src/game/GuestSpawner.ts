@@ -432,6 +432,13 @@ interface ActiveGuest {
    * spawn-time mirror that races serverMirrorId resolution eventually
    * lands and wakes up the server's H.5 timeout branch. */
   waitingMirrored?: boolean;
+  /** H.20 — last reserved-tiers CSV successfully pushed to the cloud
+   * row. Compared against the freshly-joined `reservedDishTiers` CSV
+   * each periodic tick; on mismatch the mirror fires. Undefined means
+   * "nothing pushed yet" so a non-empty current value always pushes
+   * once. Set to undefined on every push to force a re-send if the
+   * list grew between the push site and the periodic check. */
+  lastMirroredReservedTiers?: string;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -1009,6 +1016,15 @@ export class GuestSpawner {
     if (g.dishesSettled) return;
     g.dishesSettled = true;
     this.dishwareLogger?.(`settleGuestDishes(g${g.id}, state=${g.state}, orderIndex=${g.orderIndex}, reservations=${g.reservedDishTiers.length})`);
+    // H.20 — claim the settle on the cloud row BEFORE the local
+    // mutations so the server's despawn-time settle path becomes a
+    // no-op when its turn arrives. Without this the client's pool
+    // mirror (absolute counts via mirrorPool) and the server's
+    // settle (deltas via bump_dishware) would both apply, double-
+    // counting every eaten plate / refunded reservation.
+    if (isServerSim("guests") && this.cloud && g.serverMirrorId != null) {
+      this.cloud.markGuestDishesSettled(g.serverMirrorId);
+    }
     // Eaten courses become dirty.
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
       const recipe = g.order[i];
@@ -1997,6 +2013,29 @@ export class GuestSpawner {
     }
   }
 
+  /** H.20 — Push the current reservedDishTiers list to the cloud row.
+   * Called once after each `g.reservedDishTiers.push(...)` AND on
+   * every periodic stream tick (cheap idempotent re-send for the
+   * spawn-race case where serverMirrorId wasn't ready). Skips empty
+   * lists — the server rejects empty CSVs anyway to avoid clobbering
+   * existing data.
+   *
+   * Tracks the last CSV we successfully pushed so the periodic stream
+   * doesn't fire a redundant reducer call every second once the list
+   * has stabilized at end-of-meal. */
+  private mirrorGuestReservedTiers(g: ActiveGuest): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    if (g.reservedDishTiers.length === 0) return;
+    if (g.serverMirrorId == null) {
+      g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
+    }
+    if (g.serverMirrorId == null) return;
+    const csv = g.reservedDishTiers.join(",");
+    if (g.lastMirroredReservedTiers === csv) return;
+    this.cloud.setGuestReservedTiers(g.serverMirrorId, csv);
+    g.lastMirroredReservedTiers = csv;
+  }
+
   /** Throttled per-frame: every ~1 s, push each guest's body coords +
    * current target to the server so subscribed clients (visit mode,
    * future co-owner views) can lerp the same body in their own scene.
@@ -2045,6 +2084,11 @@ export class GuestSpawner {
       // pushes once; if the local sim transitions out of waiting
       // (promoted or gave up), the mirror flips back and clears.
       if (periodicFire) this.mirrorGuestWaiting(g);
+      // H.20 — retry the reserved-tiers mirror. Same cheap-once-stable
+      // discipline as the order mirror: skips when lastMirroredReservedTiers
+      // already equals the current join, so it's effectively free once
+      // the guest's full order is in flight.
+      if (periodicFire) this.mirrorGuestReservedTiers(g);
     }
   }
 
@@ -2888,6 +2932,12 @@ export class GuestSpawner {
       return false;
     }
     g.reservedDishTiers.push(reservedTier);
+    // H.20 — mirror the new reservation CSV to the server right away
+    // so settle_guest_dishes on a future despawn has the data. The
+    // mirror is idempotent + retries on the periodic stream below
+    // if serverMirrorId hasn't resolved yet.
+    g.lastMirroredReservedTiers = undefined;
+    this.mirrorGuestReservedTiers(g);
     this.game.cooking.consumeIngredients(recipe);
     // Enqueue with the BASE cook-seconds. The actual chef applies
     // their own training multiplier on pickup (StaffRouter does

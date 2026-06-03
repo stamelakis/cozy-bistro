@@ -55,6 +55,7 @@ import FinishCookingReducer from "./finish_cooking_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
+import MarkGuestDishesSettledReducer from "./mark_guest_dishes_settled_reducer";
 import MarkGuestLeavingReducer from "./mark_guest_leaving_reducer";
 import MoveFurnitureReducer from "./move_furniture_reducer";
 import PickupTicketReducer from "./pickup_ticket_reducer";
@@ -73,6 +74,7 @@ import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
+import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
@@ -487,6 +489,7 @@ const reducersSchema = __reducers(
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
+  __reducerSchema("mark_guest_dishes_settled", MarkGuestDishesSettledReducer),
   __reducerSchema("mark_guest_leaving", MarkGuestLeavingReducer),
   __reducerSchema("move_furniture", MoveFurnitureReducer),
   __reducerSchema("pickup_ticket", PickupTicketReducer),
@@ -505,6 +508,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
+  __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),

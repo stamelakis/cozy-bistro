@@ -559,6 +559,41 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.20 — Push the guest's dish reservations CSV. Each entry is the
+   * tier of the plate/glass reserved for that course in serve order.
+   * The server uses this on despawn (settle_guest_dishes) to put
+   * eaten plates into the dirty pool and refund unused reservations
+   * back to clean.
+   *
+   * Idempotent: a no-op when the row already holds the same CSV.
+   * Empty CSV is rejected server-side to avoid clobbering with stale
+   * "no reservations yet" pushes. */
+  setGuestReservedTiers(guestId: bigint, tiersCsv: string): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.setGuestReservedTiers({ guestId, tiersCsv });
+    } catch (e) {
+      console.warn("[Cloud] setGuestReservedTiers failed:", e);
+    }
+  }
+
+  /** H.20 — Tell the server "I just settled this guest's dishware
+   * locally (markDirty / addClean → mirrorPool already pushed the
+   * post-settle absolute counts)." Sets dishes_settled = true on the
+   * row so the server's own settlement path (which runs on despawn
+   * delete) becomes a no-op and we don't double-count plates.
+   *
+   * Call BEFORE the local pool mutations so the flag mirror lands
+   * before the pool-count mirrors. */
+  markGuestDishesSettled(guestId: bigint): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.markGuestDishesSettled({ guestId });
+    } catch (e) {
+      console.warn("[Cloud] markGuestDishesSettled failed:", e);
+    }
+  }
+
   /** H.11 / H.14 — Set the guest's full course list on the server so
    * the tick reducer can drive the multi-course eating cycle AND
    * autonomously place the next course's ticket (H.14
