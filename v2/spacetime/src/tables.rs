@@ -247,6 +247,19 @@ pub struct Restaurant {
     /// the row stops reading as "$0".
     #[default(0i64)]
     pub cloud_money_cents: i64,
+
+    /// Phase H.41 — Cumulative cost (in cents) of auto-shop restocks
+    /// the server fired while the owner was offline.  Each time
+    /// try_restock_pantry adds N units of an ingredient to pantry_stock
+    /// during a backgrounded ticket placement, the cost (N × per-unit
+    /// from ingredient_cost) accrues here.  Foreground client reads
+    /// this on connect (applyPendingRestockCost), debits the local
+    /// economy via forceSpendMoney("restock"), then fires
+    /// consume_pending_restock_cost to zero it.
+    ///
+    /// Mirrors H.22 / H.30's pending-rollup pattern.
+    #[default(0i64)]
+    pub pending_restock_cost_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`
@@ -1150,6 +1163,22 @@ pub struct RecipeIngredients {
     #[primary_key]
     pub recipe_id: String,
     pub ingredients: String,
+}
+
+/// Phase H.41 — Per-ingredient unit cost in cents. Seeded by the
+/// client from src/data/ingredients.ts. The server reads this when
+/// a backgrounded ticket would fail for insufficient stock and
+/// fires a just-in-time auto-shop restock (5 units per missing
+/// ingredient), billing the total to Restaurant.pending_restock_cost_cents
+/// so the foreground client debits player money on reconnect.
+///
+/// Catalog data, not per-player. Any authenticated identity can seed.
+#[table(name = ingredient_cost, public)]
+pub struct IngredientCost {
+    #[primary_key]
+    pub ingredient_id: String,
+    /// Unit cost in cents (e.g. tomato = 200 = $2, truffle = 3000 = $30).
+    pub cost_cents: i64,
 }
 
 /// Phase H.40 — Full per-recipe catalog metadata. Sibling to

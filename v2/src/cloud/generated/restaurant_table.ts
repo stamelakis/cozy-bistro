@@ -27,4 +27,5 @@ export default __t.row({
   dayElapsedMs: __t.i64().name("day_elapsed_ms"),
   pendingDaysAdvanced: __t.u32().name("pending_days_advanced"),
   cloudMoneyCents: __t.i64().name("cloud_money_cents"),
+  pendingRestockCostCents: __t.i64().name("pending_restock_cost_cents"),
 });

@@ -212,6 +212,12 @@ export const HiredStaffMember = __t.object("HiredStaffMember", {
 });
 export type HiredStaffMember = __Infer<typeof HiredStaffMember>;
 
+export const IngredientCost = __t.object("IngredientCost", {
+  ingredientId: __t.string(),
+  costCents: __t.i64(),
+});
+export type IngredientCost = __Infer<typeof IngredientCost>;
+
 export const LeaderboardEntry = __t.object("LeaderboardEntry", {
   id: __t.u64(),
   player: __t.identity(),
@@ -328,6 +334,7 @@ export const Restaurant = __t.object("Restaurant", {
   dayElapsedMs: __t.i64(),
   pendingDaysAdvanced: __t.u32(),
   cloudMoneyCents: __t.i64(),
+  pendingRestockCostCents: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

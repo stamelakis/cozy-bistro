@@ -4,7 +4,7 @@ const maxTransactionLogEntries = 5000;
 
 export type EarnReason = "payment" | "refund" | "grant" | "offline";
 export type SpendReason = "ingredients" | "staff" | "unlock" | "decor" | "rent";
-export type ForceSpendReason = "rent" | "charge";
+export type ForceSpendReason = "rent" | "charge" | "restock";
 
 export class EconomySystem {
   private money: number;
@@ -74,7 +74,11 @@ export class EconomySystem {
   forceSpendMoney(amount: number, reason: ForceSpendReason = "rent"): void {
     this.charge(amount);
     this.dailyExpensesTotal += amount;
-    this.recordTransaction(reason === "rent" ? "Rent" : "Forced charge", -amount);
+    const label =
+      reason === "rent" ? "Rent"
+      : reason === "restock" ? "Auto-shop restock (offline)"
+      : "Forced charge";
+    this.recordTransaction(label, -amount);
   }
 
   getDailyRevenue(): number {

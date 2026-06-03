@@ -14,12 +14,13 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
-    dishwasher_batch, hired_staff_member, pantry_stock, placed_furniture, player,
-    recipe_ingredients, recipe_meta, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, staff_actor,
+    dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
+    placed_furniture, player, recipe_ingredients, recipe_meta, restaurant,
+    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
-    DishwasherBatch, HiredStaffMember, PantryStock, PlacedFurniture, RecipeIngredients,
-    RecipeMeta, Restaurant, RestaurantTickSchedule, RestaurantTickState, StaffActor,
+    DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
+    RecipeIngredients, RecipeMeta, Restaurant, RestaurantTickSchedule,
+    RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -1403,6 +1404,157 @@ fn pantry_consume(
             }
         }
     }
+}
+
+// === H.41 — Server-side just-in-time auto-shop =====================
+//
+// Closes the last gameplay-correctness gap exposed by H.36 + H.37:
+// once the server starts consuming ingredients on backgrounded
+// ticket placement, a long-idle owner's kitchen would eventually
+// run dry and stall.  Foreground play already has an "auto-shop"
+// fallback in EconomySystem.shopForMissing that buys missing
+// ingredients on-demand and debits the player; we mirror that here.
+//
+// Wire:
+//   1. Client seeds ingredient_cost catalog at boot (mirrors
+//      INGREDIENT_COSTS in src/data/ingredients.ts).
+//   2. auto_place_next_course sees pantry_has_all() == false.
+//   3. try_restock_pantry is called — for each missing ingredient
+//      it adds RESTOCK_UNITS units to pantry_stock and accrues
+//      RESTOCK_UNITS × ingredient_cost.cost_cents to
+//      Restaurant.pending_restock_cost_cents.
+//   4. pantry_has_all is re-checked; on success the ticket is
+//      placed normally (and pantry_consume decrements 1 unit per
+//      ingredient as before).
+//   5. On the owner's next reconnect, the client reads
+//      pending_restock_cost_cents, debits via
+//      forceSpendMoney("restock"), and fires
+//      consume_pending_restock_cost to zero it.
+
+/// How many units of each missing ingredient to auto-restock.
+/// Matches the foreground shopForMissing default (5 units).
+const RESTOCK_UNITS: u32 = 5;
+
+/// Phase H.41 — Client seeds the ingredient cost catalog at boot
+/// from src/data/ingredients.ts.  Idempotent upsert; repeated
+/// identical calls are a no-op.  Catalog data — any authenticated
+/// identity may seed (matches set_recipe_ingredients's rationale).
+#[reducer]
+pub fn set_ingredient_cost(
+    ctx: &ReducerContext,
+    ingredient_id: String,
+    cost_cents: i64,
+) -> Result<(), String> {
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero { return Err("Must be authenticated".into()); }
+    if ingredient_id.is_empty() || ingredient_id.len() > 64 {
+        return Err("ingredient_id must be 1-64 chars".into());
+    }
+    if cost_cents < 0 {
+        return Err("cost_cents cannot be negative".into());
+    }
+    let existing = ctx.db.ingredient_cost().ingredient_id().find(ingredient_id.clone());
+    if let Some(r) = &existing {
+        if r.cost_cents == cost_cents { return Ok(()); } // idempotent
+    }
+    let row = IngredientCost { ingredient_id, cost_cents };
+    if existing.is_some() {
+        ctx.db.ingredient_cost().ingredient_id().update(row);
+    } else {
+        ctx.db.ingredient_cost().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.41 — Owner-only.  Called by the client on reconnect AFTER
+/// it has read Restaurant.pending_restock_cost_cents and debited the
+/// player's local money via forceSpendMoney("restock").  Resets the
+/// counter to 0 so the same charge isn't applied twice.
+///
+/// Idempotent — zero counter is a silent no-op.
+#[reducer]
+pub fn consume_pending_restock_cost(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume pending restock cost".into());
+    }
+    if r.pending_restock_cost_cents == 0 { return Ok(()); }
+    log::info!(
+        "consume_pending_restock_cost: restaurant {} drained {} cents",
+        restaurant_id, r.pending_restock_cost_cents,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_restock_cost_cents: 0,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.41 — For each ingredient with zero stock, add RESTOCK_UNITS
+/// units to pantry_stock and bill the cost to
+/// Restaurant.pending_restock_cost_cents.  Ingredients that already
+/// have stock are skipped (the caller will have come here via
+/// pantry_has_all == false, so at least one is empty, but parallel
+/// arrays mean some entries may already be satisfied).
+///
+/// Ingredients with no ingredient_cost row are restocked free (the
+/// stock still goes in; we just don't bill).  Mirrors the
+/// graceful-degradation pattern in lookup_recipe_ingredients.
+fn try_restock_pantry(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    needed: &[String],
+) {
+    let mut accrued_cents: i64 = 0;
+    let mut restocked_count: u32 = 0;
+    for ing in needed {
+        let key = format!("{}:{}", restaurant_id, ing);
+        let cur = ctx.db.pantry_stock().key().find(key.clone())
+            .map(|p| p.quantity)
+            .unwrap_or(0);
+        if cur > 0 { continue; }
+        // Insert / upsert RESTOCK_UNITS.
+        let row = PantryStock {
+            key: key.clone(),
+            restaurant_id,
+            ingredient_id: ing.clone(),
+            quantity: RESTOCK_UNITS,
+        };
+        if ctx.db.pantry_stock().key().find(key.clone()).is_some() {
+            ctx.db.pantry_stock().key().update(row);
+        } else {
+            ctx.db.pantry_stock().insert(row);
+        }
+        restocked_count += 1;
+        // Bill the cost (if catalog row exists for this ingredient).
+        let unit_cost = ctx.db.ingredient_cost().ingredient_id().find(ing.clone())
+            .map(|c| c.cost_cents)
+            .unwrap_or(0);
+        if unit_cost > 0 {
+            accrued_cents = accrued_cents
+                .saturating_add(unit_cost.saturating_mul(RESTOCK_UNITS as i64));
+        }
+    }
+    if restocked_count == 0 { return; }
+    // Roll up the cost onto the restaurant row so the next foreground
+    // reconnect can debit the player.
+    if accrued_cents > 0 {
+        if let Some(r) = ctx.db.restaurant().id().find(restaurant_id) {
+            let new_total = r.pending_restock_cost_cents.saturating_add(accrued_cents);
+            ctx.db.restaurant().id().update(Restaurant {
+                pending_restock_cost_cents: new_total,
+                ..r
+            });
+        }
+    }
+    log::info!(
+        "try_restock_pantry: restaurant {} restocked {} ingredient(s) for {} cents (pending total updated)",
+        restaurant_id, restocked_count, accrued_cents,
+    );
 }
 
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
@@ -3857,11 +4009,26 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> 
     // catalog yet doesn't deadlock its kitchen on every order.
     let needed = lookup_recipe_ingredients(ctx, &recipe_id);
     if !needed.is_empty() && !pantry_has_all(ctx, g.restaurant_id, &needed) {
-        log::info!(
-            "auto_place_next_course: guest {} course {} → insufficient ingredients for {} (need {:?})",
-            g.id, idx, recipe_id, needed,
-        );
-        return None;
+        // Phase H.41 — server-side just-in-time auto-shop.  Foreground
+        // play has EconomySystem.shopForMissing that buys the gap
+        // on-demand; mirror that here so backgrounded restaurants
+        // don't stall the moment a single ingredient runs out.
+        // try_restock_pantry adds RESTOCK_UNITS per missing entry and
+        // accrues the cost on Restaurant.pending_restock_cost_cents,
+        // which the client drains on reconnect.
+        try_restock_pantry(ctx, g.restaurant_id, &needed);
+        // Re-check.  Restock may still fail (e.g. ingredient_cost
+        // catalog hasn't seeded an entry — though try_restock_pantry
+        // adds stock anyway in that case, so pantry_has_all will
+        // succeed).  If a catastrophic case slips through (negative
+        // quantity bug, etc.) we bail to avoid corrupting stock.
+        if !pantry_has_all(ctx, g.restaurant_id, &needed) {
+            log::info!(
+                "auto_place_next_course: guest {} course {} → restock failed for {} (need {:?})",
+                g.id, idx, recipe_id, needed,
+            );
+            return None;
+        }
     }
     pantry_consume(ctx, g.restaurant_id, &needed);
 

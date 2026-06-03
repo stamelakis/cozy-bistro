@@ -1001,6 +1001,34 @@ export class Engine {
           });
         }
       });
+      // H.41 — seed the ingredient_cost catalog so the server's
+      // auto-shop knows what to bill when it restocks a backgrounded
+      // empty pantry slot. Mirrors INGREDIENT_COSTS in
+      // src/data/ingredients.ts; ~30 entries.  Per-unit cost stored
+      // in cents (the catalog is in dollars).  Idempotent.
+      void import("../data/ingredients").then(({ INGREDIENT_COSTS }) => {
+        for (const [id, dollars] of Object.entries(INGREDIENT_COSTS)) {
+          this.cloud.setIngredientCost(id, Math.round(dollars * 100));
+        }
+      });
+      // H.41 — drain any auto-shop debt the server accrued while
+      // this client was offline.  Server has been billing
+      // Restaurant.pending_restock_cost_cents on every backgrounded
+      // restock; debit the player's local money once, then clear the
+      // counter.  Order matters: forceSpendMoney first (so the
+      // economy reflects reality), THEN consume the cloud counter so
+      // a mid-flight failure doesn't double-bill on retry.  Cents →
+      // dollars; floor to avoid sub-cent FP slippage.
+      const pendingRestockCents = this.cloud.getPendingRestockCostCents();
+      if (pendingRestockCents > 0) {
+        const dollars = pendingRestockCents / 100;
+        try {
+          this.game.economy.forceSpendMoney(dollars, "restock");
+        } catch (e) {
+          console.warn("[Engine] H.41 forceSpendMoney(restock) failed:", e);
+        }
+        this.cloud.consumePendingRestockCost();
+      }
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];

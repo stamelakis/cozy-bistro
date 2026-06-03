@@ -1541,6 +1541,61 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.41 — Seed one row of the ingredient_cost catalog at boot.  Mirrors
+   * INGREDIENT_COSTS in src/data/ingredients.ts.  Server uses these to
+   * bill auto-shop restocks to Restaurant.pending_restock_cost_cents
+   * when a backgrounded ticket places into an empty pantry slot.
+   * Idempotent server-side. */
+  setIngredientCost(ingredientId: string, costCents: number): void {
+    if (!this.conn) return;
+    if (!ingredientId) return;
+    if (!Number.isFinite(costCents) || costCents < 0) return;
+    try {
+      this.conn.reducers.setIngredientCost({
+        ingredientId,
+        costCents: BigInt(Math.round(costCents)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setIngredientCost failed:", e);
+    }
+  }
+
+  /** H.41 — Read the restaurant's accrued auto-shop debt.  Caller is
+   * Engine.onSubscriptionReady; returns cents that should be debited
+   * via game.economy.forceSpendMoney("restock") before firing
+   * consumePendingRestockCost to clear it.  Returns 0 if no row
+   * (pre-migration restaurant, or already drained). */
+  getPendingRestockCostCents(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return 0;
+      const v = row.pendingRestockCostCents;
+      if (v == null) return 0;
+      // SDK returns BigInt for i64; coerce to Number (safe: cents up
+      // to 2^53 == $90 trillion).
+      return typeof v === "bigint" ? Number(v) : Number(v);
+    } catch (e) {
+      console.warn("[Cloud] getPendingRestockCostCents failed:", e);
+      return 0;
+    }
+  }
+
+  /** H.41 — Owner-only.  Clear pending_restock_cost_cents to zero
+   * AFTER the client has debited the player's local money via
+   * forceSpendMoney("restock").  Idempotent: zero counter is a
+   * silent server-side no-op. */
+  consumePendingRestockCost(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingRestockCost({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingRestockCost failed:", e);
+    }
+  }
+
   /** H.31 — Delta-based dishware mirror. Each Game.dishware mutation
    * (reserveOne / markDirty / washOne / addClean) pushes its
    * per-operation delta so the server's H.21 wash loader can

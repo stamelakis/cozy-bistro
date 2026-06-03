@@ -35,6 +35,9 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // H.32 — money mirror starts at zero; client's first
         // sync_cloud_money fires within seconds of spawn.
         cloud_money_cents: 0,
+        // H.41 — pending auto-shop debt starts at zero; client drains
+        // on reconnect.
+        pending_restock_cost_cents: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone
