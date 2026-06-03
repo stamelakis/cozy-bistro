@@ -1439,6 +1439,32 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // already be the next one and the branch skips.
     let arrived = (g.target_x - new_x).abs() < 0.01
         && (g.target_z - new_z).abs() < 0.01;
+
+    // H.23 — try to pick a toilet for a seated WC user. Computed
+    // BEFORE the match so the same Option drives both the
+    // transition guard and the post-match wc_target_uid / target
+    // overrides. None when (a) the guest isn't a WC user, (b)
+    // already used / gave up, or (c) every toilet is busy this tick.
+    let wc_initiation_target: Option<(String, f32, f32, u32)> =
+        if g.state == "seated"
+            && g.will_use_toilet
+            && !g.used_toilet
+            && new_clock < SEATED_DWELL_MS + WC_GIVEUP_MS
+        {
+            try_pick_wc_target(ctx, &g, WcKind::Toilet)
+        } else {
+            None
+        };
+    // H.23 — give-up signal. Set true when the wait window has
+    // elapsed without finding a free toilet; the post-match update
+    // latches used_toilet=true so the standard seated → ordering
+    // arm fires on the next tick.
+    let wc_giveup_triggered = g.state == "seated"
+        && g.will_use_toilet
+        && !g.used_toilet
+        && new_clock >= SEATED_DWELL_MS + WC_GIVEUP_MS
+        && wc_initiation_target.is_none();
+
     let transition: Option<(String, i64)> = match g.state.as_str() {
         // walkingIn → seated when the guest reaches their seat. Two
         // gates: (1) arrived at target; (2) state_clock_ms >=
@@ -1456,7 +1482,28 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // seated → ordering after a brief dwell (the guest reads the
         // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
         // The state_clock_ms is the elapsed dwell.
-        "seated" if new_clock >= SEATED_DWELL_MS => Some(("ordering".to_string(), 0)),
+        // H.23 — willUseToilet WC initiation. The foreground client
+        // owns this transition under its own state names
+        // ("walkingToToilet" etc., which the server doesn't recognize);
+        // this branch is the backgrounded-tab fallback. Fires when:
+        //   - guest hasn't done / given up on the trip yet
+        //   - we found a free toilet via wc_initiation_target above
+        // The give-up case (every toilet busy through SEATED_DWELL_MS
+        // + WC_GIVEUP_MS) is handled by setting used_toilet=true
+        // AFTER the match — see wc_giveup_triggered below — which
+        // lets the standard "seated → ordering" arm fire on the next
+        // tick.
+        "seated" if g.will_use_toilet
+                    && !g.used_toilet
+                    && wc_initiation_target.is_some() =>
+            Some(("wcWalking".to_string(), 0)),
+        // Withhold the standard ordering transition for WC users
+        // until they've either gone OR given up. Without this gate a
+        // willUseToilet guest with no free toilet would flip to
+        // ordering at SEATED_DWELL_MS and never get their WC trip.
+        "seated" if new_clock >= SEATED_DWELL_MS
+                    && !(g.will_use_toilet && !g.used_toilet) =>
+            Some(("ordering".to_string(), 0)),
         // ordering → waitingForFood when a waiter has been dwelling
         // at this guest's seat for the take-order step. The client
         // mirrors waiter.take_order_guest_id when a waiter walks to
@@ -1596,8 +1643,16 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // map flipped state to "seated" if the dwell elapsed; if so we
     // route target_x/z back to seat_x/z so the body walks (or snaps)
     // back to the chair.
+    //
+    // H.23 — seated → wcWalking transition stamps the freshly-picked
+    // toilet uid (from wc_initiation_target) onto the row so the
+    // existing wcWalking → wcSitting branch sees a non-empty
+    // wc_target_uid and doesn't try to pick AGAIN.
+    let started_wc_trip = g.state == "seated" && final_state == "wcWalking";
     let final_wc_target_uid = if g.state == "wcWashing" && final_state == "seated" {
         None
+    } else if started_wc_trip {
+        wc_initiation_target.as_ref().map(|(uid, _, _, _)| uid.clone())
     } else {
         new_wc_target_uid
     };
@@ -1606,18 +1661,32 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     //    instead of leaving them frozen at the seat.
     // 2. wcWashing → seated — restore the dining seat coords (else
     //    they'd be left targeting the sink they just walked away from).
-    // 3. WC target picked above (toilet / sink stand spot).
-    // 4. H.12 fallback seat target.
-    // 5. Existing row target (no change).
+    // 3. seated → wcWalking — route to the toilet stand spot we just
+    //    picked (H.23).
+    // 4. WC target picked above (toilet / sink stand spot, follow-up
+    //    wcSitting → wcWashing transition).
+    // 5. H.12 fallback seat target.
+    // 6. Existing row target (no change).
     let just_started_leaving = g.state != "leaving" && final_state == "leaving";
     let (out_target_x, out_target_z, out_target_floor) =
         if just_started_leaving {
             (g.door_x, g.door_z, g.door_floor)
         } else if g.state == "wcWashing" && final_state == "seated" {
             (g.seat_x, g.seat_z, g.seat_floor)
+        } else if started_wc_trip {
+            // Unwrap is safe — `started_wc_trip` only true when the
+            // wc_initiation_target match arm fired, which requires
+            // wc_initiation_target.is_some().
+            let (_uid, tx, tz, tf) = wc_initiation_target.as_ref().unwrap();
+            (*tx, *tz, *tf)
         } else {
             (effective_target_x, effective_target_z, effective_target_floor)
         };
+
+    // H.23 — latch used_toilet on cycle completion OR on give-up.
+    let new_used_toilet = g.used_toilet
+        || (g.state == "wcWashing" && final_state == "seated")
+        || wc_giveup_triggered;
 
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
@@ -1637,6 +1706,8 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // H.16 — accumulate paid + satisfaction per finished course.
         total_paid_cents: new_total_paid,
         total_satisfaction_x100: new_total_sat,
+        // H.23 — latch on cycle complete or give-up.
+        used_toilet: new_used_toilet,
         ..g
     });
 }
@@ -1686,6 +1757,11 @@ const EATING_DURATION_MS: i64 = 8_000;
 const WC_USE_MS: i64 = 6_000;
 /// Time the guest dwells at the sink before returning to seat.
 const WC_WASH_MS: i64 = 3_000;
+/// Phase H.23 — extra grace beyond SEATED_DWELL_MS during which a WC
+/// user keeps re-attempting to pick a free toilet before giving up
+/// and proceeding to ordering. Mirrors the client's
+/// WC_PATIENCE_SECONDS (10 s).
+const WC_GIVEUP_MS: i64 = 10_000;
 
 /// True if the given guest has any active_ticket row in state
 /// "delivered" — i.e. a plate has just landed at their seat. H.10
@@ -2103,6 +2179,9 @@ pub fn spawn_guest(
         // (ordering → waitingForFood, eating → next-course) can
         // recompute SERVE pool × multiplier.
         patience_mult_x100,
+        // H.23 — Always false at spawn; the seated → wcWalking branch
+        // sets it on completion (wcWashing → seated) OR on give-up.
+        used_toilet: false,
     });
     Ok(())
 }

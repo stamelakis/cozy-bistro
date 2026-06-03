@@ -66,6 +66,7 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   orderPricesCsv: __t.option(__t.string()),
   orderSatisfactionsCsv: __t.option(__t.string()),
   patienceMultX100: __t.i32(),
+  usedToilet: __t.bool(),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 

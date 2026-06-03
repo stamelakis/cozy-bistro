@@ -751,6 +751,23 @@ pub struct ActiveGuest {
     /// DEFAULT_PATIENCE_MS path.
     #[default(100)]
     pub patience_mult_x100: i32,
+
+    /// Phase H.23 — Latch that the server-side WC attempt has resolved.
+    /// True once either (a) the guest completed the toilet → wash cycle
+    /// (wcWashing → seated transition sets it), OR (b) the seated WC-
+    /// initiation branch ran the give-up countdown to 0 because no
+    /// free toilet was available. Gates the seated → wcWalking branch
+    /// so a guest who finished one trip doesn't immediately go again.
+    ///
+    /// Independent from will_use_toilet — that's the spawn-time "this
+    /// archetype is a WC user" roll, set by the client and read-only
+    /// after spawn. used_toilet is the runtime "did it actually happen
+    /// or finalize" flag.
+    ///
+    /// Default false (= "not yet attempted") matches the spawn case for
+    /// existing rows. Primitive bool default — migration-safe.
+    #[default(false)]
+    pub used_toilet: bool,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
