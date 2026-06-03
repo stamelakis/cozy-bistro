@@ -1152,6 +1152,53 @@ pub struct RecipeIngredients {
     pub ingredients: String,
 }
 
+/// Phase H.40 — Full per-recipe catalog metadata. Sibling to
+/// recipe_ingredients (H.37) — that table is just the ingredient
+/// list; this one carries the pricing / cook-time / appliance /
+/// category data the server needs to BUILD orders for backgrounded-
+/// only guests (server-spawned via H.33 that have no foreground
+/// client to call buildOrder + set_guest_order).
+///
+/// Client seeds at boot from src/data/recipes.ts via set_recipe_meta.
+/// Catalog data, not per-player.
+#[table(name = recipe_meta, public)]
+pub struct RecipeMeta {
+    #[primary_key]
+    pub recipe_id: String,
+    /// Base cook time in ms (pre-chef-multiplier). Passed straight
+    /// into active_ticket.base_cook_seconds_ms on order placement.
+    pub base_cook_seconds_ms: i64,
+    /// Required appliance: "stove" | "toaster" | "coffee" | "bar" | …
+    /// "bar" routes through barman path (no waiter trip); rest
+    /// route through chef + appliance furniture.
+    pub appliance: String,
+    /// Effective sell price in cents at base upgrade level.
+    /// active_guest.order_prices_csv consumes this verbatim.
+    pub sell_price_cents: i64,
+    /// Effective satisfaction × 100 at base upgrade level.
+    /// active_guest.order_satisfactions_csv consumes this.
+    pub satisfaction_x100_base: i32,
+    /// "appetizer" | "main" | "side" | "drink" | "dessert" — used
+    /// for picking a balanced multi-course order.
+    pub category: String,
+}
+
+/// Phase H.40 — Current "on-menu" recipe set per restaurant. One row
+/// per restaurant; `recipe_ids` is a comma-separated list of the
+/// recipe ids currently turned on in the menu. The client mirrors
+/// this via set_active_menu whenever the player toggles a recipe
+/// on/off. Server-side order building reads this to know which
+/// recipes are available for a backgrounded-only guest to order.
+///
+/// Empty `recipe_ids` = no menu set yet (brand-new restaurant); the
+/// order builder bails gracefully in that case.
+#[table(name = active_menu, public)]
+pub struct ActiveMenu {
+    #[primary_key]
+    pub restaurant_id: u64,
+    pub recipe_ids: String,
+}
+
 /// Phase H.39 — Roster of hired staff members. The client owns the
 /// canonical roster (StaffSystem.members) and mirrors every
 /// add/remove/level-up here so visit mode + co-owner views + the

@@ -197,6 +197,7 @@ export class CookingSystem {
       return "lastItem";
     }
     this.menuRecipeIds = this.menuRecipeIds.filter((id) => id !== recipeId);
+    this.cloud?.setActiveMenu(this.menuRecipeIds); // H.40
     return "removed";
   }
 
@@ -217,6 +218,7 @@ export class CookingSystem {
       if (inCat >= maxActiveRecipesPerCategory) return false;
     }
     this.menuRecipeIds = [...this.menuRecipeIds, recipeId];
+    this.cloud?.setActiveMenu(this.menuRecipeIds); // H.40
     return true;
   }
 

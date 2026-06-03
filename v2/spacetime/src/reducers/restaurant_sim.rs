@@ -13,12 +13,13 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_ticket, customer_archetype, dishware_pool, dishwasher_batch,
-    hired_staff_member, pantry_stock, placed_furniture, player, recipe_ingredients,
-    restaurant, restaurant_tick_schedule, restaurant_tick_state, staff_actor,
-    ActiveGuest, ActiveTicket, CustomerArchetypeDef, DishwarePool, DishwasherBatch,
-    HiredStaffMember, PantryStock, PlacedFurniture, RecipeIngredients, Restaurant,
-    RestaurantTickSchedule, RestaurantTickState, StaffActor,
+    active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
+    dishwasher_batch, hired_staff_member, pantry_stock, placed_furniture, player,
+    recipe_ingredients, recipe_meta, restaurant, restaurant_tick_schedule,
+    restaurant_tick_state, staff_actor,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
+    DishwasherBatch, HiredStaffMember, PantryStock, PlacedFurniture, RecipeIngredients,
+    RecipeMeta, Restaurant, RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -1088,6 +1089,177 @@ pub fn set_recipe_ingredients(
         ctx.db.recipe_ingredients().insert(row);
     }
     Ok(())
+}
+
+/// Phase H.40 — Seed full per-recipe metadata (sibling to H.37's
+/// recipe_ingredients). Idempotent upsert; any authenticated identity
+/// may seed (catalog data, same rationale as set_recipe_ingredients).
+#[reducer]
+pub fn set_recipe_meta(
+    ctx: &ReducerContext,
+    recipe_id: String,
+    base_cook_seconds_ms: i64,
+    appliance: String,
+    sell_price_cents: i64,
+    satisfaction_x100_base: i32,
+    category: String,
+) -> Result<(), String> {
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero { return Err("Must be authenticated".into()); }
+    if recipe_id.is_empty() || recipe_id.len() > 64 {
+        return Err("recipe_id must be 1-64 chars".into());
+    }
+    let existing = ctx.db.recipe_meta().recipe_id().find(recipe_id.clone());
+    if let Some(r) = &existing {
+        if r.base_cook_seconds_ms == base_cook_seconds_ms
+            && r.appliance == appliance
+            && r.sell_price_cents == sell_price_cents
+            && r.satisfaction_x100_base == satisfaction_x100_base
+            && r.category == category {
+            return Ok(()); // idempotent
+        }
+    }
+    let row = RecipeMeta {
+        recipe_id,
+        base_cook_seconds_ms,
+        appliance,
+        sell_price_cents,
+        satisfaction_x100_base,
+        category,
+    };
+    if existing.is_some() {
+        ctx.db.recipe_meta().recipe_id().update(row);
+    } else {
+        ctx.db.recipe_meta().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.40 — Client mirrors the active menu when the player
+/// toggles recipes on/off. Owner-only since this is per-restaurant
+/// state (unlike recipe_meta / archetype catalogs which are global).
+#[reducer]
+pub fn set_active_menu(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    recipe_ids: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set the active menu".into());
+    }
+    let existing = ctx.db.active_menu().restaurant_id().find(restaurant_id);
+    if let Some(m) = &existing {
+        if m.recipe_ids == recipe_ids { return Ok(()); }
+    }
+    let row = ActiveMenu { restaurant_id, recipe_ids };
+    if existing.is_some() {
+        ctx.db.active_menu().restaurant_id().update(row);
+    } else {
+        ctx.db.active_menu().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.40 — Build a default 1-3 course order for a server-spawned
+/// guest. Picks recipes from the restaurant's active_menu, weighted
+/// by category (1 main is always picked, plus optional appetizer +
+/// dessert based on the per-spawn hash).
+///
+/// Returns the parallel CSVs (recipes, appliances, cook_seconds_ms,
+/// prices_cents, satisfactions_x100) ready to stamp on the new
+/// active_guest row.  Empty tuple of empty strings on bail
+/// (no menu set, no meta seeded, etc.) — caller leaves order_recipes
+/// empty and the guest sits in ordering until patience timeout, the
+/// pre-H.40 behavior.
+fn build_server_order(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    hash: u64,
+) -> (String, String, String, String, String) {
+    let empty = (String::new(), String::new(), String::new(), String::new(), String::new());
+    let menu = match ctx.db.active_menu().restaurant_id().find(restaurant_id) {
+        Some(m) => m,
+        None => return empty,
+    };
+    let menu_ids: Vec<&str> = menu.recipe_ids
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if menu_ids.is_empty() { return empty; }
+
+    // Pull RecipeMeta for each menu id; bucket by category.  Skip
+    // entries with no meta seeded (graceful fallback).
+    let mut by_cat: std::collections::HashMap<String, Vec<RecipeMeta>> = std::collections::HashMap::new();
+    for id in &menu_ids {
+        if let Some(m) = ctx.db.recipe_meta().recipe_id().find(id.to_string()) {
+            by_cat.entry(m.category.clone()).or_default().push(m);
+        }
+    }
+    // Need at least one "main" or "drink" to anchor the order.
+    let anchor_cat = if by_cat.contains_key("main") { "main" }
+        else if by_cat.contains_key("drink") { "drink" }
+        else if !by_cat.is_empty() {
+            // Fallback: pick whatever category we do have.
+            // Determinism via sorted iteration so resume produces
+            // the same anchor.
+            let mut keys: Vec<&String> = by_cat.keys().collect();
+            keys.sort();
+            // Borrow the static via a clone-into-Option dance —
+            // can't return a &str into a string we don't own.
+            // Just convert to owned and use String everywhere below.
+            let key = keys[0].clone();
+            return build_order_from_anchor(&by_cat, &key, hash);
+        }
+        else { return empty; };
+    build_order_from_anchor(&by_cat, anchor_cat, hash)
+}
+
+/// Helper for build_server_order: assemble the 1-3 course order
+/// given a chosen anchor category. ~30% chance of an appetizer,
+/// ~30% chance of a dessert, randomly added.
+fn build_order_from_anchor(
+    by_cat: &std::collections::HashMap<String, Vec<RecipeMeta>>,
+    anchor_cat: &str,
+    hash: u64,
+) -> (String, String, String, String, String) {
+    let mut courses: Vec<&RecipeMeta> = Vec::new();
+    // Appetizer roll first (so it lands before the main if added).
+    if by_cat.contains_key("appetizer") && ((hash >> 8) % 10) < 3 {
+        let bucket = &by_cat["appetizer"];
+        if !bucket.is_empty() {
+            courses.push(&bucket[((hash >> 16) as usize) % bucket.len()]);
+        }
+    }
+    // Anchor (main / drink / etc).
+    if let Some(bucket) = by_cat.get(anchor_cat) {
+        if !bucket.is_empty() {
+            courses.push(&bucket[((hash >> 24) as usize) % bucket.len()]);
+        }
+    }
+    // Dessert roll last.
+    if by_cat.contains_key("dessert") && ((hash >> 32) % 10) < 3 {
+        let bucket = &by_cat["dessert"];
+        if !bucket.is_empty() {
+            courses.push(&bucket[((hash >> 40) as usize) % bucket.len()]);
+        }
+    }
+    if courses.is_empty() {
+        return (String::new(), String::new(), String::new(), String::new(), String::new());
+    }
+    let recipes: Vec<String> = courses.iter().map(|c| c.recipe_id.clone()).collect();
+    let appliances: Vec<String> = courses.iter().map(|c| c.appliance.clone()).collect();
+    let cooks: Vec<String> = courses.iter().map(|c| c.base_cook_seconds_ms.to_string()).collect();
+    let prices: Vec<String> = courses.iter().map(|c| c.sell_price_cents.to_string()).collect();
+    let sats: Vec<String> = courses.iter().map(|c| c.satisfaction_x100_base.to_string()).collect();
+    (
+        recipes.join(","),
+        appliances.join(","),
+        cooks.join(","),
+        prices.join(","),
+        sats.join(","),
+    )
 }
 
 /// Phase H.38 — Client seeds the customer_archetype catalog at boot.
@@ -2763,6 +2935,21 @@ pub(crate) fn try_spawn_arrival_guest(
 
     let client_temp_id = format!("srv-arrival-{}", h & 0xFFFF_FFFF);
 
+    // H.40 — build a server-side order so the guest actually orders
+    // something instead of sitting forever with an empty
+    // order_recipes string.  Pulls recipe metadata from recipe_meta
+    // + active_menu (both seeded by the client at boot); returns
+    // empty CSVs gracefully if either isn't available (e.g. brand-
+    // new restaurant pre-foreground), in which case the guest will
+    // still sit + leave on patience timeout — pre-H.40 behavior.
+    let (order_recipes_csv, order_appliances_csv, order_cooks_csv,
+         order_prices_csv, order_satisfactions_csv)
+        = build_server_order(ctx, restaurant_id, h);
+    let order_appliances_opt = if order_appliances_csv.is_empty() { None } else { Some(order_appliances_csv) };
+    let order_cooks_opt = if order_cooks_csv.is_empty() { None } else { Some(order_cooks_csv) };
+    let order_prices_opt = if order_prices_csv.is_empty() { None } else { Some(order_prices_csv) };
+    let order_sats_opt = if order_satisfactions_csv.is_empty() { None } else { Some(order_satisfactions_csv) };
+
     ctx.db.active_guest().insert(ActiveGuest {
         id: 0, // auto_inc
         restaurant_id,
@@ -2794,7 +2981,10 @@ pub(crate) fn try_spawn_arrival_guest(
         target_x: door_x,
         target_z: door_z,
         target_floor: 0,
-        order_recipes: String::new(),
+        // H.40 — pre-populate the order CSVs so the guest actually
+        // orders something. Empty string here = "no menu / no meta
+        // seeded yet"; guest will sit and leave on patience timeout.
+        order_recipes: order_recipes_csv,
         order_index: 0,
         ticket_id: None,
         reserved_dish_tiers: String::new(),
@@ -2805,13 +2995,13 @@ pub(crate) fn try_spawn_arrival_guest(
         dishes_settled: false,
         spawned_at: ctx.timestamp,
         wc_target_uid: None,
-        order_appliances: None,
-        order_cook_seconds_csv: None,
+        order_appliances: order_appliances_opt,
+        order_cook_seconds_csv: order_cooks_opt,
         door_x,
         door_z,
         door_floor: 0,
-        order_prices_csv: None,
-        order_satisfactions_csv: None,
+        order_prices_csv: order_prices_opt,
+        order_satisfactions_csv: order_sats_opt,
         patience_mult_x100,
         used_toilet: false,
         will_wash_only,

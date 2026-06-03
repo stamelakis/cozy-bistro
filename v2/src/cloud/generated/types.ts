@@ -73,6 +73,12 @@ export const ActiveGuest = __t.object("ActiveGuest", {
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
+export const ActiveMenu = __t.object("ActiveMenu", {
+  restaurantId: __t.u64(),
+  recipeIds: __t.string(),
+});
+export type ActiveMenu = __Infer<typeof ActiveMenu>;
+
 export const ActiveTicket = __t.object("ActiveTicket", {
   id: __t.u64(),
   restaurantId: __t.u64(),
@@ -294,6 +300,16 @@ export const RecipeIngredients = __t.object("RecipeIngredients", {
   ingredients: __t.string(),
 });
 export type RecipeIngredients = __Infer<typeof RecipeIngredients>;
+
+export const RecipeMeta = __t.object("RecipeMeta", {
+  recipeId: __t.string(),
+  baseCookSecondsMs: __t.i64(),
+  appliance: __t.string(),
+  sellPriceCents: __t.i64(),
+  satisfactionX100Base: __t.i32(),
+  category: __t.string(),
+});
+export type RecipeMeta = __Infer<typeof RecipeMeta>;
 
 export const Restaurant = __t.object("Restaurant", {
   id: __t.u64(),

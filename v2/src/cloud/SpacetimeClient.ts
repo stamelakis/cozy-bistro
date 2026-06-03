@@ -1423,6 +1423,51 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.40 — Seed full per-recipe metadata. Sibling to
+   * setRecipeIngredients (which is just the ingredient list);
+   * carries cook-time / appliance / pricing / satisfaction / category
+   * so the server's build_server_order can construct orders for
+   * backgrounded-only guests (server-spawned via H.33 with no
+   * foreground client to call buildOrder + set_guest_order). */
+  setRecipeMeta(args: {
+    recipeId: string;
+    baseCookSecondsMs: number;
+    appliance: string;
+    sellPriceCents: number;
+    satisfactionX100Base: number;
+    category: string;
+  }): void {
+    if (!this.conn) return;
+    if (!args.recipeId) return;
+    try {
+      this.conn.reducers.setRecipeMeta({
+        recipeId: args.recipeId,
+        baseCookSecondsMs: BigInt(Math.max(0, Math.round(args.baseCookSecondsMs))),
+        appliance: args.appliance,
+        sellPriceCents: BigInt(Math.max(0, Math.round(args.sellPriceCents))),
+        satisfactionX100Base: Math.max(0, Math.round(args.satisfactionX100Base)),
+        category: args.category,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRecipeMeta failed:", e);
+    }
+  }
+
+  /** H.40 — Mirror the active menu so the server's order builder
+   * knows which recipes are available for backgrounded guests to
+   * order. Called whenever CookingSystem changes the menu set. */
+  setActiveMenu(recipeIds: readonly string[]): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setActiveMenu({
+        restaurantId: this.restaurantId,
+        recipeIds: recipeIds.join(","),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setActiveMenu failed:", e);
+    }
+  }
+
   /** H.38 — Seed one row of the customer_archetype catalog.  Same
    * shape as setRecipeIngredients: idempotent server-side, fire-and-
    * forget, called once per archetype at boot.  Server's H.33

@@ -78,6 +78,7 @@ import SellFurnitureReducer from "./sell_furniture_reducer";
 import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
+import SetActiveMenuReducer from "./set_active_menu_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
@@ -86,6 +87,7 @@ import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
+import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
@@ -106,6 +108,7 @@ import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 // Import all table schema definitions
 import AchievementUnlockRow from "./achievement_unlock_table";
 import ActiveGuestRow from "./active_guest_table";
+import ActiveMenuRow from "./active_menu_table";
 import ActiveTicketRow from "./active_ticket_table";
 import AuthRecordRow from "./auth_record_table";
 import BanRecordRow from "./ban_record_table";
@@ -126,6 +129,7 @@ import PlacedFurnitureRow from "./placed_furniture_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RecipeIngredientsRow from "./recipe_ingredients_table";
+import RecipeMetaRow from "./recipe_meta_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
@@ -168,6 +172,17 @@ const tablesSchema = __schema({
       { name: 'active_guest_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ActiveGuestRow),
+  active_menu: __table({
+    name: 'active_menu',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'active_menu_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'active_menu_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
+    ],
+  }, ActiveMenuRow),
   active_ticket: __table({
     name: 'active_ticket',
     indexes: [
@@ -451,6 +466,17 @@ const tablesSchema = __schema({
       { name: 'recipe_ingredients_recipe_id_key', constraint: 'unique', columns: ['recipeId'] },
     ],
   }, RecipeIngredientsRow),
+  recipe_meta: __table({
+    name: 'recipe_meta',
+    indexes: [
+      { accessor: 'recipe_id', name: 'recipe_meta_recipe_id_idx_btree', algorithm: 'btree', columns: [
+        'recipeId',
+      ] },
+    ],
+    constraints: [
+      { name: 'recipe_meta_recipe_id_key', constraint: 'unique', columns: ['recipeId'] },
+    ],
+  }, RecipeMetaRow),
   restaurant: __table({
     name: 'restaurant',
     indexes: [
@@ -577,6 +603,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_global", SendChatGlobalReducer),
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
+  __reducerSchema("set_active_menu", SetActiveMenuReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
@@ -585,6 +612,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_hired_staff_member", SetHiredStaffMemberReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
+  __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),

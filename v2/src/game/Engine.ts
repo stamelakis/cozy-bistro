@@ -947,6 +947,11 @@ export class Engine {
       // consumeIngredients / addPantryStock to bump_pantry_stock so
       // visit mode + co-owner views see live ingredient counts.
       this.game.cooking.cloud = this.cloud;
+      // H.40 — push the current active menu now (covers the
+      // initial-load case where menu was set from the save before
+      // cloud was wired). addToMenu/removeFromMenu fire their own
+      // mirrors from this point forward.
+      this.cloud.setActiveMenu(this.game.cooking.getMenuRecipeIds());
       // H.39 — staff roster mirror. StaffSystem fires
       // setHiredStaffMember on hire + training-level-up, and
       // deleteHiredStaffMember on fire.  Mirrors are observational
@@ -963,6 +968,21 @@ export class Engine {
       void import("../data/recipes").then(({ recipes }) => {
         for (const r of recipes) {
           this.cloud.setRecipeIngredients(r.id, r.ingredients);
+          // H.40 — seed the full meta too (sibling table). Server
+          // uses this to build orders for backgrounded-only guests.
+          // Pick a sensible default appliance: "bar" for drinks,
+          // else r.appliances[0] ?? r.stationNeeded ?? "stove".
+          const appliance = r.category === "drink"
+            ? "bar"
+            : (r.appliances?.[0] ?? r.stationNeeded ?? "stove");
+          this.cloud.setRecipeMeta({
+            recipeId: r.id,
+            baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1000),
+            appliance,
+            sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
+            satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),
+            category: r.category,
+          });
         }
       });
       // H.38 — same shape for customer_archetype. Server's
