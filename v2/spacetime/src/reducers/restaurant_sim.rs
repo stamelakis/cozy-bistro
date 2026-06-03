@@ -11,7 +11,7 @@
 //! create_restaurant / delete_restaurant) and in lifecycle.rs's init
 //! (backfill for restaurants that existed before this feature shipped).
 
-use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_ticket, dishware_pool, dishwasher_batch,
     placed_furniture, restaurant, restaurant_tick_schedule,
@@ -125,6 +125,18 @@ pub fn restaurant_tick(
     let rid = schedule.restaurant_id;
     let now = ctx.timestamp;
 
+    // Section C debt fix — capture the previous tick's timestamp
+    // BEFORE we overwrite it, so compute_dt_ms can use real elapsed
+    // time. Previously the function returned the scheduled interval
+    // verbatim, which meant a tick delayed by load advanced state
+    // machines by 100ms while real time moved by 500ms. Now state
+    // machines stay calibrated to wall clock under load.
+    let previous_tick_at: Option<Timestamp> = ctx.db
+        .restaurant_tick_state()
+        .restaurant_id()
+        .find(rid)
+        .map(|s| s.last_tick_at);
+
     // Upsert tick-state — first tick after schedule creation INSERTs;
     // every tick after UPDATEs. Tick count helps dev tools / logs
     // confirm the schedule is genuinely firing.
@@ -149,7 +161,7 @@ pub fn restaurant_tick(
     // Iterate every active_guest belonging to this restaurant and
     // step its state machine (patience countdown, leaving dwell,
     // etc.). Phase B owns this branch.
-    let dt_ms = compute_dt_ms(ctx, &schedule);
+    let dt_ms = compute_dt_ms(now, previous_tick_at);
     let guest_ids: Vec<u64> = ctx.db
         .active_guest()
         .iter()
@@ -801,17 +813,37 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
     ), false)
 }
 
-/// Compute elapsed time since the previous tick for this restaurant,
-/// in milliseconds. Used to advance state-machine clocks. Falls back
-/// to the scheduled interval (100 ms) on the first tick after a
-/// restart, since `last_tick_at` won't exist yet.
-fn compute_dt_ms(_ctx: &ReducerContext, _schedule: &RestaurantTickSchedule) -> i64 {
-    // The reducer body itself just upserted restaurant_tick_state
-    // ABOVE this call site; so by the time we read, last_tick_at is
-    // already "now". We instead pin to the configured interval — the
-    // schedule is what guarantees pacing, and any per-tick drift is
-    // sub-millisecond and not worth a more complex bookkeeping field.
-    SIM_TICK_INTERVAL_MICROS / 1_000
+/// Compute elapsed time between this tick and the previous one for
+/// the same restaurant, in milliseconds. Used to advance state-
+/// machine clocks at wall-clock pace under server load.
+///
+/// Section C debt fix — previously this pinned to the scheduled
+/// interval (100ms) regardless of real elapsed time. If a tick was
+/// delayed by load (e.g. lots of restaurants ticking, GC pause),
+/// state machines advanced by 100ms while the wall clock moved
+/// further. Guests appeared to slow down on a busy host.
+///
+/// Falls back to the scheduled interval (100ms) when previous_tick_at
+/// is None — first tick after schedule creation OR a restart where
+/// the row hadn't been written yet.
+///
+/// Clamps to [50ms, 1000ms]. Lower clamp protects against clock
+/// jitter producing zero / negative diffs (single-tick double-fires
+/// from internal retry); upper clamp prevents a multi-second pause
+/// from advancing everything to "leaving" in one go (a guest
+/// 30 seconds into eating shouldn't jump straight to leaving after
+/// a long stall — the clamp lets them catch up across a few ticks
+/// instead).
+fn compute_dt_ms(now: Timestamp, previous_tick_at: Option<Timestamp>) -> i64 {
+    let Some(prev) = previous_tick_at else {
+        return SIM_TICK_INTERVAL_MICROS / 1_000;
+    };
+    // duration_since returns Result<std::time::Duration, ...> — micros
+    // converted to ms with saturating_cast since i64::MAX > u128::MAX
+    // is impossible for any realistic tick gap.
+    let diff_micros = now.duration_since(prev).map(|d| d.as_micros()).unwrap_or(0);
+    let diff_ms = (diff_micros / 1_000) as i64;
+    diff_ms.clamp(50, 1_000)
 }
 
 /// Advance one guest's state machine by `dt_ms`. Phase B.2 handles
