@@ -1863,41 +1863,40 @@ export class SpacetimeClient {
     return () => { this.chatMessageListeners.delete(cb); };
   }
 
-  /** Wait for one reducer call to apply OR fail. SpacetimeDB
-   * reducers fire-and-forget; we wire transient onSuccess /
-   * onError listeners to convert that into a Promise the modal
-   * can `await`. Times out after 10s so a dropped connection
-   * doesn't hang the UI forever. */
-  private callReducer(_label: string, fire: () => void): Promise<void> {
-    if (!this.conn) return Promise.reject(new Error("Not connected"));
-    // Subscribing to a reducer's events is SDK-specific and noisy.
-    // Easier path: kick off the call, then poll the local cache /
-    // listen for a state change for a short window. For auth flows
-    // we care about the OUTCOME visible in the cache (auth_record
-    // row appears/updates) rather than the literal reducer ACK,
-    // so listening for a notify is good enough.
-    return new Promise((resolve, reject) => {
-      const t = window.setTimeout(() => {
-        cleanup();
+  /** Fire one reducer call and surface its actual outcome. The
+   * SpacetimeDB SDK's reducer accessor returns a Promise that
+   * resolves on success and rejects with `SenderError(message)` on
+   * server-side rejection (e.g. login returning "Wrong password"
+   * via `Err(...)`).  We forward the rejection's message string to
+   * the modal so users see the real error instead of the old
+   * "Server didn't respond in time" timeout.
+   *
+   * Also keeps a 10 s safety cap so a dropped connection still
+   * surfaces SOMETHING rather than hanging the modal forever. */
+  private async callReducer(_label: string, fire: () => Promise<void> | void): Promise<void> {
+    if (!this.conn) throw new Error("Not connected");
+    const TIMEOUT_MS = 10_000;
+    let timeoutId: number | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = window.setTimeout(() => {
         reject(new Error("Server didn't respond in time"));
-      }, 10_000);
-      const cleanup = (): void => {
-        window.clearTimeout(t);
-        this.listeners.delete(onChange);
-      };
-      const onChange = (): void => {
-        // Resolve on the next state mutation. The modal calls
-        // getCurrentAccount() after the resolve to verify outcome
-        // and surfaces the appropriate UI.
-        cleanup();
-        resolve();
-      };
-      this.listeners.add(onChange);
-      try { fire(); } catch (e) {
-        cleanup();
-        reject(e instanceof Error ? e : new Error(String(e)));
-      }
+      }, TIMEOUT_MS);
     });
+    try {
+      // Race the SDK call against the timeout. If the SDK rejects
+      // (server returned Err), the rejection wins and carries the
+      // real error message.
+      const callPromise = (async () => fire())();
+      await Promise.race([callPromise, timeoutPromise]);
+    } catch (e) {
+      // Strip the SenderError wrapping for display. The SDK formats
+      // these as "Reducer call failed: <message>" or carries the raw
+      // server string; just pass the message through.
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(msg);
+    } finally {
+      if (timeoutId != null) window.clearTimeout(timeoutId);
+    }
   }
 
   /** Build the connection and start listening. Safe to await; failures
