@@ -2147,6 +2147,123 @@ fn parse_csv_index_i32(csv: Option<&str>, idx: usize) -> Option<i32> {
     if cell.is_empty() { Some(0) } else { cell.parse::<i32>().ok() }
 }
 
+/// Phase H.33 — Server-side conversion of a server-spawned pedestrian
+/// into an active guest. Fired by pedestrian_tick when the pedestrian's
+/// trip expires and the target plot's owner is OFFLINE — foreground
+/// clients still handle the conversion via SharedPedestrians.onArrival
+/// → triggerExternalArrival → local spawnGuest, but a backgrounded /
+/// disconnected tab can't fire that path, so the customer would
+/// otherwise be lost.
+///
+/// Spawns with neutral defaults (archetype = "regular", taste_diet =
+/// "both", patience multiplier rolled in [0.8, 1.2], 20% will_use_toilet
+/// / 30%-of-remainder will_wash_only). The full archetype/taste tables
+/// only live in the client's TS today; porting them to Rust is a
+/// separate migration. The existing simulation pipeline (H.12 seat
+/// fallback, H.14 auto place_order, H.16+ payment tracking, etc.) picks
+/// the guest up from here.
+///
+/// Returns true when a guest was inserted, false on any bail (restaurant
+/// already full, etc.). pub(crate) so reducers::pedestrians can call it.
+pub(crate) fn try_spawn_arrival_guest(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    variant: &str,
+    door_x: f32,
+    door_z: f32,
+) -> bool {
+    /// Cap — don't pile up server-spawned guests past a sane limit.
+    /// Matches the rough order of the foreground client's effective
+    /// guest pool size; prevents a long-backgrounded tab with no
+    /// seating from accruing a runaway count.
+    const MAX_ACTIVE_GUESTS: usize = 12;
+    let active_count = ctx.db.active_guest().iter()
+        .filter(|g| g.restaurant_id == restaurant_id)
+        .count();
+    if active_count >= MAX_ACTIVE_GUESTS {
+        return false;
+    }
+
+    // Pseudo-random rolls — Date.now()/random() are disallowed in
+    // scheduled-reducer context, so we hash (timestamp ^ restaurant_id
+    // ^ active_count) and pull bits off it. Distribution good enough
+    // for archetype-like flavor rolls.
+    let seed: u64 = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
+        .wrapping_mul(restaurant_id.wrapping_add(1))
+        .wrapping_mul(active_count as u64 + 17);
+    let mut h: u64 = seed ^ 0x9E37_79B9_7F4A_7C15;
+    h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    let r1 = (h % 1000) as u32;
+    let r2 = ((h >> 16) % 1000) as u32;
+    let will_use_toilet = r1 < 200;             // 20%
+    let will_wash_only = !will_use_toilet && r2 < 300; // 30% of remainder
+    // Patience multiplier 80..120 (= 0.8× .. 1.2× of base).
+    let patience_mult_x100 = 80 + ((h >> 32) % 41) as i32;
+
+    let client_temp_id = format!("srv-arrival-{}", h & 0xFFFF_FFFF);
+
+    ctx.db.active_guest().insert(ActiveGuest {
+        id: 0, // auto_inc
+        restaurant_id,
+        client_temp_id,
+        variant: variant.to_string(),
+        archetype: "regular".to_string(),
+        taste_diet: "both".to_string(),
+        taste_decor_pref: 0.5,
+        taste_window_pref: 0.5,
+        taste_cuisine_bias: String::new(),
+        taste_drink_tolerance: 0.0,
+        will_use_toilet,
+        state: "walkingIn".to_string(),
+        state_clock_ms: 0,
+        patience_ms: scale_patience(ORDER_PATIENCE_BASE_MS, patience_mult_x100),
+        seat_uid: String::new(),
+        seat_x: 0.0,
+        seat_z: 0.0,
+        seat_facing_y: 0.0,
+        seat_floor: 0,
+        seat_at_bar: false,
+        plate_x: 0.0,
+        plate_z: 0.0,
+        x: door_x,
+        z: door_z,
+        floor: 0,
+        target_x: door_x,
+        target_z: door_z,
+        target_floor: 0,
+        order_recipes: String::new(),
+        order_index: 0,
+        ticket_id: None,
+        reserved_dish_tiers: String::new(),
+        waiting_chair_uid: String::new(),
+        waiting_timeout_ms: 0,
+        total_paid_cents: 0,
+        total_satisfaction_x100: 0,
+        dishes_settled: false,
+        spawned_at: ctx.timestamp,
+        wc_target_uid: None,
+        order_appliances: None,
+        order_cook_seconds_csv: None,
+        door_x,
+        door_z,
+        door_floor: 0,
+        order_prices_csv: None,
+        order_satisfactions_csv: None,
+        patience_mult_x100,
+        used_toilet: false,
+        will_wash_only,
+        washed_hands: false,
+        wc_completed: false,
+    });
+    log::info!(
+        "try_spawn_arrival_guest: spawned for offline owner in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
+        restaurant_id, variant, will_use_toilet, will_wash_only, patience_mult_x100,
+    );
+    true
+}
+
 /// Phase H.25 — per-piece satisfaction contribution of a (kind, tier)
 /// piece of dishware, expressed as i64 × 100 to keep the avgSat
 /// math in integer space. Mirrors src/data/dishwareCatalog.ts's

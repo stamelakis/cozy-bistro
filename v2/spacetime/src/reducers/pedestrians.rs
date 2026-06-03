@@ -18,8 +18,11 @@
 //! ~225 s, which keeps the city looking busy without overloading
 //! the table.
 
-use spacetimedb::{rand::Rng, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
-use crate::tables::{building, pedestrian, pedestrian_tick_schedule, player_save, visit_event, Building, Pedestrian, PedestrianTickSchedule};
+use spacetimedb::{rand::Rng, reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
+use crate::tables::{
+    building, pedestrian, pedestrian_tick_schedule, player, player_save, restaurant,
+    visit_event, Building, Pedestrian, PedestrianTickSchedule,
+};
 
 /// Cap on simultaneously active pedestrians. Each is one row in the
 /// pedestrian table; client renders one character model per row.
@@ -72,19 +75,30 @@ const VARIANTS: &[&str] = &[
 #[reducer]
 pub fn pedestrian_tick(ctx: &ReducerContext, _schedule: PedestrianTickSchedule) -> Result<(), String> {
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    // Pass 1 — despawn expired pedestrians.
+    // Pass 1 — despawn expired pedestrians. Collect the whole row
+    // (not just the id) so the arrival-handoff step below can read
+    // target_plot_id + end coords + variant for the conversion.
     let mut alive_count: usize = 0;
-    let to_despawn: Vec<u64> = ctx.db.pedestrian().iter().filter_map(|p| {
+    let expired: Vec<Pedestrian> = ctx.db.pedestrian().iter().filter_map(|p| {
         let elapsed = now_micros - p.spawn_at.to_micros_since_unix_epoch();
         if elapsed > p.duration_micros {
-            Some(p.id)
+            Some(p)
         } else {
             alive_count += 1;
             None
         }
     }).collect();
-    for id in to_despawn {
-        ctx.db.pedestrian().id().delete(id);
+    // Phase H.33 — server-side pedestrian → guest conversion. For every
+    // expired pedestrian whose target plot belongs to an OFFLINE owner,
+    // insert an ActiveGuest server-side so a backgrounded tab doesn't
+    // lose the customer. Foreground owners still handle the conversion
+    // via SharedPedestrians.onArrival → triggerExternalArrival; this
+    // branch yields when the owner's Player.last_seen_at is recent.
+    for p in &expired {
+        try_arrival_handoff(ctx, p, now_micros);
+    }
+    for p in &expired {
+        ctx.db.pedestrian().id().delete(p.id);
     }
     // Pass 2 — spawn up to N new pedestrians per tick, respecting
     // the cap. Spawning one per tick keeps the city feeling alive
@@ -107,6 +121,43 @@ pub fn pedestrian_tick(ctx: &ReducerContext, _schedule: PedestrianTickSchedule) 
         ctx.db.visit_event().id().delete(id);
     }
     Ok(())
+}
+
+/// Phase H.33 — Convert an expired customer-arrival pedestrian to an
+/// ActiveGuest server-side IFF the target plot's owner is offline.
+/// Foreground owners still handle the conversion via the client-side
+/// SharedPedestrians.onArrival → triggerExternalArrival path; this
+/// branch yields when the owner's Player.last_seen_at is recent
+/// (within OFFLINE_THRESHOLD_MICROS = 30 s). Without the gate both
+/// paths would fire and double-spawn the guest.
+fn try_arrival_handoff(ctx: &ReducerContext, p: &Pedestrian, now_micros: i64) {
+    // Ambient walker — no plot to deliver to.
+    if p.target_plot_id == 0 { return; }
+    let Some(b) = ctx.db.building().id().find(p.target_plot_id) else { return; };
+    let zero = Identity::__dummy();
+    if b.owner_identity == zero { return; }
+    // Foreground guard — skip when the owner pinged presence recently.
+    // Player.last_seen_at refreshes every 30 s via pingPresence; 30 s
+    // window matches the heartbeat interval so a tab that just dropped
+    // a single ping is still considered online.
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    let owner_online = ctx.db.player().identity().find(b.owner_identity)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online {
+        return; // client handles via triggerExternalArrival
+    }
+    // Find the offline owner's restaurant. There's at most one per
+    // identity in the current single-restaurant model; we iterate
+    // because Restaurant.owner is indexed but not unique.
+    let Some(rest) = ctx.db.restaurant().iter().find(|r| r.owner == b.owner_identity) else { return; };
+    crate::reducers::restaurant_sim::try_spawn_arrival_guest(
+        ctx,
+        rest.id,
+        &p.variant,
+        p.end_x,
+        p.end_z,
+    );
 }
 
 /// Public bootstrap — installs the pedestrian_tick_schedule row if
