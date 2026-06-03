@@ -639,10 +639,33 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         .count();
     if course_count == 0 { return; }
 
-    // total_satisfaction_x100 / 100 / count = avgSat. Then
-    // base = clamp(2 + avgSat/2, 1, 5), rounded to nearest int.
-    // Done in integer math for determinism — × 100 / 200 = / 2.
-    let avg_sat_x100 = g.total_satisfaction_x100 as i64 / (course_count as i64);
+    // H.25 — dish-quality satisfaction bonus, mirroring
+    // GuestSpawner.finalizeVisit's `dishSatBonus` loop. For each
+    // course we look up satisfactionPerPiece by (kind, tier) from
+    // the lookup table below and sum onto the existing
+    // total_satisfaction_x100 before averaging. Kind comes from
+    // order_appliances: "bar" → glass, anything else → plate. Tier
+    // comes from the parallel reserved_dish_tiers CSV (mirrored
+    // by H.20).
+    let tiers: Vec<u32> = g.reserved_dish_tiers
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
+    let appliance_csv = g.order_appliances.as_deref().unwrap_or("");
+    let appliances: Vec<&str> = appliance_csv.split(',').collect();
+    let mut dish_sat_bonus_x100: i64 = 0;
+    for (i, &tier) in tiers.iter().enumerate() {
+        let appliance = appliances.get(i).copied().unwrap_or("stove");
+        let kind = if appliance == "bar" { "glass" } else { "plate" };
+        dish_sat_bonus_x100 += dish_satisfaction_x100(kind, tier);
+    }
+
+    // (total_satisfaction_x100 + dish_sat_bonus_x100) / 100 / count
+    // = avgSat. Then base = clamp(2 + avgSat/2, 1, 5), rounded.
+    // Integer math: × 100 / 200 = / 2.
+    let adjusted_sat_x100 = (g.total_satisfaction_x100 as i64)
+        .saturating_add(dish_sat_bonus_x100);
+    let avg_sat_x100 = adjusted_sat_x100 / (course_count as i64);
     // base_x100 = 200 + avg_sat_x100 / 2
     let base_x100 = 200 + (avg_sat_x100 / 2);
     let rating_raw = (base_x100 + 50) / 100; // round-half-up to nearest star
@@ -1752,6 +1775,33 @@ fn parse_csv_index_i32(csv: Option<&str>, idx: usize) -> Option<i32> {
     let mut iter = s.split(',');
     let cell = iter.nth(idx)?;
     if cell.is_empty() { Some(0) } else { cell.parse::<i32>().ok() }
+}
+
+/// Phase H.25 — per-piece satisfaction contribution of a (kind, tier)
+/// piece of dishware, expressed as i64 × 100 to keep the avgSat
+/// math in integer space. Mirrors src/data/dishwareCatalog.ts's
+/// satisfactionPerPiece column exactly:
+///   plate T1..T5: 0.0, 0.5, 1.0, 1.6, 2.2
+///   glass T1..T5: 0.0, 0.4, 0.8, 1.3, 1.9
+/// Any unknown (kind, tier) returns 0 — so misconfigured or T0/T6
+/// rows just don't contribute. Lookup table is hardcoded rather than
+/// schema-driven; the client's catalog is also hardcoded in TS, and
+/// keeping them in sync via two source files (the client TS + this
+/// Rust constant) is cheaper than threading a dishware_def table.
+fn dish_satisfaction_x100(kind: &str, tier: u32) -> i64 {
+    match (kind, tier) {
+        ("plate", 1) => 0,
+        ("plate", 2) => 50,
+        ("plate", 3) => 100,
+        ("plate", 4) => 160,
+        ("plate", 5) => 220,
+        ("glass", 1) => 0,
+        ("glass", 2) => 40,
+        ("glass", 3) => 80,
+        ("glass", 4) => 130,
+        ("glass", 5) => 190,
+        _ => 0,
+    }
 }
 
 /// Minimum time a guest must spend in "walkingIn" before the server
