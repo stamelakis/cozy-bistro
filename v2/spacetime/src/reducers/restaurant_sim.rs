@@ -667,7 +667,57 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         .saturating_add(dish_sat_bonus_x100);
     let avg_sat_x100 = adjusted_sat_x100 / (course_count as i64);
     // base_x100 = 200 + avg_sat_x100 / 2
-    let base_x100 = 200 + (avg_sat_x100 / 2);
+    let mut base_x100 = 200 + (avg_sat_x100 / 2);
+
+    // H.26 — dirty-pile penalty. Mirrors Game.isDishPileOverwhelming:
+    // if total dirty pieces across the restaurant exceed 8, drop the
+    // rating by 1 star (floor at 1).
+    const DIRTY_PILE_THRESHOLD: u32 = 8;
+    let total_dirty: u32 = ctx.db.dishware_pool().iter()
+        .filter(|p| p.restaurant_id == g.restaurant_id)
+        .map(|p| p.dirty)
+        .sum();
+    if total_dirty > DIRTY_PILE_THRESHOLD {
+        base_x100 = (base_x100 - 100).max(100);
+    }
+
+    // H.26 — smoke penalty. -0.1 stars per unhooded stove, capped at
+    // -0.5. Stoves and hoods identified by def_id matching the
+    // client's countById calls in finalizeVisit.
+    let mut stove_count: i32 = 0;
+    let mut hood_count: i32 = 0;
+    for f in ctx.db.placed_furniture().iter() {
+        if f.restaurant_id != g.restaurant_id { continue; }
+        match f.def_id.as_str() {
+            "stove" | "stove-electric" => stove_count += 1,
+            "kitchen-hood" | "kitchen-hood-l" => hood_count += 1,
+            _ => {}
+        }
+    }
+    let unhooded = (stove_count - hood_count).max(0);
+    if unhooded > 0 {
+        let smoke_x100 = (unhooded as i64 * 10).min(50);
+        base_x100 = (base_x100 - smoke_x100).max(100);
+    }
+
+    // H.26 — deterministic jitter, ±0.4 (= ±40 in x100). The client
+    // uses Math.random() but the server tick disallows that (would
+    // break resume determinism). Mix the guest id into a small
+    // PRNG-ish hash; gives every guest their own consistent jitter
+    // without external state.
+    //
+    // Splitmix64-style mix: simple, fast, and well-distributed enough
+    // that adjacent guest ids produce uncorrelated jitters.
+    let mut h: u64 = g.id ^ 0x9E37_79B9_7F4A_7C15;
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    // Map to [-40, +40] inclusive.
+    let jitter_x100 = (h % 81) as i64 - 40;
+    base_x100 += jitter_x100;
+
     let rating_raw = (base_x100 + 50) / 100; // round-half-up to nearest star
     let rating = rating_raw.clamp(1, 5) as u32;
 
