@@ -451,6 +451,80 @@ pub fn consume_pending_day_advancement(
 /// stays queued indefinitely. The local sim's tickChef cross-floor
 /// orphan path has the same constraint — without a toaster, that
 /// recipe can never be cooked.
+
+// === H.42 — Distance-aware staff dispatch =========================
+//
+// The earlier H.6 / H.8 / H.34 / H.35 dispatchers each picked staff
+// off the iterator with no spatial preference — "first idle waiter"
+// or random pop().  Foreground play covered for this because the
+// local StaffRouter uses A* + nearest-wins to assign trips before
+// the server's auto-claim path fires.  Backgrounded restaurants,
+// though, would route a downstairs waiter to an upstairs guest
+// while an upstairs waiter sat idle.  Visit-mode subscribers saw
+// the same.
+//
+// H.42 ports the "pick nearest" half of the foreground decision
+// (NOT the full A* — wall-aware routing matters for visual quality
+// but not for which staff gets the job; the body still walks in a
+// straight line either way).  All four server dispatchers now sort
+// candidates by 2D distance with a stair-traversal penalty for
+// floor mismatches:
+//
+//   - auto_claim_queued_tickets — nearest chef/barman, AND for that
+//     pick also iterates stations to find the closest free one.
+//   - auto_assign_ready_tickets — nearest waiter to the pickup spot.
+//   - try_dispatch_take_order — nearest waiter to the guest's seat.
+//   - try_dispatch_wash_trip — nearest waiter to the wash station
+//     (the seat used as visual pseudo-pickup is incidental).
+
+/// Per-floor penalty added when a staff actor and a target are on
+/// different floors. Approximates "you have to walk to the stairs
+/// first" without modeling the actual stair locations. Tuned to
+/// dominate same-floor wide-room cases: a same-floor candidate at
+/// distance 14 should still beat a cross-floor candidate at
+/// distance 4. Bumping this higher just makes the heuristic
+/// more conservative about cross-floor assignments.
+const STAIR_TRAVERSAL_DIST: f32 = 15.0;
+
+/// Distance from a staff actor to a target point, with a per-floor
+/// stair penalty applied. Used for picking the "nearest" candidate
+/// across all four dispatchers.  Euclidean (sqrt) so the units are
+/// in tiles and the floor penalty is meaningful — a squared metric
+/// would warp the penalty math.
+fn staff_dist_to(actor: &StaffActor, tx: f32, tz: f32, t_floor: u32) -> f32 {
+    let dx = actor.x - tx;
+    let dz = actor.z - tz;
+    let mut d = (dx * dx + dz * dz).sqrt();
+    if actor.floor != t_floor {
+        let floors = (actor.floor as i32 - t_floor as i32).unsigned_abs() as f32;
+        d += floors * STAIR_TRAVERSAL_DIST;
+    }
+    d
+}
+
+/// Remove and return the nearest actor from `pool` to (tx, tz, t_floor).
+/// Returns None if the pool is empty. O(n) per call; pool sizes are
+/// tiny (≤6 staff per restaurant), so the simple linear scan is
+/// cheaper than maintaining a sorted structure.
+fn pop_nearest_staff(
+    pool: &mut Vec<StaffActor>,
+    tx: f32,
+    tz: f32,
+    t_floor: u32,
+) -> Option<StaffActor> {
+    if pool.is_empty() { return None; }
+    let mut best_idx = 0usize;
+    let mut best_dist = staff_dist_to(&pool[0], tx, tz, t_floor);
+    for (i, a) in pool.iter().enumerate().skip(1) {
+        let d = staff_dist_to(a, tx, tz, t_floor);
+        if d < best_dist {
+            best_dist = d;
+            best_idx = i;
+        }
+    }
+    Some(pool.swap_remove(best_idx))
+}
+
 fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
     /// Fallback when ticket.base_cook_seconds_ms is 0 (legacy tickets
     /// or tickets where place_order didn't pass a value).
@@ -502,25 +576,44 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else { continue };
         if ticket.state != "queued" { continue; }
         let is_bar = ticket.appliance == "bar";
-        // Choose role pool.
-        let actor_opt: Option<StaffActor> = if is_bar {
-            idle_barmen.pop()
-        } else {
-            idle_chefs.pop()
-        };
-        let Some(actor) = actor_opt else { continue; };
-        // Find a free station whose `provides` matches the ticket's
-        // appliance. Iterates placed_furniture; small N.
-        let station: Option<PlacedFurniture> = ctx.db
-            .placed_furniture()
-            .iter()
-            .find(|f| f.restaurant_id == rid
-                && def_provides(&f.def_id) == Some(ticket.appliance.as_str())
-                && !occupied.contains(&f.uid));
-        let Some(station) = station else {
-            // Put the actor back; no station for this appliance.
-            if is_bar { idle_barmen.push(actor); } else { idle_chefs.push(actor); }
+        // Bail early if no idle staff of the right role exist.
+        let pool_empty = if is_bar { idle_barmen.is_empty() } else { idle_chefs.is_empty() };
+        if pool_empty { continue; }
+
+        // H.42 — Of all stations matching the ticket's appliance, pick
+        // the one closest to the nearest idle staff member of the
+        // right role.  Naive O(stations × staff) but pool sizes are
+        // small (~10 × ~6).  This mirrors the foreground
+        // StaffRouter's nearest-wins behavior.
+        let pool: &Vec<StaffActor> = if is_bar { &idle_barmen } else { &idle_chefs };
+        let mut best: Option<(PlacedFurniture, usize, f32)> = None; // (station, actor_idx, total_dist)
+        for f in ctx.db.placed_furniture().iter() {
+            if f.restaurant_id != rid { continue; }
+            if def_provides(&f.def_id) != Some(ticket.appliance.as_str()) { continue; }
+            if occupied.contains(&f.uid) { continue; }
+            // Cheapest actor for this candidate station.
+            let mut local_best: Option<(usize, f32)> = None;
+            for (i, a) in pool.iter().enumerate() {
+                let d = staff_dist_to(a, f.x, f.z, f.floor);
+                if local_best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                    local_best = Some((i, d));
+                }
+            }
+            if let Some((ai, d)) = local_best {
+                if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
+                    best = Some((f, ai, d));
+                }
+            }
+        }
+        let Some((station, actor_idx, _)) = best else {
+            // No station for this appliance — bail this ticket.
             continue;
+        };
+        // Pop the chosen actor from the right pool.
+        let actor: StaffActor = if is_bar {
+            idle_barmen.swap_remove(actor_idx)
+        } else {
+            idle_chefs.swap_remove(actor_idx)
         };
         // Lock the station so subsequent iterations don't reuse it.
         occupied.insert(station.uid.clone());
@@ -612,13 +705,17 @@ fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
     if idle_waiters.is_empty() { return; }
 
     for ticket_id in ready_ids {
-        let Some(waiter) = idle_waiters.pop() else { break };
         let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else { continue };
         // Recheck — local sim may have raced us.
         if ticket.state != "ready" { continue; }
         let pickup_x = ticket.pickup_x;
         let pickup_z = ticket.pickup_z;
         let pickup_floor = ticket.pickup_floor;
+        // H.42 — pick the waiter nearest to the pickup spot, not the
+        // first one off the iterator.  Mirrors the foreground W4/W5/W6
+        // distance-weighted picker for backgrounded play.
+        let Some(waiter) = pop_nearest_staff(&mut idle_waiters, pickup_x, pickup_z, pickup_floor)
+            else { break };
         let waiter_member = waiter.member_id.clone();
         ctx.db.active_ticket().id().update(ActiveTicket {
             state: "delivering".to_string(),
@@ -1772,7 +1869,11 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
         if g.state != "ordering" { continue; }
         if g.seat_at_bar { continue; }
         if covered.contains(&g.id) { continue; }
-        let Some(actor) = idle_waiters.pop() else { return; }; // out of waiters
+        // H.42 — nearest waiter to this guest's seat (with stair
+        // penalty), not the first one off the iterator.  Matches
+        // the foreground StaffRouter's behavior.
+        let Some(actor) = pop_nearest_staff(&mut idle_waiters, g.seat_x, g.seat_z, g.seat_floor)
+            else { return; }; // out of waiters
         let actor_id = actor.member_id.clone();
         log::info!(
             "try_dispatch_take_order: waiter {} → guest {} seat ({:.2}, {:.2}, f{})",
@@ -1822,34 +1923,58 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
         .any(|p| p.restaurant_id == rid && p.dirty > 0);
     if !any_dirty { return; }
 
-    // Pick a wash station — dishwasher or kitchen sink. Order
-    // matters: dishwasher first (matches client preference), sink
-    // as fallback.
-    let station = ctx.db.placed_furniture().iter()
-        .find(|f| f.restaurant_id == rid
+    // Collect wash stations — dishwasher or kitchen sink. We may
+    // pair across multiple (e.g. one upstairs, one downstairs) so
+    // the cheapest waiter→station match wins, not the first found.
+    let stations: Vec<PlacedFurniture> = ctx.db.placed_furniture().iter()
+        .filter(|f| f.restaurant_id == rid
             && (f.def_id == "dishwasher"
                 || f.def_id == "dishwasher-pro"
                 || f.def_id == "sink"
-                || f.def_id == "kitchen-sink"));
-    let Some(station) = station else { return; };
+                || f.def_id == "kitchen-sink"))
+        .collect();
+    if stations.is_empty() { return; }
 
-    // Need any seat for the pseudo-pickup. The server doesn't track
-    // where individual dirty pieces sit (the client owns that data),
-    // so picking ANY seat as the visual pickup spot is good enough
-    // for backgrounded fidelity.
-    let seat = ctx.db.placed_furniture().iter()
-        .find(|f| f.restaurant_id == rid && is_seat_providing_def(&f.def_id));
-    let Some(seat) = seat else { return; };
-
-    // Idle waiter not already on another trip.
-    let actor = ctx.db.staff_actor().iter()
-        .find(|a| a.restaurant_id == rid
+    // Idle waiters not already on another trip.
+    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor().iter()
+        .filter(|a| a.restaurant_id == rid
             && a.role == "waiter"
             && a.state == "idle"
             && a.ticket_id.is_none()
             && a.take_order_guest_id.is_none()
-            && a.wash_target_uid.is_empty());
-    let Some(actor) = actor else { return; };
+            && a.wash_target_uid.is_empty())
+        .collect();
+    if idle_waiters.is_empty() { return; }
+
+    // H.42 — pair waiter ↔ station by cheapest distance (with stair
+    // penalty).  Mirrors the W6 foreground fix that paired by total
+    // travel cost.  The pickup seat is visually incidental, so we
+    // optimize the dominant cost (waiter → station) and pick any
+    // same-floor seat as the visual pseudo-pickup after the fact.
+    let mut best: Option<(usize, usize, f32)> = None; // (waiter_idx, station_idx, dist)
+    for (wi, w) in idle_waiters.iter().enumerate() {
+        for (si, s) in stations.iter().enumerate() {
+            let d = staff_dist_to(w, s.x, s.z, s.floor);
+            if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
+                best = Some((wi, si, d));
+            }
+        }
+    }
+    let Some((wi, si, _)) = best else { return; };
+    let station = stations.into_iter().nth(si).expect("si in range");
+    let actor = idle_waiters.swap_remove(wi);
+
+    // Need any seat for the pseudo-pickup. Prefer one on the same
+    // floor as the wash station so the visual route doesn't yo-yo
+    // between floors.  Fall back to any seat if the station's
+    // floor has none (rare; small upstairs without seating yet).
+    let seat = ctx.db.placed_furniture().iter()
+        .find(|f| f.restaurant_id == rid
+            && f.floor == station.floor
+            && is_seat_providing_def(&f.def_id))
+        .or_else(|| ctx.db.placed_furniture().iter()
+            .find(|f| f.restaurant_id == rid && is_seat_providing_def(&f.def_id)));
+    let Some(seat) = seat else { return; };
 
     let member_id = actor.member_id.clone();
     let station_uid = station.uid.clone();
