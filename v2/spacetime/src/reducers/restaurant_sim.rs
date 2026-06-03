@@ -14,7 +14,7 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_ticket, dishware_pool, dishwasher_batch,
-    placed_furniture, restaurant, restaurant_tick_schedule,
+    placed_furniture, player, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
     PlacedFurniture, Restaurant, RestaurantTickSchedule, RestaurantTickState,
@@ -291,6 +291,15 @@ pub fn restaurant_tick(
     // The two-leg waiter trip (pickup → seat) is encoded in the new
     // delivery_phase field, which tick_staff_actor reads on arrival.
     auto_assign_ready_tickets(ctx, rid);
+
+    // Phase H.34 — take-order dispatch. Picks idle waiters and walks
+    // them to seated/ordering guests who don't yet have a waiter en
+    // route. Foreground client owns this when alive; this branch is
+    // the backgrounded fallback so a reconnecting player sees the
+    // waiter actually finishing the order trip instead of the guest
+    // having already advanced via ORDERING_FALLBACK_MS. Gated on the
+    // owner being offline (same heuristic as H.33's arrival handoff).
+    try_dispatch_take_order(ctx, rid);
 
     // Phase H.30 — advance the visual day clock. The foreground client
     // periodically yokes the cloud's day_elapsed_ms to its local value
@@ -1124,6 +1133,82 @@ pub fn consume_pending_visit_rollup(
 /// Combined with the existing H.4 cycle (~1.5 s per item for a
 /// regular dishwasher), a typical 3-course visit's plates clear
 /// back to clean in well under a minute.
+/// Phase H.34 — Server-side take-order dispatch for offline owners.
+/// Mirrors what StaffRouter does in foreground: find a seated/ordering
+/// guest without a waiter en route, pick an idle waiter, route them
+/// to the guest's seat with take_order_guest_id set. After the
+/// existing TAKE_ORDER_DWELL_MS dwell, waiter_finished_taking_order
+/// returns true and tick_guest_state flips the guest to
+/// waitingForFood — exactly the same path foreground play uses.
+///
+/// Offline guard: gated on the restaurant owner's Player.last_seen_at
+/// being stale (>30 s since last pingPresence). When foreground is
+/// alive the client's StaffRouter dispatches and the server skips so
+/// we don't clobber its take_order_guest_id mirror.
+///
+/// Bar customers (seat_at_bar = true) are skipped here — the barman
+/// takes their order at the bar counter without a walk; they auto-
+/// advance via ORDERING_FALLBACK_MS (H.14) which is still fine.
+fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
+    /// Same offline window H.33 uses.
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    let r = match ctx.db.restaurant().id().find(rid) {
+        Some(x) => x,
+        None => return,
+    };
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online { return; }
+
+    // Set of guest_ids that already have a waiter en route. Used to
+    // avoid double-assigning. We treat ANY waiter with take_order_guest_id
+    // set as "covering" that guest — whether they're walking to it or
+    // already at the seat dwelling.
+    let mut covered: std::collections::HashSet<u64> = ctx.db.staff_actor().iter()
+        .filter(|a| a.restaurant_id == rid)
+        .filter_map(|a| a.take_order_guest_id)
+        .collect();
+
+    // Idle waiters available for dispatch this tick. Pop as we assign.
+    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor().iter()
+        .filter(|a| a.restaurant_id == rid
+            && a.role == "waiter"
+            && a.state == "idle"
+            && a.ticket_id.is_none()
+            && a.take_order_guest_id.is_none()
+            && a.wash_target_uid.is_empty())
+        .collect();
+    if idle_waiters.is_empty() { return; }
+
+    // Walk ordering guests in this restaurant. Skip bar customers
+    // (barman path, no walk needed) and any guest already covered
+    // by an existing waiter assignment.
+    for g in ctx.db.active_guest().iter() {
+        if g.restaurant_id != rid { continue; }
+        if g.state != "ordering" { continue; }
+        if g.seat_at_bar { continue; }
+        if covered.contains(&g.id) { continue; }
+        let Some(actor) = idle_waiters.pop() else { return; }; // out of waiters
+        let actor_id = actor.member_id.clone();
+        log::info!(
+            "try_dispatch_take_order: waiter {} → guest {} seat ({:.2}, {:.2}, f{})",
+            actor_id, g.id, g.seat_x, g.seat_z, g.seat_floor,
+        );
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "movingToWork".to_string(),
+            state_clock_ms: 0,
+            target_x: g.seat_x,
+            target_z: g.seat_z,
+            target_floor: g.seat_floor,
+            take_order_guest_id: Some(g.id),
+            ..actor
+        });
+        covered.insert(g.id);
+    }
+}
+
 fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     /// Capacity per kind inside one dishwasher. Matches the client's
     /// DISHWASHER_CAPACITY in DishwareSystem.ts.
@@ -1349,6 +1434,13 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     let (new_state, new_clock, new_target_x, new_target_z, new_target_floor,
          new_delivery_phase, new_ticket_id) = transition;
 
+    // H.34 — clear take_order_guest_id when the actor releases back to
+    // idle / returningHome. Without this the field would persist past
+    // the trip and falsely "cover" the guest in try_dispatch_take_order's
+    // dedup set on the next tick. Harmless to clear unconditionally on
+    // these states because chefs never have take_order_guest_id set
+    // in the first place.
+    let clear_take_order = new_state == "returningHome" || new_state == "idle";
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
@@ -1361,6 +1453,7 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         target_floor: new_target_floor,
         delivery_phase: new_delivery_phase,
         ticket_id: new_ticket_id,
+        take_order_guest_id: if clear_take_order { None } else { a.take_order_guest_id },
         ..a
     });
 }
@@ -1410,9 +1503,21 @@ fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool
     // clock. If yes, advance to the next leg.
     if a.state == "working" {
         let phase = a.delivery_phase.as_deref().unwrap_or("");
-        // Non-waiter "working" (e.g. chef at stove) — no dwell logic,
-        // leave it to tick_ticket_state. Advance clock as normal.
+        // Non-pickup/deliver "working" — could be a chef at a stove
+        // (tick_ticket_state handles their release) OR a waiter
+        // running a take-order trip (H.34). For the take-order case
+        // we recognize take_order_guest_id being set + state_clock_ms
+        // past TAKE_ORDER_DWELL_MS as "done"; return home and let the
+        // post-update step in tick_staff_actor clear the field.
         if phase != "pickup" && phase != "deliver" {
+            if a.take_order_guest_id.is_some() && a.state_clock_ms >= TAKE_ORDER_DWELL_MS {
+                return ((
+                    "returningHome".to_string(), 0,
+                    a.home_x, a.home_z, a.home_floor,
+                    None, None,
+                ), false);
+            }
+            // Generic chef "working" — leave it to tick_ticket_state.
             return ((
                 a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
                 a.delivery_phase.clone(), a.ticket_id,
