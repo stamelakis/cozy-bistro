@@ -25,4 +25,5 @@ export default {
   doorZ: __t.f32(),
   doorFloor: __t.u32(),
   patienceMultX100: __t.i32(),
+  willWashOnly: __t.bool(),
 };

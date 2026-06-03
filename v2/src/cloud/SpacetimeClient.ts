@@ -486,6 +486,11 @@ export class SpacetimeClient {
      *  Server scales ORDER and SERVE base patience by this so a
      *  backgrounded tab times out at the same cadence as foreground. */
     patienceMultX100: number;
+    /** H.24 — pre-meal handwash flag, mirrored from GuestSpawner's
+     *  spawn-time roll. Mutually exclusive with willUseToilet in the
+     *  client; the server treats toilet as taking priority if both are
+     *  somehow true. */
+    willWashOnly: boolean;
   }): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
@@ -504,6 +509,7 @@ export class SpacetimeClient {
         doorZ: args.doorZ,
         doorFloor: args.doorFloor,
         patienceMultX100: args.patienceMultX100,
+        willWashOnly: args.willWashOnly,
       });
     } catch (e) {
       console.warn("[Cloud] spawnGuest failed:", e);

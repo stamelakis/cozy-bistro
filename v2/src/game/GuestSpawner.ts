@@ -1884,6 +1884,11 @@ export class GuestSpawner {
       // customers wait longer; impatient ones leave faster. Clamped
       // server-side too as a defense in depth.
       patienceMultX100: Math.round(g.archetype.patienceMultiplier * 100),
+      // H.24 — pre-meal handwash flag. Mirror so a backgrounded tab
+      // still runs the sink trip via the server's seated → wcWalking
+      // branch (with a sink target). Mutually exclusive with
+      // willUseToilet — only one will ever be true.
+      willWashOnly: g.willWashOnly ?? false,
     });
     // Resolve the server-side auto-inc id once the subscription cache
     // catches up. 250 ms is comfortably above the typical reducer

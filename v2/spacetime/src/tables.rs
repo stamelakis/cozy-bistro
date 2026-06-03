@@ -768,6 +768,22 @@ pub struct ActiveGuest {
     /// existing rows. Primitive bool default — migration-safe.
     #[default(false)]
     pub used_toilet: bool,
+
+    /// Phase H.24 — Spawn-time roll, mirrored from the client. True
+    /// for guests who'll attempt a pre-meal handwash (without a
+    /// toilet detour first). Mutually exclusive with will_use_toilet
+    /// in the client's spawn code, but the schema doesn't enforce
+    /// that — both being true would just walk the toilet path because
+    /// it tries first.
+    #[default(false)]
+    pub will_wash_only: bool,
+    /// Phase H.24 — Latch that the wash-only attempt resolved. Same
+    /// shape as used_toilet (true on completion OR give-up). For
+    /// toilet trips the wcWashing → seated transition sets BOTH this
+    /// AND used_toilet because the toilet flow ends with a sink wash.
+    /// For wash-only trips only washed_hands flips.
+    #[default(false)]
+    pub washed_hands: bool,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per

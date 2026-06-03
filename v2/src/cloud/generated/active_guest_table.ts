@@ -59,4 +59,6 @@ export default __t.row({
   orderSatisfactionsCsv: __t.option(__t.string()).name("order_satisfactions_csv"),
   patienceMultX100: __t.i32().name("patience_mult_x100"),
   usedToilet: __t.bool().name("used_toilet"),
+  willWashOnly: __t.bool().name("will_wash_only"),
+  washedHands: __t.bool().name("washed_hands"),
 });
