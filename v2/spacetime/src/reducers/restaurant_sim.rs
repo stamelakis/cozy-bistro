@@ -684,8 +684,12 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     // H.26 — smoke penalty. -0.1 stars per unhooded stove, capped at
     // -0.5. Stoves and hoods identified by def_id matching the
     // client's countById calls in finalizeVisit.
+    // H.27 — also count bathroom fixtures in the same pass so we
+    // don't iterate placed_furniture twice.
     let mut stove_count: i32 = 0;
     let mut hood_count: i32 = 0;
+    let mut toilet_count: i32 = 0;
+    let mut sink_count: i32 = 0;
     for f in ctx.db.placed_furniture().iter() {
         if f.restaurant_id != g.restaurant_id { continue; }
         match f.def_id.as_str() {
@@ -693,12 +697,47 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
             "kitchen-hood" | "kitchen-hood-l" => hood_count += 1,
             _ => {}
         }
+        if is_toilet_def(&f.def_id) { toilet_count += 1; }
+        if is_sink_def(&f.def_id) { sink_count += 1; }
     }
     let unhooded = (stove_count - hood_count).max(0);
     if unhooded > 0 {
         let smoke_x100 = (unhooded as i64 * 10).min(50);
         base_x100 = (base_x100 - smoke_x100).max(100);
     }
+
+    // H.27 — bathroom modifier (simplified). The foreground client's
+    // formula uses bathroom quality (a sum of style/comfort for placed
+    // bathroom furniture) which the server doesn't have access to
+    // without a furniture-def lookup. This approximation only
+    // distinguishes "none placed" (significant penalty) from "trip
+    // happened" (small flat bonus, no quality scaling). Misses the
+    // "wanted but every fixture was busy" middle case since we don't
+    // track completed-vs-gave-up separately on the row yet — both
+    // path sets used_toilet/washed_hands to true. Net effect: this
+    // approximation slightly OVERSTATES ratings for guests who gave
+    // up — acceptable for backgrounded play, foreground play does
+    // the full math itself.
+    let bathroom_x100: i64 = if g.will_use_toilet {
+        if toilet_count == 0 {
+            -80 // player didn't provide a toilet — significant negative
+        } else if g.used_toilet {
+            40  // trip happened (or gave up); flat positive baseline
+        } else {
+            0
+        }
+    } else if g.will_wash_only {
+        if sink_count == 0 {
+            -50 // wanted to wash, no sink at all
+        } else if g.washed_hands {
+            20  // trip happened (or gave up); smaller baseline
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+    base_x100 = (base_x100 + bathroom_x100).clamp(100, 500);
 
     // H.26 — deterministic jitter, ±0.4 (= ±40 in x100). The client
     // uses Math.random() but the server tick disallows that (would
