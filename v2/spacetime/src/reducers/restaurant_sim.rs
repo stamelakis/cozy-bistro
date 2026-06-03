@@ -301,6 +301,16 @@ pub fn restaurant_tick(
     // owner being offline (same heuristic as H.33's arrival handoff).
     try_dispatch_take_order(ctx, rid);
 
+    // Phase H.35 — wash trip dispatch. Cosmetic for the offline case:
+    // walks an idle waiter through a pseudo-pickup (any table) → wash
+    // station (sink or dishwasher) → home cycle when dirty stock + an
+    // available waiter both exist. Doesn't touch dishware_pool itself
+    // (H.21's instantaneous loader still owns inventory motion); the
+    // benefit is a reconnecting player sees waiters in motion rather
+    // than idle staff next to magically-clean dishes. Same offline
+    // guard pattern as H.33/H.34.
+    try_dispatch_wash_trip(ctx, rid);
+
     // Phase H.30 — advance the visual day clock. The foreground client
     // periodically yokes the cloud's day_elapsed_ms to its local value
     // via sync_day_clock; backgrounded play lets pending_days_advanced
@@ -1209,6 +1219,187 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
     }
 }
 
+/// Phase H.35 — Cosmetic wash trip dispatch for offline owners. Picks
+/// an idle waiter, a pseudo-pickup at any seat, and a wash station
+/// (dishwasher or sink). Sets wash_target_uid + wash_phase="pickup"
+/// + target=seat coords; tick_wash_trip then runs the multi-leg
+/// state machine.
+///
+/// Does NOT modify dishware_pool — H.21's try_server_wash_load is
+/// the authoritative inventory mover. This dispatcher's only effect
+/// is animating waiters so a reconnecting player sees activity
+/// matching the dirty pile they remember.
+///
+/// Gating: offline owner heuristic (Player.last_seen_at) + the
+/// restaurant must have at least one waiter, one dirty piece, one
+/// wash station, and one seat to use as a pseudo-pickup.
+fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    let r = match ctx.db.restaurant().id().find(rid) {
+        Some(x) => x,
+        None => return,
+    };
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online { return; }
+
+    // Need at least one dirty piece somewhere in the pool.
+    let any_dirty = ctx.db.dishware_pool().iter()
+        .any(|p| p.restaurant_id == rid && p.dirty > 0);
+    if !any_dirty { return; }
+
+    // Pick a wash station — dishwasher or kitchen sink. Order
+    // matters: dishwasher first (matches client preference), sink
+    // as fallback.
+    let station = ctx.db.placed_furniture().iter()
+        .find(|f| f.restaurant_id == rid
+            && (f.def_id == "dishwasher"
+                || f.def_id == "dishwasher-pro"
+                || f.def_id == "sink"
+                || f.def_id == "kitchen-sink"));
+    let Some(station) = station else { return; };
+
+    // Need any seat for the pseudo-pickup. The server doesn't track
+    // where individual dirty pieces sit (the client owns that data),
+    // so picking ANY seat as the visual pickup spot is good enough
+    // for backgrounded fidelity.
+    let seat = ctx.db.placed_furniture().iter()
+        .find(|f| f.restaurant_id == rid && is_seat_providing_def(&f.def_id));
+    let Some(seat) = seat else { return; };
+
+    // Idle waiter not already on another trip.
+    let actor = ctx.db.staff_actor().iter()
+        .find(|a| a.restaurant_id == rid
+            && a.role == "waiter"
+            && a.state == "idle"
+            && a.ticket_id.is_none()
+            && a.take_order_guest_id.is_none()
+            && a.wash_target_uid.is_empty());
+    let Some(actor) = actor else { return; };
+
+    let member_id = actor.member_id.clone();
+    let station_uid = station.uid.clone();
+    log::info!(
+        "try_dispatch_wash_trip: waiter {} pickup at seat {} ({:.2},{:.2}) → station {} ({:.2},{:.2})",
+        member_id, seat.uid, seat.x, seat.z, station_uid, station.x, station.z,
+    );
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state: "movingToWork".to_string(),
+        state_clock_ms: 0,
+        target_x: seat.x,
+        target_z: seat.z,
+        target_floor: seat.floor,
+        wash_target_uid: station_uid,
+        wash_phase: "pickup".to_string(),
+        wash_dirty_id: -1,
+        ..actor
+    });
+}
+
+/// Phase H.35 — Per-tick state machine for a wash-trip waiter.
+/// Multi-leg flow: movingToWork → working(pickup) → movingToWork →
+/// working(drop) → returningHome. Bypassed by tick_staff_actor when
+/// wash_target_uid+wash_phase aren't set; gates back into the
+/// standard compute_waiter_transition once wash_phase clears
+/// (returningHome → idle handled there).
+fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
+    /// Dwell at the pickup spot — short, just enough to read as
+    /// "grabbing the dirty plate."
+    const WASH_PICKUP_DWELL_MS: i64 = 500;
+    /// Dwell at the wash station — longer to read as "loading."
+    const WASH_DROP_DWELL_MS: i64 = 1_000;
+
+    let (new_x, new_z) = step_toward_target(
+        a.x, a.z, a.target_x, a.target_z,
+        speed_for_role(&a.role),
+        dt_ms,
+    );
+    let arrived = (a.target_x - new_x).abs() < 0.01 && (a.target_z - new_z).abs() < 0.01;
+    let new_clock = a.state_clock_ms.saturating_add(dt_ms);
+
+    // movingToWork + arrived → flip to working with clock reset.
+    if a.state == "movingToWork" && arrived {
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            x: new_x,
+            z: new_z,
+            state: "working".to_string(),
+            state_clock_ms: 0,
+            ..a
+        });
+        return;
+    }
+
+    // working + dwell elapsed → advance leg.
+    if a.state == "working" {
+        let dwell_done = match a.wash_phase.as_str() {
+            "pickup" => new_clock >= WASH_PICKUP_DWELL_MS,
+            "drop" => new_clock >= WASH_DROP_DWELL_MS,
+            _ => false,
+        };
+        if dwell_done {
+            if a.wash_phase == "pickup" {
+                // Pickup done — walk to station.
+                let station = ctx.db.placed_furniture().uid().find(a.wash_target_uid.clone());
+                let Some(station) = station else {
+                    // Station vanished mid-trip (sold). Abort home.
+                    ctx.db.staff_actor().member_id().update(StaffActor {
+                        x: new_x,
+                        z: new_z,
+                        state: "returningHome".to_string(),
+                        state_clock_ms: 0,
+                        target_x: a.home_x,
+                        target_z: a.home_z,
+                        target_floor: a.home_floor,
+                        wash_target_uid: String::new(),
+                        wash_phase: String::new(),
+                        wash_dirty_id: -1,
+                        ..a
+                    });
+                    return;
+                };
+                ctx.db.staff_actor().member_id().update(StaffActor {
+                    x: new_x,
+                    z: new_z,
+                    state: "movingToWork".to_string(),
+                    state_clock_ms: 0,
+                    target_x: station.x,
+                    target_z: station.z,
+                    target_floor: station.floor,
+                    wash_phase: "drop".to_string(),
+                    ..a
+                });
+                return;
+            }
+            // wash_phase == "drop": done with the trip. Clear wash
+            // fields + return home. Inventory motion stays with H.21.
+            ctx.db.staff_actor().member_id().update(StaffActor {
+                x: new_x,
+                z: new_z,
+                state: "returningHome".to_string(),
+                state_clock_ms: 0,
+                target_x: a.home_x,
+                target_z: a.home_z,
+                target_floor: a.home_floor,
+                wash_target_uid: String::new(),
+                wash_phase: String::new(),
+                wash_dirty_id: -1,
+                ..a
+            });
+            return;
+        }
+    }
+
+    // Mid-walk or mid-dwell — step + advance clock.
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        x: new_x,
+        z: new_z,
+        state_clock_ms: new_clock,
+        ..a
+    });
+}
+
 fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     /// Capacity per kind inside one dishwasher. Matches the client's
     /// DISHWASHER_CAPACITY in DishwareSystem.ts.
@@ -1415,6 +1606,15 @@ fn speed_for_role(role: &str) -> f32 {
 /// full ownership.
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    // Phase H.35 — if this actor is in the middle of a server-dispatched
+    // wash trip (wash_target_uid set + non-empty wash_phase), the trip
+    // has its own multi-leg state machine that's incompatible with the
+    // delivery-phase tuple compute_waiter_transition uses. Branch out
+    // to the dedicated handler and return.
+    if !a.wash_target_uid.is_empty() && !a.wash_phase.is_empty() {
+        tick_wash_trip(ctx, a, dt_ms);
+        return;
+    }
     let (new_x, new_z) = step_toward_target(
         a.x, a.z, a.target_x, a.target_z,
         speed_for_role(&a.role),
