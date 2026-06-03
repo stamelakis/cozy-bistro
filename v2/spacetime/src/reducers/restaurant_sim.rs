@@ -1228,6 +1228,26 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         g.order_index
     };
 
+    // H.16 — credit the just-finished course's price + satisfaction
+    // when transitioning out of "eating" (either to "seated" for the
+    // next course OR to "leaving" for the final course). Counter
+    // only — observation field, doesn't touch player money (the
+    // foreground client's creditCourse still handles the real
+    // economy.earnMoney). Parses the CSV entry at the OLD
+    // order_index (the course just finished).
+    let course_just_finished =
+        g.state == "eating" && (final_state == "seated" || final_state == "leaving");
+    let (added_paid, added_sat) = if course_just_finished {
+        let idx = g.order_index as usize;
+        let price = parse_csv_index_i64(g.order_prices_csv.as_deref(), idx).unwrap_or(0);
+        let sat = parse_csv_index_i32(g.order_satisfactions_csv.as_deref(), idx).unwrap_or(0);
+        (price, sat)
+    } else {
+        (0, 0)
+    };
+    let new_total_paid = g.total_paid_cents.saturating_add(added_paid);
+    let new_total_sat = g.total_satisfaction_x100.saturating_add(added_sat);
+
     // Section A — wcWashing → seated transition clears wc_target_uid
     // and restores target back to the dining seat. The H.9 transition
     // map flipped state to "seated" if the dwell elapsed; if so we
@@ -1271,8 +1291,31 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         target_z: out_target_z,
         target_floor: out_target_floor,
         wc_target_uid: final_wc_target_uid,
+        // H.16 — accumulate paid + satisfaction per finished course.
+        total_paid_cents: new_total_paid,
+        total_satisfaction_x100: new_total_sat,
         ..g
     });
+}
+
+/// Parse a CSV (e.g. "120,200,180") and return the entry at `idx` as
+/// i64. Returns None if the field is missing, the index is out of
+/// range, or the cell doesn't parse. Empty cells parse as 0.
+fn parse_csv_index_i64(csv: Option<&str>, idx: usize) -> Option<i64> {
+    let s = csv?;
+    let mut iter = s.split(',');
+    let cell = iter.nth(idx)?;
+    if cell.is_empty() { Some(0) } else { cell.parse::<i64>().ok() }
+}
+
+/// Same as parse_csv_index_i64 but returns i32 — used for the
+/// satisfaction_x100 column which the schema stores as i32 to match
+/// the existing total_satisfaction_x100 type.
+fn parse_csv_index_i32(csv: Option<&str>, idx: usize) -> Option<i32> {
+    let s = csv?;
+    let mut iter = s.split(',');
+    let cell = iter.nth(idx)?;
+    if cell.is_empty() { Some(0) } else { cell.parse::<i32>().ok() }
 }
 
 /// Minimum time a guest must spend in "walkingIn" before the server
@@ -1703,6 +1746,10 @@ pub fn spawn_guest(
         door_x,
         door_z,
         door_floor,
+        // H.16 — Per-course price + satisfaction CSVs. Populated by
+        // set_guest_order alongside order_recipes once buildOrder runs.
+        order_prices_csv: None,
+        order_satisfactions_csv: None,
     });
     Ok(())
 }
@@ -1765,6 +1812,8 @@ pub fn set_guest_order(
     recipes_csv: String,
     appliances_csv: String,
     cook_seconds_csv: String,
+    prices_csv: String,
+    satisfactions_csv: String,
 ) -> Result<(), String> {
     let g = ctx.db.active_guest().id().find(guest_id)
         .ok_or_else(|| format!("Guest {guest_id} not found"))?;
@@ -1775,15 +1824,21 @@ pub fn set_guest_order(
     }
     let new_appliances = if appliances_csv.is_empty() { None } else { Some(appliances_csv) };
     let new_cook_seconds = if cook_seconds_csv.is_empty() { None } else { Some(cook_seconds_csv) };
+    let new_prices = if prices_csv.is_empty() { None } else { Some(prices_csv) };
+    let new_satisfactions = if satisfactions_csv.is_empty() { None } else { Some(satisfactions_csv) };
     if g.order_recipes == recipes_csv
         && g.order_appliances == new_appliances
-        && g.order_cook_seconds_csv == new_cook_seconds {
+        && g.order_cook_seconds_csv == new_cook_seconds
+        && g.order_prices_csv == new_prices
+        && g.order_satisfactions_csv == new_satisfactions {
         return Ok(()); // idempotent
     }
     ctx.db.active_guest().id().update(ActiveGuest {
         order_recipes: recipes_csv,
         order_appliances: new_appliances,
         order_cook_seconds_csv: new_cook_seconds,
+        order_prices_csv: new_prices,
+        order_satisfactions_csv: new_satisfactions,
         ..g
     });
     Ok(())

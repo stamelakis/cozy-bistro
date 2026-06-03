@@ -1920,7 +1920,29 @@ export class GuestSpawner {
     const cookSecondsCsv = g.order
       .map((r) => Math.round(this.game.getBaseCookSeconds(r) * 1000))
       .join(",");
-    this.cloud.setGuestOrder(g.serverMirrorId, recipesCsv, appliancesCsv, cookSecondsCsv);
+    // H.16 — per-course price (cents) + satisfaction (×100). Mirrors
+    // creditCourse() exactly: getEffectiveSellPrice × 100, satisfaction
+    // = getEffectiveSatisfaction + (+2 cuisine match bonus). Server uses
+    // these to maintain its own total_paid_cents / total_satisfaction_x100
+    // counters on each eating→{seated,leaving} transition.
+    const pricesCsv = g.order
+      .map((r) => Math.round(this.game.getEffectiveSellPrice(r) * 100))
+      .join(",");
+    const satisfactionsCsv = g.order
+      .map((r) => {
+        let sat = this.game.getEffectiveSatisfaction(r);
+        if (r.category === g.taste.preferredCategory) sat += 2;
+        return Math.round(sat * 100);
+      })
+      .join(",");
+    this.cloud.setGuestOrder(
+      g.serverMirrorId,
+      recipesCsv,
+      appliancesCsv,
+      cookSecondsCsv,
+      pricesCsv,
+      satisfactionsCsv,
+    );
     g.orderMirrored = true;
   }
 

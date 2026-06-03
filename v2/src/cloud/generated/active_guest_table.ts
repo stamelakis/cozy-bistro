@@ -49,4 +49,12 @@ export default __t.row({
   totalSatisfactionX100: __t.i32().name("total_satisfaction_x100"),
   dishesSettled: __t.bool().name("dishes_settled"),
   spawnedAt: __t.timestamp().name("spawned_at"),
+  wcTargetUid: __t.option(__t.string()).name("wc_target_uid"),
+  orderAppliances: __t.option(__t.string()).name("order_appliances"),
+  orderCookSecondsCsv: __t.option(__t.string()).name("order_cook_seconds_csv"),
+  doorX: __t.f32().name("door_x"),
+  doorZ: __t.f32().name("door_z"),
+  doorFloor: __t.u32().name("door_floor"),
+  orderPricesCsv: __t.option(__t.string()).name("order_prices_csv"),
+  orderSatisfactionsCsv: __t.option(__t.string()).name("order_satisfactions_csv"),
 });

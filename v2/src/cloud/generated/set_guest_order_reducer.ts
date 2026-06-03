@@ -15,4 +15,6 @@ export default {
   recipesCsv: __t.string(),
   appliancesCsv: __t.string(),
   cookSecondsCsv: __t.string(),
+  pricesCsv: __t.string(),
+  satisfactionsCsv: __t.string(),
 };

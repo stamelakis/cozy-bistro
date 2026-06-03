@@ -699,6 +699,20 @@ pub struct ActiveGuest {
     pub door_z: f32,
     #[default(0)]
     pub door_floor: u32,
+
+    /// Phase H.16 — Per-course prices (cents) parallel to
+    /// order_recipes. CSV of i64 strings. Server credits the
+    /// guest's total_paid_cents on eating-completion of each
+    /// course (the row counter is observation-only; the actual
+    /// player money credit still happens client-side via
+    /// Game.economy.earnMoney).
+    #[default(None::<String>)]
+    pub order_prices_csv: Option<String>,
+    /// Phase H.16 — Per-course satisfaction ×100 parallel to
+    /// order_recipes. CSV of i32 strings. Server credits the
+    /// guest's total_satisfaction_x100 on eating-completion.
+    #[default(None::<String>)]
+    pub order_satisfactions_csv: Option<String>,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per

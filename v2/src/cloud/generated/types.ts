@@ -60,6 +60,11 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   wcTargetUid: __t.option(__t.string()),
   orderAppliances: __t.option(__t.string()),
   orderCookSecondsCsv: __t.option(__t.string()),
+  doorX: __t.f32(),
+  doorZ: __t.f32(),
+  doorFloor: __t.u32(),
+  orderPricesCsv: __t.option(__t.string()),
+  orderSatisfactionsCsv: __t.option(__t.string()),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 

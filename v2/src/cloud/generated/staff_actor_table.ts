@@ -32,6 +32,6 @@ export default __t.row({
   washDirtyId: __t.i64().name("wash_dirty_id"),
   washPhase: __t.string().name("wash_phase"),
   takeOrderGuestId: __t.option(__t.u64()).name("take_order_guest_id"),
-  deliveryPhase: __t.option(__t.string()).name("delivery_phase"),
   spawnedAt: __t.timestamp().name("spawned_at"),
+  deliveryPhase: __t.option(__t.string()).name("delivery_phase"),
 });

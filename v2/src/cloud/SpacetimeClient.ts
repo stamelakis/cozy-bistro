@@ -540,10 +540,13 @@ export class SpacetimeClient {
    * auto_place_next_course). Called by GuestSpawner once per guest
    * after buildOrder populates g.order. Idempotent.
    *
-   * Three parallel CSVs (same length per course):
+   * Five parallel CSVs (same length per course):
    *   - recipesCsv: recipe ids in serve order
    *   - appliancesCsv: required appliance per course
    *   - cookSecondsCsv: base cook time in ms per course (u32 string)
+   *   - pricesCsv: effective sell price in cents per course (i64)
+   *   - satisfactionsCsv: effective satisfaction × 100 per course (i32),
+   *     including the +200 cuisine-preference bonus when applicable
    *
    * Empty recipesCsv clears the order. */
   setGuestOrder(
@@ -551,11 +554,14 @@ export class SpacetimeClient {
     recipesCsv: string,
     appliancesCsv: string,
     cookSecondsCsv: string,
+    pricesCsv: string,
+    satisfactionsCsv: string,
   ): void {
     if (!this.conn) return;
     try {
       this.conn.reducers.setGuestOrder({
         guestId, recipesCsv, appliancesCsv, cookSecondsCsv,
+        pricesCsv, satisfactionsCsv,
       });
     } catch (e) {
       console.warn("[Cloud] setGuestOrder failed:", e);
