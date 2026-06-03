@@ -955,10 +955,19 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // trips, transitional walks) can't trigger it even if a stale
     // 0 patience value lingered from a prior state.
     if patience_active && new_patience == 0 && g.patience_ms > 0 {
+        // H.15 — also route target to door so H.2's position step
+        // walks the guest out during LEAVING_DWELL_MS instead of
+        // leaving them frozen at the seat.
+        let door_x = g.door_x;
+        let door_z = g.door_z;
+        let door_floor = g.door_floor;
         ctx.db.active_guest().id().update(ActiveGuest {
             state: "leaving".to_string(),
             state_clock_ms: 0,
             patience_ms: 0,
+            target_x: door_x,
+            target_z: door_z,
+            target_floor: door_floor,
             ..g
         });
         log::info!("guest {} timed out — transitioning to leaving", g.id);
@@ -975,11 +984,19 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     if g.state == "waiting" && g.waiting_timeout_ms > 0 {
         let new_wait = (g.waiting_timeout_ms - dt_ms).max(0);
         if new_wait == 0 {
+            // H.15 — route to door on leaving (same pattern as the
+            // patience-timeout branch above).
+            let door_x = g.door_x;
+            let door_z = g.door_z;
+            let door_floor = g.door_floor;
             ctx.db.active_guest().id().update(ActiveGuest {
                 state: "leaving".to_string(),
                 state_clock_ms: 0,
                 patience_ms: 0,
                 waiting_timeout_ms: 0,
+                target_x: door_x,
+                target_z: door_z,
+                target_floor: door_floor,
                 ..g
             });
             log::info!("guest {} gave up at overflow chair — transitioning to leaving", g.id);
@@ -1221,12 +1238,19 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     } else {
         new_wc_target_uid
     };
-    // When clearing WC target on the seated transition, route the
-    // effective target back to the guest's seat_x/z. Without this,
-    // a guest finishing wcWashing would be left targeting the sink
-    // they just walked away from.
+    // Decide what the row's outgoing target_x/z should be. Priority:
+    // 1. Eating → leaving — route to the door so H.2 walks them out
+    //    instead of leaving them frozen at the seat.
+    // 2. wcWashing → seated — restore the dining seat coords (else
+    //    they'd be left targeting the sink they just walked away from).
+    // 3. WC target picked above (toilet / sink stand spot).
+    // 4. H.12 fallback seat target.
+    // 5. Existing row target (no change).
+    let just_started_leaving = g.state != "leaving" && final_state == "leaving";
     let (out_target_x, out_target_z, out_target_floor) =
-        if g.state == "wcWashing" && final_state == "seated" {
+        if just_started_leaving {
+            (g.door_x, g.door_z, g.door_floor)
+        } else if g.state == "wcWashing" && final_state == "seated" {
             (g.seat_x, g.seat_z, g.seat_floor)
         } else {
             (effective_target_x, effective_target_z, effective_target_floor)
@@ -1674,6 +1698,11 @@ pub fn spawn_guest(
         // set_guest_order once buildOrder has produced g.order.
         order_appliances: None,
         order_cook_seconds_csv: None,
+        // H.15 — Door coords so leaving routes back here. spawn_guest
+        // already takes the door params; just stash them.
+        door_x,
+        door_z,
+        door_floor,
     });
     Ok(())
 }

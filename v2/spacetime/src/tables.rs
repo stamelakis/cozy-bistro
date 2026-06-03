@@ -681,6 +681,24 @@ pub struct ActiveGuest {
     /// passes it as base_cook_seconds_ms on the active_ticket row.
     #[default(None::<String>)]
     pub order_cook_seconds_csv: Option<String>,
+
+    /// Phase H.15 — Door coords (restaurant-local) so the server
+    /// can route guests back to the entrance when transitioning to
+    /// "leaving". spawn_guest stores these from the door_x/z/floor
+    /// parameters; tick_guest_state's eating→leaving transition
+    /// rewrites target_x/z to these so the H.2 step walks the
+    /// guest out instead of leaving them frozen at the seat.
+    ///
+    /// f32 + const default: 0.0 / 5.45 / 0 matches the canonical
+    /// Floor 0 door coordinates the existing restaurant layout
+    /// uses, so legacy rows that predate the column still walk to
+    /// a sensible spot.
+    #[default(0.0)]
+    pub door_x: f32,
+    #[default(5.45)]
+    pub door_z: f32,
+    #[default(0)]
+    pub door_floor: u32,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
