@@ -260,6 +260,72 @@ pub struct Restaurant {
     /// Mirrors H.22 / H.30's pending-rollup pattern.
     #[default(0i64)]
     pub pending_restock_cost_cents: i64,
+
+    /// Phase H.43 — Recipe ids (comma-separated) whose upgrade timer
+    /// completed on the server while the owner was offline.  The
+    /// client reads this on reconnect, applies a level+1 locally for
+    /// each id, then fires consume_pending_recipe_upgrades to clear
+    /// it.  None / empty string when no completions are pending.
+    ///
+    /// Why CSV not a sub-table: completion is a one-time delivery
+    /// event (we just need the level-up to fire client-side once),
+    /// so a per-restaurant rollup field is cheaper than a row-per-
+    /// completion table.
+    ///
+    /// Stored as Option<String> with `default(None)` so the migration
+    /// is non-destructive on Maincloud rows predating this column.
+    #[default(None::<String>)]
+    pub pending_recipe_upgrades_completed_csv: Option<String>,
+
+    /// Phase H.44 — Member ids (comma-separated) whose staff training
+    /// timer completed on the server while the owner was offline.
+    /// Drained the same way as recipe upgrades; see
+    /// consume_pending_training_completions.  Note: the upgrade_level
+    /// on hired_staff_member is already bumped by the server, so the
+    /// client just needs to mirror that level to its local roster and
+    /// pop a "Marcus is now L3!" toast.
+    ///
+    /// Option<String> for the same reason as the H.43 CSV.
+    #[default(None::<String>)]
+    pub pending_training_completions_csv: Option<String>,
+
+    /// Phase H.45 — Accumulated salary cost (cents) the server
+    /// accrued while the owner was offline.  Drains via
+    /// consume_pending_salary like H.41 restock; client debits via
+    /// forceSpendMoney("salary").  Capped at i64 (effectively
+    /// unbounded for game economy scales).
+    #[default(0i64)]
+    pub pending_salary_cost_cents: i64,
+
+    /// Phase H.45 — Sub-cent salary accumulator.  Keeps the integer
+    /// math exact when payroll-per-min × elapsed-micros doesn't
+    /// divide evenly into whole cents.  Units: (cents × micros /
+    /// minute), max ~60_000_000.  Carried forward across ticks; on
+    /// each accrual we divide by 60_000_000 to get whole cents and
+    /// keep the remainder here.  Without this we'd lose ~0.3 cents
+    /// per second of accrual on a typical roster.
+    #[default(0i64)]
+    pub pending_salary_remainder_x: i64,
+
+    /// Phase H.45 — Wall-clock timestamp (Unix micros) of the last
+    /// salary accrual tick.  0 = client is currently online or has
+    /// never accrued; server's next offline tick sets this to
+    /// ctx.timestamp and starts accruing from there.  The client
+    /// fires reset_salary_tick_clock on connect to drop this back to
+    /// 0, marking "I'm awake now, don't double-charge for the period
+    /// I'm about to handle locally."
+    #[default(0i64)]
+    pub last_salary_tick_micros: i64,
+
+    /// Phase H.45 — Client-mirrored base payroll rate per staff member
+    /// per minute, in cents.  e.g. $5/min = 500.  Server uses this +
+    /// the staff roster (with upgrade levels) to compute the per-min
+    /// payroll for offline accrual.  Mirrored by the client at boot
+    /// (whenever admin.payrollPerStaffPerMinute changes) via
+    /// set_cloud_payroll_rate.  Default 0 disables server accrual
+    /// (catalog-not-ready graceful degradation, matching H.41).
+    #[default(0i64)]
+    pub cloud_base_payroll_per_min_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`
@@ -1258,6 +1324,18 @@ pub struct HiredStaffMember {
     /// speed multipliers on the client; mirrored so visit mode
     /// can show "Chef Marcus L5" etc.
     pub upgrade_level: u32,
+
+    /// Phase H.44 — Wall-clock deadline (Unix micros) for the
+    /// in-flight training upgrade.  0 = member is not currently
+    /// training; > 0 = the server will bump upgrade_level by 1
+    /// when ctx.timestamp >= this value, then reset to 0 and
+    /// append member_id to pending_training_completions_csv.
+    ///
+    /// Mirrors the client's trainingCompletesAt (currently
+    /// Date.now() + duration_ms, converted to micros for server
+    /// storage).  Migration-safe primitive default.
+    #[default(0i64)]
+    pub training_completes_at_micros: i64,
 }
 
 /// Phase H.38 — static customer archetype catalog. One row per
@@ -1285,4 +1363,24 @@ pub struct CustomerArchetypeDef {
     pub tip_mult_x100: i32,
     pub order_size_bias: i32,
     pub wc_use_chance_x100: i32,
+}
+
+/// Phase H.43 — In-flight recipe upgrade timers, one row per
+/// (restaurant, recipe) pair currently mid-upgrade.  Client mirrors
+/// on startRecipeUpgrade / cancelRecipeUpgrade.  Server's
+/// restaurant_tick scans this table per restaurant; rows where
+/// completes_at_micros <= now are deleted and their recipe_id is
+/// appended to Restaurant.pending_recipe_upgrades_completed_csv.
+///
+/// Composite key as a String "{rid}:{recipe_id}" — the same pattern
+/// H.36 uses for pantry_stock.
+#[table(name = recipe_upgrade_in_flight, public)]
+pub struct RecipeUpgradeInFlight {
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub recipe_id: String,
+    /// Unix microseconds. Mirrors Date.now() × 1000 from the client.
+    pub completes_at_micros: i64,
 }

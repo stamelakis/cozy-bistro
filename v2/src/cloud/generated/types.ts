@@ -209,6 +209,7 @@ export const HiredStaffMember = __t.object("HiredStaffMember", {
   role: __t.string(),
   name: __t.string(),
   upgradeLevel: __t.u32(),
+  trainingCompletesAtMicros: __t.i64(),
 });
 export type HiredStaffMember = __Infer<typeof HiredStaffMember>;
 
@@ -317,6 +318,14 @@ export const RecipeMeta = __t.object("RecipeMeta", {
 });
 export type RecipeMeta = __Infer<typeof RecipeMeta>;
 
+export const RecipeUpgradeInFlight = __t.object("RecipeUpgradeInFlight", {
+  key: __t.string(),
+  restaurantId: __t.u64(),
+  recipeId: __t.string(),
+  completesAtMicros: __t.i64(),
+});
+export type RecipeUpgradeInFlight = __Infer<typeof RecipeUpgradeInFlight>;
+
 export const Restaurant = __t.object("Restaurant", {
   id: __t.u64(),
   owner: __t.identity(),
@@ -335,6 +344,12 @@ export const Restaurant = __t.object("Restaurant", {
   pendingDaysAdvanced: __t.u32(),
   cloudMoneyCents: __t.i64(),
   pendingRestockCostCents: __t.i64(),
+  pendingRecipeUpgradesCompletedCsv: __t.option(__t.string()),
+  pendingTrainingCompletionsCsv: __t.option(__t.string()),
+  pendingSalaryCostCents: __t.i64(),
+  pendingSalaryRemainderX: __t.i64(),
+  lastSalaryTickMicros: __t.i64(),
+  cloudBasePayrollPerMinCents: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

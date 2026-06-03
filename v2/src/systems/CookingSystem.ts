@@ -122,13 +122,23 @@ export class CookingSystem {
     if (this.isRecipeTraining(recipeId)) return false;
     const level = this.getRecipeUpgradeLevel(recipeId);
     if (level >= maxRecipeUpgradeLevel) return false;
-    this.recipeTrainingCompletesAt[recipeId] = Date.now() + durationMs;
+    const completesAt = Date.now() + durationMs;
+    this.recipeTrainingCompletesAt[recipeId] = completesAt;
+    // H.43 — mirror the deadline server-side so the level-up fires
+    // even if the tab is closed for the whole window.
+    if (this.cloud) {
+      this.cloud.startRecipeUpgrade(recipeId, completesAt);
+    }
     return true;
   }
 
   cancelRecipeUpgrade(recipeId: string): boolean {
     if (!this.isRecipeTraining(recipeId)) return false;
     delete this.recipeTrainingCompletesAt[recipeId];
+    // H.43 — mirror cancellation; server drops the in-flight row.
+    if (this.cloud) {
+      this.cloud.cancelRecipeUpgrade(recipeId);
+    }
     return true;
   }
 

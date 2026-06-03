@@ -1029,6 +1029,74 @@ export class Engine {
         }
         this.cloud.consumePendingRestockCost();
       }
+
+      // H.43 — drain server-completed recipe upgrades.  Server
+      // bumped these while the tab was offline; apply level+1 locally
+      // for each, clear any stale local trainingCompletesAt so the
+      // local tickRecipeUpgrades doesn't double-fire, then consume.
+      const completedRecipes = this.cloud.getPendingRecipeUpgradesCompleted();
+      if (completedRecipes.length > 0) {
+        for (const recipeId of completedRecipes) {
+          const curLevel = this.game.cooking.getRecipeUpgradeLevel(recipeId);
+          // Server already bumped, so we want curLevel+1.  Clamp via
+          // setRecipeUpgradeLevel which already enforces [1, max].
+          this.game.cooking.setRecipeUpgradeLevel(recipeId, curLevel + 1);
+          // Drop any stale local timer so the next tickRecipeUpgrades
+          // doesn't fire a duplicate completion.
+          this.game.cooking.cancelRecipeUpgrade(recipeId);
+        }
+        this.cloud.consumePendingRecipeUpgrades();
+      }
+
+      // H.44 — drain server-completed staff training.  Server already
+      // bumped hired_staff_member.upgrade_level; sync each local
+      // roster entry to the cloud value, clear local trainingCompletesAt,
+      // then consume the pending CSV.  Cloud level is authoritative
+      // post-completion.
+      const completedTraining = this.cloud.getPendingTrainingCompletions();
+      if (completedTraining.length > 0) {
+        for (const memberId of completedTraining) {
+          const cloudLevel = this.cloud.getCloudMemberUpgradeLevel(memberId);
+          if (cloudLevel == null) continue;
+          const localMember = this.game.staff.getMember(memberId);
+          if (!localMember) continue;
+          // Suppress the mirror so we don't re-fire setHiredStaffMember
+          // back at the cloud during this sync (cloud is the source
+          // of truth here).
+          this.game.staff.withMirrorSuppressed(() => {
+            localMember.upgradeLevel = cloudLevel;
+            if (typeof localMember.trainingCompletesAt === "number") {
+              delete localMember.trainingCompletesAt;
+            }
+          });
+        }
+        this.cloud.consumePendingTrainingCompletions();
+      }
+
+      // H.45 — drain offline salary accrual.  Same order discipline
+      // as H.41: forceSpendMoney first, then consume.  Finally,
+      // resetSalaryTickClock tells the server "I'm online; pause
+      // accrual" so the next offline period starts fresh.
+      const pendingSalaryCents = this.cloud.getPendingSalaryCents();
+      if (pendingSalaryCents > 0) {
+        const dollars = pendingSalaryCents / 100;
+        try {
+          this.game.economy.forceSpendMoney(dollars, "salary");
+        } catch (e) {
+          console.warn("[Engine] H.45 forceSpendMoney(salary) failed:", e);
+        }
+        this.cloud.consumePendingSalary();
+      }
+      this.cloud.resetSalaryTickClock();
+      // H.45 — seed the server's base payroll rate so its offline
+      // accrual matches the local rate.  Fires on every reconnect;
+      // if the admin panel changed the rate later, a fresh
+      // setCloudPayrollRate call from Game.tick would keep them in
+      // sync (current implementation: server just uses whatever the
+      // last mirror set).
+      this.cloud.setCloudPayrollRate(
+        Math.round(this.game.admin.payrollPerStaffPerMinute * 100),
+      );
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];

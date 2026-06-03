@@ -1,7 +1,7 @@
 //! Restaurant CRUD + save snapshots.
 
 use spacetimedb::{reducer, ReducerContext, Identity, Table};
-use crate::tables::{restaurant, save_snapshot, co_owner, player_save, visit_event, Restaurant, SaveSnapshot, PlayerSave, VisitEvent};
+use crate::tables::{restaurant, save_snapshot, co_owner, player_save, recipe_upgrade_in_flight, visit_event, Restaurant, SaveSnapshot, PlayerSave, VisitEvent};
 
 /// Create a new restaurant owned by the caller.
 #[reducer]
@@ -38,6 +38,16 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // H.41 — pending auto-shop debt starts at zero; client drains
         // on reconnect.
         pending_restock_cost_cents: 0,
+        // H.43 / H.44 / H.45 — server-side timer pendings all start
+        // empty / zero on a fresh restaurant; client fires the
+        // matching set_* reducers as the player schedules upgrades,
+        // training, or as payroll changes.
+        pending_recipe_upgrades_completed_csv: None,
+        pending_training_completions_csv: None,
+        pending_salary_cost_cents: 0,
+        pending_salary_remainder_x: 0,
+        last_salary_tick_micros: 0,
+        cloud_base_payroll_per_min_cents: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone
@@ -74,6 +84,15 @@ pub fn delete_restaurant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(),
     }
     for c in ctx.db.co_owner().restaurant_id().filter(restaurant_id) {
         ctx.db.co_owner().id().delete(c.id);
+    }
+    // H.43 cascade — drop any in-flight recipe-upgrade timers for
+    // this restaurant so they don't outlive the restaurant deletion.
+    let upgrade_keys: Vec<String> = ctx.db.recipe_upgrade_in_flight().restaurant_id()
+        .filter(restaurant_id)
+        .map(|f| f.key.clone())
+        .collect();
+    for k in upgrade_keys {
+        ctx.db.recipe_upgrade_in_flight().key().delete(k);
     }
     // Stop the simulation tick + drop its bookkeeping row. Idempotent
     // — silent no-op if the schedule never existed (e.g. legacy

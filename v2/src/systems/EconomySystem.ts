@@ -4,7 +4,7 @@ const maxTransactionLogEntries = 5000;
 
 export type EarnReason = "payment" | "refund" | "grant" | "offline";
 export type SpendReason = "ingredients" | "staff" | "unlock" | "decor" | "rent";
-export type ForceSpendReason = "rent" | "charge" | "restock";
+export type ForceSpendReason = "rent" | "charge" | "restock" | "salary";
 
 export class EconomySystem {
   private money: number;
@@ -77,6 +77,7 @@ export class EconomySystem {
     const label =
       reason === "rent" ? "Rent"
       : reason === "restock" ? "Auto-shop restock (offline)"
+      : reason === "salary" ? "Staff salary (offline)"
       : "Forced charge";
     this.recordTransaction(label, -amount);
   }

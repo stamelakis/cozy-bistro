@@ -47,11 +47,15 @@ import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
+import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
+import ConsumePendingRecipeUpgradesReducer from "./consume_pending_recipe_upgrades_reducer";
 import ConsumePendingRestockCostReducer from "./consume_pending_restock_cost_reducer";
+import ConsumePendingSalaryReducer from "./consume_pending_salary_reducer";
+import ConsumePendingTrainingCompletionsReducer from "./consume_pending_training_completions_reducer";
 import ConsumePendingVisitRollupReducer from "./consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteHiredStaffMemberReducer from "./delete_hired_staff_member_reducer";
@@ -73,6 +77,7 @@ import RecordVisitReducer from "./record_visit_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
+import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
 import SellFurnitureReducer from "./sell_furniture_reducer";
@@ -81,18 +86,21 @@ import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetActiveMenuReducer from "./set_active_menu_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
+import SetCloudPayrollRateReducer from "./set_cloud_payroll_rate_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetIngredientCostReducer from "./set_ingredient_cost_reducer";
+import SetMemberTrainingDeadlineReducer from "./set_member_training_deadline_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
+import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import SyncDayClockReducer from "./sync_day_clock_reducer";
 import UnfriendReducer from "./unfriend_reducer";
@@ -133,6 +141,7 @@ import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RecipeIngredientsRow from "./recipe_ingredients_table";
 import RecipeMetaRow from "./recipe_meta_table";
+import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
@@ -491,6 +500,20 @@ const tablesSchema = __schema({
       { name: 'recipe_meta_recipe_id_key', constraint: 'unique', columns: ['recipeId'] },
     ],
   }, RecipeMetaRow),
+  recipe_upgrade_in_flight: __table({
+    name: 'recipe_upgrade_in_flight',
+    indexes: [
+      { accessor: 'key', name: 'recipe_upgrade_in_flight_key_idx_btree', algorithm: 'btree', columns: [
+        'key',
+      ] },
+      { accessor: 'restaurant_id', name: 'recipe_upgrade_in_flight_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'recipe_upgrade_in_flight_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, RecipeUpgradeInFlightRow),
   restaurant: __table({
     name: 'restaurant',
     indexes: [
@@ -586,11 +609,15 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
   __reducerSchema("bump_dishware_pool", BumpDishwarePoolReducer),
   __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
+  __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
+  __reducerSchema("consume_pending_recipe_upgrades", ConsumePendingRecipeUpgradesReducer),
   __reducerSchema("consume_pending_restock_cost", ConsumePendingRestockCostReducer),
+  __reducerSchema("consume_pending_salary", ConsumePendingSalaryReducer),
+  __reducerSchema("consume_pending_training_completions", ConsumePendingTrainingCompletionsReducer),
   __reducerSchema("consume_pending_visit_rollup", ConsumePendingVisitRollupReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_hired_staff_member", DeleteHiredStaffMemberReducer),
@@ -612,6 +639,7 @@ const reducersSchema = __reducers(
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
+  __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
   __reducerSchema("sell_furniture", SellFurnitureReducer),
@@ -620,18 +648,21 @@ const reducersSchema = __reducers(
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_active_menu", SetActiveMenuReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
+  __reducerSchema("set_cloud_payroll_rate", SetCloudPayrollRateReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),
   __reducerSchema("set_hired_staff_member", SetHiredStaffMemberReducer),
   __reducerSchema("set_ingredient_cost", SetIngredientCostReducer),
+  __reducerSchema("set_member_training_deadline", SetMemberTrainingDeadlineReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
+  __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("sync_day_clock", SyncDayClockReducer),
   __reducerSchema("unfriend", UnfriendReducer),

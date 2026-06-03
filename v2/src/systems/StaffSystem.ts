@@ -72,6 +72,21 @@ export class StaffSystem {
    *  Cloud already holds whatever the autosave's hired_staff list
    *  had; re-firing every row's reducer just duplicates work. */
   private suppressStaffMirror = false;
+
+  /** Run `fn` with the staff mirror temporarily suppressed. Used by
+   * Engine.onSubscriptionReady's H.44 drain path: when syncing
+   * locally-stale upgrade levels up to the server's authoritative
+   * values, we don't want the local setter to fire setHiredStaffMember
+   * back at the cloud (it already has the new level). */
+  withMirrorSuppressed<T>(fn: () => T): T {
+    const prev = this.suppressStaffMirror;
+    this.suppressStaffMirror = true;
+    try {
+      return fn();
+    } finally {
+      this.suppressStaffMirror = prev;
+    }
+  }
   /** Monotonic counter for generating unique member ids within a
    * session. The persisted ids are namespaced by session timestamp,
    * but within one session this avoids collisions when the player
@@ -283,7 +298,14 @@ export class StaffSystem {
     if (!m || m.upgradeLevel >= STAFF_UPGRADE_MAX) return false;
     if (typeof m.trainingCompletesAt === "number") return false; // already training
     const targetLevel = m.upgradeLevel + 1;
-    m.trainingCompletesAt = Date.now() + getTrainingDurationMs(targetLevel);
+    const completesAt = Date.now() + getTrainingDurationMs(targetLevel);
+    m.trainingCompletesAt = completesAt;
+    // H.44 — mirror to server so the level bump fires even with the
+    // tab closed.  Server bumps upgrade_level on hired_staff_member
+    // and appends member_id to pending_training_completions_csv.
+    if (!this.suppressStaffMirror && this.cloud) {
+      this.cloud.setMemberTrainingDeadline(id, completesAt);
+    }
     return true;
   }
 
@@ -293,6 +315,10 @@ export class StaffSystem {
     const m = this.getMember(id);
     if (!m || typeof m.trainingCompletesAt !== "number") return false;
     delete m.trainingCompletesAt;
+    // H.44 — mirror cancel; server zeros the deadline.
+    if (!this.suppressStaffMirror && this.cloud) {
+      this.cloud.setMemberTrainingDeadline(id, 0);
+    }
     return true;
   }
 

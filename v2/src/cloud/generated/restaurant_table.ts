@@ -28,4 +28,10 @@ export default __t.row({
   pendingDaysAdvanced: __t.u32().name("pending_days_advanced"),
   cloudMoneyCents: __t.i64().name("cloud_money_cents"),
   pendingRestockCostCents: __t.i64().name("pending_restock_cost_cents"),
+  pendingRecipeUpgradesCompletedCsv: __t.option(__t.string()).name("pending_recipe_upgrades_completed_csv"),
+  pendingTrainingCompletionsCsv: __t.option(__t.string()).name("pending_training_completions_csv"),
+  pendingSalaryCostCents: __t.i64().name("pending_salary_cost_cents"),
+  pendingSalaryRemainderX: __t.i64().name("pending_salary_remainder_x"),
+  lastSalaryTickMicros: __t.i64().name("last_salary_tick_micros"),
+  cloudBasePayrollPerMinCents: __t.i64().name("cloud_base_payroll_per_min_cents"),
 });

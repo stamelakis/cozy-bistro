@@ -1596,6 +1596,203 @@ export class SpacetimeClient {
     }
   }
 
+  // ===== H.43 — Server-side recipe upgrade timers =====
+
+  /** H.43 — Mirror startRecipeUpgrade to the server so it can fire
+   * the level-up completion even while this tab is closed.  The
+   * server holds the deadline in recipe_upgrade_in_flight; when it
+   * passes, the recipe_id is appended to
+   * Restaurant.pending_recipe_upgrades_completed_csv for this client
+   * to drain on reconnect. */
+  startRecipeUpgrade(recipeId: string, completesAtEpochMs: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!recipeId) return;
+    if (!Number.isFinite(completesAtEpochMs) || completesAtEpochMs <= 0) return;
+    try {
+      this.conn.reducers.startRecipeUpgrade({
+        restaurantId: this.restaurantId,
+        recipeId,
+        // Server stores in micros (Unix epoch); ms → μs.
+        completesAtMicros: BigInt(Math.round(completesAtEpochMs * 1000)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] startRecipeUpgrade failed:", e);
+    }
+  }
+
+  /** H.43 — Mirror cancelRecipeUpgrade to the server. Server drops
+   * the in-flight row; no completion is fired. */
+  cancelRecipeUpgrade(recipeId: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!recipeId) return;
+    try {
+      this.conn.reducers.cancelRecipeUpgrade({
+        restaurantId: this.restaurantId,
+        recipeId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] cancelRecipeUpgrade failed:", e);
+    }
+  }
+
+  /** H.43 — Read the comma-separated list of recipe_ids the server
+   * leveled-up while this tab was offline.  Empty array if none.
+   * Caller applies level+1 to local state, then fires
+   * consumePendingRecipeUpgrades to clear. */
+  getPendingRecipeUpgradesCompleted(): string[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return [];
+      const csv = row.pendingRecipeUpgradesCompletedCsv ?? "";
+      if (!csv) return [];
+      return csv.split(",").filter((s) => s.length > 0);
+    } catch (e) {
+      console.warn("[Cloud] getPendingRecipeUpgradesCompleted failed:", e);
+      return [];
+    }
+  }
+
+  /** H.43 — Owner-only.  Clear the pending CSV after draining. */
+  consumePendingRecipeUpgrades(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingRecipeUpgrades({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingRecipeUpgrades failed:", e);
+    }
+  }
+
+  // ===== H.44 — Server-side staff training timers =====
+
+  /** H.44 — Mirror startMemberTraining / cancelMemberTraining.
+   * Pass 0 to cancel (matches the server convention). */
+  setMemberTrainingDeadline(memberId: string, completesAtEpochMs: number): void {
+    if (!this.conn) return;
+    if (!memberId) return;
+    if (!Number.isFinite(completesAtEpochMs) || completesAtEpochMs < 0) return;
+    try {
+      this.conn.reducers.setMemberTrainingDeadline({
+        memberId,
+        completesAtMicros: BigInt(Math.round(completesAtEpochMs * 1000)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setMemberTrainingDeadline failed:", e);
+    }
+  }
+
+  /** H.44 — Read the comma-separated list of member_ids the server
+   * leveled-up while this tab was offline.  The cloud's
+   * hired_staff_member.upgrade_level is already authoritative;
+   * caller uses this list to know whose level-up to toast. */
+  getPendingTrainingCompletions(): string[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return [];
+      const csv = row.pendingTrainingCompletionsCsv ?? "";
+      if (!csv) return [];
+      return csv.split(",").filter((s) => s.length > 0);
+    } catch (e) {
+      console.warn("[Cloud] getPendingTrainingCompletions failed:", e);
+      return [];
+    }
+  }
+
+  /** H.44 — Owner-only.  Clear the pending CSV after draining. */
+  consumePendingTrainingCompletions(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingTrainingCompletions({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingTrainingCompletions failed:", e);
+    }
+  }
+
+  /** H.44 — Lookup the cloud-mirrored upgrade_level for a given
+   * member_id.  Used on reconnect to sync local roster levels to
+   * whatever the server has (catches members whose level was bumped
+   * during the offline period). Returns null if no row exists. */
+  getCloudMemberUpgradeLevel(memberId: string): number | null {
+    if (!this.conn) return null;
+    try {
+      const row = this.conn.db.hired_staff_member.member_id.find(memberId);
+      if (!row) return null;
+      return row.upgradeLevel;
+    } catch (e) {
+      console.warn("[Cloud] getCloudMemberUpgradeLevel failed:", e);
+      return null;
+    }
+  }
+
+  // ===== H.45 — Server-side offline salary accrual =====
+
+  /** H.45 — Mirror the base payroll rate (dollars/min/staff →
+   * cents/min/staff).  Server uses this + the hired_staff_member
+   * roster to compute offline salary accruals.  Fires on boot +
+   * whenever the rate could have changed (admin panel toggle). */
+  setCloudPayrollRate(centsPerMinPerStaff: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!Number.isFinite(centsPerMinPerStaff) || centsPerMinPerStaff < 0) return;
+    try {
+      this.conn.reducers.setCloudPayrollRate({
+        restaurantId: this.restaurantId,
+        centsPerMinPerStaff: BigInt(Math.round(centsPerMinPerStaff)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setCloudPayrollRate failed:", e);
+    }
+  }
+
+  /** H.45 — Fire on connect to tell the server "I'm online; don't
+   * accrue offline salary for this period."  Server zeros
+   * last_salary_tick_micros; the next time the owner goes offline,
+   * accrual resumes from that point. */
+  resetSalaryTickClock(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.resetSalaryTickClock({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] resetSalaryTickClock failed:", e);
+    }
+  }
+
+  /** H.45 — Read the accrued offline salary cost (cents). Caller
+   * debits the player via forceSpendMoney("salary"), then fires
+   * consumePendingSalary to clear. */
+  getPendingSalaryCents(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return 0;
+      const v = row.pendingSalaryCostCents;
+      if (v == null) return 0;
+      return typeof v === "bigint" ? Number(v) : Number(v);
+    } catch (e) {
+      console.warn("[Cloud] getPendingSalaryCents failed:", e);
+      return 0;
+    }
+  }
+
+  /** H.45 — Owner-only.  Clear pending_salary_cost_cents +
+   * pending_salary_remainder_x after debiting locally. */
+  consumePendingSalary(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingSalary({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingSalary failed:", e);
+    }
+  }
+
   /** H.31 — Delta-based dishware mirror. Each Game.dishware mutation
    * (reserveOne / markDirty / washOne / addClean) pushes its
    * per-operation delta so the server's H.21 wash loader can

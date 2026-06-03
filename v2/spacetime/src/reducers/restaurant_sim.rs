@@ -15,12 +15,13 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Time
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
     dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
-    placed_furniture, player, recipe_ingredients, recipe_meta, restaurant,
-    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
+    placed_furniture, player, recipe_ingredients, recipe_meta,
+    recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
+    restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
-    RecipeIngredients, RecipeMeta, Restaurant, RestaurantTickSchedule,
-    RestaurantTickState, StaffActor,
+    RecipeIngredients, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
+    RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -321,6 +322,26 @@ pub fn restaurant_tick(
     // the elapsed counter just walks forward from wherever the
     // client left it.
     tick_day_clock(ctx, rid, dt_ms);
+
+    // Phase H.43 — scan recipe_upgrade_in_flight rows for this
+    // restaurant; any whose completes_at has passed get popped onto
+    // pending_recipe_upgrades_completed_csv for the client to apply
+    // on reconnect.  Cheap (small N — typically 0 or 1 upgrade in
+    // flight per restaurant at any time).
+    tick_recipe_upgrade_completions(ctx, rid);
+
+    // Phase H.44 — scan hired_staff_member rows for this restaurant;
+    // any whose training_completes_at has passed get bumped a level
+    // and appended to pending_training_completions_csv.  Server is
+    // the authoritative source for the level once the deadline hits.
+    tick_training_completions(ctx, rid);
+
+    // Phase H.45 — offline-only salary accrual.  Gated on the owner
+    // being offline (matches H.33/H.34/H.35) so foreground play
+    // continues to drive its own tickSalary; backgrounded restaurants
+    // bill the offline period to pending_salary_cost_cents which the
+    // client drains on reconnect.
+    tick_offline_salary(ctx, rid);
 
     Ok(())
 }
@@ -1652,6 +1673,440 @@ fn try_restock_pantry(
         "try_restock_pantry: restaurant {} restocked {} ingredient(s) for {} cents (pending total updated)",
         restaurant_id, restocked_count, accrued_cents,
     );
+}
+
+// === H.43 — Server-side recipe upgrade completion =================
+//
+// The client's CookingSystem still owns recipe levels in foreground
+// (canonical source = save's recipeUpgradeLevels map).  What changes
+// here is *who fires the completion event* — the client used to rely
+// on its own tickRecipeUpgrades, which only runs when the tab is open.
+// Now the server tracks the deadline in recipe_upgrade_in_flight and
+// fires the completion (appending recipe_id to the restaurant's
+// pending CSV) regardless of whether the player is online.  Client
+// drains on reconnect; same pattern as H.22 pending_served.
+
+/// Phase H.43 — Client fires this on startRecipeUpgrade.  Upserts an
+/// in-flight row keyed on (restaurant_id, recipe_id); when the server
+/// tick observes completes_at_micros <= ctx.timestamp, it deletes the
+/// row and appends recipe_id to pending_recipe_upgrades_completed_csv.
+///
+/// Owner-only.  Idempotent on identical (restaurant, recipe,
+/// completes_at) tuples — a re-fire with the same deadline is a no-op.
+#[reducer]
+pub fn start_recipe_upgrade(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    recipe_id: String,
+    completes_at_micros: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can start a recipe upgrade".into());
+    }
+    if recipe_id.is_empty() || recipe_id.len() > 64 {
+        return Err("recipe_id must be 1-64 chars".into());
+    }
+    if completes_at_micros <= 0 {
+        return Err("completes_at_micros must be positive".into());
+    }
+    let key = format!("{}:{}", restaurant_id, recipe_id);
+    let existing = ctx.db.recipe_upgrade_in_flight().key().find(key.clone());
+    if let Some(e) = &existing {
+        if e.completes_at_micros == completes_at_micros { return Ok(()); }
+    }
+    let row = RecipeUpgradeInFlight {
+        key,
+        restaurant_id,
+        recipe_id,
+        completes_at_micros,
+    };
+    if existing.is_some() {
+        ctx.db.recipe_upgrade_in_flight().key().update(row);
+    } else {
+        ctx.db.recipe_upgrade_in_flight().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.43 — Client fires this on cancelRecipeUpgrade. Deletes the
+/// in-flight row without firing a completion.  Owner-only.  Idempotent
+/// — missing row is a silent no-op.
+#[reducer]
+pub fn cancel_recipe_upgrade(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    recipe_id: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can cancel a recipe upgrade".into());
+    }
+    let key = format!("{}:{}", restaurant_id, recipe_id);
+    if ctx.db.recipe_upgrade_in_flight().key().find(key.clone()).is_some() {
+        ctx.db.recipe_upgrade_in_flight().key().delete(key);
+    }
+    Ok(())
+}
+
+/// Phase H.43 — Owner-only.  Client drained
+/// pending_recipe_upgrades_completed_csv into local state; this
+/// reducer clears it so the same completion isn't applied twice on
+/// the next reconnect.  Idempotent (empty string is silent no-op).
+#[reducer]
+pub fn consume_pending_recipe_upgrades(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume pending recipe upgrades".into());
+    }
+    let current = r.pending_recipe_upgrades_completed_csv.as_deref().unwrap_or("");
+    if current.is_empty() { return Ok(()); }
+    log::info!(
+        "consume_pending_recipe_upgrades: restaurant {} drained '{}'",
+        restaurant_id, current,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_recipe_upgrades_completed_csv: None,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.43 — Per-restaurant tick scan.  Any in-flight upgrade
+/// whose completes_at_micros has passed gets deleted and its recipe_id
+/// appended to the restaurant's pending CSV.  Cheap (small N — usually
+/// 0 or 1 upgrade in flight at any time).
+fn tick_recipe_upgrade_completions(ctx: &ReducerContext, rid: u64) {
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    // Collect completed rows first; iterator can't outlive deletes.
+    let completed: Vec<(String, String)> = ctx.db.recipe_upgrade_in_flight().iter()
+        .filter(|f| f.restaurant_id == rid && now_micros >= f.completes_at_micros)
+        .map(|f| (f.key.clone(), f.recipe_id.clone()))
+        .collect();
+    if completed.is_empty() { return; }
+    for (key, _) in &completed {
+        ctx.db.recipe_upgrade_in_flight().key().delete(key.clone());
+    }
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    // Append each recipe_id to the pending CSV (avoiding duplicates).
+    let current_owned = r.pending_recipe_upgrades_completed_csv
+        .clone()
+        .unwrap_or_default();
+    let mut existing: Vec<&str> = current_owned
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let extra: Vec<String> = completed.into_iter()
+        .map(|(_, rid)| rid)
+        .filter(|rid| !existing.contains(&rid.as_str()))
+        .collect();
+    for r in &extra { existing.push(r.as_str()); }
+    let new_csv = existing.join(",");
+    if new_csv == current_owned { return; }
+    log::info!(
+        "tick_recipe_upgrade_completions: restaurant {} completed {:?}",
+        rid, extra,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_recipe_upgrades_completed_csv: Some(new_csv),
+        ..r
+    });
+}
+
+// === H.44 — Server-side staff training completion =================
+//
+// Mirror of H.43 but for hired_staff_member.training_completes_at_micros.
+// When the deadline passes, the server bumps the member's upgrade_level
+// by 1 and appends the member_id to pending_training_completions_csv.
+// Client reads cloud level on reconnect (already mirrored by H.39) +
+// drains the CSV for "Marcus is now L3!" toasts.
+
+/// Phase H.44 — Client fires this on startMemberTraining /
+/// cancelMemberTraining.  Owner-only.  Sets completes_at_micros to 0
+/// to cancel; > 0 to start.  Idempotent on identical values.
+#[reducer]
+pub fn set_member_training_deadline(
+    ctx: &ReducerContext,
+    member_id: String,
+    completes_at_micros: i64,
+) -> Result<(), String> {
+    let m = ctx.db.hired_staff_member().member_id().find(member_id.clone())
+        .ok_or_else(|| format!("Staff member {member_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(m.restaurant_id)
+        .ok_or_else(|| "Staff member's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set member training".into());
+    }
+    if completes_at_micros < 0 {
+        return Err("completes_at_micros cannot be negative".into());
+    }
+    if m.training_completes_at_micros == completes_at_micros { return Ok(()); }
+    ctx.db.hired_staff_member().member_id().update(HiredStaffMember {
+        training_completes_at_micros: completes_at_micros,
+        ..m
+    });
+    Ok(())
+}
+
+/// Phase H.44 — Owner-only.  Drains pending_training_completions_csv.
+/// Idempotent (empty = silent no-op).
+#[reducer]
+pub fn consume_pending_training_completions(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume pending training completions".into());
+    }
+    let current = r.pending_training_completions_csv.as_deref().unwrap_or("");
+    if current.is_empty() { return Ok(()); }
+    log::info!(
+        "consume_pending_training_completions: restaurant {} drained '{}'",
+        restaurant_id, current,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_training_completions_csv: None,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.44 — Per-restaurant tick scan.  Any hired_staff_member
+/// whose training_completes_at_micros has passed gets its upgrade_level
+/// bumped + deadline cleared + member_id appended to the pending CSV.
+/// Cap upgrade_level at STAFF_UPGRADE_MAX_SERVER (5, mirrors client).
+const STAFF_UPGRADE_MAX_SERVER: u32 = 5;
+fn tick_training_completions(ctx: &ReducerContext, rid: u64) {
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let completed: Vec<HiredStaffMember> = ctx.db.hired_staff_member().iter()
+        .filter(|m| m.restaurant_id == rid
+            && m.training_completes_at_micros > 0
+            && now_micros >= m.training_completes_at_micros)
+        .collect();
+    if completed.is_empty() { return; }
+    let mut completed_ids: Vec<String> = Vec::new();
+    for m in completed {
+        let member_id = m.member_id.clone();
+        let new_level = (m.upgrade_level + 1).min(STAFF_UPGRADE_MAX_SERVER);
+        ctx.db.hired_staff_member().member_id().update(HiredStaffMember {
+            upgrade_level: new_level,
+            training_completes_at_micros: 0,
+            ..m
+        });
+        completed_ids.push(member_id);
+    }
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    let current_owned = r.pending_training_completions_csv
+        .clone()
+        .unwrap_or_default();
+    let mut existing: Vec<&str> = current_owned
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let extra: Vec<String> = completed_ids.into_iter()
+        .filter(|id| !existing.contains(&id.as_str()))
+        .collect();
+    for e in &extra { existing.push(e.as_str()); }
+    let new_csv = existing.join(",");
+    if new_csv == current_owned { return; }
+    log::info!(
+        "tick_training_completions: restaurant {} leveled up {:?}",
+        rid, extra,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_training_completions_csv: Some(new_csv),
+        ..r
+    });
+}
+
+// === H.45 — Server-side offline salary accrual ====================
+//
+// Foreground play continues to drive its own tickSalary (the client
+// is the authoritative source for active-play deductions).  When the
+// owner goes offline > 30s, the server takes over: every restaurant
+// tick we compute elapsed micros × per-min payroll, accrue whole cents
+// into pending_salary_cost_cents and the fractional remainder into
+// pending_salary_remainder_x.  On reconnect the client calls
+// reset_salary_tick_clock (telling the server "I'm awake; don't accrue
+// for this period — I'll handle it locally") then drains
+// pending_salary_cost_cents via forceSpendMoney("salary") + fires
+// consume_pending_salary.
+//
+// Payroll formula matches StaffSystem.getTotalPayrollPerMinute:
+//   per_min_cents = base × headcount + Σ (upgrade_level × 100)
+// where base is the client-mirrored cloud_base_payroll_per_min_cents.
+
+/// Same offline window as H.33/H.34/H.35: 30 seconds.
+const SALARY_OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+/// Cents per upgrade level per minute. Mirrors StaffSystem:
+/// "base + upgradeLevel ($1/min per level)".
+const SALARY_PER_LEVEL_CENTS_PER_MIN: i64 = 100;
+/// 1 minute = 60 million microseconds. The salary accumulator
+/// is in units of (cents × micros / minute); divide by this to get
+/// whole cents.
+const MICROS_PER_MINUTE: i64 = 60_000_000;
+
+/// Phase H.45 — Owner-only.  Client mirrors the local
+/// admin.payrollPerStaffPerMinute (in dollars) as cents/min/staff so
+/// the server can compute the same charge during offline accrual.
+/// Idempotent.
+#[reducer]
+pub fn set_cloud_payroll_rate(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    cents_per_min_per_staff: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set payroll rate".into());
+    }
+    if cents_per_min_per_staff < 0 {
+        return Err("payroll rate cannot be negative".into());
+    }
+    if r.cloud_base_payroll_per_min_cents == cents_per_min_per_staff {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_base_payroll_per_min_cents: cents_per_min_per_staff,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.45 — Owner-only.  Client fires on connect to mark "I'm
+/// online; don't accrue for any new period until I go offline again."
+/// Sets last_salary_tick_micros to 0; the next offline tick will
+/// re-seed it with ctx.timestamp.
+#[reducer]
+pub fn reset_salary_tick_clock(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can reset salary tick clock".into());
+    }
+    if r.last_salary_tick_micros == 0 { return Ok(()); }
+    ctx.db.restaurant().id().update(Restaurant {
+        last_salary_tick_micros: 0,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.45 — Owner-only.  Drains pending_salary_cost_cents (and
+/// the sub-cent remainder) after the client has debited the player's
+/// local money via forceSpendMoney("salary").  Order matters: client
+/// debits first, then fires this so a mid-flight failure doesn't
+/// double-bill on retry.
+#[reducer]
+pub fn consume_pending_salary(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume pending salary".into());
+    }
+    if r.pending_salary_cost_cents == 0 && r.pending_salary_remainder_x == 0 {
+        return Ok(());
+    }
+    log::info!(
+        "consume_pending_salary: restaurant {} drained {} cents (remainder {})",
+        restaurant_id, r.pending_salary_cost_cents, r.pending_salary_remainder_x,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_salary_cost_cents: 0,
+        pending_salary_remainder_x: 0,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.45 — Per-restaurant tick.  When the owner has been offline
+/// past the threshold AND a base payroll rate has been mirrored AND
+/// the restaurant has staff, accrue cents into pending_salary_cost_cents.
+///
+/// On the very first tick after offline (last_salary_tick_micros == 0),
+/// just seed last_salary_tick to now and return — we don't bill for
+/// the seam between online and offline.  Subsequent ticks compute
+/// elapsed × per-min and add to the accumulator.
+fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    if r.cloud_base_payroll_per_min_cents <= 0 { return; }
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < SALARY_OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online {
+        // If the client is online, ensure last_salary_tick_micros is
+        // reset so future offline accruals start fresh.  This is the
+        // backstop if the client somehow didn't fire
+        // reset_salary_tick_clock on connect.
+        if r.last_salary_tick_micros != 0 {
+            ctx.db.restaurant().id().update(Restaurant {
+                last_salary_tick_micros: 0,
+                ..r
+            });
+        }
+        return;
+    }
+    // Seed the accumulator on the first offline tick.
+    if r.last_salary_tick_micros == 0 {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_salary_tick_micros: now_micros,
+            ..r
+        });
+        return;
+    }
+    // Compute total per-minute payroll: base × headcount + Σ level × 100.
+    let mut headcount: i64 = 0;
+    let mut levels_sum: i64 = 0;
+    for m in ctx.db.hired_staff_member().iter() {
+        if m.restaurant_id != rid { continue; }
+        headcount += 1;
+        levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
+    }
+    if headcount == 0 {
+        // No staff hired — bump last_tick so we don't accrue, but
+        // don't bill.  When they hire again the accumulator resumes
+        // from the moment they're hired (not from when they went
+        // offline).
+        ctx.db.restaurant().id().update(Restaurant {
+            last_salary_tick_micros: now_micros,
+            ..r
+        });
+        return;
+    }
+    let total_per_min_cents = r.cloud_base_payroll_per_min_cents
+        .saturating_mul(headcount)
+        .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
+    let elapsed = now_micros.saturating_sub(r.last_salary_tick_micros);
+    if elapsed <= 0 { return; }
+    // accrual_x = pending_remainder_x + total_per_min × elapsed
+    // (units of cents × micros / minute)
+    let micros_cents = total_per_min_cents.saturating_mul(elapsed);
+    let total = r.pending_salary_remainder_x.saturating_add(micros_cents);
+    let whole_cents = total / MICROS_PER_MINUTE;
+    let new_remainder = total % MICROS_PER_MINUTE;
+    let new_pending = r.pending_salary_cost_cents.saturating_add(whole_cents);
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_salary_cost_cents: new_pending,
+        pending_salary_remainder_x: new_remainder,
+        last_salary_tick_micros: now_micros,
+        ..r
+    });
 }
 
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
@@ -4470,12 +4925,20 @@ pub fn set_hired_staff_member(
             return Ok(()); // idempotent
         }
     }
+    // Preserve any in-flight H.44 training deadline across set_*
+    // calls (e.g. a client-driven name change shouldn't cancel the
+    // server's pending level-up).  The dedicated set_member_training_
+    // deadline reducer is the only path that clears or sets this.
+    let preserved_training_completes_at = existing.as_ref()
+        .map(|m| m.training_completes_at_micros)
+        .unwrap_or(0);
     let row = HiredStaffMember {
         member_id,
         restaurant_id,
         role,
         name,
         upgrade_level,
+        training_completes_at_micros: preserved_training_completes_at,
     };
     if existing.is_some() {
         ctx.db.hired_staff_member().member_id().update(row);
