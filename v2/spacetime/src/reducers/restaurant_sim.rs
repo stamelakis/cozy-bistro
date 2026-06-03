@@ -70,6 +70,33 @@ fn scale_patience(base_ms: i64, mult_x100: i32) -> i64 {
 /// vanishes. Client's despawnGuest matches this cadence.
 const LEAVING_DWELL_MS: i64 = 4_000; // 4 s
 
+/// H.18 — Safety-net dwell for the client's three "leaving variant"
+/// states (`walkingToDoor`, `exitingDoor`, `walkingOut`). The client
+/// uses these instead of the bare "leaving" string for the
+/// rendered walk-out — and once the client writes one of those
+/// strings via update_guest_position, the server's normal
+/// LEAVING_DWELL_MS branch can't fire (it gates on
+/// state=="leaving"||"done"). Without this, the server's earlier
+/// `eating → leaving` transition for a backgrounded tab gets
+/// silently overwritten when the foreground tab resumes and starts
+/// pushing position mirrors with the variant string, the despawn
+/// dwell never elapses on the cloud row, and the guest holds their
+/// seat forever from the cloud's perspective.
+///
+/// 30 s matches the client-side `stuckLeaving` watchdog in
+/// GuestSpawner.ts so a guest the client would have force-despawned
+/// also gets dropped server-side. Longer than LEAVING_DWELL_MS
+/// because these are mid-walk states (client is animating); the
+/// server only despawns if the client is taking abnormally long.
+const LEAVING_VARIANT_DWELL_MS: i64 = 30_000; // 30 s
+
+/// True if this state name represents the client's "in the process
+/// of leaving" set. The server treats these the same as bare
+/// "leaving" for despawn purposes — see H.18.
+fn is_leaving_state(s: &str) -> bool {
+    matches!(s, "leaving" | "done" | "walkingToDoor" | "exitingDoor" | "walkingOut")
+}
+
 /// Interval the simulation ticks at, in microseconds. 100 ms = 10 Hz —
 /// matches the rate planned in docs/server-authoritative-plan.md.
 /// Pedestrians fire at 0.5 Hz; the live game sim needs finer
@@ -874,9 +901,18 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return };
 
     // === Despawn path: leaving state has its own dwell timer ===
-    if g.state == "leaving" || g.state == "done" {
+    // H.18 — also handles the client's "leaving variant" state strings
+    // (walkingToDoor, exitingDoor, walkingOut). The short
+    // LEAVING_DWELL_MS (4 s) applies to "leaving"/"done"; the longer
+    // LEAVING_VARIANT_DWELL_MS (30 s) applies to the client variants.
+    if is_leaving_state(&g.state) {
         let advanced_clock = g.state_clock_ms.saturating_add(dt_ms);
-        if advanced_clock >= LEAVING_DWELL_MS {
+        let dwell_threshold = if g.state == "leaving" || g.state == "done" {
+            LEAVING_DWELL_MS
+        } else {
+            LEAVING_VARIANT_DWELL_MS
+        };
+        if advanced_clock >= dwell_threshold {
             // Time's up — drop the row. Client subscription receives
             // a Delete event and removes the rendered character.
             // Cascade: also delete any active_ticket rows still bound
