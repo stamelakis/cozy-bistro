@@ -271,6 +271,10 @@ export const Restaurant = __t.object("Restaurant", {
   pendingTipsCents: __t.i64(),
   pendingRatingSumX100: __t.i64(),
   pendingRatingCount: __t.u32(),
+  cachedStyleX100: __t.i32(),
+  cachedComfortX100: __t.i32(),
+  cachedRatingBonusX100: __t.i32(),
+  cachedBathroomQualityX100: __t.i32(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

@@ -20,4 +20,8 @@ export default __t.row({
   pendingTipsCents: __t.i64().name("pending_tips_cents"),
   pendingRatingSumX100: __t.i64().name("pending_rating_sum_x100"),
   pendingRatingCount: __t.u32().name("pending_rating_count"),
+  cachedStyleX100: __t.i32().name("cached_style_x100"),
+  cachedComfortX100: __t.i32().name("cached_comfort_x100"),
+  cachedRatingBonusX100: __t.i32().name("cached_rating_bonus_x100"),
+  cachedBathroomQualityX100: __t.i32().name("cached_bathroom_quality_x100"),
 });

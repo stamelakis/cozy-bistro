@@ -60,6 +60,7 @@ import UnregisterStaffActorReducer from "../unregister_staff_actor_reducer";
 import UpdateDishwarePoolReducer from "../update_dishware_pool_reducer";
 import UpdateDishwasherBatchReducer from "../update_dishwasher_batch_reducer";
 import UpdateGuestPositionReducer from "../update_guest_position_reducer";
+import UpdateRestaurantAggregatesReducer from "../update_restaurant_aggregates_reducer";
 import UpdateStaffActorReducer from "../update_staff_actor_reducer";
 import WipeMyRestaurantReducer from "../wipe_my_restaurant_reducer";
 
@@ -117,6 +118,7 @@ export type UnregisterStaffActorParams = __Infer<typeof UnregisterStaffActorRedu
 export type UpdateDishwarePoolParams = __Infer<typeof UpdateDishwarePoolReducer>;
 export type UpdateDishwasherBatchParams = __Infer<typeof UpdateDishwasherBatchReducer>;
 export type UpdateGuestPositionParams = __Infer<typeof UpdateGuestPositionReducer>;
+export type UpdateRestaurantAggregatesParams = __Infer<typeof UpdateRestaurantAggregatesReducer>;
 export type UpdateStaffActorParams = __Infer<typeof UpdateStaffActorReducer>;
 export type WipeMyRestaurantParams = __Infer<typeof WipeMyRestaurantReducer>;
 

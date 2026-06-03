@@ -184,6 +184,32 @@ pub struct Restaurant {
     pub pending_rating_sum_x100: i64,
     #[default(0u32)]
     pub pending_rating_count: u32,
+
+    /// Phase H.28 — Cached furniture aggregate stats. The client
+    /// recomputes these on every place/move/sell and pushes them via
+    /// update_restaurant_aggregates. The server reads them in
+    /// accumulate_pending_visit_rollup to apply the vibe + bathroom
+    /// modifiers exactly the way the foreground client's
+    /// finalizeVisit does (the catalog lookups for style / comfort /
+    /// ratingBonus / per-piece bathroom quality only exist in the
+    /// client's TS data files, so caching the aggregates is cheaper
+    /// than porting the catalog to Rust).
+    ///
+    /// Stored × 100 so the server can do integer arithmetic. Default
+    /// 0 — a restaurant whose client never pushed these reads as
+    /// "no furniture vibe / empty bathroom," matching the old
+    /// no-modifier behaviour for backgrounded play.
+    #[default(0i32)]
+    pub cached_style_x100: i32,
+    #[default(0i32)]
+    pub cached_comfort_x100: i32,
+    #[default(0i32)]
+    pub cached_rating_bonus_x100: i32,
+    /// Sum of style + comfort + 2×attractionBonus + 20×ratingBonus
+    /// across BATHROOM-category placed furniture. Normalized
+    /// server-side by /18 capped at 1.0 to match the client's qNorm.
+    #[default(0i32)]
+    pub cached_bathroom_quality_x100: i32,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

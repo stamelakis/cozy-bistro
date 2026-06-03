@@ -220,6 +220,7 @@ export class FurnitureRegistry {
       slotIndex: item.slotIndex ?? -1,
       localRotY: item.localRotY ?? 0,
     });
+    this.mirrorAggregates(); // H.28
   }
 
   private mirrorFurnitureMove(item: PlacedFurnitureItem): void {
@@ -235,12 +236,36 @@ export class FurnitureRegistry {
       slotIndex: item.slotIndex ?? -1,
       localRotY: item.localRotY ?? 0,
     });
+    // Move doesn't change stats sums, but recompute anyway in case
+    // bathroom_score's visibility check (isVisibleInScene) flipped
+    // due to a floor-tier reveal. Cheap relative to the move itself.
+    this.mirrorAggregates(); // H.28
   }
 
   private mirrorFurnitureSell(uid: string): void {
     if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
     this.cloud.sellFurniture(uid);
+    this.mirrorAggregates(); // H.28
+  }
+
+  /** H.28 — Recompute aggregate furniture stats and push them to the
+   * server's Restaurant row cache. The server uses these to apply
+   * vibe + bathroom rating modifiers to backgrounded guests in
+   * accumulate_pending_visit_rollup. Fired from each of the three
+   * mirror helpers above so the cache stays in sync with every
+   * mutation. O(N) over placed items; fine for typical N (~50). */
+  private mirrorAggregates(): void {
+    if (this.suppressMirrorForReload) return;
+    if (!isServerSim("furniture") || !this.cloud) return;
+    const stats = this.getAggregateStats();
+    const bath = this.getBathroomScore();
+    this.cloud.updateRestaurantAggregates(
+      stats.style * 100,
+      stats.comfort * 100,
+      stats.ratingBonus * 100,
+      bath.quality * 100,
+    );
   }
 
   /** Indices into a host's surfaceSlots that are currently occupied by

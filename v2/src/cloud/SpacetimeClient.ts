@@ -640,6 +640,36 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.28 — Push the latest furniture aggregate stats to this player's
+   * Restaurant row. Called from FurnitureRegistry whenever a place /
+   * move / sell mutates the local layout; the server reads these
+   * cached values in accumulate_pending_visit_rollup to apply vibe +
+   * bathroom rating modifiers to backgrounded guests without porting
+   * the catalog data to Rust.
+   *
+   * Inputs are absolute (post-mutation) sums × 100 so the wire format
+   * is integer. Idempotent on the server side — no-op when the
+   * pushed values match what's already on the row. */
+  updateRestaurantAggregates(
+    styleX100: number,
+    comfortX100: number,
+    ratingBonusX100: number,
+    bathroomQualityX100: number,
+  ): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.updateRestaurantAggregates({
+        restaurantId: this.restaurantId,
+        styleX100: Math.round(styleX100),
+        comfortX100: Math.round(comfortX100),
+        ratingBonusX100: Math.round(ratingBonusX100),
+        bathroomQualityX100: Math.round(bathroomQualityX100),
+      });
+    } catch (e) {
+      console.warn("[Cloud] updateRestaurantAggregates failed:", e);
+    }
+  }
+
   /** H.22 — Read + apply + clear in one shot. Calls getPendingVisitRollup;
    * if non-null, applies the values to Game state (money, served,
    * reputation) and then clears the cloud counters. Idempotent if no

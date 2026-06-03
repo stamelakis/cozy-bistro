@@ -706,38 +706,71 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         base_x100 = (base_x100 - smoke_x100).max(100);
     }
 
-    // H.27 — bathroom modifier (simplified). The foreground client's
-    // formula uses bathroom quality (a sum of style/comfort for placed
-    // bathroom furniture) which the server doesn't have access to
-    // without a furniture-def lookup. This approximation only
-    // distinguishes "none placed" (significant penalty) from "trip
-    // happened" (small flat bonus, no quality scaling). Misses the
-    // "wanted but every fixture was busy" middle case since we don't
-    // track completed-vs-gave-up separately on the row yet — both
-    // path sets used_toilet/washed_hands to true. Net effect: this
-    // approximation slightly OVERSTATES ratings for guests who gave
-    // up — acceptable for backgrounded play, foreground play does
-    // the full math itself.
+    // H.28 — read the cached aggregate stats the client pushed via
+    // update_restaurant_aggregates. Empty when no furniture has been
+    // placed (or the client never mirrored) — in that case vibe and
+    // bathroom quality both read 0 and the rating math degrades
+    // gracefully.
+    let (cached_style_x100, cached_comfort_x100, cached_rating_bonus_x100, cached_bathroom_quality_x100) =
+        ctx.db.restaurant().id().find(g.restaurant_id)
+            .map(|r| (
+                r.cached_style_x100 as i64,
+                r.cached_comfort_x100 as i64,
+                r.cached_rating_bonus_x100 as i64,
+                r.cached_bathroom_quality_x100 as i64,
+            ))
+            .unwrap_or((0, 0, 0, 0));
+
+    // H.28 — bathroom modifier (full math). Matches
+    // GuestSpawner.finalizeVisit's bathroom delta calculation,
+    // including the quality scaling from cached_bathroom_quality_x100.
+    // qNorm = min(1, quality / 18); used toilet → delta = -0.2 +
+    // qNorm × 0.8; wash-only success → 0.15 + qNorm × 0.2; etc.
+    //
+    // Limitation we still carry: used_toilet / washed_hands lump
+    // "successful trip" with "tried but every fixture was busy."  A
+    // server-tracked wc_completed flag would split them, but isn't
+    // here yet.  As-is the "wanted but couldn't" case reads as
+    // "trip happened" → slightly overstates rating in that case.
+    let q_norm_x100 = (cached_bathroom_quality_x100 / 18).min(100); // capped at +1.0
     let bathroom_x100: i64 = if g.will_use_toilet {
         if toilet_count == 0 {
-            -80 // player didn't provide a toilet — significant negative
+            -80 // player didn't provide a toilet
         } else if g.used_toilet {
-            40  // trip happened (or gave up); flat positive baseline
+            // delta = -0.2 + qNorm * 0.8 + (washed_hands ? 0.15 : sink_count == 0 ? -0.25 : 0)
+            let mut delta = -20 + (q_norm_x100 * 80) / 100;
+            if g.washed_hands { delta += 15; }
+            else if sink_count == 0 { delta -= 25; }
+            delta
         } else {
             0
         }
     } else if g.will_wash_only {
         if sink_count == 0 {
-            -50 // wanted to wash, no sink at all
+            -50
         } else if g.washed_hands {
-            20  // trip happened (or gave up); smaller baseline
+            15 + (q_norm_x100 * 20) / 100 // 0.15 + qNorm × 0.2
         } else {
-            0
+            -20 // gave up after sink was busy (approximate; should use a separate flag)
         }
+    } else if toilet_count > 0 {
+        // Didn't visit, but a tidy bathroom is a small ambient bonus.
+        let mut delta = (q_norm_x100 * 20) / 100; // up to +0.2
+        if sink_count > 0 { delta += 5; }
+        delta
     } else {
         0
     };
     base_x100 = (base_x100 + bathroom_x100).clamp(100, 500);
+
+    // H.28 — furniture vibe modifier. vibe = (style + comfort/2)
+    // × 0.012, capped at +1.0; then ratingBonus added directly.
+    // Integer math: inputs are x100, scaling factor 0.012 = 12/1000.
+    let vibe_input_x100 = cached_style_x100 + cached_comfort_x100 / 2;
+    let vibe_x100 = (vibe_input_x100 * 12) / 1000;
+    let vibe_capped_x100 = vibe_x100.max(0).min(100); // [0, +1.0]
+    base_x100 = (base_x100 + vibe_capped_x100 + cached_rating_bonus_x100)
+        .clamp(100, 500);
 
     // H.26 — deterministic jitter, ±0.4 (= ±40 in x100). The client
     // uses Math.random() but the server tick disallows that (would
@@ -784,6 +817,43 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents)",
         g.id, g.restaurant_id, rating, tip_cents,
     );
+}
+
+/// Phase H.28 — client pushes the latest aggregate furniture stats
+/// computed via FurnitureRegistry.getAggregateStats +
+/// getBathroomScore. Cached on the Restaurant row so the server can
+/// apply vibe + bathroom rating modifiers to backgrounded guests
+/// without porting the catalog data to Rust.
+///
+/// Owner-only. Idempotent: a push with identical values is a no-op.
+#[reducer]
+pub fn update_restaurant_aggregates(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    style_x100: i32,
+    comfort_x100: i32,
+    rating_bonus_x100: i32,
+    bathroom_quality_x100: i32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can update aggregates".into());
+    }
+    if r.cached_style_x100 == style_x100
+        && r.cached_comfort_x100 == comfort_x100
+        && r.cached_rating_bonus_x100 == rating_bonus_x100
+        && r.cached_bathroom_quality_x100 == bathroom_quality_x100 {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cached_style_x100: style_x100,
+        cached_comfort_x100: comfort_x100,
+        cached_rating_bonus_x100: rating_bonus_x100,
+        cached_bathroom_quality_x100: bathroom_quality_x100,
+        ..r
+    });
+    Ok(())
 }
 
 /// Phase H.22 — atomically read + zero the Restaurant.pending_*

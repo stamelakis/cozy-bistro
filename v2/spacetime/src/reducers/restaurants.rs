@@ -23,6 +23,12 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         pending_tips_cents: 0,
         pending_rating_sum_x100: 0,
         pending_rating_count: 0,
+        // H.28 — cached aggregate stats start empty; the client fires
+        // update_restaurant_aggregates after the first furniture mutation.
+        cached_style_x100: 0,
+        cached_comfort_x100: 0,
+        cached_rating_bonus_x100: 0,
+        cached_bathroom_quality_x100: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone
