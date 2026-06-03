@@ -1114,6 +1114,24 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
         // The state_clock_ms is the elapsed dwell.
         "seated" if new_clock >= SEATED_DWELL_MS => Some(("ordering".to_string(), 0)),
+        // ordering → waitingForFood when a waiter has been dwelling
+        // at this guest's seat for the take-order step. The client
+        // mirrors waiter.take_order_guest_id when a waiter walks to
+        // a guest; the state_clock_ms accumulates while the waiter
+        // is "working" at the seat. After TAKE_ORDER_DWELL_MS the
+        // server flips guest state.
+        //
+        // Limitation: actual ticket creation (place_order) still
+        // happens client-side because the recipe catalog
+        // (appliance + cook_seconds_ms per recipe) is client-only.
+        // For a backgrounded tab, this server flip moves the guest
+        // to waitingForFood but no tickets get created — guest
+        // sits there until patience runs out and they leave. For
+        // foreground play the client's local sim hits the same
+        // mirror via update_guest_position so this branch is just
+        // a backup.
+        "ordering" if waiter_finished_taking_order(ctx, g.id) =>
+            Some(("waitingForFood".to_string(), 0)),
         // waitingForFood → eating when ANY active_ticket bound to this
         // guest has state "delivered" (H.8 waiter set it on arrival
         // at the seat). The plate has landed, customer starts eating.
@@ -1261,6 +1279,28 @@ fn has_delivered_ticket_for_guest(ctx: &ReducerContext, guest_id: u64) -> bool {
     }
     false
 }
+
+/// Section A migration — true if any staff_actor in the same
+/// restaurant has take_order_guest_id == this guest's id AND has
+/// been "working" (dwelling at the seat) for at least
+/// TAKE_ORDER_DWELL_MS. Signals that a waiter has just finished
+/// taking the order, so the guest state can advance to
+/// waitingForFood server-side.
+fn waiter_finished_taking_order(ctx: &ReducerContext, guest_id: u64) -> bool {
+    for a in ctx.db.staff_actor().iter() {
+        if a.take_order_guest_id != Some(guest_id) { continue; }
+        if a.state != "working" { continue; }
+        if a.state_clock_ms < TAKE_ORDER_DWELL_MS { continue; }
+        return true;
+    }
+    false
+}
+
+/// Time a waiter spends dwelling at a guest's seat taking the order.
+/// Matches the client's WAITER_TAKE_ORDER_DWELL_SECONDS. 2 seconds —
+/// long enough to read as a deliberate beat, short enough that the
+/// guest's patience isn't materially eaten by it.
+const TAKE_ORDER_DWELL_MS: i64 = 2_000;
 
 /// Furniture def_ids the server recognises as guest-seating tables.
 /// Mirrors the entries in v2/src/data/furnitureCatalog.ts that have
