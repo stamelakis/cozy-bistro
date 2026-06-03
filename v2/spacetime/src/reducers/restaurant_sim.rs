@@ -685,8 +685,16 @@ type WaiterTransition = (
     Option<String>,   // delivery_phase
     Option<u64>,      // ticket_id
 );
-fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool, _dt_ms: i64)
+fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool, dt_ms: i64)
     -> (WaiterTransition, bool /* advance clock */) {
+    // Section A migration fix — proper pickup/delivery dwells so
+    // subscribers see the waiter pause at the plate/seat instead of
+    // instantly teleporting to the next leg. Encoded as a working
+    // state that the function holds the waiter in until the dwell
+    // elapses.
+    const WAITER_PICKUP_DWELL_MS: i64 = 400;
+    const WAITER_DELIVERY_DWELL_MS: i64 = 500;
+
     if !arrived {
         // Mid-walk — keep everything the same, advance clock.
         return ((
@@ -695,7 +703,7 @@ fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool
         ), true);
     }
 
-    // Arrived. Standard H.3 flips first.
+    // Arrived. Standard H.3 returningHome → idle flip.
     if a.state == "returningHome" {
         return ((
             "idle".to_string(), 0, a.target_x, a.target_z, a.target_floor,
@@ -703,6 +711,36 @@ fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool
             None, // and ticket binding
         ), false);
     }
+
+    // working + arrived: this is the dwell hold. Check if the dwell
+    // window has elapsed; if not, stay in "working" and advance the
+    // clock. If yes, advance to the next leg.
+    if a.state == "working" {
+        let phase = a.delivery_phase.as_deref().unwrap_or("");
+        // Non-waiter "working" (e.g. chef at stove) — no dwell logic,
+        // leave it to tick_ticket_state. Advance clock as normal.
+        if phase != "pickup" && phase != "deliver" {
+            return ((
+                a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
+                a.delivery_phase.clone(), a.ticket_id,
+            ), true);
+        }
+        let dwell_ms = if phase == "pickup" {
+            WAITER_PICKUP_DWELL_MS
+        } else {
+            WAITER_DELIVERY_DWELL_MS
+        };
+        if a.state_clock_ms + dt_ms < dwell_ms {
+            // Still dwelling — stay in working, accumulate clock.
+            return ((
+                a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
+                a.delivery_phase.clone(), a.ticket_id,
+            ), true);
+        }
+        // Dwell elapsed — fall through to the leg transition below.
+        return advance_waiter_leg(ctx, a, phase);
+    }
+
     if a.state != "movingToWork" {
         return ((
             a.state.clone(), a.state_clock_ms, a.target_x, a.target_z, a.target_floor,
@@ -710,47 +748,48 @@ fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool
         ), true);
     }
 
-    // movingToWork + arrived. Check delivery_phase to pick the next
-    // step. Non-waiters / no delivery in flight → standard flip to
-    // "working" (H.3 chef behaviour).
-    let phase = a.delivery_phase.as_deref().unwrap_or("");
-    if phase != "pickup" && phase != "deliver" {
-        return ((
-            "working".to_string(), 0, a.target_x, a.target_z, a.target_floor,
-            a.delivery_phase.clone(), a.ticket_id,
-        ), false);
-    }
+    // movingToWork + arrived. Flip to "working" (dwell entry point).
+    // Non-delivery actors (chefs) get the same flip; ticket cooking
+    // is governed by tick_ticket_state's clock so they stay "working"
+    // there.
+    ((
+        "working".to_string(), 0, a.target_x, a.target_z, a.target_floor,
+        a.delivery_phase.clone(), a.ticket_id,
+    ), false)
+}
 
-    // We treat the working dwell as zero (arrival fires once per
-    // tick, and the dwell constants are <1 tick so we can advance
-    // immediately). For longer dwells, we'd need a holdover state.
+/// Advance a waiter to their next delivery leg AFTER the dwell at
+/// the current spot has elapsed. Called from compute_waiter_transition
+/// when state == "working" and the dwell window passed.
+fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
+    -> (WaiterTransition, bool) {
     let Some(ticket_id) = a.ticket_id else {
-        // Defensive: phase set but no ticket — return home, clear
-        // phase.
+        // Defensive: phase set but no ticket — return home.
         return ((
             "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
             None, None,
         ), false);
     };
     let Some(ticket) = ctx.db.active_ticket().id().find(ticket_id) else {
-        // Ticket gone (cancelled / cleaned up). Send waiter home.
+        // Ticket vanished (guest left, cancellation cascade) — send
+        // waiter home with no further action. release_waiter_from_ticket
+        // would have hit this path for the cascade case already.
         return ((
             "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
             None, None,
         ), false);
     };
     if phase == "pickup" {
-        // Picked up the plate — walk to seat. Ticket stays in
-        // "delivering"; only the waiter's target advances.
+        // Plate grabbed — walk to seat. Ticket stays in "delivering";
+        // only the waiter's target advances.
         return ((
             "movingToWork".to_string(), 0,
             ticket.seat_x, ticket.seat_z, ticket.seat_floor,
             Some("deliver".to_string()), Some(ticket_id),
         ), false);
     }
-    // phase == "deliver" — at the seat. Flip ticket to "delivered"
-    // (tick_ticket_state will delete after dwell), waiter returns
-    // home.
+    // phase == "deliver" — plate landed. Flip ticket to "delivered"
+    // (tick_ticket_state will delete after dwell); waiter returns home.
     ctx.db.active_ticket().id().update(ActiveTicket {
         state: "delivered".to_string(),
         state_clock_ms: 0,
