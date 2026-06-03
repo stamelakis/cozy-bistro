@@ -48,6 +48,7 @@ import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
+import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
 import ConsumePendingVisitRollupReducer from "./consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
@@ -82,6 +83,7 @@ import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
+import SyncDayClockReducer from "./sync_day_clock_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
 import UnregisterStaffActorReducer from "./unregister_staff_actor_reducer";
@@ -484,6 +486,7 @@ const reducersSchema = __reducers(
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
+  __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
   __reducerSchema("consume_pending_visit_rollup", ConsumePendingVisitRollupReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
@@ -518,6 +521,7 @@ const reducersSchema = __reducers(
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
+  __reducerSchema("sync_day_clock", SyncDayClockReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),
   __reducerSchema("unregister_staff_actor", UnregisterStaffActorReducer),

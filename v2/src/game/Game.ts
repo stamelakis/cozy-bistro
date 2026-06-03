@@ -567,7 +567,10 @@ export class Game {
     }
   }
 
-  private rolloverDay(): void {
+  /** Public for H.30 — SpacetimeClient.applyPendingDayAdvancement
+   * calls this N times to replay rollovers that accrued while the
+   * tab was backgrounded. */
+  rolloverDay(): void {
     // Capture the day's totals BEFORE resetting them — used by both the
     // day-end modal callback AND the persistent history.
     const dayNumber = this.day.getDayNumber();

@@ -276,6 +276,8 @@ export const Restaurant = __t.object("Restaurant", {
   cachedComfortX100: __t.i32(),
   cachedRatingBonusX100: __t.i32(),
   cachedBathroomQualityX100: __t.i32(),
+  dayElapsedMs: __t.i64(),
+  pendingDaysAdvanced: __t.u32(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

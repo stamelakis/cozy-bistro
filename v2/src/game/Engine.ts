@@ -117,6 +117,10 @@ export class Engine {
   readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
   readonly cloud: SpacetimeClient;
+  /** H.30 — accumulated dt since last sync_day_clock fire. The cloud
+   * yoke fires every DAY_SYNC_INTERVAL seconds so the server's
+   * day_elapsed_ms doesn't drift away from local in foreground play. */
+  private daySyncAccum = 0;
   /** P8 chat panel — bottom-left, always visible after auth. Mounted
    * lazily by installAuthGate so it can subscribe to the chat_message
    * table that the cloud only has after the initial subscription. */
@@ -2094,6 +2098,23 @@ export class Engine {
     // so 4x on a slow frame doesn't simulate a big jump.
     const dt = this.paused ? 0 : Math.min(rawDt * this.timeScale, 0.25);
     this.game.update(dt);
+    // H.30 — periodic yoke of the cloud's day clock to local. Uses
+    // rawDt (real seconds, ignores pause / timeScale) so the cloud
+    // sees real wall-clock progression and a paused / sped-up
+    // foreground tab doesn't desync. Fires every 5 s — short enough
+    // that a quick disconnect/reconnect can't accumulate spurious
+    // pending day rollovers, long enough that we're not hammering
+    // the reducer.
+    const DAY_SYNC_INTERVAL_SEC = 5;
+    this.daySyncAccum += rawDt;
+    if (this.daySyncAccum >= DAY_SYNC_INTERVAL_SEC) {
+      this.daySyncAccum = 0;
+      // elapsed-in-day in seconds = dayLength - timeRemaining.
+      const DAY_LENGTH_SEC = 720;
+      const elapsedSec = DAY_LENGTH_SEC - this.game.day.getTimeRemainingSeconds();
+      const elapsedMs = Math.max(0, Math.round(elapsedSec * 1000));
+      this.cloud.syncDayClock(elapsedMs);
+    }
     this.router?.update(dt);
     this.errand?.update(dt);
     this.spawner?.update(dt);

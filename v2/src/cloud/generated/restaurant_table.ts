@@ -24,4 +24,6 @@ export default __t.row({
   cachedComfortX100: __t.i32().name("cached_comfort_x100"),
   cachedRatingBonusX100: __t.i32().name("cached_rating_bonus_x100"),
   cachedBathroomQualityX100: __t.i32().name("cached_bathroom_quality_x100"),
+  dayElapsedMs: __t.i64().name("day_elapsed_ms"),
+  pendingDaysAdvanced: __t.u32().name("pending_days_advanced"),
 });

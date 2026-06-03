@@ -640,6 +640,70 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.30 — Periodic yoke of the cloud's day_elapsed_ms to this
+   * client's local elapsed-in-day. Called from the Engine update
+   * loop on a few-second cadence (default 5 s); prevents
+   * pending_days_advanced from accumulating while the foreground tab
+   * is alive — backgrounded play lets it grow until the next
+   * consume_pending_day_advancement on reconnect. */
+  syncDayClock(elapsedMs: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.syncDayClock({
+        restaurantId: this.restaurantId,
+        elapsedMs: BigInt(Math.max(0, Math.round(elapsedMs))),
+      });
+    } catch (e) {
+      console.warn("[Cloud] syncDayClock failed:", e);
+    }
+  }
+
+  /** H.30 — Read pending_days_advanced from the Restaurant row.
+   * Returns 0 when the row isn't subscribed yet OR no days have
+   * accumulated. Called by applyPendingDayAdvancement on reconnect. */
+  getPendingDaysAdvanced(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return 0;
+    return Number(r.pendingDaysAdvanced);
+  }
+
+  /** H.30 — Atomically zero pending_days_advanced on the cloud row.
+   * Caller should apply the days locally first (via N rollovers)
+   * before clearing. */
+  consumePendingDayAdvancement(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingDayAdvancement({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingDayAdvancement failed:", e);
+    }
+  }
+
+  /** H.30 — Read + apply + clear pending day advancement. Called
+   * from onSubscriptionReady right after applyPendingVisitRollup so
+   * backgrounded rent payments, daily resets, history snapshots etc.
+   * land via the normal Game.rolloverDay path. Idempotent. Capped at
+   * a sane MAX so a long-gone tab doesn't apply hundreds of rollovers
+   * in one frame. */
+  applyPendingDayAdvancement(): void {
+    const pending = this.getPendingDaysAdvanced();
+    if (pending === 0) return;
+    /** Cap how many days we'll roll over in one shot. 30 days of
+     *  rent + history is a lot of UI work for a single connect; if
+     *  the player was gone for >30 days we just lose the excess. */
+    const MAX_ROLLOVER = 30;
+    const days = Math.min(pending, MAX_ROLLOVER);
+    if (pending > MAX_ROLLOVER) {
+      console.warn(`[Cloud] capping pending day rollover ${pending} → ${MAX_ROLLOVER}`);
+    }
+    console.log(`[Cloud] applying ${days} pending day rollover(s)`);
+    for (let i = 0; i < days; i += 1) {
+      this.game.rolloverDay();
+    }
+    this.consumePendingDayAdvancement();
+  }
+
   /** H.28 — Push the latest furniture aggregate stats to this player's
    * Restaurant row. Called from FurnitureRegistry whenever a place /
    * move / sell mutates the local layout; the server reads these
@@ -1939,6 +2003,13 @@ export class SpacetimeClient {
       // state synchronously (apply is now correct) OR triggers a
       // page reload (we never get here, fresh boot picks it up).
       this.applyPendingVisitRollup();
+      // H.30 — same shape for day rollovers. Each pending day fires
+      // Game.rolloverDay() which charges rent (past grace days),
+      // resets daily totals, pushes a history row, and increments
+      // dayNumber. Applying AFTER the visit rollup means today's
+      // accumulated tips count toward today's daily revenue, then
+      // the rollover snapshots + resets it cleanly.
+      this.applyPendingDayAdvancement();
     }
     this.wireGameHooks();
     this.wireCloudListeners(ctx);

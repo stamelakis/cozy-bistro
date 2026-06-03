@@ -292,6 +292,97 @@ pub fn restaurant_tick(
     // delivery_phase field, which tick_staff_actor reads on arrival.
     auto_assign_ready_tickets(ctx, rid);
 
+    // Phase H.30 — advance the visual day clock. The foreground client
+    // periodically yokes the cloud's day_elapsed_ms to its local value
+    // via sync_day_clock; backgrounded play lets pending_days_advanced
+    // accumulate until the next consume_pending_day_advancement on
+    // reconnect. Tick is idempotent on a row that was just synced —
+    // the elapsed counter just walks forward from wherever the
+    // client left it.
+    tick_day_clock(ctx, rid, dt_ms);
+
+    Ok(())
+}
+
+/// Phase H.30 — Advance the visual day clock for this restaurant.
+/// Pops as many full days as have elapsed into pending_days_advanced
+/// so a multi-hour backgrounded session correctly accrues a stack of
+/// rollovers when the client reconnects.
+fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    let mut elapsed = r.day_elapsed_ms.saturating_add(dt_ms);
+    let mut pending = r.pending_days_advanced;
+    while elapsed >= DAY_LENGTH_MS {
+        elapsed -= DAY_LENGTH_MS;
+        pending = pending.saturating_add(1);
+    }
+    if elapsed == r.day_elapsed_ms && pending == r.pending_days_advanced {
+        return; // no change worth a write
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        day_elapsed_ms: elapsed,
+        pending_days_advanced: pending,
+        ..r
+    });
+}
+
+/// Phase H.30 — Foreground client periodically yokes the cloud's
+/// day_elapsed_ms to its local value so the cloud clock doesn't drift
+/// out from under the player while the tab is alive. Also clears
+/// pending_days_advanced because a foreground client has just
+/// finished the rollovers locally via Game.rolloverDay().
+///
+/// Owner-only. Called from the Engine's update loop on a few-second
+/// cadence (cheap reducer; tunable client-side).
+#[reducer]
+pub fn sync_day_clock(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    elapsed_ms: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can sync day clock".into());
+    }
+    let clamped = elapsed_ms.clamp(0, DAY_LENGTH_MS);
+    if r.day_elapsed_ms == clamped && r.pending_days_advanced == 0 {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        day_elapsed_ms: clamped,
+        pending_days_advanced: 0,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.30 — Atomically read + zero pending_days_advanced. Called
+/// by the client on reconnect (after subscription cache settles) so
+/// it can loop Game.rolloverDay() N times to apply backgrounded
+/// rent payments, daily resets, history snapshots, etc. day_elapsed_ms
+/// is left intact; the client's next sync_day_clock yokes it.
+#[reducer]
+pub fn consume_pending_day_advancement(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume day advancement".into());
+    }
+    if r.pending_days_advanced == 0 {
+        return Ok(()); // idempotent
+    }
+    log::info!(
+        "consume_pending_day_advancement: clearing {} days on restaurant {}",
+        r.pending_days_advanced, restaurant_id,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_days_advanced: 0,
+        ..r
+    });
     Ok(())
 }
 
@@ -2005,6 +2096,13 @@ const WC_WASH_MS: i64 = 3_000;
 /// and proceeding to ordering. Mirrors the client's
 /// WC_PATIENCE_SECONDS (10 s).
 const WC_GIVEUP_MS: i64 = 10_000;
+
+/// Phase H.30 — Visual day cycle length. 720_000 ms = 720 s = 12 real
+/// minutes per game day. Matches the client's
+/// DayCycleSystem.dayLengthSeconds default. When day_elapsed_ms on a
+/// Restaurant row crosses this in restaurant_tick, the server pops
+/// one full day into pending_days_advanced.
+const DAY_LENGTH_MS: i64 = 720_000;
 
 /// True if the given guest has any active_ticket row in state
 /// "delivered" — i.e. a plate has just landed at their seat. H.10

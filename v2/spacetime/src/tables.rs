@@ -210,6 +210,23 @@ pub struct Restaurant {
     /// server-side by /18 capped at 1.0 to match the client's qNorm.
     #[default(0i32)]
     pub cached_bathroom_quality_x100: i32,
+
+    /// Phase H.30 — Server-side visual day clock. day_elapsed_ms
+    /// counts up by dt_ms in restaurant_tick; every time it crosses
+    /// DAY_LENGTH_MS (720_000 = 12 real minutes per game day) we
+    /// subtract one full day's worth from it and bump
+    /// pending_days_advanced. The foreground client periodically
+    /// pushes its local elapsed via sync_day_clock so the cloud
+    /// clock stays yoked while the tab is alive; backgrounded tabs
+    /// let pending_days_advanced grow until the next
+    /// consume_pending_day_advancement.
+    ///
+    /// All i64 / u32 with primitive 0 defaults — migration-safe
+    /// end-of-struct additions.
+    #[default(0i64)]
+    pub day_elapsed_ms: i64,
+    #[default(0u32)]
+    pub pending_days_advanced: u32,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

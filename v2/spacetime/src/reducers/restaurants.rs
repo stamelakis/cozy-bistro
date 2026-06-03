@@ -29,6 +29,9 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         cached_comfort_x100: 0,
         cached_rating_bonus_x100: 0,
         cached_bathroom_quality_x100: 0,
+        // H.30 — day clock starts fresh; client syncs in foreground.
+        day_elapsed_ms: 0,
+        pending_days_advanced: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone
