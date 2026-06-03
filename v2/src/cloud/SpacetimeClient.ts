@@ -1369,6 +1369,37 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.31 — Delta-based dishware mirror. Each Game.dishware mutation
+   * (reserveOne / markDirty / washOne / addClean) pushes its
+   * per-operation delta so the server's H.21 wash loader can
+   * additively contribute without being clobbered by the next absolute
+   * mirror tick. Negative deltas decrement; saturating math on the
+   * server prevents underflow.
+   *
+   * For bulk-sync paths (hydrate after save load, admin reset)
+   * updateDishwarePool's absolute push is still correct — those
+   * replace state wholesale rather than mutate. */
+  bumpDishwarePool(
+    kind: "plate" | "glass",
+    tier: number,
+    cleanDelta: number,
+    dirtyDelta: number,
+  ): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (cleanDelta === 0 && dirtyDelta === 0) return;
+    try {
+      this.conn.reducers.bumpDishwarePool({
+        restaurantId: this.restaurantId,
+        kind,
+        tier,
+        cleanDelta: Math.round(cleanDelta),
+        dirtyDelta: Math.round(dirtyDelta),
+      });
+    } catch (e) {
+      console.warn("[Cloud] bumpDishwarePool failed:", e);
+    }
+  }
+
   /** Read every dishware_pool row for the current restaurant. Used by
    * DishwareSystem.restoreFromCloud on auth. Returns an empty list if
    * the cloud isn't wired yet. */

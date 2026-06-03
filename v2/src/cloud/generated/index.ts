@@ -45,6 +45,7 @@ import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
+import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
@@ -483,6 +484,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
+  __reducerSchema("bump_dishware_pool", BumpDishwarePoolReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),

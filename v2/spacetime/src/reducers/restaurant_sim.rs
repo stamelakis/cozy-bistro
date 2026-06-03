@@ -915,6 +915,77 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     );
 }
 
+/// Phase H.31 — Delta-based dishware mirror. Each client mutation on
+/// Game.dishware (reserveOne, markDirty, washOne, addClean) pushes a
+/// (kind, tier, clean_delta, dirty_delta) tuple. The server adds
+/// the deltas to the matching dishware_pool row (saturating on
+/// underflow), inserts the row if it doesn't exist, and deletes it
+/// when both counts hit zero — matching update_dishware_pool's
+/// delete-on-empty semantics.
+///
+/// Crucially this lets H.21's opportunistic server wash loader
+/// contribute to dishware_pool without being clobbered by the
+/// client's next absolute mirror — both sides additively contribute
+/// instead of overwriting.
+///
+/// The older absolute-write update_dishware_pool reducer is kept for
+/// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
+/// Owner-only.
+#[reducer]
+pub fn bump_dishware_pool(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: String,
+    tier: u32,
+    clean_delta: i32,
+    dirty_delta: i32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can bump dishware pool".into());
+    }
+    if clean_delta == 0 && dirty_delta == 0 {
+        return Ok(());
+    }
+    let key = pool_key(restaurant_id, &kind, tier);
+    let existing = ctx.db.dishware_pool().key().find(key.clone());
+    let (cur_clean, cur_dirty) = match &existing {
+        Some(p) => (p.clean, p.dirty),
+        None => (0u32, 0u32),
+    };
+    let new_clean = if clean_delta >= 0 {
+        cur_clean.saturating_add(clean_delta as u32)
+    } else {
+        cur_clean.saturating_sub((-clean_delta) as u32)
+    };
+    let new_dirty = if dirty_delta >= 0 {
+        cur_dirty.saturating_add(dirty_delta as u32)
+    } else {
+        cur_dirty.saturating_sub((-dirty_delta) as u32)
+    };
+    if new_clean == 0 && new_dirty == 0 {
+        if existing.is_some() {
+            ctx.db.dishware_pool().key().delete(key);
+        }
+        return Ok(());
+    }
+    let row = DishwarePool {
+        key,
+        restaurant_id,
+        kind,
+        tier,
+        clean: new_clean,
+        dirty: new_dirty,
+    };
+    if existing.is_some() {
+        ctx.db.dishware_pool().key().update(row);
+    } else {
+        ctx.db.dishware_pool().insert(row);
+    }
+    Ok(())
+}
+
 /// Phase H.28 — client pushes the latest aggregate furniture stats
 /// computed via FurnitureRegistry.getAggregateStats +
 /// getBathroomScore. Cached on the Restaurant row so the server can

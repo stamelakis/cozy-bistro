@@ -117,6 +117,17 @@ export class DishwareSystem {
     this.cloud.updateDishwarePool(kind, tier, entry.clean, entry.dirty);
   }
 
+  /** H.31 — Delta-based mirror for a single mutation. The four
+   * mutators (reserveOne, markDirty, washOne, addClean) call this
+   * instead of mirrorPool so the server's H.21 wash loader can also
+   * contribute to the same row without absolute-write clobbering.
+   * Bulk-sync paths still use mirrorPool / mirrorAllPools. */
+  private mirrorBump(kind: DishKind, tier: number, cleanDelta: number, dirtyDelta: number): void {
+    if (this.suppressMirrorForReload) return;
+    if (!isServerSim("dishware") || !this.cloud) return;
+    this.cloud.bumpDishwarePool(kind, tier, cleanDelta, dirtyDelta);
+  }
+
   /** Sweep every (kind, tier) pool entry to the cloud. Used after
    * bulk operations (hydrate from save, adminWashAll) where we'd
    * otherwise have to fire mirrorPool inside the inner loops. */
@@ -429,7 +440,7 @@ export class DishwareSystem {
     entry.clean -= 1;
     if (entry.clean === 0 && entry.dirty === 0) pool.delete(tier);
     this.log(`reserveOne(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorPool(kind, tier);
+    this.mirrorBump(kind, tier, -1, 0); // H.31
     return tier;
   }
 
@@ -441,7 +452,7 @@ export class DishwareSystem {
     entry.dirty += 1;
     pool.set(tier, entry);
     this.log(`markDirty(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorPool(kind, tier);
+    this.mirrorBump(kind, tier, 0, +1); // H.31
   }
 
   /** Wash one dirty piece (any tier — picks the highest-tier dirty so
@@ -463,7 +474,7 @@ export class DishwareSystem {
     entry.clean += 1;
     this.onDishWashed?.(kind, best);
     this.log(`washOne(${kind}, t${best}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorPool(kind, best);
+    this.mirrorBump(kind, best, +1, -1); // H.31
     return best;
   }
 
@@ -489,7 +500,7 @@ export class DishwareSystem {
     // bumps lifetimeAdded itself so only real purchases inflate the
     // expected total.
     this.log(`addClean(${kind}, t${tier}, +${take}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorPool(kind, tier);
+    this.mirrorBump(kind, tier, +take, 0); // H.31
     return take;
   }
 
