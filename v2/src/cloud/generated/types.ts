@@ -270,6 +270,12 @@ export const PlayerSave = __t.object("PlayerSave", {
 });
 export type PlayerSave = __Infer<typeof PlayerSave>;
 
+export const RecipeIngredients = __t.object("RecipeIngredients", {
+  recipeId: __t.string(),
+  ingredients: __t.string(),
+});
+export type RecipeIngredients = __Infer<typeof RecipeIngredients>;
+
 export const Restaurant = __t.object("Restaurant", {
   id: __t.u64(),
   owner: __t.identity(),

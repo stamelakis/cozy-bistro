@@ -82,6 +82,7 @@ import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
+import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
@@ -119,6 +120,7 @@ import PedestrianRow from "./pedestrian_table";
 import PlacedFurnitureRow from "./placed_furniture_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
+import RecipeIngredientsRow from "./recipe_ingredients_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
@@ -408,6 +410,17 @@ const tablesSchema = __schema({
       { name: 'player_save_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, PlayerSaveRow),
+  recipe_ingredients: __table({
+    name: 'recipe_ingredients',
+    indexes: [
+      { accessor: 'recipe_id', name: 'recipe_ingredients_recipe_id_idx_btree', algorithm: 'btree', columns: [
+        'recipeId',
+      ] },
+    ],
+    constraints: [
+      { name: 'recipe_ingredients_recipe_id_key', constraint: 'unique', columns: ['recipeId'] },
+    ],
+  }, RecipeIngredientsRow),
   restaurant: __table({
     name: 'restaurant',
     indexes: [
@@ -538,6 +551,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
+  __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),

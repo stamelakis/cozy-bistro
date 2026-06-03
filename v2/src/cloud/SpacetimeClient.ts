@@ -1387,6 +1387,25 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.37 — Seed one row of the recipe_ingredients lookup table.
+   * Called once per recipe at boot; idempotent server-side so
+   * repeat-on-reconnect is fine. Empty `ingredients` is allowed for
+   * catalog-edge-case recipes.  Fire-and-forget — server-side
+   * consumption silently no-ops on unseeded recipes, so a delayed
+   * seed doesn't break gameplay. */
+  setRecipeIngredients(recipeId: string, ingredients: string[]): void {
+    if (!this.conn) return;
+    if (!recipeId) return;
+    try {
+      this.conn.reducers.setRecipeIngredients({
+        recipeId,
+        ingredients: ingredients.join("|"),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRecipeIngredients failed:", e);
+    }
+  }
+
   /** H.36 — Delta-based mirror for pantry stock. CookingSystem fires
    * this on every consumeIngredients (-1 per ingredient slot) and
    * addPantryStock (+qty per slot). Server saturating-adds to a row

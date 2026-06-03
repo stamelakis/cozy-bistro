@@ -1114,9 +1114,9 @@ pub struct DishwasherBatch {
 /// + leaderboard + future co-owner views read live counts here
 /// instead of waiting for the periodic save_snapshot.
 ///
-/// Server-side consumption (H.37 follow-up) needs a recipe → ingredient
-/// lookup to know what to decrement when H.6 auto_claim_queued_tickets
-/// fires; that ships separately.
+/// Server-side consumption ships in H.37 — auto_place_next_course
+/// reads recipe_ingredients to know what to decrement on ticket
+/// insert.
 #[table(name = pantry_stock, public)]
 pub struct PantryStock {
     /// Composite key: "{restaurant_id}:{ingredient_id}".
@@ -1130,4 +1130,24 @@ pub struct PantryStock {
     pub ingredient_id: String,
     /// Current stock count. Saturating math on underflow.
     pub quantity: u32,
+}
+
+/// Phase H.37 — static recipe → ingredient-list lookup. One row per
+/// recipe id; the client seeds this from src/data/recipes.ts at boot
+/// via set_recipe_ingredients. The server's auto_place_next_course
+/// reads it to decrement pantry_stock when creating a ticket for an
+/// offline owner, closing the "backgrounded play cooks without
+/// consuming ingredients" loophole.
+///
+/// Pipe-separated ingredient ids — e.g. "bread|butter" for the toast
+/// recipe. Each occurrence counts as one unit consumed. Empty string
+/// = no ingredients (mostly catalog-edge-case recipes).
+///
+/// Catalog data, not per-player. Survives publishes (no per-row
+/// mutation in normal play); first run after a publish re-seeds.
+#[table(name = recipe_ingredients, public)]
+pub struct RecipeIngredients {
+    #[primary_key]
+    pub recipe_id: String,
+    pub ingredients: String,
 }

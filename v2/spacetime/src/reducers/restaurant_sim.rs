@@ -14,11 +14,11 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_ticket, dishware_pool, dishwasher_batch, pantry_stock,
-    placed_furniture, player, restaurant, restaurant_tick_schedule,
+    placed_furniture, player, recipe_ingredients, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
-    PantryStock, PlacedFurniture, Restaurant, RestaurantTickSchedule,
-    RestaurantTickState, StaffActor,
+    PantryStock, PlacedFurniture, RecipeIngredients, Restaurant,
+    RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -1042,6 +1042,108 @@ pub fn bump_pantry_stock(
         ctx.db.pantry_stock().insert(row);
     }
     Ok(())
+}
+
+/// Phase H.37 — Client seeds the recipe_ingredients lookup at boot,
+/// one row per RecipeDefinition in src/data/recipes.ts. Idempotent
+/// upsert — repeated calls with the same content are a no-op.
+///
+/// `ingredients` is pipe-separated to allow duplicates (a recipe that
+/// needs 2 tomatoes shows up as "tomato|tomato"). Empty string is
+/// allowed for catalog-edge-case recipes with no ingredients.
+///
+/// Public table so any client can read it; only writeable by any
+/// authenticated player (sender check is presence, not ownership —
+/// any logged-in browser can seed since the catalog is static and
+/// the data is non-malicious). A future hardening pass could
+/// restrict this to admins, but that's premature for a stable
+/// catalog.
+#[reducer]
+pub fn set_recipe_ingredients(
+    ctx: &ReducerContext,
+    recipe_id: String,
+    ingredients: String,
+) -> Result<(), String> {
+    // Any authenticated identity can seed; zero identity rejected.
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero {
+        return Err("Must be authenticated".into());
+    }
+    if recipe_id.is_empty() || recipe_id.len() > 64 {
+        return Err("recipe_id must be 1-64 chars".into());
+    }
+    if ingredients.len() > 256 {
+        return Err("ingredients string too long".into());
+    }
+    let existing = ctx.db.recipe_ingredients().recipe_id().find(recipe_id.clone());
+    if let Some(r) = &existing {
+        if r.ingredients == ingredients {
+            return Ok(()); // idempotent
+        }
+    }
+    let row = RecipeIngredients { recipe_id, ingredients };
+    if existing.is_some() {
+        ctx.db.recipe_ingredients().recipe_id().update(row);
+    } else {
+        ctx.db.recipe_ingredients().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.37 — Look up a recipe's ingredient list. Returns an empty
+/// vec for unseeded recipes (graceful degradation — server-side
+/// consumption silently no-ops until the client seeds, instead of
+/// blocking ticket creation for unknown recipes).
+fn lookup_recipe_ingredients(ctx: &ReducerContext, recipe_id: &str) -> Vec<String> {
+    let Some(r) = ctx.db.recipe_ingredients().recipe_id().find(recipe_id.to_string()) else {
+        return Vec::new();
+    };
+    r.ingredients
+        .split('|')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Phase H.37 — Check that the restaurant has at least 1 unit of each
+/// ingredient. Returns true iff every required ingredient has stock.
+fn pantry_has_all(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    ingredients: &[String],
+) -> bool {
+    for ing in ingredients {
+        let key = format!("{}:{}", restaurant_id, ing);
+        let cur = ctx.db.pantry_stock().key().find(key)
+            .map(|p| p.quantity)
+            .unwrap_or(0);
+        if cur == 0 { return false; }
+    }
+    true
+}
+
+/// Phase H.37 — Decrement 1 unit of each listed ingredient from
+/// pantry_stock. Caller is expected to have already verified
+/// availability via pantry_has_all (no rollback on partial failure).
+fn pantry_consume(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    ingredients: &[String],
+) {
+    for ing in ingredients {
+        let key = format!("{}:{}", restaurant_id, ing);
+        if let Some(p) = ctx.db.pantry_stock().key().find(key.clone()) {
+            let new_qty = p.quantity.saturating_sub(1);
+            if new_qty == 0 {
+                ctx.db.pantry_stock().key().delete(key);
+            } else {
+                ctx.db.pantry_stock().key().update(PantryStock {
+                    quantity: new_qty,
+                    ..p
+                });
+            }
+        }
+    }
 }
 
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
@@ -3456,6 +3558,28 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> 
     let recipe_id = recipes[idx].to_string();
     let appliance = appliances[idx].to_string();
     let base_cook_seconds_ms = cook_seconds[idx];
+
+    // Phase H.37 — server-side ingredient consumption. Look up the
+    // recipe's ingredient list and verify availability BEFORE
+    // creating the ticket. Insufficient stock → skip; the guest
+    // sits in waitingForFood until patience runs out and they
+    // leave (matching what the foreground client does when the
+    // kitchen can't fulfill an order).
+    //
+    // Unseeded recipes (recipe_ingredients table empty for this id)
+    // return an empty vec, which silently succeeds — graceful
+    // degradation so a brand-new account that hasn't seeded the
+    // catalog yet doesn't deadlock its kitchen on every order.
+    let needed = lookup_recipe_ingredients(ctx, &recipe_id);
+    if !needed.is_empty() && !pantry_has_all(ctx, g.restaurant_id, &needed) {
+        log::info!(
+            "auto_place_next_course: guest {} course {} → insufficient ingredients for {} (need {:?})",
+            g.id, idx, recipe_id, needed,
+        );
+        return None;
+    }
+    pantry_consume(ctx, g.restaurant_id, &needed);
+
     let inserted = ctx.db.active_ticket().insert(ActiveTicket {
         id: 0, // auto_inc
         restaurant_id: g.restaurant_id,

@@ -947,6 +947,18 @@ export class Engine {
       // consumeIngredients / addPantryStock to bump_pantry_stock so
       // visit mode + co-owner views see live ingredient counts.
       this.game.cooking.cloud = this.cloud;
+      // H.37 — seed recipe_ingredients lookup so the server's
+      // auto_place_next_course can decrement pantry_stock on
+      // backgrounded-tab ticket creation. Idempotent on the server
+      // side; cheap to re-fire every connect (and matters when the
+      // catalog has changed between client + server). Catalog is
+      // small (~50 recipes), so the burst of N reducer calls is
+      // fine.
+      void import("../data/recipes").then(({ recipes }) => {
+        for (const r of recipes) {
+          this.cloud.setRecipeIngredients(r.id, r.ingredients);
+        }
+      });
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];
