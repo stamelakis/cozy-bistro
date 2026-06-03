@@ -1021,10 +1021,46 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         } else {
             (g.seat_uid.clone(), None)
         };
+    // Section A — server-side WC trip target picking. When a guest
+    // enters wcWalking without a wc_target_uid set (client hadn't
+    // mirrored one, or backgrounded tab where the local sim doesn't
+    // run), the server picks the nearest free toilet. Same for
+    // wcSitting → wcWashing (need a sink). When wcWashing
+    // transitions to seated below, the server clears wc_target_uid
+    // and restores target back to the dining seat.
+    let mut new_wc_target_uid: Option<String> = g.wc_target_uid.clone();
+    let (wc_target_x, wc_target_z, wc_target_floor): (Option<f32>, Option<f32>, Option<u32>) =
+        if g.state == "wcWalking" && g.wc_target_uid.as_deref().unwrap_or("").is_empty() {
+            match try_pick_wc_target(ctx, &g, WcKind::Toilet) {
+                Some((uid, tx, tz, tf)) => {
+                    log::info!("guest {} assigned toilet {} (server fallback)", g.id, uid);
+                    new_wc_target_uid = Some(uid);
+                    (Some(tx), Some(tz), Some(tf))
+                }
+                None => (None, None, None),
+            }
+        } else if g.state == "wcWashing"
+            && g.wc_target_uid.as_deref().map(is_toilet_def).unwrap_or(false) {
+            // Transition from sitting on toilet to walking to sink.
+            // wc_target_uid currently points at the toilet; swap it
+            // for a sink uid.
+            match try_pick_wc_target(ctx, &g, WcKind::Sink) {
+                Some((uid, tx, tz, tf)) => {
+                    log::info!("guest {} assigned sink {} (server fallback)", g.id, uid);
+                    new_wc_target_uid = Some(uid);
+                    (Some(tx), Some(tz), Some(tf))
+                }
+                None => (None, None, None),
+            }
+        } else {
+            (None, None, None)
+        };
+
     let (effective_target_x, effective_target_z, effective_target_floor) =
-        match assigned_target {
-            Some((tx, tz, tf)) => (tx, tz, tf),
-            None => (g.target_x, g.target_z, g.target_floor),
+        match (wc_target_x, assigned_target) {
+            (Some(tx), _) => (tx, wc_target_z.unwrap(), wc_target_floor.unwrap()),
+            (None, Some((tx, tz, tf))) => (tx, tz, tf),
+            (None, None) => (g.target_x, g.target_z, g.target_floor),
         };
 
     // Phase H.2 — server steps the guest's body toward target_x/z
@@ -1143,6 +1179,27 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         g.order_index
     };
 
+    // Section A — wcWashing → seated transition clears wc_target_uid
+    // and restores target back to the dining seat. The H.9 transition
+    // map flipped state to "seated" if the dwell elapsed; if so we
+    // route target_x/z back to seat_x/z so the body walks (or snaps)
+    // back to the chair.
+    let final_wc_target_uid = if g.state == "wcWashing" && final_state == "seated" {
+        None
+    } else {
+        new_wc_target_uid
+    };
+    // When clearing WC target on the seated transition, route the
+    // effective target back to the guest's seat_x/z. Without this,
+    // a guest finishing wcWashing would be left targeting the sink
+    // they just walked away from.
+    let (out_target_x, out_target_z, out_target_floor) =
+        if g.state == "wcWashing" && final_state == "seated" {
+            (g.seat_x, g.seat_z, g.seat_floor)
+        } else {
+            (effective_target_x, effective_target_z, effective_target_floor)
+        };
+
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
         state_clock_ms: final_clock,
@@ -1154,9 +1211,10 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // When assigned_target is None, these read back to the
         // existing row values (no change).
         seat_uid: assigned_seat,
-        target_x: effective_target_x,
-        target_z: effective_target_z,
-        target_floor: effective_target_floor,
+        target_x: out_target_x,
+        target_z: out_target_z,
+        target_floor: out_target_floor,
+        wc_target_uid: final_wc_target_uid,
         ..g
     });
 }
@@ -1221,6 +1279,66 @@ fn is_seat_providing_def(def_id: &str) -> bool {
         | "cloth-table" | "glass-table"
         | "coffee-table" | "coffee-glass" | "coffee-square" | "coffee-glass-sq"
     )
+}
+
+/// Toilet def_ids — guests in state=wcWalking head here.
+fn is_toilet_def(def_id: &str) -> bool {
+    matches!(def_id, "toilet" | "toilet-square")
+}
+
+/// Bathroom sink def_ids — guests in state=wcWashing head here.
+/// Distinct from the kitchen "sink" (category=="wash") which the
+/// waiters use for dishwashing.
+fn is_sink_def(def_id: &str) -> bool {
+    matches!(def_id, "bathroom-sink" | "bathroom-sink-sq")
+}
+
+#[derive(Clone, Copy)]
+enum WcKind { Toilet, Sink }
+
+/// Section A migration — pick a free toilet or sink for a guest's
+/// WC trip. Returns (uid, stand_x, stand_z, floor) — stand position
+/// is one tile ahead along the fixture's facing axis (matches the
+/// client's getToilets / getBathroomSinks convention so the guest
+/// renders next to the unit, not on top of it).
+///
+/// "Free" check filters out any uid currently held by another guest's
+/// wc_target_uid. Strict per-fixture lock since toilets really are
+/// single-occupancy.
+fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
+    -> Option<(String, f32, f32, u32)> {
+    let rid = g.restaurant_id;
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for other in ctx.db.active_guest().iter() {
+        if other.restaurant_id != rid { continue; }
+        if other.id == g.id { continue; }
+        if let Some(uid) = &other.wc_target_uid {
+            if !uid.is_empty() { taken.insert(uid.clone()); }
+        }
+    }
+    let predicate: fn(&str) -> bool = match kind {
+        WcKind::Toilet => is_toilet_def,
+        WcKind::Sink => is_sink_def,
+    };
+    let mut best: Option<(String, f32, f32, u32)> = None;
+    let mut best_dist = f32::INFINITY;
+    for f in ctx.db.placed_furniture().iter() {
+        if f.restaurant_id != rid { continue; }
+        if !predicate(&f.def_id) { continue; }
+        if taken.contains(&f.uid) { continue; }
+        // Stand-in-front position — one tile ahead along facing axis.
+        // Matches client FurnitureRegistry.getToilets exactly.
+        let stand_x = f.x + f.rot_y.sin();
+        let stand_z = f.z + f.rot_y.cos();
+        let dx = stand_x - g.x;
+        let dz = stand_z - g.z;
+        let dist = dx * dx + dz * dz;
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
+        }
+    }
+    best
 }
 
 /// H.12 — Server-side fallback seat assignment. Called from
@@ -1489,6 +1607,7 @@ pub fn spawn_guest(
         total_satisfaction_x100: 0,
         dishes_settled: false,
         spawned_at: ctx.timestamp,
+        wc_target_uid: None,
     });
     Ok(())
 }

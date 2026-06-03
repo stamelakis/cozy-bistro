@@ -647,6 +647,22 @@ pub struct ActiveGuest {
     /// ActiveGuest — every despawn path checks it.
     pub dishes_settled: bool,
     pub spawned_at: Timestamp,
+
+    /// Section A migration — Furniture uid of the toilet or sink the
+    /// guest is currently using (set during wcWalking → wcSitting →
+    /// wcWashing). Independent from seat_uid so the server can
+    /// remember the dining seat to return to after washing.
+    ///
+    /// Option<String> default None (same migration-safe pattern as
+    /// StaffActor.delivery_phase per the lessons-learned doc — bare
+    /// String::new() defaults aren't const-evaluable by the macro,
+    /// so we use Option<T> for ALL new String columns on populated
+    /// tables).
+    ///
+    /// IMPORTANT: must stay at the end of the struct so this column
+    /// addition is a non-destructive publish.
+    #[default(None::<String>)]
+    pub wc_target_uid: Option<String>,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
