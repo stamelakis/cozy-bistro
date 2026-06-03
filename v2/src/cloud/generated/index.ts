@@ -53,6 +53,7 @@ import ClaimTicketReducer from "./claim_ticket_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
 import ConsumePendingVisitRollupReducer from "./consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
+import DeleteHiredStaffMemberReducer from "./delete_hired_staff_member_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import DeliverTicketReducer from "./deliver_ticket_reducer";
 import FinishCookingReducer from "./finish_cooking_reducer";
@@ -82,6 +83,7 @@ import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
+import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
@@ -115,6 +117,7 @@ import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
+import HiredStaffMemberRow from "./hired_staff_member_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import PantryStockRow from "./pantry_stock_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
@@ -331,6 +334,20 @@ const tablesSchema = __schema({
       { name: 'friendship_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, FriendshipRow),
+  hired_staff_member: __table({
+    name: 'hired_staff_member',
+    indexes: [
+      { accessor: 'member_id', name: 'hired_staff_member_member_id_idx_btree', algorithm: 'btree', columns: [
+        'memberId',
+      ] },
+      { accessor: 'restaurant_id', name: 'hired_staff_member_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'hired_staff_member_member_id_key', constraint: 'unique', columns: ['memberId'] },
+    ],
+  }, HiredStaffMemberRow),
   leaderboard_entry: __table({
     name: 'leaderboard_entry',
     indexes: [
@@ -535,6 +552,7 @@ const reducersSchema = __reducers(
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
   __reducerSchema("consume_pending_visit_rollup", ConsumePendingVisitRollupReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
+  __reducerSchema("delete_hired_staff_member", DeleteHiredStaffMemberReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
   __reducerSchema("deliver_ticket", DeliverTicketReducer),
   __reducerSchema("finish_cooking", FinishCookingReducer),
@@ -564,6 +582,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),
+  __reducerSchema("set_hired_staff_member", SetHiredStaffMemberReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),

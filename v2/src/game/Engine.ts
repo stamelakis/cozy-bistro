@@ -947,6 +947,12 @@ export class Engine {
       // consumeIngredients / addPantryStock to bump_pantry_stock so
       // visit mode + co-owner views see live ingredient counts.
       this.game.cooking.cloud = this.cloud;
+      // H.39 — staff roster mirror. StaffSystem fires
+      // setHiredStaffMember on hire + training-level-up, and
+      // deleteHiredStaffMember on fire.  Mirrors are observational
+      // (client stays the source of truth in foreground); cloud row
+      // gives visit mode + leaderboard access to the live roster.
+      this.game.staff.cloud = this.cloud;
       // H.37 — seed recipe_ingredients lookup so the server's
       // auto_place_next_course can decrement pantry_stock on
       // backgrounded-tab ticket creation. Idempotent on the server

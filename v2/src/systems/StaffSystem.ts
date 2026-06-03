@@ -64,6 +64,14 @@ export class StaffSystem {
   private pendingStaffFirings: Record<StaffRole, number> = { chef: 0, waiter: 0, errand: 0, barman: 0 };
   private lastSalaryChargeAt = 0;
   private salaryRemainder = 0;
+  /** H.39 — Cloud handle. Engine wires this on cloud-ready; null in
+   *  tests / pre-auth. Mirrors fire on addStaff / removeStaff /
+   *  removeStaffById / training completion. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  /** Suppresses mirror writes during bulk-load paths (save hydrate).
+   *  Cloud already holds whatever the autosave's hired_staff list
+   *  had; re-firing every row's reducer just duplicates work. */
+  private suppressStaffMirror = false;
   /** Monotonic counter for generating unique member ids within a
    * session. The persisted ids are namespaced by session timestamp,
    * but within one session this avoids collisions when the player
@@ -138,6 +146,17 @@ export class StaffSystem {
       upgradeLevel: 0,
     };
     this.members.push(member);
+    // H.39 — mirror the hire to cloud. Bails silently when not wired
+    // or during bulk-load (suppressStaffMirror). Cross-device + visit
+    // mode see the new roster row within a tick of the hire.
+    if (!this.suppressStaffMirror && this.cloud) {
+      this.cloud.setHiredStaffMember({
+        memberId: member.id,
+        role: member.role,
+        name: member.name,
+        upgradeLevel: member.upgradeLevel,
+      });
+    }
     return member;
   }
 
@@ -147,7 +166,12 @@ export class StaffSystem {
   removeStaff(role: StaffRole): HiredStaffMember | null {
     for (let i = this.members.length - 1; i >= 0; i -= 1) {
       if (this.members[i].role === role) {
-        return this.members.splice(i, 1)[0];
+        const removed = this.members.splice(i, 1)[0];
+        // H.39 — mirror the fire to cloud.
+        if (!this.suppressStaffMirror && this.cloud) {
+          this.cloud.deleteHiredStaffMember(removed.id);
+        }
+        return removed;
       }
     }
     return null;
@@ -158,7 +182,12 @@ export class StaffSystem {
   removeStaffById(id: string): HiredStaffMember | null {
     const i = this.members.findIndex((m) => m.id === id);
     if (i < 0) return null;
-    return this.members.splice(i, 1)[0];
+    const removed = this.members.splice(i, 1)[0];
+    // H.39 — mirror the fire to cloud.
+    if (!this.suppressStaffMirror && this.cloud) {
+      this.cloud.deleteHiredStaffMember(removed.id);
+    }
+    return removed;
   }
 
   queueFiring(role: StaffRole): void {
@@ -281,6 +310,16 @@ export class StaffSystem {
         m.upgradeLevel = Math.min(STAFF_UPGRADE_MAX, m.upgradeLevel + 1);
         delete m.trainingCompletesAt;
         completed.push(m);
+        // H.39 — mirror the new upgrade level to cloud so visit mode
+        // sees "Chef Marcus L3" instead of L2.
+        if (!this.suppressStaffMirror && this.cloud) {
+          this.cloud.setHiredStaffMember({
+            memberId: m.id,
+            role: m.role,
+            name: m.name,
+            upgradeLevel: m.upgradeLevel,
+          });
+        }
       }
     }
     return completed;

@@ -1387,6 +1387,42 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.39 — Mirror a hired-staff roster entry to the cloud.  Called
+   * from StaffSystem.addStaff at hire time AND from training
+   * completion (upgrade_level change).  Idempotent server-side. */
+  setHiredStaffMember(args: {
+    memberId: string;
+    role: string;
+    name: string;
+    upgradeLevel: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!args.memberId) return;
+    try {
+      this.conn.reducers.setHiredStaffMember({
+        restaurantId: this.restaurantId,
+        memberId: args.memberId,
+        role: args.role,
+        name: args.name,
+        upgradeLevel: Math.max(0, Math.round(args.upgradeLevel)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setHiredStaffMember failed:", e);
+    }
+  }
+
+  /** H.39 — Drop a hired-staff roster row.  Called from
+   * StaffSystem.removeStaff / removeStaffById at fire time. */
+  deleteHiredStaffMember(memberId: string): void {
+    if (!this.conn) return;
+    if (!memberId) return;
+    try {
+      this.conn.reducers.deleteHiredStaffMember({ memberId });
+    } catch (e) {
+      console.warn("[Cloud] deleteHiredStaffMember failed:", e);
+    }
+  }
+
   /** H.38 — Seed one row of the customer_archetype catalog.  Same
    * shape as setRecipeIngredients: idempotent server-side, fire-and-
    * forget, called once per archetype at boot.  Server's H.33

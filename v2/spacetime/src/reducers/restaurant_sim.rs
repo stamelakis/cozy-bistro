@@ -14,10 +14,10 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_ticket, customer_archetype, dishware_pool, dishwasher_batch,
-    pantry_stock, placed_furniture, player, recipe_ingredients, restaurant,
-    restaurant_tick_schedule, restaurant_tick_state, staff_actor,
+    hired_staff_member, pantry_stock, placed_furniture, player, recipe_ingredients,
+    restaurant, restaurant_tick_schedule, restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, CustomerArchetypeDef, DishwarePool, DishwasherBatch,
-    PantryStock, PlacedFurniture, RecipeIngredients, Restaurant,
+    HiredStaffMember, PantryStock, PlacedFurniture, RecipeIngredients, Restaurant,
     RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
 
@@ -3952,6 +3952,79 @@ pub fn cancel_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String>
 
 /// First registration of an actor into the restaurant. The client
 /// calls this when a hired staff member is dispatched into the
+/// Phase H.39 — Client mirrors a hired-staff roster entry. Called
+/// from StaffSystem.addStaff on hire AND from training completion
+/// (upgrade_level changes).  Idempotent upsert: a row with the same
+/// (member_id, role, name, upgrade_level) is a no-op; level-up just
+/// writes the new value.
+///
+/// Owner-only.  Cross-restaurant member_ids in the same browser
+/// would conflict on the PK, but the client's makeMemberId namespaces
+/// by role and counter so collisions are essentially impossible in
+/// practice.
+#[reducer]
+pub fn set_hired_staff_member(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    member_id: String,
+    role: String,
+    name: String,
+    upgrade_level: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set staff".into());
+    }
+    if member_id.is_empty() || member_id.len() > 64 {
+        return Err("member_id must be 1-64 chars".into());
+    }
+    let existing = ctx.db.hired_staff_member().member_id().find(member_id.clone());
+    if let Some(m) = &existing {
+        if m.restaurant_id == restaurant_id
+            && m.role == role
+            && m.name == name
+            && m.upgrade_level == upgrade_level {
+            return Ok(()); // idempotent
+        }
+    }
+    let row = HiredStaffMember {
+        member_id,
+        restaurant_id,
+        role,
+        name,
+        upgrade_level,
+    };
+    if existing.is_some() {
+        ctx.db.hired_staff_member().member_id().update(row);
+    } else {
+        ctx.db.hired_staff_member().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.39 — Client mirrors a fire by deleting the roster row.
+/// Idempotent: missing member_id is a no-op.  staff_actor lifetime
+/// is managed separately via unregister_staff_actor (the client
+/// calls both on fire — unregister to drop the world actor, delete
+/// here to drop the roster).
+#[reducer]
+pub fn delete_hired_staff_member(
+    ctx: &ReducerContext,
+    member_id: String,
+) -> Result<(), String> {
+    let Some(m) = ctx.db.hired_staff_member().member_id().find(member_id.clone()) else {
+        return Ok(()); // idempotent
+    };
+    let r = ctx.db.restaurant().id().find(m.restaurant_id)
+        .ok_or_else(|| "Staff member's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can delete staff".into());
+    }
+    ctx.db.hired_staff_member().member_id().delete(member_id);
+    Ok(())
+}
+
 /// world (just after the GLB character loads). Idempotent against
 /// the same member_id — a re-register updates the existing row's
 /// metadata + resets state to "idle".

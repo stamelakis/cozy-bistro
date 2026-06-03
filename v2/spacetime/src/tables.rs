@@ -1152,6 +1152,38 @@ pub struct RecipeIngredients {
     pub ingredients: String,
 }
 
+/// Phase H.39 — Roster of hired staff members. The client owns the
+/// canonical roster (StaffSystem.members) and mirrors every
+/// add/remove/level-up here so visit mode + co-owner views + the
+/// future "manage staff remotely" admin panel can see the player's
+/// current staff without parsing save_snapshot's JSON blob.
+///
+/// Distinct from `staff_actor` — that table tracks per-frame
+/// position + state for actors that exist IN THE WORLD (chefs at
+/// stations, waiters mid-trip). `hired_staff_member` is the
+/// long-lived roster: name, upgrade level, role. Joining the two
+/// on `member_id` gives a full picture of the staffing.
+#[table(name = hired_staff_member, public)]
+pub struct HiredStaffMember {
+    /// Same id the client's HiredStaffMember.id uses (e.g.
+    /// "waiter-3", "chef-1"). PK; one row per hired member per
+    /// restaurant.
+    #[primary_key]
+    pub member_id: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// "chef" | "waiter" | "barman" | "errand"
+    pub role: String,
+    /// Display name (e.g. "Marcus Bell"). Set at hire from
+    /// randomStaffName(); changeable later if the UI ever supports
+    /// renaming.
+    pub name: String,
+    /// Training upgrade level (0..). Drives cook-speed / delivery-
+    /// speed multipliers on the client; mirrored so visit mode
+    /// can show "Chef Marcus L5" etc.
+    pub upgrade_level: u32,
+}
+
 /// Phase H.38 — static customer archetype catalog. One row per
 /// archetype defined in src/data/customerArchetypes.ts; seeded by
 /// the client at boot via set_customer_archetype. The server's

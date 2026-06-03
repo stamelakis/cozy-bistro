@@ -197,6 +197,15 @@ export const Friendship = __t.object("Friendship", {
 });
 export type Friendship = __Infer<typeof Friendship>;
 
+export const HiredStaffMember = __t.object("HiredStaffMember", {
+  memberId: __t.string(),
+  restaurantId: __t.u64(),
+  role: __t.string(),
+  name: __t.string(),
+  upgradeLevel: __t.u32(),
+});
+export type HiredStaffMember = __Infer<typeof HiredStaffMember>;
+
 export const LeaderboardEntry = __t.object("LeaderboardEntry", {
   id: __t.u64(),
   player: __t.identity(),
