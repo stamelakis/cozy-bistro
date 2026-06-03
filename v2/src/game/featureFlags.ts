@@ -68,9 +68,34 @@ const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
  * off for now to keep "nothing changes unless you opt in" the rule
  * across the board while Phase H finishes baking. */
 const DEFAULTS: ServerSimFlags = {
-  guests: false,
-  tickets: false,
-  staff: false,
+  // Phase H cutover step 5 — guests flag flipped default-on.
+  // The flag semantic was rewritten post-revert (commit 1fba1e7) to
+  // "additionally mirror to cloud" rather than "skip local sim"; the
+  // GuestSpawner.update() docstring captures the rationale. So this
+  // flip just turns on the spawn / leave / position-stream mirrors
+  // and unlocks visit-mode + cross-device guest visibility for the
+  // owner's own restaurant. Local sim remains the source of truth
+  // for now. Backgrounded play is covered by H.16+ + H.33 (server
+  // spawns arrivals + runs the full state machine).
+  guests: true,
+  // Phase H cutover step 3 — tickets flag flipped default-on.
+  // Purely additive mirror per the original audit ("every isServerSim
+  // check is a mirror-gate inside a StaffRouter helper. Local sim
+  // runs unchanged"). H.6 (auto-claim) + H.8 (auto-assign) +
+  // H.10 (delivered handoff) make the server's tick correctly drive
+  // active_ticket state on its own, so backgrounded play continues;
+  // foreground keeps the StaffRouter local sim as truth and the
+  // mirrors propagate to the cloud for visit mode + future co-owner
+  // views.
+  tickets: true,
+  // Phase H cutover step 4 — staff flag flipped default-on.
+  // Same shape as tickets: pure mirror-gate per original audit
+  // ("same — mirror-gates only, no bailouts"). H.7 (chef release) +
+  // H.8 (waiter dispatch) + H.34 (take-order) + H.35 (wash trip
+  // dispatch) cover the offline simulation path; foreground play
+  // keeps StaffRouter local-sim authoritative and the mirrors
+  // populate staff_actor for cross-device visibility.
+  staff: true,
   // Phase H cutover step 2 — dishware flag flipped default-on
   // (post-H.20 / H.21 / H.31). The original revert comment flagged
   // dishware as "publish-dependent" because flipping it disabled the
