@@ -426,6 +426,12 @@ interface ActiveGuest {
    * retries the order mirror on every 1 Hz periodic tick while
    * this flag is false, naturally backing off once it succeeds. */
   orderMirrored?: boolean;
+  /** H.19 — true once the overflow waiting chair assignment + give-up
+   * timer have been pushed to the cloud row via setGuestWaitingChair.
+   * Same retry-on-periodic-tick discipline as orderMirrored so a
+   * spawn-time mirror that races serverMirrorId resolution eventually
+   * lands and wakes up the server's H.5 timeout branch. */
+  waitingMirrored?: boolean;
 }
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
@@ -1871,7 +1877,14 @@ export class GuestSpawner {
     window.setTimeout(() => {
       if (!this.cloud) return;
       const id = this.cloud.findActiveGuestIdByClientTempId(g.id);
-      if (id != null) g.serverMirrorId = id;
+      if (id != null) {
+        g.serverMirrorId = id;
+        // H.19 — push the waiting-chair assignment ASAP after the
+        // serverMirrorId resolves. The periodic stream picks up the
+        // retry if this firing somehow misses, but front-loading
+        // it cuts ~1 s off the time before H.5 starts counting.
+        if (g.waiting && !g.waitingMirrored) this.mirrorGuestWaiting(g);
+      }
     }, 250);
   }
 
@@ -1951,6 +1964,39 @@ export class GuestSpawner {
     g.orderMirrored = true;
   }
 
+  /** H.19 — Push the overflow waiting chair assignment to the server
+   * so the cloud row's H.5 timeout-leave branch starts ticking. Called
+   * by the periodic position stream while g.waitingMirrored is false
+   * — same retry discipline as mirrorGuestOrder, since serverMirrorId
+   * may not have resolved yet at spawn time. Once the guest is no
+   * longer waiting (promoted to a seat OR gave up), this also fires
+   * the clear path (empty chair + 0 timeout).
+   *
+   * Idempotent on the wire: the reducer no-ops when the row already
+   * holds the same chair/timeout values. */
+  private mirrorGuestWaiting(g: ActiveGuest): void {
+    if (!isServerSim("guests") || !this.cloud) return;
+    if (g.serverMirrorId == null) {
+      g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
+    }
+    if (g.serverMirrorId == null) return;
+    if (g.waiting) {
+      // Convert seconds → ms; the server stores i64 milliseconds.
+      const timeoutMs = Math.max(0, Math.round(g.waiting.timeLeft * 1000));
+      this.cloud.setGuestWaitingChair(g.serverMirrorId, g.waiting.chairUid, timeoutMs);
+      g.waitingMirrored = true;
+    } else if (!g.waitingMirrored) {
+      // Already clear on both sides — nothing to do, but latch the
+      // flag so we don't keep checking every periodic tick.
+      g.waitingMirrored = true;
+    } else {
+      // Was mirrored as waiting; now they're not. Push the clear so
+      // the server stops counting down the H.5 timeout.
+      this.cloud.setGuestWaitingChair(g.serverMirrorId, "", 0);
+      g.waitingMirrored = false; // re-arm for any future re-assignment
+    }
+  }
+
   /** Throttled per-frame: every ~1 s, push each guest's body coords +
    * current target to the server so subscribed clients (visit mode,
    * future co-owner views) can lerp the same body in their own scene.
@@ -1994,6 +2040,11 @@ export class GuestSpawner {
       // when orderMirrored is true, so this is cheap once the first
       // successful send completes.
       if (periodicFire) this.mirrorGuestOrder(g);
+      // H.19 — also retry the waiting-chair mirror on the same cadence.
+      // Latches via waitingMirrored so a steady waiting state only
+      // pushes once; if the local sim transitions out of waiting
+      // (promoted or gave up), the mirror flips back and clears.
+      if (periodicFire) this.mirrorGuestWaiting(g);
     }
   }
 

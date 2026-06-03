@@ -97,6 +97,16 @@ fn is_leaving_state(s: &str) -> bool {
     matches!(s, "leaving" | "done" | "walkingToDoor" | "exitingDoor" | "walkingOut")
 }
 
+/// True if this state name represents an "overflow waiting" guest —
+/// parked on a yellow waiting chair because no real seat was free
+/// at spawn. The plan doc lists "waiting" but the client actually
+/// writes "waitingForSeat"; we accept both so H.5's timeout-leave
+/// branch (which gated only on "waiting") fires correctly on the
+/// mirror state the client produces. See H.19.
+fn is_waiting_state(s: &str) -> bool {
+    matches!(s, "waiting" | "waitingForSeat")
+}
+
 /// Interval the simulation ticks at, in microseconds. 100 ms = 10 Hz —
 /// matches the rate planned in docs/server-authoritative-plan.md.
 /// Pedestrians fire at 0.5 Hz; the live game sim needs finer
@@ -1026,11 +1036,17 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // Phase H.5 — overflow-chair waiting timeout. Guests parked on a
     // yellow waiting chair use a SEPARATE clock from the patience
     // timer (which represents in-seat impatience). waiting_timeout_ms
-    // counts down only while state == "waiting"; when it hits zero
-    // the guest leaves in disgust. Same client-side transition the
-    // local GuestSpawner runs today; mirroring it here keeps the
-    // two devices in sync when the player switches mid-meal.
-    if g.state == "waiting" && g.waiting_timeout_ms > 0 {
+    // counts down only while the guest is on the overflow chair; when
+    // it hits zero the guest leaves in disgust. Same client-side
+    // transition the local GuestSpawner runs today; mirroring it here
+    // keeps the two devices in sync when the player switches mid-meal.
+    //
+    // H.19 — accepts both "waiting" (the plan-doc name) and the
+    // "waitingForSeat" string the client actually writes via its
+    // position-mirror loop. Together with set_guest_waiting_chair
+    // setting waiting_timeout_ms once at chair assignment, this is
+    // what wakes H.5 up from being dormant code.
+    if is_waiting_state(&g.state) && g.waiting_timeout_ms > 0 {
         let new_wait = (g.waiting_timeout_ms - dt_ms).max(0);
         if new_wait == 0 {
             // H.15 — route to door on leaving (same pattern as the
@@ -1854,6 +1870,50 @@ pub fn mark_guest_leaving(ctx: &ReducerContext, guest_id: u64) -> Result<(), Str
         state: "leaving".to_string(),
         state_clock_ms: 0,
         patience_ms: 0,
+        ..g
+    });
+    Ok(())
+}
+
+/// H.19 — Client tells the server which overflow chair a guest is
+/// parked on AND how many milliseconds remain on their give-up timer.
+/// Called once at spawn (after the local sim picks a yellow chair
+/// because no real seat was available) AND on each "shuffled to a
+/// different chair" event if that ever happens. Empty chair_uid OR
+/// timeout_ms <= 0 clears both fields — used when promoteWaitingGuests
+/// hands the guest a real seat.
+///
+/// Without this, the server's H.5 timeout-leave branch is dormant
+/// (waiting_timeout_ms stays at 0, the branch's `> 0` gate never
+/// passes). For backgrounded-tab survival this guarantees that an
+/// overflow-waitlisted guest still gets dropped after their give-up
+/// window expires even when the local sim isn't ticking.
+///
+/// Idempotent on the wire: writing the same chair/timeout combo as
+/// the row already holds is a no-op.
+#[reducer]
+pub fn set_guest_waiting_chair(
+    ctx: &ReducerContext,
+    guest_id: u64,
+    chair_uid: String,
+    timeout_ms: i64,
+) -> Result<(), String> {
+    let g = ctx.db.active_guest().id().find(guest_id)
+        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can manage guests".into());
+    }
+    // Clamp the incoming timeout — keep it non-negative. A non-positive
+    // value combined with empty chair_uid is the "clear" path.
+    let new_timeout = timeout_ms.max(0);
+    if g.waiting_chair_uid == chair_uid && g.waiting_timeout_ms == new_timeout {
+        return Ok(()); // idempotent
+    }
+    ctx.db.active_guest().id().update(ActiveGuest {
+        waiting_chair_uid: chair_uid,
+        waiting_timeout_ms: new_timeout,
         ..g
     });
     Ok(())

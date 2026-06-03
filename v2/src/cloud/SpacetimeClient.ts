@@ -540,6 +540,25 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.19 — Set (or clear) the overflow waiting chair assignment +
+   * give-up timer on a guest's cloud row. Pass empty chairUid +
+   * timeoutMs <= 0 to clear (when promoteWaitingGuests hands them a
+   * real seat). Otherwise the server's H.5 dwell-then-leave branch
+   * starts ticking the timeout down so a backgrounded-tab guest
+   * still leaves on schedule even when the local sim isn't running. */
+  setGuestWaitingChair(guestId: bigint, chairUid: string, timeoutMs: number): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.setGuestWaitingChair({
+        guestId,
+        chairUid,
+        timeoutMs: BigInt(Math.max(0, Math.round(timeoutMs))),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setGuestWaitingChair failed:", e);
+    }
+  }
+
   /** H.11 / H.14 — Set the guest's full course list on the server so
    * the tick reducer can drive the multi-course eating cycle AND
    * autonomously place the next course's ticket (H.14
