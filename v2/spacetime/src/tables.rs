@@ -788,18 +788,22 @@ pub struct StaffActor {
     /// order, or None when not on a take-order trip.
     pub take_order_guest_id: Option<u64>,
 
+    pub spawned_at: Timestamp,
+
     /// H.8 — Waiter delivery phase. None when not on a delivery,
     /// Some("pickup") while walking to the plate at the kitchen,
     /// Some("deliver") while carrying the plate to the seat.
     /// Distinguishes the two movingToWork legs of a delivery so
     /// the server's arrival-flip knows whether to transition into
     /// the carrying-plate leg or to mark the ticket delivered.
-    /// Option<String> default None keeps the schema migration safe
-    /// for existing rows (see lessons-learned doc).
+    ///
+    /// IMPORTANT — must stay at the END of the struct. Inserting it
+    /// mid-struct counts as reordering and trips
+    /// "manual migration required" on a non-destructive publish.
+    /// Option<String> + default None keeps the row migration safe
+    /// for existing populated rows.
     #[default(None::<String>)]
     pub delivery_phase: Option<String>,
-
-    pub spawned_at: Timestamp,
 }
 
 /// Phase F — server-authoritative placed furniture. One row per item
