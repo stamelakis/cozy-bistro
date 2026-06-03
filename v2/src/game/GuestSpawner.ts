@@ -1903,11 +1903,24 @@ export class GuestSpawner {
       g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
     }
     if (g.serverMirrorId == null) return;
-    const csv = g.order.map((r) => r.id).join(",");
-    this.cloud.setGuestOrder(g.serverMirrorId, csv);
-    // Trust the call landed in the reducer queue. setGuestOrder is
-    // idempotent server-side (compares incoming CSV to row's current
-    // value) so an accidental double-send is harmless.
+    const recipesCsv = g.order.map((r) => r.id).join(",");
+    // H.14 — build parallel CSVs from recipe catalog so the server can
+    // auto_place_next_course without the recipe data. Per-course
+    // appliance is the same routing the client uses (bar for drinks,
+    // recipe.appliances[0] otherwise). Cook time uses the BASE
+    // (pre-chef-multiplier) value — the server's H.6 chef multiplier
+    // is uniform (no training data on server) so we just pass base.
+    const appliancesCsv = g.order
+      .map((r) => {
+        if (r.category === "drink") return "bar";
+        const apps = this.game.cooking.getRecipeAppliances(r);
+        return apps[0] ?? r.stationNeeded ?? "stove";
+      })
+      .join(",");
+    const cookSecondsCsv = g.order
+      .map((r) => Math.round(this.game.getBaseCookSeconds(r) * 1000))
+      .join(",");
+    this.cloud.setGuestOrder(g.serverMirrorId, recipesCsv, appliancesCsv, cookSecondsCsv);
     g.orderMirrored = true;
   }
 

@@ -57,6 +57,9 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   totalSatisfactionX100: __t.i32(),
   dishesSettled: __t.bool(),
   spawnedAt: __t.timestamp(),
+  wcTargetUid: __t.option(__t.string()),
+  orderAppliances: __t.option(__t.string()),
+  orderCookSecondsCsv: __t.option(__t.string()),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
@@ -305,8 +308,8 @@ export const StaffActor = __t.object("StaffActor", {
   washDirtyId: __t.i64(),
   washPhase: __t.string(),
   takeOrderGuestId: __t.option(__t.u64()),
-  deliveryPhase: __t.option(__t.string()),
   spawnedAt: __t.timestamp(),
+  deliveryPhase: __t.option(__t.string()),
 });
 export type StaffActor = __Infer<typeof StaffActor>;
 

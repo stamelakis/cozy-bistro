@@ -13,4 +13,6 @@ import {
 export default {
   guestId: __t.u64(),
   recipesCsv: __t.string(),
+  appliancesCsv: __t.string(),
+  cookSecondsCsv: __t.string(),
 };

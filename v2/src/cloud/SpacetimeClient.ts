@@ -534,18 +534,29 @@ export class SpacetimeClient {
     }
   }
 
-  /** H.11 — Set the guest's full course list on the server so the
-   * tick reducer can drive the multi-course eating cycle (eating →
-   * seated → ... → leaving). Called by GuestSpawner once per guest
+  /** H.11 / H.14 — Set the guest's full course list on the server so
+   * the tick reducer can drive the multi-course eating cycle AND
+   * autonomously place the next course's ticket (H.14
+   * auto_place_next_course). Called by GuestSpawner once per guest
    * after buildOrder populates g.order. Idempotent.
    *
-   * recipesCSV is comma-separated recipe ids in serve order. Empty
-   * string clears the order (e.g. when the guest gives up before
-   * ordering). */
-  setGuestOrder(guestId: bigint, recipesCsv: string): void {
+   * Three parallel CSVs (same length per course):
+   *   - recipesCsv: recipe ids in serve order
+   *   - appliancesCsv: required appliance per course
+   *   - cookSecondsCsv: base cook time in ms per course (u32 string)
+   *
+   * Empty recipesCsv clears the order. */
+  setGuestOrder(
+    guestId: bigint,
+    recipesCsv: string,
+    appliancesCsv: string,
+    cookSecondsCsv: string,
+  ): void {
     if (!this.conn) return;
     try {
-      this.conn.reducers.setGuestOrder({ guestId, recipesCsv });
+      this.conn.reducers.setGuestOrder({
+        guestId, recipesCsv, appliancesCsv, cookSecondsCsv,
+      });
     } catch (e) {
       console.warn("[Cloud] setGuestOrder failed:", e);
     }

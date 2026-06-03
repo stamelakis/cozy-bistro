@@ -1119,18 +1119,21 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // mirrors waiter.take_order_guest_id when a waiter walks to
         // a guest; the state_clock_ms accumulates while the waiter
         // is "working" at the seat. After TAKE_ORDER_DWELL_MS the
-        // server flips guest state.
-        //
-        // Limitation: actual ticket creation (place_order) still
-        // happens client-side because the recipe catalog
-        // (appliance + cook_seconds_ms per recipe) is client-only.
-        // For a backgrounded tab, this server flip moves the guest
-        // to waitingForFood but no tickets get created — guest
-        // sits there until patience runs out and they leave. For
-        // foreground play the client's local sim hits the same
-        // mirror via update_guest_position so this branch is just
-        // a backup.
+        // server flips guest state — and auto_place_next_course
+        // (H.14) fires below to create the ticket from the stored
+        // CSVs.
         "ordering" if waiter_finished_taking_order(ctx, g.id) =>
+            Some(("waitingForFood".to_string(), 0)),
+        // H.14 fallback — for backgrounded tabs where no waiter ever
+        // walks over (local sim isn't running), advance after a
+        // grace period regardless. Without this fallback, guests on
+        // course 2+ would get stuck in ordering forever because the
+        // re-enqueue path that DOES fire in foreground play uses a
+        // direct beginNextCourse → state=waitingForFood, never going
+        // through a take-order trip. ORDERING_FALLBACK_MS is longer
+        // than TAKE_ORDER_DWELL_MS so foreground play's real waiter
+        // dwell wins when both are firing.
+        "ordering" if new_clock >= ORDERING_FALLBACK_MS =>
             Some(("waitingForFood".to_string(), 0)),
         // waitingForFood → eating when ANY active_ticket bound to this
         // guest has state "delivered" (H.8 waiter set it on arrival
@@ -1182,6 +1185,17 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         }
         None => (g.state.clone(), new_clock),
     };
+
+    // H.14 — when transitioning to waitingForFood (server-side
+    // ordering→waitingForFood OR client mirror catches up), attempt
+    // to place the current course's ticket if no ticket is currently
+    // active for this guest. Foreground play has the client doing
+    // this directly via place_order; backgrounded tabs rely on the
+    // server now. auto_place_next_course bails on idempotency when
+    // a non-terminal ticket already exists.
+    if final_state == "waitingForFood" {
+        auto_place_next_course(ctx, &g);
+    }
 
     // H.11 — server-side order_index advance when transitioning
     // eating → seated. The client's local sim ALSO advances this on
@@ -1301,6 +1315,14 @@ fn waiter_finished_taking_order(ctx: &ReducerContext, guest_id: u64) -> bool {
 /// long enough to read as a deliberate beat, short enough that the
 /// guest's patience isn't materially eaten by it.
 const TAKE_ORDER_DWELL_MS: i64 = 2_000;
+
+/// H.14 — Backgrounded-tab fallback for ordering → waitingForFood.
+/// If a waiter never arrives within this window (no local sim
+/// running, the take-order trip system is client-only), the server
+/// gives up waiting and progresses the guest anyway. Longer than
+/// TAKE_ORDER_DWELL_MS so foreground play's real waiter dwell
+/// always wins the race.
+const ORDERING_FALLBACK_MS: i64 = 10_000;
 
 /// Furniture def_ids the server recognises as guest-seating tables.
 /// Mirrors the entries in v2/src/data/furnitureCatalog.ts that have
@@ -1648,6 +1670,10 @@ pub fn spawn_guest(
         dishes_settled: false,
         spawned_at: ctx.timestamp,
         wc_target_uid: None,
+        // H.14 — per-course appliance + cook-time CSVs. Populated by
+        // set_guest_order once buildOrder has produced g.order.
+        order_appliances: None,
+        order_cook_seconds_csv: None,
     });
     Ok(())
 }
@@ -1690,18 +1716,26 @@ pub fn mark_guest_leaving(ctx: &ReducerContext, guest_id: u64) -> Result<(), Str
 /// Throttled by the caller — typical cadence ~5 Hz. The reducer
 /// itself doesn't rate-limit; future hardening can add a min-delta
 /// guard if abuse appears.
-/// H.11 — Client tells the server which recipes the guest ordered so
-/// the server can drive the multi-course eating cycle. Comma-separated
-/// recipe ids; order_index = 0 is the first course.
+/// H.11 / H.14 — Client tells the server which recipes the guest
+/// ordered + per-course appliance + cook_seconds. The CSV trio is
+/// parallel (same length).
 ///
-/// Idempotent: re-setting the same CSV is a no-op. The client
-/// typically calls this once per guest, right after buildOrder
-/// populates g.order.
+/// H.14 extension: appliances_csv + cook_seconds_csv let the server
+/// create active_ticket rows autonomously when the guest reaches
+/// waitingForFood (H.14 auto_place_next_course). Without these the
+/// server can only flip guest state; ticket creation still needs
+/// the client's recipe catalog.
+///
+/// Idempotent: re-setting identical CSVs is a no-op. Client typically
+/// calls this once per guest, right after buildOrder populates
+/// g.order.
 #[reducer]
 pub fn set_guest_order(
     ctx: &ReducerContext,
     guest_id: u64,
     recipes_csv: String,
+    appliances_csv: String,
+    cook_seconds_csv: String,
 ) -> Result<(), String> {
     let g = ctx.db.active_guest().id().find(guest_id)
         .ok_or_else(|| format!("Guest {guest_id} not found"))?;
@@ -1710,14 +1744,100 @@ pub fn set_guest_order(
     if r.owner != ctx.sender {
         return Err("Only the owner can set guest orders".into());
     }
-    if g.order_recipes == recipes_csv {
+    let new_appliances = if appliances_csv.is_empty() { None } else { Some(appliances_csv) };
+    let new_cook_seconds = if cook_seconds_csv.is_empty() { None } else { Some(cook_seconds_csv) };
+    if g.order_recipes == recipes_csv
+        && g.order_appliances == new_appliances
+        && g.order_cook_seconds_csv == new_cook_seconds {
         return Ok(()); // idempotent
     }
     ctx.db.active_guest().id().update(ActiveGuest {
         order_recipes: recipes_csv,
+        order_appliances: new_appliances,
+        order_cook_seconds_csv: new_cook_seconds,
         ..g
     });
     Ok(())
+}
+
+/// H.14 — Server-side place_order for the guest's current course.
+/// Inserts an active_ticket row using:
+///   - recipe_id from order_recipes[order_index]
+///   - appliance from order_appliances[order_index]
+///   - base_cook_seconds_ms from order_cook_seconds_csv[order_index]
+///   - seat coords from active_guest
+///
+/// Skipped silently when:
+///   - per-course CSVs aren't populated yet (set_guest_order hasn't
+///     fired or the client's catalog access failed)
+///   - order_index >= number of courses (no more to place)
+///   - a ticket for this guest's current course already exists
+///     (client raced us with its own place_order — idempotency
+///     guard via guest_id+state filter)
+///
+/// Returns the new ticket id on success, None on any of the bail
+/// conditions above. Caller uses this to know whether the place
+/// succeeded for logging.
+fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> {
+    let recipes: Vec<&str> = g.order_recipes
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let appliances: Vec<&str> = g.order_appliances.as_deref().unwrap_or("")
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let cook_seconds: Vec<i64> = g.order_cook_seconds_csv.as_deref().unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().parse::<i64>().unwrap_or(0))
+        .collect();
+    // Need all three populated and aligned.
+    if recipes.is_empty() || appliances.is_empty() || cook_seconds.is_empty() {
+        return None;
+    }
+    let idx = g.order_index as usize;
+    if idx >= recipes.len() || idx >= appliances.len() || idx >= cook_seconds.len() {
+        return None;
+    }
+    // Idempotency — skip if a non-terminal ticket for this guest
+    // already exists (client raced us, or we already fired this tick).
+    let already_pending = ctx.db.active_ticket().iter().any(|t|
+        t.guest_id == g.id
+        && (t.state == "queued" || t.state == "cooking" || t.state == "ready" || t.state == "delivering"));
+    if already_pending {
+        return None;
+    }
+    let recipe_id = recipes[idx].to_string();
+    let appliance = appliances[idx].to_string();
+    let base_cook_seconds_ms = cook_seconds[idx];
+    let inserted = ctx.db.active_ticket().insert(ActiveTicket {
+        id: 0, // auto_inc
+        restaurant_id: g.restaurant_id,
+        guest_id: g.id,
+        client_temp_id: format!("srv-{}-{}", g.id, idx),
+        recipe_id,
+        state: "queued".to_string(),
+        state_clock_ms: 0,
+        base_cook_seconds_ms,
+        cook_seconds_ms: 0,
+        appliance,
+        assigned_chef_id: String::new(),
+        seat_x: g.seat_x,
+        seat_z: g.seat_z,
+        seat_floor: g.seat_floor,
+        seat_at_bar: g.seat_at_bar,
+        pickup_x: 0.0,
+        pickup_z: 0.0,
+        pickup_floor: 0,
+        created_at: ctx.timestamp,
+    });
+    log::info!(
+        "auto_place_next_course: guest {} course {} → ticket {} ({}@{})",
+        g.id, idx, inserted.id, inserted.recipe_id, inserted.appliance,
+    );
+    Some(inserted.id)
 }
 
 #[reducer]

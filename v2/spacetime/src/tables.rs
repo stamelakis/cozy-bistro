@@ -663,6 +663,24 @@ pub struct ActiveGuest {
     /// addition is a non-destructive publish.
     #[default(None::<String>)]
     pub wc_target_uid: Option<String>,
+
+    /// Phase H.14 — Per-course appliance ids parallel to
+    /// order_recipes. e.g. "stove,toaster,coffee" matches a 3-course
+    /// order_recipes "burger,toast,latte". Lets the server's
+    /// auto-place-order step look up which appliance each course
+    /// needs without reading the TS recipe catalog.
+    ///
+    /// End-of-struct + Option<String> + default None per the
+    /// lessons-learned migration pattern.
+    #[default(None::<String>)]
+    pub order_appliances: Option<String>,
+
+    /// Phase H.14 — Per-course cook times (ms) parallel to
+    /// order_recipes. CSV of u32 strings (e.g. "5000,3500,4000").
+    /// Server's auto-place-order parses one entry per course and
+    /// passes it as base_cook_seconds_ms on the active_ticket row.
+    #[default(None::<String>)]
+    pub order_cook_seconds_csv: Option<String>,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
