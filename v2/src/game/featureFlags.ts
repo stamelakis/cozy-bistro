@@ -71,19 +71,25 @@ const DEFAULTS: ServerSimFlags = {
   guests: false,
   tickets: false,
   staff: false,
-  dishware: false,
-  // Phase H cutover step 1 — furniture flag flipped default-on
-  // (post-H.35). Comment on the original revert called this one
-  // "cutover-ready (full read + write + live-diff shipped + verified
-  // by audit)"; flipping it now makes the cloud's placed_furniture
-  // table the source of truth for the player's own restaurant in
-  // foreground too, matching what visit mode already does for
-  // others' restaurants. Mutations route through reducers; the
-  // subscription drives the render tree via Engine's
-  // applyCloudInsert / subscribePlacedFurnitureChanges hooks.
+  // Phase H cutover step 2 — dishware flag flipped default-on
+  // (post-H.20 / H.21 / H.31). The original revert comment flagged
+  // dishware as "publish-dependent" because flipping it disabled the
+  // local DishwareSystem.update() cycle countdown, leaving cycles
+  // hanging if the server didn't have H.4. H.4 has been live for
+  // months; the only remaining concern was the absolute-write mirror
+  // clobbering server-side wash dumps. H.31 fixed that by switching
+  // every mutation to delta-based bumpDishwarePool calls.
   //
-  // Recovery: ?serverSim=off forces every flag back to false for
-  // one session if this turns out to regress something.
+  // With the flag on:
+  //   - markDirty / addClean / reserveOne / washOne push deltas (H.31)
+  //   - dishwasher batches mirror via updateDishwasherBatch
+  //   - DishwareSystem.update() skips its local cycle countdown
+  //     because tick_dishwasher_batch (H.4) drives it server-side
+  //   - subscribeDishwarePoolChanges + restoreFromCloud adopt server
+  //     state as truth on connect
+  dishware: true,
+  // Phase H cutover step 1 — furniture flag flipped default-on
+  // (post-H.35).
   furniture: true,
 };
 
@@ -166,9 +172,12 @@ export const featureFlags: Readonly<ServerSimFlags> = Object.freeze(computeFlags
  *               If you flip this on without publishing the matching
  *               server changes, dishwasher cycles never complete.
  */
-const UNSAFE_FLAGS: ReadonlySet<keyof ServerSimFlags> = new Set([
-  "dishware",
-]);
+// Phase H cutover step 2 removed `dishware` from UNSAFE_FLAGS — the
+// original "without publish the cycle stops" concern was rendered
+// moot once H.4 (tick_dishwasher_batch) shipped and H.31 switched the
+// mirror to deltas. Set kept around (empty) so the warning machinery
+// is ready for the next subsystem that turns out to be cutover-sensitive.
+const UNSAFE_FLAGS: ReadonlySet<keyof ServerSimFlags> = new Set([]);
 
 /** Loud console warning at module import when a publish-dependent
  * flag is on. Helps surface the cutover dependency before users
