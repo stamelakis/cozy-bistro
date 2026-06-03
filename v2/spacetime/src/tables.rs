@@ -810,6 +810,17 @@ pub struct ActiveGuest {
     /// For wash-only trips only washed_hands flips.
     #[default(false)]
     pub washed_hands: bool,
+
+    /// Phase H.29 — distinguishes "successful trip" from "gave up
+    /// because every fixture was busy."  used_toilet / washed_hands
+    /// latch on both paths so the seated state machine doesn't loop;
+    /// wc_completed latches ONLY on cycle completion (wcWashing →
+    /// seated transition). accumulate_pending_visit_rollup reads it
+    /// to apply "wanted but couldn't" rating penalties separately
+    /// from "successfully visited" bonuses. Default false; primitive
+    /// bool — migration-safe end-of-struct add.
+    #[default(false)]
+    pub wc_completed: bool,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per

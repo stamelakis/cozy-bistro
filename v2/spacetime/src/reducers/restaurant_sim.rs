@@ -721,41 +721,46 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
             ))
             .unwrap_or((0, 0, 0, 0));
 
-    // H.28 — bathroom modifier (full math). Matches
+    // H.28 + H.29 — bathroom modifier (full math). Matches
     // GuestSpawner.finalizeVisit's bathroom delta calculation,
-    // including the quality scaling from cached_bathroom_quality_x100.
-    // qNorm = min(1, quality / 18); used toilet → delta = -0.2 +
-    // qNorm × 0.8; wash-only success → 0.15 + qNorm × 0.2; etc.
-    //
-    // Limitation we still carry: used_toilet / washed_hands lump
-    // "successful trip" with "tried but every fixture was busy."  A
-    // server-tracked wc_completed flag would split them, but isn't
-    // here yet.  As-is the "wanted but couldn't" case reads as
-    // "trip happened" → slightly overstates rating in that case.
+    // including quality scaling from cached_bathroom_quality_x100
+    // AND the "wanted but couldn't" distinction via wc_completed:
+    //   - wc_completed=true: cycle finished, apply success bonus
+    //   - wc_completed=false but used_toilet/washed_hands=true:
+    //     gave up because every fixture was busy. Moderate penalty.
     let q_norm_x100 = (cached_bathroom_quality_x100 / 18).min(100); // capped at +1.0
     let bathroom_x100: i64 = if g.will_use_toilet {
         if toilet_count == 0 {
             -80 // player didn't provide a toilet
-        } else if g.used_toilet {
-            // delta = -0.2 + qNorm * 0.8 + (washed_hands ? 0.15 : sink_count == 0 ? -0.25 : 0)
+        } else if g.wc_completed {
+            // Successful toilet trip — full quality-scaled bonus.
+            // delta = -0.2 + qNorm * 0.8 + (washed ? 0.15 : no-sink ? -0.25 : 0)
             let mut delta = -20 + (q_norm_x100 * 80) / 100;
             if g.washed_hands { delta += 15; }
             else if sink_count == 0 { delta -= 25; }
             delta
+        } else if g.used_toilet {
+            // Latched without completing → gave up (H.29).
+            -35
         } else {
             0
         }
     } else if g.will_wash_only {
         if sink_count == 0 {
             -50
+        } else if g.wc_completed {
+            // Successful wash-only.  0.15 + qNorm * 0.2
+            15 + (q_norm_x100 * 20) / 100
         } else if g.washed_hands {
-            15 + (q_norm_x100 * 20) / 100 // 0.15 + qNorm × 0.2
+            // Tried but every sink was busy (give-up).
+            -20
         } else {
-            -20 // gave up after sink was busy (approximate; should use a separate flag)
+            0
         }
     } else if toilet_count > 0 {
-        // Didn't visit, but a tidy bathroom is a small ambient bonus.
-        let mut delta = (q_norm_x100 * 20) / 100; // up to +0.2
+        // Didn't intend to visit; a tidy bathroom is a small ambient
+        // bonus capped at +0.2 + extra +0.05 if a sink is also placed.
+        let mut delta = (q_norm_x100 * 20) / 100;
         if sink_count > 0 { delta += 5; }
         delta
     } else {
@@ -1889,6 +1894,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     let new_washed_hands = g.washed_hands
         || wc_cycle_completed
         || (wc_giveup_triggered && wash_attempt_active);
+    // H.29 — wc_completed flips ONLY on cycle completion, not on
+    // give-up. accumulate_pending_visit_rollup uses this to apply
+    // "wanted but couldn't" rating penalties separately from
+    // "successfully visited" bonuses.
+    let new_wc_completed = g.wc_completed || wc_cycle_completed;
 
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
@@ -1912,6 +1922,8 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         used_toilet: new_used_toilet,
         // H.24 — same shape; wash-only OR toilet cycle completion.
         washed_hands: new_washed_hands,
+        // H.29 — only on cycle completion (not give-up).
+        wc_completed: new_wc_completed,
         ..g
     });
 }
@@ -2418,6 +2430,10 @@ pub fn spawn_guest(
         // will_wash_only) is true per guest (toilet takes priority).
         will_wash_only,
         washed_hands: false,
+        // H.29 — latches separately from used_toilet / washed_hands
+        // to distinguish "trip completed" from "gave up." False at
+        // spawn; the wcWashing → seated transition flips it.
+        wc_completed: false,
     });
     Ok(())
 }

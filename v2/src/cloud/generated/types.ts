@@ -69,6 +69,7 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   usedToilet: __t.bool(),
   willWashOnly: __t.bool(),
   washedHands: __t.bool(),
+  wcCompleted: __t.bool(),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
