@@ -1387,6 +1387,30 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.36 — Delta-based mirror for pantry stock. CookingSystem fires
+   * this on every consumeIngredients (-1 per ingredient slot) and
+   * addPantryStock (+qty per slot). Server saturating-adds to a row
+   * keyed on (restaurant_id, ingredient_id); rows are deleted when
+   * quantity hits 0.
+   *
+   * Server-side consumption on backgrounded ticket cooks (the actual
+   * "stop cheating" fix) ships in a follow-up — H.37 adds a recipe
+   * → ingredient lookup so auto_claim_queued_tickets can decrement
+   * autonomously. */
+  bumpPantryStock(ingredientId: string, delta: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (delta === 0 || !ingredientId) return;
+    try {
+      this.conn.reducers.bumpPantryStock({
+        restaurantId: this.restaurantId,
+        ingredientId,
+        delta: Math.round(delta),
+      });
+    } catch (e) {
+      console.warn("[Cloud] bumpPantryStock failed:", e);
+    }
+  }
+
   /** H.31 — Delta-based dishware mirror. Each Game.dishware mutation
    * (reserveOne / markDirty / washOne / addClean) pushes its
    * per-operation delta so the server's H.21 wash loader can

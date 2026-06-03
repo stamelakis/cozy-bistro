@@ -18,6 +18,7 @@ import BootstrapPedestrianScheduleReducer from "../bootstrap_pedestrian_schedule
 import BootstrapSimSchedulesReducer from "../bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "../bootstrap_weather_reducer";
 import BumpDishwarePoolReducer from "../bump_dishware_pool_reducer";
+import BumpPantryStockReducer from "../bump_pantry_stock_reducer";
 import CancelTicketReducer from "../cancel_ticket_reducer";
 import ClaimBuildingReducer from "../claim_building_reducer";
 import ClaimTicketReducer from "../claim_ticket_reducer";
@@ -80,6 +81,7 @@ export type BootstrapPedestrianScheduleParams = __Infer<typeof BootstrapPedestri
 export type BootstrapSimSchedulesParams = __Infer<typeof BootstrapSimSchedulesReducer>;
 export type BootstrapWeatherParams = __Infer<typeof BootstrapWeatherReducer>;
 export type BumpDishwarePoolParams = __Infer<typeof BumpDishwarePoolReducer>;
+export type BumpPantryStockParams = __Infer<typeof BumpPantryStockReducer>;
 export type CancelTicketParams = __Infer<typeof CancelTicketReducer>;
 export type ClaimBuildingParams = __Infer<typeof ClaimBuildingReducer>;
 export type ClaimTicketParams = __Infer<typeof ClaimTicketReducer>;

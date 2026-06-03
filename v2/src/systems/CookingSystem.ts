@@ -34,6 +34,16 @@ export class CookingSystem {
   private errandOrder: Record<string, number> = {};
   private errandInTransit: Record<string, number> = {};
   private preparedServings: Record<string, number> = {};
+  /** H.36 — Cloud handle for mirroring pantry mutations. Wired
+   *  optionally by Engine after auth lands; null in tests or before
+   *  cloud connect. Mirror helpers below bail silently when unset
+   *  or when we'd be pushing a zero delta. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  /** Suppresses pantry mirror writes during bulk-load paths (save
+   *  hydrate, cloud restore) — the cloud already holds those values
+   *  and re-firing every entry's delta would just duplicate what
+   *  subscription already knows. */
+  private suppressPantryMirror = false;
 
   constructor() {
     this.menuRecipeIds = recipes
@@ -298,6 +308,13 @@ export class CookingSystem {
         stock.quantity = Math.max(0, stock.quantity - 1);
         this.consumedToday.set(ingredient, (this.consumedToday.get(ingredient) ?? 0) + 1);
         consumed += 1;
+        // H.36 — mirror the decrement to the server's pantry_stock
+        // table. Visit mode + co-owner views see live ingredient
+        // counts instead of waiting for autosave. Bails silently
+        // when cloud isn't wired (tests / pre-auth boot).
+        if (!this.suppressPantryMirror && this.cloud) {
+          this.cloud.bumpPantryStock(ingredient, -1);
+        }
       }
     });
     return consumed;
@@ -328,6 +345,10 @@ export class CookingSystem {
       return false;
     }
     stock.quantity += quantity;
+    // H.36 — mirror the increment. Symmetrical to consumeIngredients.
+    if (!this.suppressPantryMirror && this.cloud && quantity > 0) {
+      this.cloud.bumpPantryStock(ingredientId, quantity);
+    }
     return true;
   }
 

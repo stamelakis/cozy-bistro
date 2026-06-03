@@ -46,6 +46,7 @@ import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
+import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
@@ -112,6 +113,7 @@ import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
+import PantryStockRow from "./pantry_stock_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
 import PedestrianRow from "./pedestrian_table";
 import PlacedFurnitureRow from "./placed_furniture_table";
@@ -331,6 +333,20 @@ const tablesSchema = __schema({
       { name: 'leaderboard_entry_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, LeaderboardEntryRow),
+  pantry_stock: __table({
+    name: 'pantry_stock',
+    indexes: [
+      { accessor: 'key', name: 'pantry_stock_key_idx_btree', algorithm: 'btree', columns: [
+        'key',
+      ] },
+      { accessor: 'restaurant_id', name: 'pantry_stock_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'pantry_stock_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, PantryStockRow),
   password_reset_request: __table({
     name: 'password_reset_request',
     indexes: [
@@ -486,6 +502,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
   __reducerSchema("bump_dishware_pool", BumpDishwarePoolReducer),
+  __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),

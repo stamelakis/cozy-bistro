@@ -13,12 +13,12 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_ticket, dishware_pool, dishwasher_batch,
+    active_guest, active_ticket, dishware_pool, dishwasher_batch, pantry_stock,
     placed_furniture, player, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
-    PlacedFurniture, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    StaffActor,
+    PantryStock, PlacedFurniture, Restaurant, RestaurantTickSchedule,
+    RestaurantTickState, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -985,6 +985,65 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
 /// instead of overwriting.
 ///
 /// The older absolute-write update_dishware_pool reducer is kept for
+/// Phase H.36 — delta-based mirror for pantry stock. Client's
+/// CookingSystem fires this on every consumeIngredients (delta = -1
+/// per ingredient slot) and addPantryStock (delta = +qty per slot).
+/// The server's pantry_stock table accumulates a live cross-device
+/// view of ingredient counts; visit mode + leaderboard + co-owner
+/// reads see the player's real stock instead of waiting for the
+/// periodic save_snapshot.
+///
+/// Saturating math on underflow; deletes the row when quantity
+/// reaches 0 (delete-on-empty mirrors dishware_pool semantics).
+/// Owner-only. Idempotent for delta = 0.
+///
+/// Server-side consumption on backgrounded ticket claim (closing the
+/// "cheating" loophole) is a follow-up — H.37 adds a recipe →
+/// ingredient lookup so H.6 can decrement on its own.
+#[reducer]
+pub fn bump_pantry_stock(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    ingredient_id: String,
+    delta: i32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can bump pantry stock".into());
+    }
+    if delta == 0 { return Ok(()); }
+    if ingredient_id.is_empty() {
+        return Err("ingredient_id required".into());
+    }
+    let key = format!("{}:{}", restaurant_id, ingredient_id);
+    let existing = ctx.db.pantry_stock().key().find(key.clone());
+    let cur = existing.as_ref().map(|p| p.quantity).unwrap_or(0u32);
+    let new_qty = if delta >= 0 {
+        cur.saturating_add(delta as u32)
+    } else {
+        cur.saturating_sub((-delta) as u32)
+    };
+    if new_qty == 0 {
+        if existing.is_some() {
+            ctx.db.pantry_stock().key().delete(key);
+        }
+        return Ok(());
+    }
+    let row = PantryStock {
+        key,
+        restaurant_id,
+        ingredient_id,
+        quantity: new_qty,
+    };
+    if existing.is_some() {
+        ctx.db.pantry_stock().key().update(row);
+    } else {
+        ctx.db.pantry_stock().insert(row);
+    }
+    Ok(())
+}
+
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
 /// Owner-only.
 #[reducer]

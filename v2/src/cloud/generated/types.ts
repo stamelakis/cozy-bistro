@@ -198,6 +198,14 @@ export const LeaderboardEntry = __t.object("LeaderboardEntry", {
 });
 export type LeaderboardEntry = __Infer<typeof LeaderboardEntry>;
 
+export const PantryStock = __t.object("PantryStock", {
+  key: __t.string(),
+  restaurantId: __t.u64(),
+  ingredientId: __t.string(),
+  quantity: __t.u32(),
+});
+export type PantryStock = __Infer<typeof PantryStock>;
+
 export const PasswordResetRequest = __t.object("PasswordResetRequest", {
   id: __t.u64(),
   username: __t.string(),

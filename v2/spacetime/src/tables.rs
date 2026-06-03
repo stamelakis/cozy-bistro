@@ -1101,3 +1101,33 @@ pub struct DishwasherBatch {
     pub glasses: u32,
     pub cycle_time_remaining_ms: i64,
 }
+
+/// Phase H.36 — per-restaurant pantry stock mirror. One row per
+/// (restaurant_id, ingredient_id) pair, keyed by the composite
+/// "{restaurant_id}:{ingredient_id}" string. Quantity reflects how
+/// many units of that ingredient the restaurant currently has on
+/// hand.
+///
+/// Observational only at this layer: the client's CookingSystem
+/// remains the source of truth in foreground play, mirroring every
+/// consume / addStock via the bump_pantry_stock reducer.  Visit-mode
+/// + leaderboard + future co-owner views read live counts here
+/// instead of waiting for the periodic save_snapshot.
+///
+/// Server-side consumption (H.37 follow-up) needs a recipe → ingredient
+/// lookup to know what to decrement when H.6 auto_claim_queued_tickets
+/// fires; that ships separately.
+#[table(name = pantry_stock, public)]
+pub struct PantryStock {
+    /// Composite key: "{restaurant_id}:{ingredient_id}".
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// Ingredient id from the client's catalog (e.g. "tomato",
+    /// "bread", "beef"). Server doesn't validate against the
+    /// catalog — any string the client pushes is accepted.
+    pub ingredient_id: String,
+    /// Current stock count. Saturating math on underflow.
+    pub quantity: u32,
+}

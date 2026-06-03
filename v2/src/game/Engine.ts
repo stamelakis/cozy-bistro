@@ -943,6 +943,10 @@ export class Engine {
       // Phase E — DishwareSystem mirrors pool + batch mutations to
       // the cloud when isServerSim("dishware") is on. No-op flag-off.
       this.game.dishware.cloud = this.cloud;
+      // H.36 — same shape for the pantry. CookingSystem mirrors every
+      // consumeIngredients / addPantryStock to bump_pantry_stock so
+      // visit mode + co-owner views see live ingredient counts.
+      this.game.cooking.cloud = this.cloud;
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];
