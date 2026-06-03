@@ -16,4 +16,8 @@ export default __t.row({
   name: __t.string(),
   public: __t.bool(),
   createdAt: __t.timestamp().name("created_at"),
+  pendingServed: __t.u32().name("pending_served"),
+  pendingTipsCents: __t.i64().name("pending_tips_cents"),
+  pendingRatingSumX100: __t.i64().name("pending_rating_sum_x100"),
+  pendingRatingCount: __t.u32().name("pending_rating_count"),
 });

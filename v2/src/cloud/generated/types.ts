@@ -264,6 +264,10 @@ export const Restaurant = __t.object("Restaurant", {
   name: __t.string(),
   public: __t.bool(),
   createdAt: __t.timestamp(),
+  pendingServed: __t.u32(),
+  pendingTipsCents: __t.i64(),
+  pendingRatingSumX100: __t.i64(),
+  pendingRatingCount: __t.u32(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

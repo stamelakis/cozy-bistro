@@ -17,7 +17,7 @@ use crate::tables::{
     placed_furniture, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveTicket, DishwarePool, DishwasherBatch,
-    PlacedFurniture, RestaurantTickSchedule, RestaurantTickState,
+    PlacedFurniture, Restaurant, RestaurantTickSchedule, RestaurantTickState,
     StaffActor,
 };
 
@@ -610,6 +610,108 @@ fn tick_dishwasher_batch(ctx: &ReducerContext, furniture_uid: &str, restaurant_i
     );
 }
 
+/// Phase H.22 — accumulate the just-despawned guest's approximate
+/// rating + tip on the Restaurant.pending_* counters. Called from
+/// tick_guest_state's despawn branch alongside settle_guest_dishes,
+/// inside the same `!g.dishes_settled` gate so we don't double-count
+/// when a foreground client already credited the visit locally.
+///
+/// Rating approximation: server has total_satisfaction_x100 +
+/// order_recipes (from H.16 + H.14 mirrors). Mirrors the FIRST step
+/// of GuestSpawner.finalizeVisit's rating math — `base = 2 + avgSat/2`
+/// clamped to 1..5 — but SKIPS dish quality bonus, dirty-restaurant
+/// penalty, furniture vibe, bathroom score, smoke penalty, and the
+/// random jitter. Foreground play still computes the full rating
+/// (no approximation) because settleGuestDishes gates the server's
+/// settle. This rough rating is only used for backgrounded survival.
+///
+/// Tip approximation: tipMultByRating[rating] × archetype.tipMultiplier
+/// × weatherMult — but archetype mult + weather mult require state
+/// the server doesn't carry yet, so we use 1.0× / 1.0× and only the
+/// rating-derived rate. Better than dropping all tips.
+fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
+    // Course count = entries in order_recipes CSV. Used as the avgSat
+    // denominator. Skip if there are no courses recorded — a guest who
+    // never ordered shouldn't contribute a rating.
+    let course_count = g.order_recipes
+        .split(',')
+        .filter(|s| !s.trim().is_empty())
+        .count();
+    if course_count == 0 { return; }
+
+    // total_satisfaction_x100 / 100 / count = avgSat. Then
+    // base = clamp(2 + avgSat/2, 1, 5), rounded to nearest int.
+    // Done in integer math for determinism — × 100 / 200 = / 2.
+    let avg_sat_x100 = g.total_satisfaction_x100 as i64 / (course_count as i64);
+    // base_x100 = 200 + avg_sat_x100 / 2
+    let base_x100 = 200 + (avg_sat_x100 / 2);
+    let rating_raw = (base_x100 + 50) / 100; // round-half-up to nearest star
+    let rating = rating_raw.clamp(1, 5) as u32;
+
+    // tipMultByRating: 1 → 0%, 2 → 0%, 3 → 5%, 4 → 15%, 5 → 30%.
+    // Stored × 1000 (basis points scaled by 10) for integer math.
+    let tip_rate_per_mille: i64 = match rating {
+        3 => 50,
+        4 => 150,
+        5 => 300,
+        _ => 0,
+    };
+    let tip_cents = (g.total_paid_cents.saturating_mul(tip_rate_per_mille)) / 1_000;
+
+    // Read-modify-write the Restaurant row. If the row disappeared
+    // (sell-mid-flight), skip silently.
+    let Some(r) = ctx.db.restaurant().id().find(g.restaurant_id) else { return; };
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_served: r.pending_served.saturating_add(1),
+        pending_tips_cents: r.pending_tips_cents.saturating_add(tip_cents),
+        pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(rating as i64 * 100),
+        pending_rating_count: r.pending_rating_count.saturating_add(1),
+        ..r
+    });
+    log::info!(
+        "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents)",
+        g.id, g.restaurant_id, rating, tip_cents,
+    );
+}
+
+/// Phase H.22 — atomically read + zero the Restaurant.pending_*
+/// counters. Returns the four values via the same row update path
+/// (client reads from subscription before calling, so no explicit
+/// return value needed — clearing is the side effect). Called by
+/// the foreground client on first frame after the Restaurant
+/// subscription has populated, so a backgrounded-then-foregrounded
+/// session can apply the rollup to local Game state exactly once.
+///
+/// Idempotent — calling on an already-zero row is a no-op.
+#[reducer]
+pub fn consume_pending_visit_rollup(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can consume pending rollup".into());
+    }
+    if r.pending_served == 0
+        && r.pending_tips_cents == 0
+        && r.pending_rating_count == 0 {
+        return Ok(()); // already cleared
+    }
+    log::info!(
+        "consume_pending_visit_rollup: clearing {} served / {} tip cents / {} ratings on restaurant {}",
+        r.pending_served, r.pending_tips_cents, r.pending_rating_count, restaurant_id,
+    );
+    ctx.db.restaurant().id().update(Restaurant {
+        pending_served: 0,
+        pending_tips_cents: 0,
+        pending_rating_sum_x100: 0,
+        pending_rating_count: 0,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.21 — server-side dishwasher loader. Best-effort survival
 /// path: per tick, push at most one dirty piece into a free
 /// dishwasher's batch so the existing H.4 cycle countdown can wash
@@ -1121,10 +1223,18 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             // row vanishes. Mirrors client settleGuestDishes; the
             // dishes_settled gate inside the helper keeps it
             // idempotent (and a no-op when the client already settled
-            // and pushed `dishes_settled = true`, though that mirror
-            // path doesn't exist yet — for now this is the only
-            // settlement site).
+            // and pushed `dishes_settled = true`).
             settle_guest_dishes(ctx, &g);
+            // H.22 — also accumulate approximate tip + star rating on
+            // the Restaurant's pending_* counters if this guest never
+            // got credited locally. Same dishes_settled gate keeps
+            // foreground guests (which run their own finalizeVisit
+            // with the full grading formula) from getting counted
+            // twice. The foreground client drains these via
+            // consume_pending_visit_rollup on connect.
+            if !g.dishes_settled {
+                accumulate_pending_visit_rollup(ctx, &g);
+            }
             ctx.db.active_guest().id().delete(g.id);
             return;
         }

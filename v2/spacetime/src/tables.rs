@@ -160,6 +160,30 @@ pub struct Restaurant {
     /// friends' "visit" lists. Defaults to true.
     pub public: bool,
     pub created_at: Timestamp,
+
+    /// Phase H.22 — pending end-of-visit rollup for guests the server
+    /// despawned while the foreground client wasn't running. The
+    /// server-side settle path (see tick_guest_state's despawn block)
+    /// increments these every time it processes a guest whose
+    /// dishes_settled flag was still false. On reconnect / foreground,
+    /// the client reads these from the Restaurant subscription, applies
+    /// them to local Game state (money, served counter, reputation
+    /// rating history), and calls consume_pending_visit_rollup to
+    /// zero them out atomically.
+    ///
+    /// All four default to 0 — migration-safe primitive defaults. At
+    /// end-of-struct so the addition is a non-destructive publish.
+    #[default(0u32)]
+    pub pending_served: u32,
+    #[default(0i64)]
+    pub pending_tips_cents: i64,
+    /// Sum of approximated star ratings × 100 across pending guests.
+    /// Combined with pending_rating_count to compute an average
+    /// rating to apply via Game.reputation.recordRating(avg).
+    #[default(0i64)]
+    pub pending_rating_sum_x100: i64,
+    #[default(0u32)]
+    pub pending_rating_count: u32,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

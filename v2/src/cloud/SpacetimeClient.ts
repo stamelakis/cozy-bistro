@@ -594,6 +594,83 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.22 — Read the pending end-of-visit rollup from this player's
+   * Restaurant row. Non-zero values represent guests the server
+   * despawned while the foreground tab wasn't running — their
+   * approximate tips + ratings + served count accumulated server-side
+   * waiting for the client to come back and apply them locally.
+   *
+   * Returns null when the Restaurant row isn't subscribed yet OR all
+   * counters are zero (nothing to apply). Caller should follow up
+   * with consumePendingVisitRollup() once the values are applied to
+   * Game state, atomically clearing the cloud counters. */
+  getPendingVisitRollup():
+    | { served: number; tipsCents: number; ratingSumX100: number; ratingCount: number }
+    | null
+  {
+    if (!this.conn || this.restaurantId == null) return null;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return null;
+    const served = Number(r.pendingServed);
+    const tipsCents = Number(r.pendingTipsCents);
+    const ratingSumX100 = Number(r.pendingRatingSumX100);
+    const ratingCount = Number(r.pendingRatingCount);
+    if (served === 0 && tipsCents === 0 && ratingCount === 0) return null;
+    return { served, tipsCents, ratingSumX100, ratingCount };
+  }
+
+  /** H.22 — Clear the pending_* counters on this player's Restaurant
+   * row. Call after getPendingVisitRollup() returned a non-null
+   * snapshot AND those values have been applied to Game state. The
+   * server's accumulate path always saturating-adds, so a clear that
+   * races with a fresh accumulation is safe — at worst we lose ONE
+   * fresh visit's contribution between the read and the clear. */
+  consumePendingVisitRollup(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.consumePendingVisitRollup({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] consumePendingVisitRollup failed:", e);
+    }
+  }
+
+  /** H.22 — Read + apply + clear in one shot. Calls getPendingVisitRollup;
+   * if non-null, applies the values to Game state (money, served,
+   * reputation) and then clears the cloud counters. Idempotent if no
+   * rollup is pending. Safe to call repeatedly. */
+  applyPendingVisitRollup(): void {
+    const rollup = this.getPendingVisitRollup();
+    if (!rollup) return;
+    // Tips — credit as a payment (matches the foreground client's
+    // creditCourse + finalizeVisit category so the ledger / animation
+    // grouping stays consistent).
+    if (rollup.tipsCents > 0) {
+      this.game.economy.earnMoney(rollup.tipsCents / 100, "payment");
+    }
+    // Served counter — bumps the HUD's "served today" + drives
+    // achievements that watch the total. Cloud carries one count for
+    // each pending guest already despawned by the server.
+    if (rollup.served > 0) {
+      this.game.customers.recordServed(rollup.served);
+    }
+    // Ratings — server only carried sum + count, so we apply the
+    // average back N times. Losing the per-guest distribution is OK
+    // for backgrounded play (those guests already missed the foreground
+    // grading anyway); the player still gets a representative
+    // rating-history update.
+    if (rollup.ratingCount > 0) {
+      const avg = rollup.ratingSumX100 / rollup.ratingCount / 100;
+      for (let i = 0; i < rollup.ratingCount; i += 1) {
+        this.game.reputation.recordRating(avg);
+      }
+    }
+    console.log(
+      `[Cloud] applied pending visit rollup — ${rollup.served} guests, $${(rollup.tipsCents / 100).toFixed(2)} tips, ` +
+      `${rollup.ratingCount} ratings (avg ${(rollup.ratingSumX100 / Math.max(1, rollup.ratingCount) / 100).toFixed(1)})`
+    );
+    this.consumePendingVisitRollup();
+  }
+
   /** H.11 / H.14 — Set the guest's full course list on the server so
    * the tick reducer can drive the multi-course eating cycle AND
    * autonomously place the next course's ticket (H.14
@@ -1818,6 +1895,14 @@ export class SpacetimeClient {
       } else {
         console.log(`[SpacetimeDB] restaurant ${this.restaurantId} exists but no save yet`);
       }
+      // H.22 — drain any pending end-of-visit rollup the server
+      // accumulated while this tab was backgrounded / disconnected.
+      // Applied AFTER the save-load attempt so tips/served/ratings
+      // get added ON TOP of the hydrated state rather than being
+      // overwritten by it. maybeAutoLoadCloudSave either replaces
+      // state synchronously (apply is now correct) OR triggers a
+      // page reload (we never get here, fresh boot picks it up).
+      this.applyPendingVisitRollup();
     }
     this.wireGameHooks();
     this.wireCloudListeners(ctx);

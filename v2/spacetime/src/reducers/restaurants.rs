@@ -16,6 +16,13 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         name: trimmed.to_string(),
         public,
         created_at: ctx.timestamp,
+        // H.22 — pending rollup counters start at zero for new restaurants.
+        // The defaults on the schema also cover existing rows that predate
+        // these fields, so the migration is non-destructive.
+        pending_served: 0,
+        pending_tips_cents: 0,
+        pending_rating_sum_x100: 0,
+        pending_rating_count: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone
