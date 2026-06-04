@@ -1,6 +1,8 @@
 /**
  * Bridge between the Cozy Bistro 3D Game/Engine and the
- * SpacetimeDB-published `cozy-bistro-andre` module.
+ * SpacetimeDB-published `dunnin` module (self-hosted on
+ * dunnin-spacetime.ownsun.de; previously cozy-bistro-andre on
+ * Maincloud, migrated off to escape energy metering).
  *
  * On Engine startup we:
  *   1. Connect (auth via a stored token; first run gets one for free).
@@ -156,8 +158,13 @@ import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "
 import { Identity } from "spacetimedb";
 
 const TOKEN_KEY = "cozy-bistro-stdb-token";
-const DEFAULT_HOST = "wss://maincloud.spacetimedb.com";
-const DEFAULT_MODULE = "cozy-bistro-andre";
+// Self-hosted SpacetimeDB instance (Jercy's box at ownsun.de).
+// Moved off Maincloud to escape the energy-budget metering — the
+// per-tick / per-mirror cadence even after the H.* optimizations
+// was burning more TeV/month than the free tier allowed.  Module
+// name on the new host is "dunnin" (NOT cozy-bistro-andre).
+const DEFAULT_HOST = "wss://dunnin-spacetime.ownsun.de";
+const DEFAULT_MODULE = "dunnin";
 
 export interface SpacetimeConfig {
   /** Module name as published on Maincloud. */
