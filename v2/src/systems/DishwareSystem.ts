@@ -204,11 +204,19 @@ export class DishwareSystem {
         const target = p.kind === "plate" ? this.plates : this.glasses;
         target.set(p.tier, { clean: p.clean, dirty: p.dirty });
       }
-      // Lifetime totals are the SOURCE of truth for the leak-recovery
-      // logic; we rebuild from the loaded pools because we don't persist
-      // lifetime in the cloud (it's a save-file-only derived number).
-      this.lifetimeAddedPlate = this.getOwned("plate");
-      this.lifetimeAddedGlass = this.getOwned("glass");
+      // Phase I (H.76) — DO NOT re-baseline lifetime from the loaded
+      // pool here.  The old line `lifetimeAddedPlate = getOwned("plate")`
+      // was one of two sources of the "534 plates and climbing" bug:
+      // whenever cloud or pool had a transient bloated value (from
+      // subscription replay, in-flight double-count, etc.), this
+      // would lock the bloated count in as the new canonical
+      // lifetime, which then propagated forward via save.
+      //
+      // Lifetime is now ALWAYS derived from STARTER + sum(purchaseLog)
+      // via computeLifetimeFromLog().  hydrate() recomputes it on
+      // every load.  Cloud restoreFromCloud only updates the pool
+      // distribution (clean / dirty / tier breakdown) — never the
+      // canonical owned count.
       this.dishwasherBatches.clear();
       for (const b of batches) {
         this.dishwasherBatches.set(b.furnitureUid, {
@@ -251,16 +259,19 @@ export class DishwareSystem {
     this.suppressMirrorForReload = true;
     try {
       pool.set(row.tier, { clean: row.clean, dirty: row.dirty });
-      // Lifetime self-heals — bump it up if the cloud knows about more
-      // pieces than our local total. Never shrink (lifetime is monotonic
-      // and a cloud-side state with fewer pieces than ours means the
-      // OTHER device served / leaked, not "we never owned them").
-      const owned = this.getOwned(row.kind);
-      if (row.kind === "plate" && owned > this.lifetimeAddedPlate) {
-        this.lifetimeAddedPlate = owned;
-      } else if (row.kind === "glass" && owned > this.lifetimeAddedGlass) {
-        this.lifetimeAddedGlass = owned;
-      }
+      // Phase I (H.76) — REMOVED the lifetime self-heal bump.  It was
+      // the SECOND source of the 534-plate spiral: any transient
+      // bloated `owned` from a subscription replay or another device's
+      // race would bump `lifetimeAddedPlate` UP, save would persist
+      // the new high-water mark, next session's hydrate would top
+      // up to match, mirror would push back to cloud, and the
+      // subscription would bump lifetime again.  Pure positive
+      // feedback loop.
+      //
+      // Lifetime is now strictly derived from STARTER + sum(purchaseLog)
+      // — never from the pool's owned count.  See computeLifetimeFromLog
+      // and the comment in restoreFromCloud.  buySet remains the only
+      // way to grow lifetime, via bumpLifetime → purchaseLog.push.
     } finally {
       this.suppressMirrorForReload = false;
     }
@@ -543,6 +554,49 @@ export class DishwareSystem {
     return { plate, glass };
   }
 
+  /** Phase I (H.76) — Reconcile a single kind's pool to match the
+   * canonical lifetime.  Called by hydrate after computing lifetime
+   * from STARTER + sum(purchaseLog).  Two cases:
+   *
+   *   - owned > target (BLOAT): trim the excess.  Start from
+   *     highest-tier clean (most replaceable), then highest-tier
+   *     dirty, walking down to tier 1.  Preserves the player's
+   *     best plates last.
+   *   - owned < target (LEAK): top up the missing count into tier
+   *     1 clean.  These are pieces that were in-flight at save
+   *     time or got dropped by the chef-stall bug; recovering them
+   *     keeps the total honest.
+   *
+   * No-op when owned === target. */
+  private reconcilePoolToLifetime(kind: DishKind): void {
+    const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
+    const owned = this.getOwned(kind);
+    if (owned === target) return;
+    const map = kind === "plate" ? this.plates : this.glasses;
+    if (owned > target) {
+      let excess = owned - target;
+      const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
+      for (const tier of tiersDesc) {
+        if (excess <= 0) break;
+        const e = map.get(tier)!;
+        const trimClean = Math.min(excess, e.clean);
+        e.clean -= trimClean;
+        excess -= trimClean;
+        if (excess <= 0) break;
+        const trimDirty = Math.min(excess, e.dirty);
+        e.dirty -= trimDirty;
+        excess -= trimDirty;
+      }
+      this.log(`hydrate: trimmed ${owned - target} excess ${kind}(s) → canonical ${target} (was ${owned})`);
+    } else {
+      const missing = target - owned;
+      const e = map.get(1) ?? { clean: 0, dirty: 0 };
+      e.clean += missing;
+      map.set(1, e);
+      this.log(`hydrate: topped up ${missing} missing ${kind}(s) → clean tier 1 (was ${owned}, target ${target})`);
+    }
+  }
+
   /** Admin: reset both pool and lifetime counters to STARTER +
    * sum(purchaseLog). Sole purpose is undoing the accumulated
    * over-compensation from the pre-fix hydrate bug. Players who
@@ -744,45 +798,21 @@ export class DishwareSystem {
     if (this.glasses.size === 0) this.glasses.set(1, { clean: STARTER_GLASS_COUNT, dirty: 0 });
     autoWashPool(this.plates);
     autoWashPool(this.glasses);
-    // (No in-flight add here anymore — that's the duping bug. The
-    //  saved in-flight count was sometimes double-counted from
-    //  reservedDishTiers, and the unconditional `pool += in-flight`
-    //  inflated the pool past the lifetime, which then propagated
-    //  upward via the Math.max baseline below. The top-up branch
-    //  beneath this comment already recovers any plates the guest
-    //  was holding at save time — anything in-flight shows up as
-    //  `lifetime > pool` after the save snapshot is loaded.)
-    // Lifetime is the GROUND TRUTH. It comes from the persisted save
-    // value (which only grows via buySet) — no Math.max re-baseline,
-    // no widening on hydrate noise. Old saves without a lifetime
-    // field fall back to "current owned" so they don't fail to load.
-    this.lifetimeAddedPlate = Math.max(0, Math.floor(lifetime?.plate ?? this.getOwned("plate")));
-    this.lifetimeAddedGlass = Math.max(0, Math.floor(lifetime?.glass ?? this.getOwned("glass")));
-    // Top up the pool to match lifetime. Recovers BOTH leaks and
-    // in-flight pieces in one shot.
-    const havePlate = this.getOwned("plate");
-    const haveGlass = this.getOwned("glass");
-    if (this.lifetimeAddedPlate > havePlate) {
-      const missing = this.lifetimeAddedPlate - havePlate;
-      const e = this.plates.get(1) ?? { clean: 0, dirty: 0 };
-      e.clean += missing;
-      this.plates.set(1, e);
-      this.log(`hydrate recovered ${missing} missing plate(s) → clean tier 1`);
-    }
-    if (this.lifetimeAddedGlass > haveGlass) {
-      const missing = this.lifetimeAddedGlass - haveGlass;
-      const e = this.glasses.get(1) ?? { clean: 0, dirty: 0 };
-      e.clean += missing;
-      this.glasses.set(1, e);
-      this.log(`hydrate recovered ${missing} missing glass(es) → clean tier 1`);
-    }
-    // Restore purchase log if present in the save. Old saves don't
-    // have one; their lifetime stays whatever value the save
-    // recorded (may be bloated from the pre-fix bug — admin can
-    // call reconcileToPurchaseLog if they want to wipe back to
-    // STARTER + whatever future buys they make).
-    if (purchaseLog && Array.isArray(purchaseLog)) {
-      this.purchaseLog = purchaseLog
+    // === Phase I (H.76) — Canonical accounting via purchaseLog ===
+    //
+    // Per Dunnin's specification ("started with X, bought Y, total
+    // = X+Y"), lifetime is ALWAYS computed from STARTER +
+    // sum(purchaseLog).  The save's `lifetime` field is no longer
+    // trusted — it could be bloated from the legacy "subscription
+    // bump" + "restoreFromCloud re-baseline" bugs that ratcheted
+    // counts upward across sessions.  purchaseLog is the
+    // immutable audit trail of what the player actually bought;
+    // it can only grow via buySet (one append per purchase).
+
+    // Step 1 — load the audit log.
+    const sawLogField = Array.isArray(purchaseLog);
+    if (sawLogField) {
+      this.purchaseLog = purchaseLog!
         .filter((p) => p && typeof p.tier === "number" && typeof p.count === "number"
           && p.tier >= 1 && p.tier <= 5 && p.count > 0)
         .map((p) => ({
@@ -791,12 +821,49 @@ export class DishwareSystem {
           count: Math.floor(p.count),
           at: typeof p.at === "number" ? p.at : 0,
         }));
+    } else {
+      this.purchaseLog = [];
     }
-    // Quiet/silently-ignore the in-flight param — it's now unused on
-    // the read side. Keeping the signature for backwards-compat with
-    // the save format so old call sites don't have to change.
-    void inFlight;
-    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass}, log entries: ${this.purchaseLog.length}`);
+
+    // Step 2 — if the save predates the purchaseLog field (legacy
+    // user), synthesize a single retroactive entry from whatever
+    // is in the pool right now MINUS the starter.  That preserves
+    // their existing dishes as "things they bought back then" so
+    // we don't zero them out.  Going forward, future buys append
+    // normally.
+    //
+    // We ONLY synthesize for true legacy (sawLogField=false).  If
+    // the save HAS a purchaseLog field but it's empty, treat that
+    // as "user hasn't bought anything yet" — STARTER counts apply.
+    if (!sawLogField) {
+      const platesBeyondStarter = Math.max(0, this.getOwned("plate") - STARTER_PLATE_COUNT);
+      const glassesBeyondStarter = Math.max(0, this.getOwned("glass") - STARTER_GLASS_COUNT);
+      if (platesBeyondStarter > 0) {
+        this.purchaseLog.push({ kind: "plate", tier: 1, count: platesBeyondStarter, at: 0 });
+      }
+      if (glassesBeyondStarter > 0) {
+        this.purchaseLog.push({ kind: "glass", tier: 1, count: glassesBeyondStarter, at: 0 });
+      }
+      if (platesBeyondStarter > 0 || glassesBeyondStarter > 0) {
+        this.log(`legacy save without purchaseLog — synthesized ${platesBeyondStarter} plate(s) + ${glassesBeyondStarter} glass(es) into the log`);
+      }
+    }
+
+    // Step 3 — derive lifetime from the (possibly-just-synthesized) log.
+    const target = this.computeLifetimeFromLog();
+    this.lifetimeAddedPlate = target.plate;
+    this.lifetimeAddedGlass = target.glass;
+
+    // Step 4 — reconcile the loaded pool to match the canonical
+    // lifetime.  Trim if over (bloat recovery), top up if under
+    // (in-flight pieces returning home, leaks from chef-stall etc.).
+    this.reconcilePoolToLifetime("plate");
+    this.reconcilePoolToLifetime("glass");
+
+    // The `inFlight` + `lifetime` save params are now ignored — kept
+    // in the signature only so old call sites don't have to change.
+    void inFlight; void lifetime;
+    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass} (canonical), log entries: ${this.purchaseLog.length}`);
     // Phase E — push the post-hydrate pool snapshot to the cloud so
     // subscribers see the loaded restaurant's dish inventory without
     // waiting for the first per-action mutation.
