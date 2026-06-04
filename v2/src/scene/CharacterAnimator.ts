@@ -49,6 +49,36 @@ export class CharacterAnimator {
   private readonly characters: AnimatedCharacter[] = [];
   private elapsed = 0;
 
+  // Phase I (perf) — frustum culling so off-screen characters skip
+  // the per-frame pose update.  Engine calls setCullCamera() once
+  // after the camera is constructed.  When unset, the cull is a
+  // no-op (every character ticks every frame, original behaviour).
+  //
+  // Scaling: at the iso angle + typical FOV, ~30-50 % of all spawned
+  // characters are off-camera at any moment (pedestrians on the
+  // far side of the city, customers inside other plots etc.).  Skipping
+  // tickCharacter for them saves a switch statement + 3 trig calls +
+  // a position/rotation/scale write per skipped character per frame.
+  private cullCamera?: THREE.Camera;
+  private worldRoot?: THREE.Object3D;
+  private readonly frustum = new THREE.Frustum();
+  private readonly projScreenMatrix = new THREE.Matrix4();
+  // Reused sphere — character ~1.5 m tall + ~0.4 m wide, so radius
+  // 0.9 covers both well.  intersectsSphere (not containsPoint) so
+  // a character with feet just below the frustum but head visible
+  // still ticks.
+  private readonly cullSphere = new THREE.Sphere(new THREE.Vector3(), 0.9);
+
+  /** Phase I (perf) — wire the camera + worldRoot so update() can
+   * frustum-cull off-screen characters.  worldRoot is needed because
+   * character roots are children of it, so c.root.position is in
+   * worldRoot-local space; we add worldRoot.position to get the
+   * world coord that the camera frustum is in. */
+  setCullCamera(camera: THREE.Camera, worldRoot: THREE.Object3D): void {
+    this.cullCamera = camera;
+    this.worldRoot = worldRoot;
+  }
+
   add(c: AnimatedCharacter): void {
     c._baseScale = c.root.scale.x; // assume uniform scale
     c.phase = c.phase ?? Math.random() * 100;
@@ -67,7 +97,37 @@ export class CharacterAnimator {
 
   update(dt: number): void {
     this.elapsed += dt;
+    // Phase I (perf) — recompute the frustum from the camera's
+    // current projection × inverse-world matrix.  Three.js does
+    // this once per render anyway; we duplicate the work here so
+    // the cull decision uses the SAME frustum the renderer will
+    // use moments later.  Sub-millisecond per frame.
+    const cull = this.cullCamera && this.worldRoot;
+    let wx = 0, wy = 0, wz = 0;
+    if (cull) {
+      this.cullCamera!.updateMatrixWorld();
+      this.projScreenMatrix.multiplyMatrices(
+        this.cullCamera!.projectionMatrix,
+        this.cullCamera!.matrixWorldInverse,
+      );
+      this.frustum.setFromProjectionMatrix(this.projScreenMatrix);
+      wx = this.worldRoot!.position.x;
+      wy = this.worldRoot!.position.y;
+      wz = this.worldRoot!.position.z;
+    }
     for (const c of this.characters) {
+      if (cull) {
+        // Sphere centred on the character's head (groundPos + ~0.9 m
+        // up the body) so a tall character isn't false-culled when
+        // their feet are below the bottom plane.
+        const baseY = c._baseY ?? 0;
+        this.cullSphere.center.set(
+          c.groundPos.x + wx,
+          baseY + wy + 0.45,
+          c.groundPos.y + wz,
+        );
+        if (!this.frustum.intersectsSphere(this.cullSphere)) continue;
+      }
       this.tickCharacter(c);
     }
   }

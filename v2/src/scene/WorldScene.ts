@@ -118,6 +118,14 @@ interface PerimeterWallState {
   wallMatRef?: THREE.MeshStandardMaterial;
 }
 
+/** Phase I (perf) — pool size for placed-lamp point lights.  16 is
+ * generous for a small / medium restaurant; the player rarely places
+ * more lamps than this.  Beyond the pool, registerLamp falls back to
+ * the construct-a-new-light path (one shader recompile per extra
+ * lamp).  Bumping this costs ~3 KB of GPU buffer per extra light +
+ * grows the per-pixel shader cost slightly (proportional to N). */
+const PLACED_LAMP_POOL_SIZE = 16;
+
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
   readonly loader = new ModelLoader();
@@ -698,6 +706,35 @@ export class WorldScene {
     this.fillLight.position.set(-6, 10, -4);
     this.threeScene.add(this.fillLight);
 
+    // Phase I (perf) — pre-allocated pool of PointLights for placed
+    // lamps.  Three.js recompiles every shader using lighting whenever
+    // the active light count in the scene graph changes — that's a
+    // 50-500 ms GPU stall.  Without the pool, EACH lamp placement
+    // changed the count by 1 and triggered the stall — the lag the
+    // user notices when placing lights.
+    //
+    // With the pool: lights are created ONCE at boot (paying the
+    // recompile cost during the loading screen, when nobody sees it).
+    // registerLamp re-parents an existing pool light under the lamp
+    // model instead of constructing a new one — re-parenting doesn't
+    // change the active-light count, so no recompile.  Placement
+    // becomes instant.
+    //
+    // Pool size 16 covers the typical restaurant layout (player
+    // rarely places more lamps than this).  Past the pool's capacity
+    // we fall back to the old construct-a-new-light path, accepting
+    // one recompile per additional lamp.
+    for (let i = 0; i < PLACED_LAMP_POOL_SIZE; i += 1) {
+      const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
+      light.castShadow = false;
+      // Park far below the ground while idle so the light contributes
+      // nothing visible but the shader still compiles for the right
+      // active-light count.
+      light.position.set(0, -100, 0);
+      this.worldRoot.add(light);
+      this.placedLampLightPool.push({ light, inUse: false });
+    }
+
     // Sky dome — sphere radius 600 (well inside the camera's far
     // plane of 1000) with BackSide material so the camera sees its
     // inner surface, depthWrite false so it never occludes scene
@@ -736,6 +773,15 @@ export class WorldScene {
   // ramps the intensity with how dark the sky is. Cap is enforced
   // implicitly by the player's furniture budget.
   private placedLamps: { model: THREE.Object3D; light: THREE.PointLight; bulb: THREE.Mesh }[] = [];
+
+  /** Phase I (perf) — pool of pre-allocated PointLights for placed
+   * lamps.  See the comment in addLighting() for the rationale (avoids
+   * shader recompile on every lamp placement).  Each entry is either
+   * idle (parented to worldRoot, intensity 0, far below ground) or
+   * in-use (parented to a lamp model, intensity ramped to current
+   * darkness).  registerLamp claims a free slot; unregisterLamp
+   * releases it. */
+  private placedLampLightPool: { light: THREE.PointLight; inUse: boolean }[] = [];
   /** Footprints of every procedurally-placed scenery house in the city
    * (populated by addCityScenery). The scatter passes that follow
    * (grass blades, wildflowers, trees, rocks) consult this list via
@@ -825,10 +871,33 @@ export class WorldScene {
     const sy = model.scale.y || 1;
     const sz = model.scale.z || 1;
 
-    const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
-    light.position.copy(localCentre);
-    light.castShadow = false; // shadow maps for many lamps tank perf
-    model.add(light);
+    // Phase I (perf) — try to claim a pool light first.  Re-parenting
+    // an existing light DOESN'T change the scene's active-light count
+    // (Three.js traverses to count, both parents are in the scene),
+    // so no shader recompile.  Falls back to constructing a fresh
+    // light only if the pool is exhausted (>= 16 placed lamps).
+    let light: THREE.PointLight;
+    const poolEntry = this.placedLampLightPool.find((e) => !e.inUse);
+    if (poolEntry) {
+      poolEntry.inUse = true;
+      light = poolEntry.light;
+      // Detach from worldRoot (the pool's idle parent) before
+      // re-attaching to the lamp model.  Object3D.add() handles
+      // re-parenting automatically (removes from previous parent),
+      // but we set the position FIRST so the brief one-frame world
+      // matrix update reads the right placement.
+      light.position.copy(localCentre);
+      model.add(light);
+    } else {
+      // Pool exhausted — construct a fresh light.  This adds an extra
+      // active light to the scene, which triggers a shader recompile
+      // on the next render.  Acceptable: the player has already placed
+      // 16+ lamps so they're past the eager-iteration phase.
+      light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
+      light.position.copy(localCentre);
+      light.castShadow = false;
+      model.add(light);
+    }
     // A tiny emissive sphere makes the bulb itself visibly "lit" at
     // night even when the player can't see the cone of illumination.
     const bulb = new THREE.Mesh(
@@ -850,7 +919,8 @@ export class WorldScene {
   }
 
   /** Remove a lamp from the active list (sell mode, undo, etc.). The
-   * point light is disposed; the bulb mesh is removed too. */
+   * point light is returned to the pool (or disposed if it was a
+   * pool-overflow fallback); the bulb mesh is removed and disposed. */
   unregisterLamp(model: THREE.Object3D): void {
     const i = this.placedLamps.findIndex((lp) => lp.model === model);
     if (i < 0) return;
@@ -859,6 +929,21 @@ export class WorldScene {
     model.remove(lp.bulb);
     lp.bulb.geometry.dispose();
     (lp.bulb.material as THREE.Material).dispose();
+    // Phase I (perf) — return the light to the pool so the next
+    // registerLamp can reuse it.  If this light wasn't from the pool
+    // (placement past PLACED_LAMP_POOL_SIZE), dispose it; that drops
+    // the scene's active-light count and triggers a shader recompile
+    // on the next render — same cost as the original out-of-pool
+    // path on the way in.
+    const poolEntry = this.placedLampLightPool.find((e) => e.light === lp.light);
+    if (poolEntry) {
+      poolEntry.inUse = false;
+      lp.light.intensity = 0;
+      lp.light.position.set(0, -100, 0); // park idle below ground
+      this.worldRoot.add(lp.light);      // back to idle parent
+    } else {
+      lp.light.dispose();
+    }
     this.placedLamps.splice(i, 1);
   }
 

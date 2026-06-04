@@ -235,6 +235,14 @@ export class Engine {
     this.scene = new WorldScene();
     this.camera = new IsoCamera(container.clientWidth, container.clientHeight);
     this.camera.attachInputTo(this.renderer.domElement);
+    // Phase I (perf) — wire the camera + worldRoot into the
+    // CharacterAnimator so its update() can frustum-cull off-screen
+    // characters and skip their per-frame pose recompute.  ~30-50 %
+    // of spawned characters are off-camera at iso angle (other plots,
+    // far side of the city), so this typically drops tickCharacter
+    // work in half.  Safe to call this early: setCullCamera just
+    // stores refs; the actual frustum is rebuilt every update().
+    this.scene.animator.setCullCamera(this.camera.threeCamera, this.scene.worldRoot);
 
     const savedState = SaveSystem.loadFromStorage();
     // Track whether we booted on a truly fresh device (no localStorage
