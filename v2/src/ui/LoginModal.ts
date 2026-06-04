@@ -151,6 +151,23 @@ export class LoginModal {
     this.body = document.createElement("div");
     card.appendChild(this.body);
 
+    // Modal-root Enter handler — defensive fallback for the per-input
+    // wireEnterSubmit.  If focus is on a tab button, a link, a
+    // checkbox, or anywhere else inside the modal, pressing Enter
+    // still clicks the current tab's primary submit button.  Skipped
+    // when focus is on a <textarea> (forgot-tab message field needs
+    // multi-line input) or when the button is disabled (in-flight
+    // request).
+    this.root.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const target = e.target as HTMLElement | null;
+      if (target instanceof HTMLTextAreaElement) return;
+      const submit = this.body.querySelector<HTMLButtonElement>("button[data-primary='1']");
+      if (!submit || submit.disabled) return;
+      e.preventDefault();
+      submit.click();
+    });
+
     this.render();
   }
 
@@ -409,6 +426,9 @@ export class LoginModal {
   private makePrimaryButton(label: string): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.textContent = label;
+    // Tag so the modal-root Enter handler can find the current
+    // tab's submit button regardless of where focus is.
+    btn.dataset.primary = "1";
     Object.assign(btn.style, {
       display: "block",
       width: "100%",

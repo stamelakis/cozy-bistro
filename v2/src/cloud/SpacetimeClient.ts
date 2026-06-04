@@ -157,7 +157,30 @@ export interface ActiveTicketRow {
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
 
-const TOKEN_KEY = "cozy-bistro-stdb-token";
+/** Base prefix for the stored auth token.  The actual storage key is
+ * `<TOKEN_KEY_BASE>:<host-slug>` so each SpacetimeDB host gets its
+ * own token slot — critical when switching between Maincloud and a
+ * self-hosted instance, because a token signed by one server's
+ * private key is meaningless to the other.  Without this scoping
+ * the OLD Maincloud token was being sent to the new ownsun box,
+ * which rejected it silently and left the connection hanging until
+ * the 10 s "Server didn't respond in time" timeout fired. */
+const TOKEN_KEY_BASE = "cozy-bistro-stdb-token";
+
+/** Derive the storage key for a given host URL.  Strips protocol +
+ * trailing slash + non-alphanumerics so the key is short and
+ * filesystem-safe.  Examples:
+ *   wss://maincloud.spacetimedb.com → maincloud-spacetimedb-com
+ *   wss://dunnin-spacetime.ownsun.de → dunnin-spacetime-ownsun-de */
+function tokenStorageKeyFor(host: string): string {
+  const slug = host
+    .replace(/^wss?:\/\//, "")
+    .replace(/\/+$/, "")
+    .replace(/[^a-zA-Z0-9-]/g, "-")
+    .toLowerCase();
+  return `${TOKEN_KEY_BASE}:${slug}`;
+}
+
 // Self-hosted SpacetimeDB instance (Jercy's box at ownsun.de).
 // Moved off Maincloud to escape the energy-budget metering — the
 // per-tick / per-mirror cadence even after the H.* optimizations
@@ -2569,14 +2592,26 @@ export class SpacetimeClient {
    * for this session so the onConnect write-back goes to the same
    * place (otherwise we'd silently "upgrade" the user to remembered). */
   connect(): void {
+    const tokenKey = tokenStorageKeyFor(this.cfg.host);
+    // One-time migration: if an unscoped legacy token exists (from
+    // before the per-host scoping), nuke it.  It was likely signed
+    // by Maincloud and would just confuse a self-hosted server.
+    try {
+      if (localStorage.getItem(TOKEN_KEY_BASE) != null) {
+        localStorage.removeItem(TOKEN_KEY_BASE);
+      }
+      if (sessionStorage.getItem(TOKEN_KEY_BASE) != null) {
+        sessionStorage.removeItem(TOKEN_KEY_BASE);
+      }
+    } catch { /* private-mode storage error — proceed */ }
     let stored: string | undefined;
     try {
-      const sessionTok = sessionStorage.getItem(TOKEN_KEY);
+      const sessionTok = sessionStorage.getItem(tokenKey);
       if (sessionTok) {
         stored = sessionTok;
         this.rememberMe = false;
       } else {
-        stored = localStorage.getItem(TOKEN_KEY) ?? undefined;
+        stored = localStorage.getItem(tokenKey) ?? undefined;
         // rememberMe stays at its current value (default true)
       }
     } catch { /* private-mode storage error — connect anyway */ }
@@ -2590,8 +2625,17 @@ export class SpacetimeClient {
         this.afterConnect(conn, identity);
       })
       .onDisconnect(() => console.warn("[SpacetimeDB] disconnected"))
-      .onConnectError((_ctx: ErrorContext, err: Error) =>
-        console.error("[SpacetimeDB] connect error", err));
+      .onConnectError((_ctx: ErrorContext, err: Error) => {
+        console.error("[SpacetimeDB] connect error", err);
+        // If the server rejected our stored token (auth failed,
+        // signature mismatch from a different host, etc.), nuke it
+        // and tell the user to retry — the next connect will be
+        // anonymous and the LoginModal will let them sign up cleanly.
+        try {
+          sessionStorage.removeItem(tokenKey);
+          localStorage.removeItem(tokenKey);
+        } catch { /* ignore */ }
+      });
     if (stored) builder = builder.withToken(stored);
     try {
       this.conn = builder.build();
@@ -2615,20 +2659,21 @@ export class SpacetimeClient {
    * BEFORE the user sees the login form. */
   setRememberMe(b: boolean): void {
     this.rememberMe = b;
+    const tokenKey = tokenStorageKeyFor(this.cfg.host);
     try {
-      const fromLocal = localStorage.getItem(TOKEN_KEY);
-      const fromSession = sessionStorage.getItem(TOKEN_KEY);
+      const fromLocal = localStorage.getItem(tokenKey);
+      const fromSession = sessionStorage.getItem(tokenKey);
       const token = fromLocal ?? fromSession;
       if (!token) return;
       if (b) {
         // Promote to permanent storage.
-        localStorage.setItem(TOKEN_KEY, token);
-        sessionStorage.removeItem(TOKEN_KEY);
+        localStorage.setItem(tokenKey, token);
+        sessionStorage.removeItem(tokenKey);
       } else {
         // Demote to session-only storage; wipe permanent copy so a
         // browser close really clears the identity.
-        sessionStorage.setItem(TOKEN_KEY, token);
-        localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.setItem(tokenKey, token);
+        localStorage.removeItem(tokenKey);
       }
     } catch { /* ignore quota / private mode */ }
   }
@@ -2637,13 +2682,14 @@ export class SpacetimeClient {
    * current rememberMe preference. Pairs with connect() reading
    * from the same place. */
   private persistToken(token: string): void {
+    const tokenKey = tokenStorageKeyFor(this.cfg.host);
     try {
       if (this.rememberMe) {
-        localStorage.setItem(TOKEN_KEY, token);
-        sessionStorage.removeItem(TOKEN_KEY);
+        localStorage.setItem(tokenKey, token);
+        sessionStorage.removeItem(tokenKey);
       } else {
-        sessionStorage.setItem(TOKEN_KEY, token);
-        localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.setItem(tokenKey, token);
+        localStorage.removeItem(tokenKey);
       }
     } catch { /* ignore */ }
   }
