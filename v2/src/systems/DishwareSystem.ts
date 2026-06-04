@@ -257,55 +257,17 @@ export class DishwareSystem {
     const cur = pool.get(row.tier);
     if (cur && cur.clean === row.clean && cur.dirty === row.dirty) return;
 
-    // Phase I (H.78) — SELF-HEALING CAP.  If accepting this cloud row
-    // would push the total owned past the canonical lifetime, REJECT
-    // it and push our local truth back to cloud instead.
-    //
-    // Why this matters: previous sessions persisted bloated values to
-    // cloud's dishware_pool (the 534-plate ratchet).  H.76 makes
-    // local hydrate to a clean canonical count, but the cloud
-    // subscription's INITIAL sync replays those stale rows back at
-    // the client — overwriting the freshly-trimmed local back to
-    // bloated.  Combined with mirrorBump elsewhere, the user sees
-    // "fixed at 40 → jumped to 500 instantly" right after first
-    // delivery of the subscription cache.
-    //
-    // Now: applyPoolRow simulates the row, checks if owned would
-    // exceed lifetime, and if so leaves local alone + pushes our
-    // canonical truth back to cloud (one bumpDishwarePool per
-    // mismatch).  The cloud's row self-heals to canonical, and
-    // subsequent subscription deltas match.
-    const lifetime = row.kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
-    // Simulate accepting the row + sum the other tiers' owned.
-    let otherTiersOwned = 0;
-    for (const [tier, e] of pool) {
-      if (tier !== row.tier) otherTiersOwned += e.clean + e.dirty;
-    }
-    const proposedOwned = otherTiersOwned + row.clean + row.dirty;
-    if (proposedOwned > lifetime) {
-      console.warn(
-        `[Dishware] H.78 rejected cloud row that would push owned past lifetime: ` +
-        `kind=${row.kind} tier=${row.tier} cloudClean=${row.clean} cloudDirty=${row.dirty} ` +
-        `→ proposed owned=${proposedOwned}, lifetime=${lifetime}.  Pushing local truth back.`,
-      );
-      // Force local back to canonical (in case some prior code
-      // already mutated it) and push every tier of this kind UP to
-      // cloud so the bloated row gets overwritten.
-      this.reconcilePoolToLifetime(row.kind);
-      if (this.cloud && isServerSim("dishware")) {
-        for (const [tier, e] of pool) {
-          this.cloud.updateDishwarePool(row.kind, tier, e.clean, e.dirty);
-        }
-      }
-      return;
-    }
-
+    // Phase I (H.83) — REMOVED the H.78 "reject + push back" path.
+    // Per user demand "remove all of these mechanisms".  Cloud wins
+    // outright: whatever the row says, the local pool takes.  If
+    // the cloud sends a value past lifetime, the next hydrate trims
+    // it via reconcilePoolToLifetime; we don't second-guess the
+    // subscription mid-flight.  Lifetime stays canonical (STARTER +
+    // sum(purchaseLog)) and the trim-only invariant in hydrate
+    // corrects any drift on next reload.
     this.suppressMirrorForReload = true;
     try {
       pool.set(row.tier, { clean: row.clean, dirty: row.dirty });
-      // Phase I (H.76) — REMOVED the lifetime self-heal bump.  Lifetime
-      // is strictly derived from STARTER + sum(purchaseLog) — never
-      // from the pool's owned count.
     } finally {
       this.suppressMirrorForReload = false;
     }
@@ -588,47 +550,47 @@ export class DishwareSystem {
     return { plate, glass };
   }
 
-  /** Phase I (H.76) — Reconcile a single kind's pool to match the
-   * canonical lifetime.  Called by hydrate after computing lifetime
-   * from STARTER + sum(purchaseLog).  Two cases:
+  /** Phase I (H.83) — Reconcile a kind's pool to canonical lifetime.
    *
-   *   - owned > target (BLOAT): trim the excess.  Start from
-   *     highest-tier clean (most replaceable), then highest-tier
-   *     dirty, walking down to tier 1.  Preserves the player's
-   *     best plates last.
-   *   - owned < target (LEAK): top up the missing count into tier
-   *     1 clean.  These are pieces that were in-flight at save
-   *     time or got dropped by the chef-stall bug; recovering them
-   *     keeps the total honest.
+   * STRICT TRIM-ONLY policy.  User's words: "remove all of these
+   * mechanisms".  The previous H.76 path had two branches — trim
+   * when over, TOP UP when under.  The top-up path was the last
+   * "restore" mechanism left and it was creating OVER counts
+   * (clean + dirty + washing + in_use > lifetime) whenever hydrate
+   * fired before the in-flight bucket was reconstructed: it added
+   * dishes assuming nothing was in-flight, then the in_use count
+   * loaded separately on top of that.
    *
-   * No-op when owned === target. */
-  private reconcilePoolToLifetime(kind: DishKind): void {
+   * The "owned" used for the comparison now includes EVERY state
+   * bucket — pool clean + dirty + dishwasher batches' contents +
+   * caller-passed in-flight count — so the trim is fair and the
+   * top-up is unnecessary.  If owned < lifetime after hydrate, that
+   * just means some dishes are in transit and will return through
+   * the normal wash cycle.  We DO NOT add anything to the pool to
+   * compensate.
+   *
+   * Only trims if owned strictly > lifetime.  Trim order: highest-
+   * tier clean → highest-tier dirty → walk down. */
+  private reconcilePoolToLifetime(kind: DishKind, inFlightForKind: number): void {
     const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
-    const owned = this.getOwned(kind);
-    if (owned === target) return;
+    const inWash = this.getDishwasherInFlight(kind);
+    const owned = this.getOwned(kind) + inWash + inFlightForKind;
+    if (owned <= target) return; // nothing to do — DO NOT restore
     const map = kind === "plate" ? this.plates : this.glasses;
-    if (owned > target) {
-      let excess = owned - target;
-      const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
-      for (const tier of tiersDesc) {
-        if (excess <= 0) break;
-        const e = map.get(tier)!;
-        const trimClean = Math.min(excess, e.clean);
-        e.clean -= trimClean;
-        excess -= trimClean;
-        if (excess <= 0) break;
-        const trimDirty = Math.min(excess, e.dirty);
-        e.dirty -= trimDirty;
-        excess -= trimDirty;
-      }
-      this.log(`hydrate: trimmed ${owned - target} excess ${kind}(s) → canonical ${target} (was ${owned})`);
-    } else {
-      const missing = target - owned;
-      const e = map.get(1) ?? { clean: 0, dirty: 0 };
-      e.clean += missing;
-      map.set(1, e);
-      this.log(`hydrate: topped up ${missing} missing ${kind}(s) → clean tier 1 (was ${owned}, target ${target})`);
+    let excess = owned - target;
+    const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
+    for (const tier of tiersDesc) {
+      if (excess <= 0) break;
+      const e = map.get(tier)!;
+      const trimClean = Math.min(excess, e.clean);
+      e.clean -= trimClean;
+      excess -= trimClean;
+      if (excess <= 0) break;
+      const trimDirty = Math.min(excess, e.dirty);
+      e.dirty -= trimDirty;
+      excess -= trimDirty;
     }
+    this.log(`hydrate: trimmed ${owned - target} excess ${kind}(s) → canonical ${target} (was ${owned}: pool+wash+inFlight)`);
   }
 
   /** Admin: reset both pool and lifetime counters to STARTER +
@@ -888,15 +850,25 @@ export class DishwareSystem {
     this.lifetimeAddedPlate = target.plate;
     this.lifetimeAddedGlass = target.glass;
 
-    // Step 4 — reconcile the loaded pool to match the canonical
-    // lifetime.  Trim if over (bloat recovery), top up if under
-    // (in-flight pieces returning home, leaks from chef-stall etc.).
-    this.reconcilePoolToLifetime("plate");
-    this.reconcilePoolToLifetime("glass");
+    // Step 4 — Phase I (H.83) — TRIM-ONLY reconcile.  The "top up
+    // missing" branch is GONE per user demand "remove all of these
+    // mechanisms".  We pass the saved in-flight count so trim
+    // sees the full owned picture (pool + dishwasher + in-flight)
+    // before deciding.  If owned <= lifetime: do nothing.  Pool
+    // can be temporarily UNDER lifetime when dishes are out in
+    // customer hands or mid-wash — that's normal flow, not a leak.
+    let inFlightPlates = 0;
+    let inFlightGlasses = 0;
+    if (Array.isArray(inFlight)) {
+      for (const e of inFlight) {
+        if (e.kind === "plate") inFlightPlates += e.count;
+        else if (e.kind === "glass") inFlightGlasses += e.count;
+      }
+    }
+    this.reconcilePoolToLifetime("plate", inFlightPlates);
+    this.reconcilePoolToLifetime("glass", inFlightGlasses);
 
-    // The `inFlight` + `lifetime` save params are now ignored — kept
-    // in the signature only so old call sites don't have to change.
-    void inFlight; void lifetime;
+    void lifetime; // save's lifetime field is ignored — canonical is from log
     this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass} (canonical), log entries: ${this.purchaseLog.length}`);
     // Phase E — push the post-hydrate pool snapshot to the cloud so
     // subscribers see the loaded restaurant's dish inventory without
