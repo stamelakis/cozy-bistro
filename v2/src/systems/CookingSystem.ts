@@ -84,7 +84,14 @@ export class CookingSystem {
   }
 
   setRecipeUpgradeLevel(recipeId: string, level: number): void {
-    this.recipeUpgradeLevels[recipeId] = clamp(Math.floor(level), 1, maxRecipeUpgradeLevel);
+    const clamped = clamp(Math.floor(level), 1, maxRecipeUpgradeLevel);
+    this.recipeUpgradeLevels[recipeId] = clamped;
+    // H.53 — mirror per-restaurant per-recipe level so server's
+    // build_server_order applies the same effective satisfaction +
+    // price bonuses to server-spawned guests' orders.
+    if (this.cloud) {
+      this.cloud.setRecipeLevel(recipeId, clamped);
+    }
   }
 
   // === Recipe upgrade training (wall-clock) ===

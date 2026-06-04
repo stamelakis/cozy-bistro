@@ -1285,15 +1285,46 @@ pub struct RecipeMeta {
     /// "bar" routes through barman path (no waiter trip); rest
     /// route through chef + appliance furniture.
     pub appliance: String,
-    /// Effective sell price in cents at base upgrade level.
-    /// active_guest.order_prices_csv consumes this verbatim.
+    /// Effective sell price in cents at level 1 (base).
+    /// active_guest.order_prices_csv consumes this verbatim when
+    /// no per-restaurant recipe_level row exists; H.53 build_server_order
+    /// upgrades it via the level + tier delta when one does.
     pub sell_price_cents: i64,
-    /// Effective satisfaction × 100 at base upgrade level.
-    /// active_guest.order_satisfactions_csv consumes this.
+    /// Effective satisfaction × 100 at level 1 (base).
+    /// active_guest.order_satisfactions_csv consumes this; H.53
+    /// adds (level-1) × 150 per upgrade level.
     pub satisfaction_x100_base: i32,
     /// "appetizer" | "main" | "side" | "drink" | "dessert" — used
     /// for picking a balanced multi-course order.
     pub category: String,
+
+    /// Phase H.53 — Luxury tier (1-5) of this recipe.  Server uses
+    /// the tier × upgrade-level product to compute the effective
+    /// sell price beyond level 1:
+    ///   effective_price = base + (level - 1) × TIER_BASE_PROFIT[tier]
+    /// Migration-safe primitive default of 1 (lowest tier) so
+    /// pre-H.53 rows behave like cheap recipes — slight under-pricing
+    /// until the client re-seeds.
+    #[default(1u32)]
+    pub tier: u32,
+}
+
+/// Phase H.53 — Per-restaurant per-recipe upgrade level.  Mirrors
+/// CookingSystem.recipeUpgradeLevels[recipeId] on the client.  When
+/// missing, server defaults to level 1 (base values from recipe_meta
+/// stand without any bonus).
+///
+/// Key = "{restaurant_id}:{recipe_id}" — same pattern as pantry_stock.
+/// Client fires set_recipe_level on every getCookingSystem.set
+/// or completion drain (consume_pending_recipe_upgrades).
+#[table(name = recipe_level, public)]
+pub struct RecipeLevel {
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub recipe_id: String,
+    pub level: u32,
 }
 
 /// Phase H.40 — Current "on-menu" recipe set per restaurant. One row

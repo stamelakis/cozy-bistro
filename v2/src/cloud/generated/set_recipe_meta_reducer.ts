@@ -17,4 +17,5 @@ export default {
   sellPriceCents: __t.i64(),
   satisfactionX100Base: __t.i32(),
   category: __t.string(),
+  tier: __t.u32(),
 };

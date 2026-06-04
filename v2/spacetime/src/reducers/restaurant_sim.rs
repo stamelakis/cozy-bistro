@@ -15,12 +15,12 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Time
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
     dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
-    placed_furniture, player, recipe_ingredients, recipe_meta,
+    placed_furniture, player, recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
-    RecipeIngredients, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
+    RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
     RestaurantTickSchedule, RestaurantTickState, StaffActor,
 };
 
@@ -1267,6 +1267,7 @@ pub fn set_recipe_meta(
     sell_price_cents: i64,
     satisfaction_x100_base: i32,
     category: String,
+    tier: u32,
 ) -> Result<(), String> {
     let zero = spacetimedb::Identity::__dummy();
     if ctx.sender == zero { return Err("Must be authenticated".into()); }
@@ -1279,7 +1280,8 @@ pub fn set_recipe_meta(
             && r.appliance == appliance
             && r.sell_price_cents == sell_price_cents
             && r.satisfaction_x100_base == satisfaction_x100_base
-            && r.category == category {
+            && r.category == category
+            && r.tier == tier {
             return Ok(()); // idempotent
         }
     }
@@ -1290,11 +1292,50 @@ pub fn set_recipe_meta(
         sell_price_cents,
         satisfaction_x100_base,
         category,
+        tier,
     };
     if existing.is_some() {
         ctx.db.recipe_meta().recipe_id().update(row);
     } else {
         ctx.db.recipe_meta().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase H.53 — Client mirrors a recipe's per-restaurant upgrade
+/// level (1..maxRecipeUpgradeLevel).  Owner-only.  Idempotent on
+/// identical level.
+#[reducer]
+pub fn set_recipe_level(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    recipe_id: String,
+    level: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set a recipe level".into());
+    }
+    if recipe_id.is_empty() || recipe_id.len() > 64 {
+        return Err("recipe_id must be 1-64 chars".into());
+    }
+    let clamped = level.max(1);
+    let key = format!("{}:{}", restaurant_id, recipe_id);
+    let existing = ctx.db.recipe_level().key().find(key.clone());
+    if let Some(e) = &existing {
+        if e.level == clamped { return Ok(()); }
+    }
+    let row = RecipeLevel {
+        key,
+        restaurant_id,
+        recipe_id,
+        level: clamped,
+    };
+    if existing.is_some() {
+        ctx.db.recipe_level().key().update(row);
+    } else {
+        ctx.db.recipe_level().insert(row);
     }
     Ok(())
 }
@@ -1374,16 +1415,41 @@ fn build_server_order(
             // can't return a &str into a string we don't own.
             // Just convert to owned and use String everywhere below.
             let key = keys[0].clone();
-            return build_order_from_anchor(&by_cat, &key, hash);
+            return build_order_from_anchor(ctx, restaurant_id, &by_cat, &key, hash);
         }
         else { return empty; };
-    build_order_from_anchor(&by_cat, anchor_cat, hash)
+    build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash)
+}
+
+/// Phase H.53 — TIER_BASE_PROFIT in cents.  Matches the client's
+/// [0, 3, 4, 5, 6, 7] × 100 dollars.  Indexed by recipe tier
+/// (1..5); tier 0 is a degenerate "unknown" that contributes no
+/// profit bonus.  Same shape as the client constant.
+const TIER_BASE_PROFIT_CENTS: [i64; 6] = [0, 300, 400, 500, 600, 700];
+
+/// Phase H.53 — Satisfaction bonus per upgrade level, × 100.
+/// Matches the client's UPGRADE_SATISFACTION_PER_LEVEL = 1.5.
+const UPGRADE_SATISFACTION_PER_LEVEL_X100: i32 = 150;
+
+/// Phase H.53 — Look up a recipe's upgrade level for a given
+/// restaurant.  Returns 1 (base) when no row exists — same default
+/// as the client's getRecipeUpgradeLevel.
+fn recipe_level_for(ctx: &ReducerContext, restaurant_id: u64, recipe_id: &str) -> u32 {
+    let key = format!("{}:{}", restaurant_id, recipe_id);
+    ctx.db.recipe_level().key().find(key).map(|r| r.level.max(1)).unwrap_or(1)
 }
 
 /// Helper for build_server_order: assemble the 1-3 course order
 /// given a chosen anchor category. ~30% chance of an appetizer,
 /// ~30% chance of a dessert, randomly added.
+///
+/// H.53 — applies per-restaurant per-recipe upgrade-level bonuses
+/// to both price (linear in tier × level) and satisfaction (linear
+/// in level only).  Mirrors Game.getEffectiveSellPrice +
+/// getEffectiveSatisfaction on the client.
 fn build_order_from_anchor(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
     by_cat: &std::collections::HashMap<String, Vec<RecipeMeta>>,
     anchor_cat: &str,
     hash: u64,
@@ -1415,8 +1481,25 @@ fn build_order_from_anchor(
     let recipes: Vec<String> = courses.iter().map(|c| c.recipe_id.clone()).collect();
     let appliances: Vec<String> = courses.iter().map(|c| c.appliance.clone()).collect();
     let cooks: Vec<String> = courses.iter().map(|c| c.base_cook_seconds_ms.to_string()).collect();
-    let prices: Vec<String> = courses.iter().map(|c| c.sell_price_cents.to_string()).collect();
-    let sats: Vec<String> = courses.iter().map(|c| c.satisfaction_x100_base.to_string()).collect();
+    // H.53 — apply upgrade-level price and satisfaction bonuses
+    // per course.  Mirrors the client's effective formulas:
+    //   price = base + (level - 1) × TIER_BASE_PROFIT[tier]
+    //   sat   = base + (level - 1) × 1.5  (× 100 here)
+    let prices: Vec<String> = courses.iter().map(|c| {
+        let level = recipe_level_for(ctx, restaurant_id, &c.recipe_id);
+        let tier_idx = (c.tier as usize).min(TIER_BASE_PROFIT_CENTS.len() - 1);
+        let bonus_per_level = TIER_BASE_PROFIT_CENTS[tier_idx];
+        let effective = c.sell_price_cents.saturating_add(
+            ((level as i64) - 1).saturating_mul(bonus_per_level),
+        );
+        effective.max(0).to_string()
+    }).collect();
+    let sats: Vec<String> = courses.iter().map(|c| {
+        let level = recipe_level_for(ctx, restaurant_id, &c.recipe_id);
+        let bonus = ((level as i32) - 1).saturating_mul(UPGRADE_SATISFACTION_PER_LEVEL_X100);
+        let effective = c.satisfaction_x100_base.saturating_add(bonus);
+        effective.max(0).to_string()
+    }).collect();
     (
         recipes.join(","),
         appliances.join(","),

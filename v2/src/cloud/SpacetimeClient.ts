@@ -1498,6 +1498,10 @@ export class SpacetimeClient {
     sellPriceCents: number;
     satisfactionX100Base: number;
     category: string;
+    /** H.53 — luxury tier (1-5).  Server uses tier × upgrade-level
+     * to compute the price bonus.  Defaults to 1 in callers that
+     * pre-date this field. */
+    tier: number;
   }): void {
     if (!this.conn) return;
     if (!args.recipeId) return;
@@ -1509,9 +1513,28 @@ export class SpacetimeClient {
         sellPriceCents: BigInt(Math.max(0, Math.round(args.sellPriceCents))),
         satisfactionX100Base: Math.max(0, Math.round(args.satisfactionX100Base)),
         category: args.category,
+        tier: Math.max(1, Math.min(5, Math.round(args.tier))),
       });
     } catch (e) {
       console.warn("[Cloud] setRecipeMeta failed:", e);
+    }
+  }
+
+  /** H.53 — Mirror the per-restaurant upgrade level for a recipe.
+   * Owner-only server-side.  Server's build_server_order looks
+   * this up to apply effective-price + effective-satisfaction
+   * bonuses to server-spawned guests' orders. */
+  setRecipeLevel(recipeId: string, level: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!recipeId) return;
+    try {
+      this.conn.reducers.setRecipeLevel({
+        restaurantId: this.restaurantId,
+        recipeId,
+        level: Math.max(1, Math.round(level)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRecipeLevel failed:", e);
     }
   }
 

@@ -308,6 +308,14 @@ export const RecipeIngredients = __t.object("RecipeIngredients", {
 });
 export type RecipeIngredients = __Infer<typeof RecipeIngredients>;
 
+export const RecipeLevel = __t.object("RecipeLevel", {
+  key: __t.string(),
+  restaurantId: __t.u64(),
+  recipeId: __t.string(),
+  level: __t.u32(),
+});
+export type RecipeLevel = __Infer<typeof RecipeLevel>;
+
 export const RecipeMeta = __t.object("RecipeMeta", {
   recipeId: __t.string(),
   baseCookSecondsMs: __t.i64(),
@@ -315,6 +323,7 @@ export const RecipeMeta = __t.object("RecipeMeta", {
   sellPriceCents: __t.i64(),
   satisfactionX100Base: __t.i32(),
   category: __t.string(),
+  tier: __t.u32(),
 });
 export type RecipeMeta = __Infer<typeof RecipeMeta>;
 

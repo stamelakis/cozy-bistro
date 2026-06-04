@@ -96,6 +96,7 @@ import SetIngredientCostReducer from "./set_ingredient_cost_reducer";
 import SetMemberTrainingDeadlineReducer from "./set_member_training_deadline_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
+import SetRecipeLevelReducer from "./set_recipe_level_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SignUpReducer from "./sign_up_reducer";
@@ -141,6 +142,7 @@ import PlacedFurnitureRow from "./placed_furniture_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
 import RecipeIngredientsRow from "./recipe_ingredients_table";
+import RecipeLevelRow from "./recipe_level_table";
 import RecipeMetaRow from "./recipe_meta_table";
 import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
 import RestaurantRow from "./restaurant_table";
@@ -490,6 +492,20 @@ const tablesSchema = __schema({
       { name: 'recipe_ingredients_recipe_id_key', constraint: 'unique', columns: ['recipeId'] },
     ],
   }, RecipeIngredientsRow),
+  recipe_level: __table({
+    name: 'recipe_level',
+    indexes: [
+      { accessor: 'key', name: 'recipe_level_key_idx_btree', algorithm: 'btree', columns: [
+        'key',
+      ] },
+      { accessor: 'restaurant_id', name: 'recipe_level_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'recipe_level_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, RecipeLevelRow),
   recipe_meta: __table({
     name: 'recipe_meta',
     indexes: [
@@ -659,6 +675,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_member_training_deadline", SetMemberTrainingDeadlineReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
+  __reducerSchema("set_recipe_level", SetRecipeLevelReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("sign_up", SignUpReducer),

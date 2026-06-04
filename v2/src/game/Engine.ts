@@ -977,9 +977,17 @@ export class Engine {
       // catalog has changed between client + server). Catalog is
       // small (~50 recipes), so the burst of N reducer calls is
       // fine.
-      void import("../data/recipes").then(({ recipes }) => {
+      void Promise.all([
+        import("../data/recipes"),
+        import("../systems/CookingSystem"),
+      ]).then(([{ recipes }, { getRecipeLuxuryTier }]) => {
         for (const r of recipes) {
           this.cloud.setRecipeIngredients(r.id, r.ingredients);
+          // H.53 — also push the CURRENT per-restaurant upgrade level
+          // so server's build_server_order has it before the first
+          // server-spawned guest's order is computed.  Idempotent —
+          // server skips writes when the level matches.
+          this.cloud.setRecipeLevel(r.id, this.game.cooking.getRecipeUpgradeLevel(r));
           // H.40 — seed the full meta too (sibling table). Server
           // uses this to build orders for backgrounded-only guests.
           // Pick a sensible default appliance: "bar" for drinks,
@@ -994,6 +1002,9 @@ export class Engine {
             sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
             satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),
             category: r.category,
+            // H.53 — mirror luxury tier so server can compute the
+            // tier × upgrade-level price bonus.
+            tier: getRecipeLuxuryTier(r),
           });
         }
       });
