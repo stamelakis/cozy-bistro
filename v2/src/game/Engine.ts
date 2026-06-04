@@ -865,6 +865,14 @@ export class Engine {
       // mirrors guest lifecycle to the active_guest cloud table.
       // No-op when flag off (default).
       this.spawner.cloud = this.cloud;
+      // Phase I.1 (H.47) — hydrate from active_guest now that the
+      // spawner has its cloud handle.  Imports any cloud rows that
+      // aren't in the local save (server-spawned during offline play)
+      // and despawns local guests the server already settled.  Async
+      // because each import loads a GLB; we don't await it (foreground
+      // sim can resume immediately, imported guests pop in as their
+      // characters load — same UX as a normal spawn).
+      void this.spawner.hydrateFromCloud();
       // Phase C.3b — same for StaffRouter's ticket lifecycle. Plus
       // wire the cross-system lookup so placeOrder knows the server-
       // side guest id for the FK.

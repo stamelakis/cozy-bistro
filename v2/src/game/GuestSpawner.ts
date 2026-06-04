@@ -12,7 +12,7 @@ import { getFurnitureDef } from "../data/furnitureCatalog";
 import type { DishKind } from "../data/dishwareCatalog";
 import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
-import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste } from "../data/customerArchetypes";
+import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste, customerArchetypes } from "../data/customerArchetypes";
 import { RESTAURANT_THEMES } from "../data/themes";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
@@ -476,6 +476,118 @@ const ENTRY_SPAWN_X_RANGE = 60;
  * walkingToDoor → DOOR_POSITION → exitingDoor → DOOR_EXTERIOR_POSITION →
  * walkingOut → EXIT_POSITION → despawn. */
 const EXIT_POSITION = new THREE.Vector2(0, 10);
+
+// ============================================================================
+//         Phase I.1 (H.47) — Helpers for cloud→local guest hydrate
+// ============================================================================
+
+/** Look up a CustomerArchetype by its id string.  Falls back to
+ * "casual" when the id is unknown (e.g. a future archetype that the
+ * client catalog hasn't picked up yet). */
+function archetypeFromId(id: string): CustomerArchetype {
+  for (const a of customerArchetypes) {
+    if (a.id === id) return a;
+  }
+  return customerArchetypes[0]; // "casual" fallback
+}
+
+/** Construct a CustomerTaste from a cloud HydratableGuestRow.  Diet,
+ * decor/window prefs, cuisine bias, drink tolerance come straight
+ * from the cloud columns.  Fields the server doesn't track yet
+ * (preferredTheme, groupSize, privacyBias, barAffinity) get neutral
+ * defaults — these only affect seat-pick scoring which is a one-time
+ * decision the server already made; on hydrate the seat is already
+ * assigned so the missing values don't matter for ongoing play. */
+function tasteFromCloud(
+  row: import("../cloud/SpacetimeClient").HydratableGuestRow,
+): CustomerTaste {
+  const diet: DietKind =
+    row.tasteDiet === "drink" ? "drink"
+    : row.tasteDiet === "both" ? "both"
+    : "food";
+  const cat = row.tasteCuisineBias as CustomerTaste["preferredCategory"];
+  const okCat: CustomerTaste["preferredCategory"] =
+    (cat === "appetizer" || cat === "main" || cat === "dessert"
+     || cat === "drink" || cat === "side")
+      ? cat : "main";
+  return {
+    diet,
+    preferredTheme: RESTAURANT_THEMES[0]?.id ?? "",
+    decorAffinity: clamp(row.tasteDecorPref, 0, 1),
+    preferredCategory: okCat,
+    groupSize: 1,
+    windowAffinity: clamp(row.tasteWindowPref, 0, 1),
+    privacyBias: 0,
+    barAffinity: 0,
+  };
+}
+
+/** Map server state strings to local GuestState.  Server has a coarser
+ * set ("ordering" is absent locally — folded into "seated"); local
+ * has a richer waiting/door subdivision the server doesn't model.
+ * Unknown states fall through to "seated" as a safe sit-still default. */
+function cloudStateToLocal(serverState: string): GuestState {
+  switch (serverState) {
+    case "walkingIn":          return "walkingIn";
+    case "waiting":            return "waitingForSeat";
+    case "seated":             return "seated";
+    case "ordering":           return "seated"; // local treats this as a seated sub-phase
+    case "waitingForFood":     return "waitingForFood";
+    case "eating":             return "eating";
+    case "wcWalking":          return "walkingToToilet";
+    case "wcSitting":          return "atToilet";
+    case "wcWashing":          return "atSink";
+    case "returningFromToilet": return "returningFromToilet";
+    case "leaving":
+    case "walkingToDoor":      return "walkingToDoor";
+    case "exitingDoor":        return "exitingDoor";
+    case "walkingOut":
+    case "done":               return "walkingOut";
+    default:                   return "seated";
+  }
+}
+
+/** States where the character should be in its "sit" pose.  Used both
+ * for picking the animation action on import and for setting
+ * seatHeight (a tiny chair lift so the model lands on the cushion). */
+const SIT_STATES: Set<GuestState> = new Set([
+  "seated", "waitingForFood", "eating", "atToilet", "atSink", "waitingForSeat",
+]);
+
+/** Pick the character animation action ("sit" / "walk" / "idle") for
+ * a given local guest state.  Drives the CharacterAnimator's pose
+ * selection — wrong action just looks weird, doesn't break gameplay. */
+function actionFromState(state: GuestState): "sit" | "walk" | "idle" {
+  if (SIT_STATES.has(state)) return "sit";
+  return "walk";
+}
+
+/** Parse a comma-separated list of recipe ids into RecipeDefinition[].
+ * Skips unknown / blank ids silently so a stale cloud row referencing
+ * a deleted catalog recipe doesn't poison the import. */
+function parseOrderRecipes(csv: string): RecipeDefinition[] {
+  if (!csv) return [];
+  const out: RecipeDefinition[] = [];
+  for (const raw of csv.split(",")) {
+    const id = raw.trim();
+    if (!id) continue;
+    const r = recipes.find((x) => x.id === id);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
+/** Parse a comma-separated tier list ("1,2,1") into number[].  Used
+ * for reservedDishTiers on hydrate.  Bad entries default to 1. */
+function parseTiersCsv(csv: string): number[] {
+  if (!csv) return [];
+  const out: number[] = [];
+  for (const raw of csv.split(",")) {
+    const n = parseInt(raw.trim(), 10);
+    out.push(Number.isFinite(n) && n > 0 ? n : 1);
+  }
+  return out;
+}
 
 /** Fallback table-surface height. The live code path looks up the
  * actual placed-table model's bounding-box top via
@@ -1158,6 +1270,188 @@ export class GuestSpawner {
       if (g.id === localGuestId) return g.serverMirrorId;
     }
     return undefined;
+  }
+
+  // ======================================================================
+  //              Phase I.1 — H.47 cloud hydrate on reconnect
+  // ======================================================================
+  //
+  // Bridges the gap between save-snapshot restore and the live server
+  // state.  On a fresh tab, the save brings back whatever guests existed
+  // at the last autosave, but the server's active_guest table has the
+  // CURRENT state (including any H.33-spawned offline guests + state
+  // transitions the server ran while we were closed).  hydrateFromCloud
+  // reconciles the two:
+  //
+  //   1. Local guests whose serverMirrorId is no longer in active_guest
+  //      get despawned (server already settled them while offline).
+  //   2. Cloud rows not represented locally get imported as functional
+  //      Guests so the local sim picks up where the server left off.
+  //
+  // Engine calls this from onSubscriptionReady AFTER save load AND
+  // spawner construction.  Idempotent on repeated calls (no-op when
+  // local + cloud already agree).
+
+  /** True once hydrateFromCloud has run at least once.  Stops repeat
+   * calls (subscription re-readys, multi-tab swaps) from
+   * double-importing.  Cleared by despawnAllForReset / equivalent
+   * paths if we ever wire a "rejoin" flow. */
+  private cloudHydrated = false;
+
+  async hydrateFromCloud(): Promise<void> {
+    if (!this.cloud) return;
+    if (this.cloudHydrated) return;
+    const cloudRows = this.cloud.listActiveGuests();
+    // Even if cloud is empty, mark hydrated so we don't keep retrying.
+    this.cloudHydrated = true;
+    if (cloudRows.length === 0 && this.guests.length === 0) {
+      return;
+    }
+    // ---- 1. Despawn locals whose cloud row vanished --------------
+    const cloudIdSet = new Set<bigint>();
+    for (const r of cloudRows) cloudIdSet.add(r.id);
+    for (let i = this.guests.length - 1; i >= 0; i--) {
+      const g = this.guests[i];
+      if (g.serverMirrorId != null && !cloudIdSet.has(g.serverMirrorId)) {
+        if (DEBUG_GUEST_LOGS) {
+          console.log(`[H.47] despawn local guest ${g.id} (server already settled)`);
+        }
+        this.despawnGuest(i);
+      }
+    }
+    // ---- 2. Import cloud rows not represented locally ------------
+    const localServerIds = new Set<bigint>();
+    const localTempIds = new Set<string>();
+    for (const g of this.guests) {
+      if (g.serverMirrorId != null) localServerIds.add(g.serverMirrorId);
+      localTempIds.add(g.id);
+    }
+    const importPromises: Promise<void>[] = [];
+    for (const row of cloudRows) {
+      // Skip if already represented (by serverMirrorId or matching
+      // client_temp_id from the save's local id namespace).
+      if (localServerIds.has(row.id)) continue;
+      if (row.clientTempId && localTempIds.has(row.clientTempId)) continue;
+      importPromises.push(this.importCloudGuest(row));
+    }
+    const results = await Promise.allSettled(importPromises);
+    let imported = 0;
+    let failed = 0;
+    for (const r of results) {
+      if (r.status === "fulfilled") imported += 1;
+      else failed += 1;
+    }
+    console.log(`[H.47] hydrateFromCloud: ${imported} guests imported, ${failed} failed (cloud had ${cloudRows.length} rows, local has ${this.guests.length})`);
+  }
+
+  /** Build one local Guest from a cloud active_guest row.  Loads the
+   * character GLB, constructs the AnimatedCharacter, fills in every
+   * field with the cloud's value (or a reasonable default for things
+   * the cloud doesn't track — plates, path waypoints, taste fields
+   * not yet mirrored).  Appends to this.guests on success. */
+  private async importCloudGuest(
+    row: import("../cloud/SpacetimeClient").HydratableGuestRow,
+  ): Promise<void> {
+    const variant = (row.variant && GUEST_VARIANT_IDS.includes(row.variant))
+      ? row.variant : "guest-v0";
+    const model = await this.characterLoader.load(variant);
+    this.scene.add(model);
+
+    const archetype = archetypeFromId(row.archetype);
+    const taste = tasteFromCloud(row);
+    const state = cloudStateToLocal(row.state);
+    const action = actionFromState(state);
+    const isSitting = SIT_STATES.has(state);
+
+    // Seat height from action.  Toilet / sink seats use a lower
+    // value but we don't differentiate here — that's a Phase I.2
+    // fidelity issue.  0.62 matches the dining chair surface.
+    const seatHeight = isSitting ? 0.62 : 0;
+
+    const character: AnimatedCharacter = {
+      root: model,
+      groundPos: new THREE.Vector2(row.x, row.z),
+      facingY: row.seatFacingY ?? 0,
+      action,
+      phase: Math.random() * 5,
+      seatHeight,
+    };
+    this.animator.add(character);
+
+    // Re-parent to the correct storey group if cross-floor.
+    if (this.reparentCharacter && row.floor > 0) {
+      this.reparentCharacter(character, row.floor);
+    }
+
+    const localId = row.clientTempId || `cloud-${row.id}`;
+    const order = parseOrderRecipes(row.orderRecipes);
+    const reservedDishTiers = parseTiersCsv(row.reservedDishTiers);
+
+    const guest: ActiveGuest = {
+      id: localId,
+      variantId: variant,
+      state,
+      character,
+      seatId: row.seatUid as SeatId,
+      seatPos: new THREE.Vector2(row.seatX, row.seatZ),
+      seatFacingY: row.seatFacingY,
+      seatFloor: row.seatFloor,
+      seatAtBar: row.seatAtBar,
+      platePos: new THREE.Vector2(row.plateX || row.seatX, row.plateZ || row.seatZ),
+      target: new THREE.Vector2(row.targetX, row.targetZ),
+      passedDoor: state !== "walkingIn", // assume past door once seated/etc.
+      passedExterior: state !== "walkingIn",
+      stateClock: Number(row.stateClockMs) / 1000,
+      order,
+      orderIndex: row.orderIndex,
+      // Ticket id: the server-side u64 doesn't map cleanly to the
+      // local StaffRouter id namespace ("ticket-N").  Leave null —
+      // local will re-enqueue from the order on next state pass if
+      // the cloud's ticket is still cooking; the server's
+      // active_ticket hydrate (H.48b) will fix this properly.
+      ticketId: null,
+      patience: Number(row.patienceMs) / 1000,
+      totalPaid: Number(row.totalPaidCents) / 100,
+      totalSatisfaction: row.totalSatisfactionX100 / 100,
+      archetype,
+      taste,
+      path: [],
+      currentFloor: row.floor,
+      replanAccum: 0,
+      willUseToilet: row.willUseToilet,
+      // Defaults for fields cloud doesn't expose in HydratableGuestRow.
+      // The server's wash/toilet state is captured indirectly via
+      // `state` (wcWalking → walkingToToilet, etc.).  Latches default
+      // off — the sim re-derives them as the guest advances.
+      usedToilet: false,
+      reservedDishTiers,
+      serverMirrorId: row.id,
+      // Mark mirror flags as already-settled so periodic mirror
+      // doesn't re-push.  Cloud already has these values.
+      orderMirrored: order.length > 0,
+      waitingMirrored: !!row.waitingChairUid,
+      lastMirroredReservedTiers: row.reservedDishTiers,
+    };
+
+    if (row.waitingChairUid) {
+      guest.waiting = {
+        chairUid: row.waitingChairUid,
+        chairPos: new THREE.Vector2(row.x, row.z),
+        chairFacingY: 0,
+        timeLeft: Number(row.waitingTimeoutMs) / 1000,
+      };
+      this.claimedWaitingChairs.set(row.waitingChairUid, localId);
+    }
+
+    // Mark seat occupancy so reconcileOccupancy doesn't trip.
+    if (row.seatUid && !row.seatAtBar) {
+      this.occupiedSeats.add(row.seatUid as SeatId);
+    }
+
+    this.guests.push(guest);
+    if (DEBUG_GUEST_LOGS) {
+      console.log(`[H.47] imported cloud guest ${localId} (server id ${row.id}) state=${state} seat=${row.seatUid || "none"}`);
+    }
   }
 
   /** Stats snapshot for the live sidebar diagnostic strip. Cheap; safe
