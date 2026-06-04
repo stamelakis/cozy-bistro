@@ -1172,7 +1172,31 @@ export class FurnitureRegistry {
   async restoreFromCloud(): Promise<void> {
     if (!this.cloud) return;
     const rows = this.cloud.listPlacedFurniture();
-    if (rows.length === 0) return;
+    // Phase I (H.75) — Empty cloud + populated local = ONE-TIME
+    // BACKFILL.  H.66 made cloud authoritative when it had rows,
+    // but completely missed the case where the cloud was simply
+    // never populated (legacy save predates the placed_furniture
+    // mirror, OR a publish nuked the table).  For those users
+    // every restoreFromCloud was a no-op and the server saw zero
+    // furniture forever — meaning auto_claim_queued_tickets could
+    // never find a stove, guests timed out, etc.
+    //
+    // When cloud is empty and local has items, push the local set
+    // up to cloud one piece at a time.  mirrorFurniturePlace is
+    // already idempotent server-side (placeFurniture upserts by
+    // uid).  Aggregates get pushed once at the end so the
+    // attraction-layer free_seats counter is correct.
+    if (rows.length === 0) {
+      if (this.items.length === 0) return;
+      console.log(`[H.75] cloud has 0 furniture rows but local has ${this.items.length} — backfilling cloud.`);
+      let pushed = 0;
+      for (const it of this.items) {
+        this.mirrorFurniturePlace(it);
+        pushed += 1;
+      }
+      console.log(`[H.75] backfill complete — pushed ${pushed} furniture rows to cloud.`);
+      return;
+    }
     // Phase I (H.66) — CLOUD IS AUTHORITATIVE.  The legacy guard
     // here used to bail out if local had any items, preserving the
     // localStorage save's positions over the cloud's.  That was the
