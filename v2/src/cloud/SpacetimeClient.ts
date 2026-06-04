@@ -95,6 +95,43 @@ export interface ActiveGuestRow {
   seatUid: string;
 }
 
+/** Phase I.1 (H.47) — Full row shape returned by listActiveGuests.
+ * GuestSpawner.hydrateFromCloud consumes this to reconstruct a
+ * functional local Guest after a reload, picking up where the server
+ * left off (including any H.33 server-spawned guests from the offline
+ * period). Distinct from ActiveGuestRow (which is the slim shape used
+ * by VisitMode's render-only subscription path). */
+export interface HydratableGuestRow {
+  id: bigint;
+  clientTempId: string;
+  variant: string;
+  archetype: string;
+  state: string;
+  stateClockMs: bigint;
+  patienceMs: bigint;
+  x: number; z: number; floor: number;
+  targetX: number; targetZ: number; targetFloor: number;
+  seatUid: string;
+  seatX: number; seatZ: number; seatFloor: number;
+  seatFacingY: number;
+  seatAtBar: boolean;
+  plateX: number; plateZ: number;
+  orderRecipes: string;
+  orderIndex: number;
+  ticketId: bigint | null;
+  reservedDishTiers: string;
+  tasteDiet: string;
+  tasteDecorPref: number;
+  tasteWindowPref: number;
+  tasteCuisineBias: string;
+  tasteDrinkTolerance: number;
+  willUseToilet: boolean;
+  waitingChairUid: string;
+  waitingTimeoutMs: bigint;
+  totalPaidCents: bigint;
+  totalSatisfactionX100: number;
+}
+
 /** Public shape of one active_ticket row — one per in-flight order.
  * State is the lifecycle label (queued / waitingChef / cooking / ready
  * / pickedUp / delivered). */
@@ -419,25 +456,15 @@ export class SpacetimeClient {
 
   /** Snapshot of every active_guest row belonging to my restaurant.
    * Cheap: in-memory iteration on the SpacetimeDB subscription cache.
-   * Returns [] when not connected or when no restaurant is known yet. */
-  listActiveGuests(): {
-    id: bigint;
-    clientTempId: string;
-    state: string;
-    variant: string;
-    archetype: string;
-    stateClockMs: bigint;
-    patienceMs: bigint;
-    x: number;
-    z: number;
-    floor: number;
-    targetX: number;
-    targetZ: number;
-    targetFloor: number;
-    seatUid: string;
-  }[] {
+   * Returns [] when not connected or when no restaurant is known yet.
+   *
+   * Phase I.1 (H.47) — expanded to return every field the local
+   * GuestSpawner.hydrateFromCloud needs to reconstruct a functional
+   * local Guest from a server row.  Skipped purely-server fields
+   * (e.g. archetype_patience_mult — derivable from archetype). */
+  listActiveGuests(): HydratableGuestRow[] {
     if (!this.conn || this.restaurantId == null) return [];
-    const out: ReturnType<SpacetimeClient["listActiveGuests"]> = [];
+    const out: HydratableGuestRow[] = [];
     const rid = this.restaurantId;
     try {
       for (const g of this.conn.db.active_guest.iter()) {
@@ -445,18 +472,32 @@ export class SpacetimeClient {
         out.push({
           id: g.id,
           clientTempId: g.clientTempId,
-          state: g.state,
           variant: g.variant,
           archetype: g.archetype,
+          state: g.state,
           stateClockMs: g.stateClockMs,
           patienceMs: g.patienceMs,
-          x: g.x,
-          z: g.z,
-          floor: g.floor,
-          targetX: g.targetX,
-          targetZ: g.targetZ,
-          targetFloor: g.targetFloor,
+          x: g.x, z: g.z, floor: g.floor,
+          targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
           seatUid: g.seatUid,
+          seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
+          seatFacingY: g.seatFacingY,
+          seatAtBar: g.seatAtBar,
+          plateX: g.plateX, plateZ: g.plateZ,
+          orderRecipes: g.orderRecipes,
+          orderIndex: g.orderIndex,
+          ticketId: g.ticketId ?? null,
+          reservedDishTiers: g.reservedDishTiers,
+          tasteDiet: g.tasteDiet,
+          tasteDecorPref: g.tasteDecorPref,
+          tasteWindowPref: g.tasteWindowPref,
+          tasteCuisineBias: g.tasteCuisineBias,
+          tasteDrinkTolerance: g.tasteDrinkTolerance,
+          willUseToilet: g.willUseToilet,
+          waitingChairUid: g.waitingChairUid,
+          waitingTimeoutMs: g.waitingTimeoutMs,
+          totalPaidCents: g.totalPaidCents,
+          totalSatisfactionX100: g.totalSatisfactionX100,
         });
       }
     } catch { /* table not yet wired (pre-publish or old build) */ }
