@@ -2711,9 +2711,33 @@ export class SpacetimeClient {
     };
   }
 
+  /** Phase I energy audit — minimum gap between cloud save_snapshot
+   * uploads.  Was 2 s (every autosave fired one).  Bumped to 5 min
+   * because the per-table mirrors (H.31 furniture, H.36 pantry, H.39
+   * staff, H.41 restock, H.42 dispatch, H.43-46 timers/totals, H.53
+   * recipe levels, etc.) cover every gameplay-relevant field — the
+   * save_snapshot blob is now a once-per-session backup of the
+   * straggler fields (reputation history, transaction log, achievement
+   * unlock list — though achievements ARE also already mirrored via
+   * unlock_achievement reducer).
+   *
+   * Once Phase I.5 finishes migrating the last straggler fields,
+   * save_snapshot is retired entirely and this field goes with it. */
+  private static readonly CLOUD_SAVE_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+  private lastCloudSaveAt = 0;
+
   private scheduleCloudSave(): void {
     if (this.saveDebounce != null) window.clearTimeout(this.saveDebounce);
-    this.saveDebounce = window.setTimeout(() => this.cloudSaveNow(), 2000);
+    const sinceLast = Date.now() - this.lastCloudSaveAt;
+    if (sinceLast < SpacetimeClient.CLOUD_SAVE_MIN_INTERVAL_MS) {
+      // Too soon — skip this upload.  The local autosave still wrote
+      // to IndexedDB so we don't lose anything on a refresh.
+      return;
+    }
+    this.saveDebounce = window.setTimeout(() => {
+      this.lastCloudSaveAt = Date.now();
+      this.cloudSaveNow();
+    }, 2000);
   }
 
   /** Push the current game state to the save_snapshot table. Skips if

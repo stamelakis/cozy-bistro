@@ -180,6 +180,47 @@ Each sub-phase ports one quality feature from client to server:
 - [ ] `player_save` keeps just visit-mode visibility fields
   (money, rating_avg, etc.).
 
+### Straggler migrations (all post-H.53 → must happen before H.58)
+These fields are CURRENTLY only persisted in the save_snapshot JSON.
+Each gets its own cloud table + mirror reducer + hydrate path before
+the save blob can be retired:
+
+- [x] **Achievement unlocks** — already mirrored via `unlock_achievement`
+  reducer + `achievement_unlock` table.  Just needs a read-side
+  hydrate (compare cloud unlocks vs local save unlocks; union).
+  *Effort: small.  H.59.*
+- [ ] **Reputation rating history** — new `reputation_rating` table
+  (rid, id, value_x100, recorded_at_micros).  Mirror on every
+  `Game.reputation.recordRating(avg)`.  Hydrate on connect (rebuild
+  the rolling-window list with timestamps for decay calc).
+  *Effort: medium.  H.60.*
+- [ ] **Transaction log** — new `transaction_log` table (rid, id,
+  label, delta_cents, recorded_at_micros).  Append-only.  Mirror on
+  every `recordTransaction` call.  Needs pruning policy (keep last
+  N or last 24h).
+  *Effort: medium.  H.61.*
+- [ ] **Tutorial state** — small.  Either a column on `Player` table
+  or new `tutorial_state` (identity, shown_csv).  Mirror on tutorial
+  step shown.
+  *Effort: small.  H.62.*
+- [ ] **Daily revenue/expense per-day history** — new `daily_history`
+  (rid, day_number, revenue_cents, expenses_cents).  Mirror on day
+  rollover.  Current-day totals already in H.46.
+  *Effort: medium.  H.63.*
+
+### Cleanup (final)
+- [ ] **H.64** — Stop cloud `save_snapshot` upload entirely (delete
+  `cloudSaveNow` / `scheduleCloudSave`).  Keep local IndexedDB save
+  for offline backup OR remove if confident.
+
+### Recent energy cut (shipped already)
+- **Cloud save_snapshot upload cadence** dropped from "every autosave
+  (5 s × 2 s debounce)" to a 5-minute minimum gap.  Per-table mirrors
+  carry the live state; the blob is now a once-every-few-minutes
+  backup of the straggler fields until they're migrated.  Tab-close
+  beforeunload path still fires `cloudSaveNow` immediately as a
+  last-chance commit.
+
 ---
 
 ## Risks and mitigations
