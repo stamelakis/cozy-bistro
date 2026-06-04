@@ -658,6 +658,27 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.46 — Push today's running revenue + expense totals (in
+   * DOLLARS — converted to cents server-side) to Restaurant for
+   * visitors / leaderboard / cross-device.  Fires on the same
+   * cadence as syncCloudMoney from Engine.update.  Idempotent
+   * server-side; no-op when both values match the existing row. */
+  syncCloudDailyTotals(revenueDollars: number, expensesDollars: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      // Clamp to non-negative — server rejects negatives.
+      const rev = Math.max(0, Math.round(revenueDollars * 100));
+      const exp = Math.max(0, Math.round(expensesDollars * 100));
+      this.conn.reducers.syncCloudDailyTotals({
+        restaurantId: this.restaurantId,
+        revenueCents: BigInt(rev),
+        expensesCents: BigInt(exp),
+      });
+    } catch (e) {
+      console.warn("[Cloud] syncCloudDailyTotals failed:", e);
+    }
+  }
+
   /** H.30 — Periodic yoke of the cloud's day_elapsed_ms to this
    * client's local elapsed-in-day. Called from the Engine update
    * loop on a few-second cadence (default 5 s); prevents

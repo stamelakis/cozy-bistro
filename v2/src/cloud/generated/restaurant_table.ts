@@ -34,4 +34,6 @@ export default __t.row({
   pendingSalaryRemainderX: __t.i64().name("pending_salary_remainder_x"),
   lastSalaryTickMicros: __t.i64().name("last_salary_tick_micros"),
   cloudBasePayrollPerMinCents: __t.i64().name("cloud_base_payroll_per_min_cents"),
+  cloudDailyRevenueCents: __t.i64().name("cloud_daily_revenue_cents"),
+  cloudDailyExpensesCents: __t.i64().name("cloud_daily_expenses_cents"),
 });

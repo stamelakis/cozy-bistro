@@ -326,6 +326,24 @@ pub struct Restaurant {
     /// (catalog-not-ready graceful degradation, matching H.41).
     #[default(0i64)]
     pub cloud_base_payroll_per_min_cents: i64,
+
+    /// Phase H.46 — Live mirror of the foreground client's per-day
+    /// revenue total (cents).  Visitors + leaderboard read this for
+    /// "today's revenue: $X" displays.  Foreground client pushes its
+    /// EconomySystem.dailyRevenueTotal here on the same cadence as
+    /// sync_day_clock / set_cloud_money via sync_cloud_daily_totals.
+    /// Day rollover (whenever it fires locally — either foreground or
+    /// during the drain of pending_days_advanced) pushes 0 here too.
+    ///
+    /// Not server-accrued — the local drain paths (earnMoney("offline")
+    /// for H.22 tips, forceSpendMoney("restock"/"salary") for H.41/H.45)
+    /// already bump local dailyRevenueTotal correctly on reconnect, so
+    /// the next foreground sync after drain pushes the integrated
+    /// value here.  No server-side double-counting risk.
+    #[default(0i64)]
+    pub cloud_daily_revenue_cents: i64,
+    #[default(0i64)]
+    pub cloud_daily_expenses_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

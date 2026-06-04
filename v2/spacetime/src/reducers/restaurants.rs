@@ -48,6 +48,10 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         pending_salary_remainder_x: 0,
         last_salary_tick_micros: 0,
         cloud_base_payroll_per_min_cents: 0,
+        // H.46 — live daily totals start at zero; foreground client
+        // syncs after each economy update.
+        cloud_daily_revenue_cents: 0,
+        cloud_daily_expenses_cents: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

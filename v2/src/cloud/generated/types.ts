@@ -350,6 +350,8 @@ export const Restaurant = __t.object("Restaurant", {
   pendingSalaryRemainderX: __t.i64(),
   lastSalaryTickMicros: __t.i64(),
   cloudBasePayrollPerMinCents: __t.i64(),
+  cloudDailyRevenueCents: __t.i64(),
+  cloudDailyExpensesCents: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

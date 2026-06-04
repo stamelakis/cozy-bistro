@@ -396,6 +396,46 @@ pub fn set_cloud_money(
     Ok(())
 }
 
+/// Phase H.46 — Live mirror of the foreground client's per-day
+/// revenue + expense totals (cents).  Observational only — visitors,
+/// leaderboard, and cross-device load read these for "today's stats."
+/// Fires on the same cadence as set_cloud_money / sync_day_clock
+/// (every few seconds while the tab is alive); idempotent.
+///
+/// Distinct from the H.22/H.41/H.45 pending counters: those track
+/// offline accruals to be drained on reconnect.  These are absolute
+/// daily totals.  After the reconnect drain, the foreground client's
+/// next sync sweeps the integrated totals up here.
+///
+/// Owner-only.
+#[reducer]
+pub fn sync_cloud_daily_totals(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    revenue_cents: i64,
+    expenses_cents: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can sync cloud daily totals".into());
+    }
+    if revenue_cents < 0 || expenses_cents < 0 {
+        return Err("daily totals cannot be negative".into());
+    }
+    if r.cloud_daily_revenue_cents == revenue_cents
+        && r.cloud_daily_expenses_cents == expenses_cents
+    {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_daily_revenue_cents: revenue_cents,
+        cloud_daily_expenses_cents: expenses_cents,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.30 — Foreground client periodically yokes the cloud's
 /// day_elapsed_ms to its local value so the cloud clock doesn't drift
 /// out from under the player while the tab is alive. Also clears

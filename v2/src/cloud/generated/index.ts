@@ -102,6 +102,7 @@ import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
+import SyncCloudDailyTotalsReducer from "./sync_cloud_daily_totals_reducer";
 import SyncDayClockReducer from "./sync_day_clock_reducer";
 import UnfriendReducer from "./unfriend_reducer";
 import UnlockAchievementReducer from "./unlock_achievement_reducer";
@@ -664,6 +665,7 @@ const reducersSchema = __reducers(
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
+  __reducerSchema("sync_cloud_daily_totals", SyncCloudDailyTotalsReducer),
   __reducerSchema("sync_day_clock", SyncDayClockReducer),
   __reducerSchema("unfriend", UnfriendReducer),
   __reducerSchema("unlock_achievement", UnlockAchievementReducer),

@@ -2278,6 +2278,14 @@ export class Engine {
       // don't multiply network calls. Idempotent server-side; no
       // write when the value hasn't changed.
       this.cloud.syncCloudMoney(this.game.economy.getMoney());
+      // H.46 — push today's revenue + expense totals so visitors,
+      // the leaderboard, and any second-device session see live
+      // values instead of save-snapshot stale ones.  Same cadence,
+      // same idempotency rationale.
+      this.cloud.syncCloudDailyTotals(
+        this.game.economy.getDailyRevenue(),
+        this.game.economy.getDailyExpenses(),
+      );
     }
     this.router?.update(dt);
     this.errand?.update(dt);
