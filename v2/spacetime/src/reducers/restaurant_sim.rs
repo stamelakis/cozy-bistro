@@ -679,11 +679,16 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         // Lock the station so subsequent iterations don't reuse it.
         occupied.insert(station.uid.clone());
 
-        let cook_seconds_ms = if ticket.base_cook_seconds_ms > 0 {
+        // H.52 — apply chef/barman training multiplier to the cook
+        // time so a trained staff member actually cooks faster server-
+        // side (matches the client's chef.cookMultiplier path).
+        let base_ms = if ticket.base_cook_seconds_ms > 0 {
             ticket.base_cook_seconds_ms
         } else {
             FALLBACK_COOK_SECONDS_MS
         };
+        let mult_x100 = chef_cook_multiplier_x100(ctx, &actor.member_id);
+        let cook_seconds_ms = apply_chef_speed(base_ms, mult_x100);
 
         let actor_member_id = actor.member_id.clone();
         let station_uid = station.uid.clone();
@@ -2503,9 +2508,10 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     /// Dwell at the wash station — longer to read as "loading."
     const WASH_DROP_DWELL_MS: i64 = 1_000;
 
+    // H.52 — waiter walk-speed gets +10% per training level.
     let (new_x, new_z) = step_toward_target(
         a.x, a.z, a.target_x, a.target_z,
-        speed_for_role(&a.role),
+        actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
     let arrived = (a.target_x - new_x).abs() < 0.01 && (a.target_z - new_z).abs() < 0.01;
@@ -2779,6 +2785,52 @@ fn speed_for_role(role: &str) -> f32 {
     }
 }
 
+// === H.52 — training-level multipliers (Phase I.3) ================
+//
+// Ports the client's per-member multipliers to the server so
+// backgrounded play applies the same chef cook-speed and waiter
+// walk-speed bonuses that foreground play does.  Formulas match
+// StaffSystem.getChefCookMultiplier / getWaiterSpeedMultiplier
+// exactly.
+
+/// Chef / barman cook-time multiplier × 100 for the given staff
+/// member.  Matches the client's max(0.1, 1 - 0.10 × level) — so
+/// level 0 → 100, level 1 → 90, ..., level 9 → 10 (floor).
+/// Returns 100 (no bonus) when the member id is unknown.
+fn chef_cook_multiplier_x100(ctx: &ReducerContext, member_id: &str) -> i32 {
+    let Some(m) = ctx.db.hired_staff_member().member_id().find(member_id.to_string())
+    else { return 100; };
+    let raw = 100i32 - (m.upgrade_level as i32) * 10;
+    raw.max(10) // floor matches client's 0.1× cap
+}
+
+/// Apply chef training to a base cook time (ms).  Integer math: ms
+/// × x100 / 100.  Saturating to keep us safe against negative
+/// products even though all inputs here are positive.
+fn apply_chef_speed(base_ms: i64, mult_x100: i32) -> i64 {
+    let prod = (base_ms.max(0) as i128) * (mult_x100.max(0) as i128);
+    (prod / 100).clamp(0, i64::MAX as i128) as i64
+}
+
+/// Walk-speed multiplier (float) for a staff actor.  Chefs/barmen
+/// get no walk-speed bonus from training — their bonus is the
+/// chef_cook_multiplier on cook time.  Waiters get +10% speed per
+/// level, matching getWaiterSpeedMultiplier.  Unknown members
+/// default to 1.0× (no bonus).
+fn actor_speed_multiplier(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
+    if role != "waiter" { return 1.0; }
+    let Some(m) = ctx.db.hired_staff_member().member_id().find(member_id.to_string())
+    else { return 1.0; };
+    1.0 + 0.10 * (m.upgrade_level as f32)
+}
+
+/// Convenience: full walk speed for an actor, role base × training
+/// multiplier.  Replaces speed_for_role at tick_staff_actor /
+/// tick_wash_trip step sites.
+fn actor_walk_speed(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
+    speed_for_role(role) * actor_speed_multiplier(ctx, role, member_id)
+}
+
 /// Phase H.1 — server-side body step. Each tick advances (x, z)
 /// toward (target_x, target_z) at the role's walking speed, capped so
 /// we never overshoot the target. When the actor arrives (distance <
@@ -2807,9 +2859,10 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         tick_wash_trip(ctx, a, dt_ms);
         return;
     }
+    // H.52 — waiter walk speed includes training multiplier.
     let (new_x, new_z) = step_toward_target(
         a.x, a.z, a.target_x, a.target_z,
-        speed_for_role(&a.role),
+        actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
 
