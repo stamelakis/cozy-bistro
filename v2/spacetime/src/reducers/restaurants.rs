@@ -66,6 +66,9 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         waiter_rest_x: 0.0,
         waiter_rest_z: 0.0,
         waiter_rest_floor: 0,
+        // H.71 — no server-side spawns yet; first tick will fire one
+        // once the owner is offline + cadence has elapsed.
+        last_guest_spawn_micros: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

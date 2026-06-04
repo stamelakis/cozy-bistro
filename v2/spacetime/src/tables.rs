@@ -406,6 +406,18 @@ pub struct Restaurant {
     pub waiter_rest_z: f32,
     #[default(0u32)]
     pub waiter_rest_floor: u32,
+
+    // ----- Phase I (H.71) — server-side continuous spawning -----
+    //
+    // Tracks when this restaurant last got a server-issued guest so
+    // the tick can space spawns out (per the SPAWN_INTERVAL_MICROS
+    // constant in restaurant_sim).  Only fires when the owner is
+    // OFFLINE (Player.last_seen_at > 30 s) — otherwise the
+    // foreground client's GuestSpawner handles arrivals and we'd
+    // double-spawn.  Closes the user-reported "while I was off
+    // nothing happened, I log in to a dead restaurant" gap.
+    #[default(0i64)]
+    pub last_guest_spawn_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

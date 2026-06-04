@@ -1355,6 +1355,39 @@ export class GuestSpawner {
       else failed += 1;
     }
     console.log(`[H.47] hydrateFromCloud: ${imported} guests imported, ${failed} failed (cloud had ${cloudRows.length} rows, local has ${this.guests.length})`);
+
+    // Phase I (H.70) — post-hydrate kickstart.  Two fixes for the
+    // user-reported "I log in, nothing changes" symptom:
+    //
+    //   1. Pre-warm spawnCooldown to 0 so the very next update tick
+    //      fires a fresh spawn.  Without this the cooldown sat at
+    //      its 1.0 s boot default and then re-armed to 5.5 s on the
+    //      first spawn — meaning ~6.5 s of dead air after login
+    //      where the only "customers" were ones from the prior
+    //      session finishing up their meal.
+    //
+    //   2. Burst-spawn enough guests to bring the restaurant up to
+    //      half its seat capacity (capped at 3 fresh spawns), so
+    //      the room feels alive within ~1 second of login.  This
+    //      approximates "the world kept going while you were gone"
+    //      without needing actual server-side continuous spawning.
+    //      Each spawn still respects countAvailableSeats / waiting
+    //      capacity, so we can't over-fill.
+    if (this.restaurantOpen) {
+      this.spawnCooldown = 0;
+      const liveGuests = this.guests.length;
+      const seats = this.countAvailableSeats() + liveGuests;
+      const target = Math.min(3, Math.max(0, Math.floor(seats / 2) - liveGuests));
+      let burstSpawned = 0;
+      for (let i = 0; i < target; i += 1) {
+        if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) break;
+        void this.spawnGuest();
+        burstSpawned += 1;
+      }
+      if (burstSpawned > 0) {
+        console.log(`[H.70] post-hydrate burst: spawned ${burstSpawned} guest(s) to fill the restaurant (was ${liveGuests}, target ${liveGuests + burstSpawned})`);
+      }
+    }
   }
 
   /** Build one local Guest from a cloud active_guest row.  Loads the

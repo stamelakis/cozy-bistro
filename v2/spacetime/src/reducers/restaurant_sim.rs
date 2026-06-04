@@ -15,7 +15,7 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Time
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
     dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
-    placed_furniture, player, recipe_ingredients, recipe_level, recipe_meta,
+    placed_furniture, player, player_save, recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
@@ -325,6 +325,23 @@ pub fn restaurant_tick(
     for uid in batch_uids {
         tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
     }
+
+    // Phase I (H.71) — continuous server-side guest spawning while
+    // the owner is OFFLINE.  Closes the user-reported "I log in,
+    // nothing changes" gap: previously NEW guests only materialized
+    // server-side when a pedestrian happened to walk to the door
+    // (try_arrival_handoff in pedestrians.rs).  For a restaurant
+    // with low rating or far from a busy avenue, that meant near-
+    // zero offline accrual.  Now the server fires one own guest
+    // every SERVER_SPAWN_INTERVAL_MICROS as long as the restaurant
+    // is open + has free seats + below the cap, matching what the
+    // client's GuestSpawner would do at the same cadence.
+    //
+    // Gated on owner-offline (30 s last_seen_at window) so we don't
+    // double-spawn with the live client — the foreground tab's
+    // GuestSpawner already runs at 5.5 s intervals, and there's no
+    // value in adding a parallel server path that races it.
+    try_server_spawn_guest(ctx, rid, now);
 
     // Energy audit (C) — early-out: if this restaurant has NOTHING
     // going on (no guests, no tickets, no actors, no dishwasher
@@ -4143,6 +4160,76 @@ pub(crate) fn try_spawn_arrival_guest(
         restaurant_id, variant, will_use_toilet, will_wash_only, patience_mult_x100,
     );
     true
+}
+
+/// Phase I (H.71) — continuous server-side guest spawning while the
+/// owner is OFFLINE.  Called from `restaurant_tick` every 0.5 s.  Most
+/// of those calls early-out (online owner, no seats, cadence not
+/// elapsed); the actual spawn-fire path runs at the SERVER_SPAWN
+/// cadence below — same rate the foreground client's GuestSpawner
+/// uses, so when the player comes back the restaurant has been
+/// filling at roughly the right pace.
+///
+/// Why the offline gate: when the player is ONLINE the local
+/// GuestSpawner fires arrivals at 5.5 s intervals.  Letting the
+/// server fire in parallel would double the rate and overflow the
+/// 12-guest cap immediately.  The 30 s last_seen_at threshold
+/// matches pedestrians.rs's try_arrival_handoff for consistency.
+fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
+    const SERVER_SPAWN_INTERVAL_MICROS: i64 = 5_500_000; // 5.5 s
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;    // 30 s
+
+    let Some(rest) = ctx.db.restaurant().id().find(rid) else { return; };
+
+    let now_micros = now.to_micros_since_unix_epoch();
+    if now_micros - rest.last_guest_spawn_micros < SERVER_SPAWN_INTERVAL_MICROS {
+        return;
+    }
+
+    // Restaurant open / free-seats gate.  Those flags live on the
+    // PlayerSave row (keyed by Identity, not by Restaurant id) because
+    // they're maintained by the foreground client as gameplay
+    // signals for the attraction layer.  If no save row yet, treat
+    // as "open with seats" — first sign-up player still gets the
+    // first server spawn even before their save persists.
+    let save = ctx.db.player_save().identity().find(rest.owner);
+    let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
+    let free_seats = save.as_ref().map(|s| s.free_seats).unwrap_or(4);
+    if !restaurant_open { return; }
+    if free_seats == 0 { return; }
+
+    // Owner-offline gate.  See doc comment above.
+    let owner_online = ctx.db.player().identity().find(rest.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch())
+            < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online { return; }
+
+    // Pick a variant by hashing the current micros + restaurant id so
+    // consecutive spawns vary instead of cloning the same character.
+    // Same hash-pull pattern as try_spawn_arrival_guest.  Pulled from
+    // a stable list of 7 — matches the client's CharacterLoader pool.
+    const VARIANTS: &[&str] = &[
+        "guest-v0", "guest-v1", "guest-v2", "guest-v3",
+        "guest-v4", "guest-v5", "guest-v6",
+    ];
+    let h: u64 = (now_micros as u64).wrapping_mul(rid.wrapping_add(1));
+    let variant = VARIANTS[(h as usize) % VARIANTS.len()];
+
+    // Restaurant-local door anchor is (0, 0) by convention — the
+    // client's WorldScene puts the front door at origin so a guest
+    // appearing here walks naturally to a seat.
+    let spawned = try_spawn_arrival_guest(ctx, rid, variant, 0.0, 0.0);
+    if spawned {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_guest_spawn_micros: now_micros,
+            ..rest
+        });
+        log::info!(
+            "try_server_spawn_guest: spawned offline guest for restaurant {} (variant={})",
+            rid, variant,
+        );
+    }
 }
 
 /// Phase H.25 — per-piece satisfaction contribution of a (kind, tier)

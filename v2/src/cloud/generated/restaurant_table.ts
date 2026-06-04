@@ -43,4 +43,5 @@ export default __t.row({
   waiterRestX: __t.f32().name("waiter_rest_x"),
   waiterRestZ: __t.f32().name("waiter_rest_z"),
   waiterRestFloor: __t.u32().name("waiter_rest_floor"),
+  lastGuestSpawnMicros: __t.i64().name("last_guest_spawn_micros"),
 });

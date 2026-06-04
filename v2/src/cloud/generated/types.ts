@@ -368,6 +368,7 @@ export const Restaurant = __t.object("Restaurant", {
   waiterRestX: __t.f32(),
   waiterRestZ: __t.f32(),
   waiterRestFloor: __t.u32(),
+  lastGuestSpawnMicros: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
