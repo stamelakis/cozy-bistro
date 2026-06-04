@@ -24,7 +24,9 @@ use rand::RngCore;
 use crate::tables::{
     auth_record, ban_record, building, password_reset_request, player_save,
     restaurant, save_snapshot, co_owner, leaderboard_entry, achievement_unlock,
+    hired_staff_member, placed_furniture,
     AuthRecord, BanRecord, PasswordResetRequest,
+    Building, Restaurant, PlayerSave, AchievementUnlock,
 };
 
 const ADMIN_USERNAME: &str = "dunnin"; // lowercased — usernames are stored lowercased
@@ -117,12 +119,151 @@ pub fn login(ctx: &ReducerContext, username: String, password: String) -> Result
         }
     }
 
+    // Capture the OLD identity before we overwrite the auth_record.
+    // This is the identity that previously owned all of this account's
+    // restaurants / buildings / saves / achievements; we transfer
+    // everything below.
+    let old_identity = account.identity;
+
     // Move the identity claim onto the new sender.
     ctx.db.auth_record().username().update(AuthRecord {
         identity,
         ..account
     });
+
+    // Phase I (H.85) — Cross-identity ownership transfer.
+    //
+    // Without this, a player who signs in on a NEW browser (any
+    // browser other than the one they signed up on) ends up with
+    // their auth_record pointing at the new identity, but
+    // restaurant.owner / building.owner_identity / player_save.identity
+    // still pointing at the old anonymous identity.  Every
+    // owner-gated reducer (set_hired_staff_member, place_furniture,
+    // etc.) then rejects with "Only the owner can …", the client
+    // silently swallows the rejection, and the player sees their
+    // restaurant become read-only forever.  We hit this with Dunnin
+    // — restaurant 2 was owned by his prior browser's identity
+    // (0xc200cf…), his new login moved auth to 0xc20043…, and the
+    // client kept auto-creating fresh restaurants on each login.
+    //
+    // Transfer every entity that's keyed by the old identity:
+    transfer_identity_resources(ctx, old_identity, identity);
+
     Ok(())
+}
+
+/// Phase I (H.85) — Move every owner-keyed resource from `old_id`
+/// over to `new_id`.  Called from `login` after the auth_record
+/// flip so the player's new browser session inherits everything
+/// the old session owned.  Also wipes the empty "auto-created
+/// placeholder" restaurant the connect flow may have made for the
+/// new identity before login fired (no point keeping a second
+/// restaurant the player will never see, and it'd confuse listings).
+fn transfer_identity_resources(
+    ctx: &ReducerContext,
+    old_id: spacetimedb::Identity,
+    new_id: spacetimedb::Identity,
+) {
+    if old_id == new_id { return; }
+    let zero = spacetimedb::Identity::__dummy();
+    if old_id == zero { return; } // first-ever login or post-logout — nothing to move
+
+    // --- restaurant.owner ---
+    // Snapshot ids first; updating during iter() is unsafe.
+    let mine_old: Vec<u64> = ctx.db.restaurant().iter()
+        .filter(|r| r.owner == old_id)
+        .map(|r| r.id)
+        .collect();
+    let mut moved_restaurants = 0usize;
+    for rid in &mine_old {
+        if let Some(r) = ctx.db.restaurant().id().find(*rid) {
+            ctx.db.restaurant().id().update(Restaurant {
+                owner: new_id,
+                ..r
+            });
+            moved_restaurants += 1;
+        }
+    }
+
+    // --- DELETE empty placeholder restaurants the new identity
+    //     might have auto-created via createRestaurant on connect
+    //     before login completed.  "Empty" = no hired_staff_member
+    //     AND no placed_furniture rows.  Saves the player from
+    //     ending up with two restaurants in the dropdown after
+    //     every cross-browser login. ---
+    let new_side: Vec<u64> = ctx.db.restaurant().iter()
+        .filter(|r| r.owner == new_id)
+        .map(|r| r.id)
+        .collect();
+    let mut placeholders_deleted = 0usize;
+    for rid in &new_side {
+        // Skip the ones we just transferred in.
+        if mine_old.contains(rid) { continue; }
+        let has_staff = ctx.db.hired_staff_member().restaurant_id().filter(*rid).next().is_some();
+        let has_furniture = ctx.db.placed_furniture().restaurant_id().filter(*rid).next().is_some();
+        if !has_staff && !has_furniture {
+            // Safe to drop — newly auto-created, nothing of value.
+            // Cascade-delete supporting rows so we don't strand
+            // sim schedules pointing at a non-existent restaurant.
+            crate::reducers::restaurants::delete_restaurant_cascade(ctx, *rid);
+            placeholders_deleted += 1;
+        }
+    }
+
+    // --- building.owner_identity ---
+    let buildings: Vec<u64> = ctx.db.building().iter()
+        .filter(|b| b.owner_identity == old_id)
+        .map(|b| b.id)
+        .collect();
+    let mut moved_buildings = 0usize;
+    for bid in &buildings {
+        if let Some(b) = ctx.db.building().id().find(*bid) {
+            ctx.db.building().id().update(Building {
+                owner_identity: new_id,
+                ..b
+            });
+            moved_buildings += 1;
+        }
+    }
+
+    // --- player_save (PK = identity) ---
+    // Only transfer if the new identity doesn't already have a
+    // save (don't clobber).  Otherwise the old one becomes orphan
+    // data that the reset-save flow can clean up later.
+    let new_has_save = ctx.db.player_save().identity().find(new_id).is_some();
+    let mut moved_save = false;
+    if !new_has_save {
+        if let Some(old_save) = ctx.db.player_save().identity().find(old_id) {
+            ctx.db.player_save().identity().delete(old_id);
+            ctx.db.player_save().insert(PlayerSave {
+                identity: new_id,
+                ..old_save
+            });
+            moved_save = true;
+        }
+    }
+
+    // --- achievement_unlock.player ---
+    let achievement_ids: Vec<u64> = ctx.db.achievement_unlock().iter()
+        .filter(|a| a.player == old_id)
+        .map(|a| a.id)
+        .collect();
+    let mut moved_achievements = 0usize;
+    for aid in &achievement_ids {
+        if let Some(a) = ctx.db.achievement_unlock().id().find(*aid) {
+            ctx.db.achievement_unlock().id().update(AchievementUnlock {
+                player: new_id,
+                ..a
+            });
+            moved_achievements += 1;
+        }
+    }
+
+    log::info!(
+        "transfer_identity_resources: old={} → new={}  moved {} restaurant(s), {} building(s), save={}, {} achievement(s), deleted {} placeholder restaurant(s)",
+        old_id.to_hex(), new_id.to_hex(),
+        moved_restaurants, moved_buildings, moved_save, moved_achievements, placeholders_deleted,
+    );
 }
 
 /// Log out — releases the current identity's claim by setting the

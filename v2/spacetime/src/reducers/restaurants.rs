@@ -99,15 +99,22 @@ pub fn delete_restaurant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(),
     if r.owner != ctx.sender {
         return Err("Only the owner can delete".into());
     }
-    // Cascade — save_snapshot + co_owner rows.
+    delete_restaurant_cascade(ctx, restaurant_id);
+    Ok(())
+}
+
+/// Phase I (H.85) — Cascade-delete every dependent row for a
+/// restaurant + the restaurant row itself.  Pulled out of the
+/// owner-gated `delete_restaurant` reducer so internal callers
+/// (auth.rs's transfer_identity_resources placeholder cleanup)
+/// can re-use the same cleanup without re-checking ownership.
+pub fn delete_restaurant_cascade(ctx: &ReducerContext, restaurant_id: u64) {
     if ctx.db.save_snapshot().restaurant_id().find(restaurant_id).is_some() {
         ctx.db.save_snapshot().restaurant_id().delete(restaurant_id);
     }
     for c in ctx.db.co_owner().restaurant_id().filter(restaurant_id) {
         ctx.db.co_owner().id().delete(c.id);
     }
-    // H.43 cascade — drop any in-flight recipe-upgrade timers for
-    // this restaurant so they don't outlive the restaurant deletion.
     let upgrade_keys: Vec<String> = ctx.db.recipe_upgrade_in_flight().restaurant_id()
         .filter(restaurant_id)
         .map(|f| f.key.clone())
@@ -115,12 +122,8 @@ pub fn delete_restaurant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(),
     for k in upgrade_keys {
         ctx.db.recipe_upgrade_in_flight().key().delete(k);
     }
-    // Stop the simulation tick + drop its bookkeeping row. Idempotent
-    // — silent no-op if the schedule never existed (e.g. legacy
-    // restaurant deleted before sim ticks shipped).
     crate::reducers::restaurant_sim::drop_tick_schedule(ctx, restaurant_id);
     ctx.db.restaurant().id().delete(restaurant_id);
-    Ok(())
 }
 
 /// Upsert the save snapshot for a restaurant. The caller must be the
