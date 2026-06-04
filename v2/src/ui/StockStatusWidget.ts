@@ -54,45 +54,26 @@ export class StockStatusWidget {
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
-    const title = document.createElement("div");
-    title.textContent = "📦 STOCK";
-    Object.assign(title.style, {
-      fontWeight: "700", fontSize: "12px",
-      marginBottom: "4px", letterSpacing: "0.04em",
-      textAlign: "center", opacity: "0.9",
-    } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(title);
+    // Phase I (H.81) — Reorganized layout into three labelled
+    // sections so the player can tell ingredient stock, dishware
+    // stock, and kitchen pipeline apart at a glance:
+    //
+    //   ─── 🥫 INGREDIENTS ───
+    //   145 / 2400 · cap 30/item          ← storage badge (clickable)
+    //   ⚠ OUT: 3 · LOW: 2 · 18 used today ← need badge (clickable)
+    //   🛒 Auto-shop ON · 7 in transit
+    //
+    //   ─── 🍽 DISHWARE ───
+    //   35 plates (3 dirty) · 14 glasses  ← dish badge (clickable)
+    //
+    //   ─── 🍳 KITCHEN ───
+    //   5 queued · 0 cooking · 2 delivering
 
-    // === Need badge — tooltip lives on document.body ===
-    this.needRow = makeHoverRow();
-    this.needBadge = document.createElement("span");
-    this.needCaret = makeCaret();
-    this.needRow.appendChild(this.needBadge);
-    this.needRow.appendChild(this.needCaret);
-    this.root.appendChild(this.needRow);
-    this.needTooltip = makeFloatingTooltip();
-    document.body.appendChild(this.needTooltip);
-    attachHoverTooltip(this.needRow, this.needTooltip, this.needCaret);
+    this.root.appendChild(makeSectionHeader("🥫 INGREDIENTS"));
 
-    // === Auto-shop status ===
-    this.autoShop = document.createElement("div");
-    Object.assign(this.autoShop.style, {
-      fontSize: "10px", marginTop: "3px", textAlign: "center",
-    } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.autoShop);
-
-    // === Dishware badge — tooltip lives on document.body ===
-    this.dishRow = makeHoverRow();
-    this.dishBadge = document.createElement("span");
-    this.dishCaret = makeCaret();
-    this.dishRow.appendChild(this.dishBadge);
-    this.dishRow.appendChild(this.dishCaret);
-    this.root.appendChild(this.dishRow);
-    this.dishTooltip = makeFloatingTooltip();
-    document.body.appendChild(this.dishTooltip);
-    attachHoverTooltip(this.dishRow, this.dishTooltip, this.dishCaret);
-
-    // === Storage badge — tooltip lives on document.body ===
+    // Storage badge moved to TOP of ingredients section — that's the
+    // "how full is my pantry" headline number the user wanted to see
+    // first.
     this.storageRow = makeHoverRow();
     this.storageBadge = document.createElement("span");
     this.storageCaret = makeCaret();
@@ -103,10 +84,40 @@ export class StockStatusWidget {
     document.body.appendChild(this.storageTooltip);
     attachHoverTooltip(this.storageRow, this.storageTooltip, this.storageCaret);
 
-    // === Kitchen pipeline ===
+    // Need badge — warnings about specific ingredients.
+    this.needRow = makeHoverRow();
+    this.needBadge = document.createElement("span");
+    this.needCaret = makeCaret();
+    this.needRow.appendChild(this.needBadge);
+    this.needRow.appendChild(this.needCaret);
+    this.root.appendChild(this.needRow);
+    this.needTooltip = makeFloatingTooltip();
+    document.body.appendChild(this.needTooltip);
+    attachHoverTooltip(this.needRow, this.needTooltip, this.needCaret);
+
+    this.autoShop = document.createElement("div");
+    Object.assign(this.autoShop.style, {
+      fontSize: "10px", marginTop: "1px", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.autoShop);
+
+    this.root.appendChild(makeSectionHeader("🍽 DISHWARE"));
+
+    this.dishRow = makeHoverRow();
+    this.dishBadge = document.createElement("span");
+    this.dishCaret = makeCaret();
+    this.dishRow.appendChild(this.dishBadge);
+    this.dishRow.appendChild(this.dishCaret);
+    this.root.appendChild(this.dishRow);
+    this.dishTooltip = makeFloatingTooltip();
+    document.body.appendChild(this.dishTooltip);
+    attachHoverTooltip(this.dishRow, this.dishTooltip, this.dishCaret);
+
+    this.root.appendChild(makeSectionHeader("🍳 KITCHEN"));
+
     this.pipeline = document.createElement("div");
     Object.assign(this.pipeline.style, {
-      marginTop: "4px", fontSize: "10px", textAlign: "center",
+      fontSize: "10px", textAlign: "center", opacity: "0.85",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.pipeline);
 
@@ -201,26 +212,33 @@ export class StockStatusWidget {
       this.autoShop.textContent = "🛒 Auto-shop OFF — restock manually";
     }
 
-    // === Dishware badge — total clean + dirty across plates & glasses ===
+    // === Dishware badge — Phase I (H.81) availability/total ===
+    // Format: "Plates 5/458 (3 dirty) · Glasses 24/26 (2 dirty)"
+    //   N/M = clean ready / total owned
+    //   color tracks clean count low/empty
     const dish = this.game.dishware;
     const plateClean = dish.getClean("plate");
     const plateDirty = dish.getDirty("plate");
+    const plateTotal = plateClean + plateDirty;
     const glassClean = dish.getClean("glass");
     const glassDirty = dish.getDirty("glass");
+    const glassTotal = glassClean + glassDirty;
     const totalDirty = plateDirty + glassDirty;
-    // Severity colour: red when literally no clean dishes at all (orders
-    // start backing up), amber when one type is empty, otherwise green.
     const plateColor = plateClean === 0 ? "#ff9a9a" : plateClean <= 4 ? "#ffd47a" : "#a8e2a8";
     const glassColor = glassClean === 0 ? "#ff9a9a" : glassClean <= 4 ? "#ffd47a" : "#a8e2a8";
-    const dirtySpan = totalDirty > 0
-      ? ` <span style="opacity:0.7">· ${totalDirty} dirty</span>`
-      : "";
+    const plateDirtyTag = plateDirty > 0 ? ` <span style="opacity:0.55">(${plateDirty} dirty)</span>` : "";
+    const glassDirtyTag = glassDirty > 0 ? ` <span style="opacity:0.55">(${glassDirty} dirty)</span>` : "";
     this.dishBadge.innerHTML =
-      `🍽️ ` +
+      `Plates ` +
       `<span style="color:${plateColor};font-weight:700">${plateClean}</span>` +
-      ` plates · ` +
+      `<span style="opacity:0.6">/${plateTotal}</span>` +
+      plateDirtyTag +
+      `<br>Glasses ` +
       `<span style="color:${glassColor};font-weight:700">${glassClean}</span>` +
-      ` glasses` + dirtySpan;
+      `<span style="opacity:0.6">/${glassTotal}</span>` +
+      glassDirtyTag;
+    // suppress unused-var warning when totalDirty isn't shown inline
+    void totalDirty;
 
     // === Dishware tooltip body ===
     const dishScroll = this.dishTooltip.scrollTop;
@@ -271,10 +289,11 @@ export class StockStatusWidget {
     const totalCap = ingredientCount > 0 ? ingredientCount * perItemTarget : perItemMax;
     const usagePct = totalCap > 0 ? totalStocked / totalCap : 0;
     const usageColor = usagePct >= 0.95 ? "#a8e2a8" : usagePct >= 0.6 ? "#fff5dc" : usagePct >= 0.3 ? "#ffd47a" : "#ff9a9a";
+    // Section header already says "INGREDIENTS"; drop the redundant
+    // icon + word and lead with the headline number.
     this.storageBadge.innerHTML =
-      `❄️ Stock ` +
       `<span style="color:${usageColor};font-weight:700">${totalStocked}</span>` +
-      `<span style="opacity:0.6">/${totalCap}</span>` +
+      `<span style="opacity:0.6"> / ${totalCap}</span>` +
       ` <span style="opacity:0.5">· cap ${perItemTarget}/item</span>`;
 
     // === Storage tooltip body ===
@@ -315,15 +334,17 @@ export class StockStatusWidget {
     this.storageTooltip.innerHTML = lines.join("");
     this.storageTooltip.scrollTop = storageScroll;
 
-    // === Pipeline ===
+    // === Kitchen pipeline ===
+    // Phase I (H.81) — Emoji moved to section header; this line just
+    // shows the numbers in the queued · cooking · delivering order.
     const ts = this.game.getTicketStats?.();
     if (ts) {
       const totalTickets = ts.queued + ts.cooking + ts.ready + ts.delivering;
-      this.pipeline.style.opacity = totalTickets > 0 ? "1" : "0.6";
+      this.pipeline.style.opacity = totalTickets > 0 ? "1" : "0.55";
       this.pipeline.style.color = totalTickets > 0 ? "#a8e2a8" : "#fff5dc";
       this.pipeline.textContent = totalTickets > 0
-        ? `🍳 ${ts.queued} queued · ${ts.cooking} cooking · ${ts.ready + ts.delivering} delivering`
-        : "🍳 Kitchen idle";
+        ? `${ts.queued} queued · ${ts.cooking} cooking · ${ts.ready + ts.delivering} delivering`
+        : "Kitchen idle";
     } else {
       this.pipeline.textContent = "";
     }
@@ -342,6 +363,33 @@ function makeHoverRow(): HTMLElement {
     transition: "background 80ms ease",
   } as Partial<CSSStyleDeclaration>);
   return row;
+}
+
+/** Phase I (H.81) — Section header for the three sub-panels
+ * (INGREDIENTS / DISHWARE / KITCHEN).  A thin separator line + a
+ * small uppercase label so each section reads as its own block. */
+function makeSectionHeader(label: string): HTMLElement {
+  const wrap = document.createElement("div");
+  Object.assign(wrap.style, {
+    display: "flex", alignItems: "center", gap: "5px",
+    marginTop: "8px", marginBottom: "1px",
+    fontSize: "10px", fontWeight: "700",
+    letterSpacing: "0.06em", opacity: "0.55",
+  } as Partial<CSSStyleDeclaration>);
+  const line = (): HTMLElement => {
+    const l = document.createElement("div");
+    Object.assign(l.style, {
+      flex: "1", height: "1px",
+      background: "rgba(255,245,220,0.18)",
+    } as Partial<CSSStyleDeclaration>);
+    return l;
+  };
+  wrap.appendChild(line());
+  const lab = document.createElement("span");
+  lab.textContent = label;
+  wrap.appendChild(lab);
+  wrap.appendChild(line());
+  return wrap;
 }
 
 /** Down-caret beside an expandable summary; flips to up-caret while
