@@ -4176,30 +4176,36 @@ pub(crate) fn try_spawn_arrival_guest(
 /// 12-guest cap immediately.  The 30 s last_seen_at threshold
 /// matches pedestrians.rs's try_arrival_handoff for consistency.
 fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
+    // Phase I (H.84) — DISABLED.  Server-side spawning was creating
+    // ghost guests (empty seat_uid, stuck in "waitingForFood" forever)
+    // because try_spawn_arrival_guest inserts a guest in "walkingIn"
+    // at (0, 0) and the server has no logic to pick a chair from
+    // placed_furniture and seat them — that lives client-side.  The
+    // state machine then times the guest out without ever sitting
+    // them down, and the client's H.47 hydrate imports them but
+    // can't render them (no seat_uid → no chair → invisible at the
+    // door).  Result: every offline tick produced more invisible
+    // accrual that made the user say "still no customers when I
+    // reload".
+    //
+    // True offline continuity requires server-side seat assignment
+    // (or moving the seat picker to the server), which is a larger
+    // change.  Until then: zero server-side spawning.  H.70's
+    // client-side burst-fill on reconnect makes the restaurant
+    // feel lively as soon as the player loads back in.
+    let _ = (ctx, rid, now);
+    return;
+
+    #[allow(unreachable_code, dead_code)]
+    {
     const SERVER_SPAWN_INTERVAL_MICROS: i64 = 5_500_000; // 5.5 s
     const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;    // 30 s
 
     let Some(rest) = ctx.db.restaurant().id().find(rid) else { return; };
 
-    // Phase I (H.77) — Guard against "ghost guest" accrual.  Spawning
-    // a guest server-side only makes sense when the server actually
-    // knows about FURNITURE in this restaurant: without a chair the
-    // guest can't be seated, without a stove the chef can't cook,
-    // and the state machine ends up timing them out to
-    // "waitingForFood" → "leaving" with seat_x=0,seat_z=0 — invisible
-    // ghosts sitting at the door.  Once the foreground client has
-    // logged in once on the H.75 build, placed_furniture fills up
-    // and this gate opens.  Until then we accept zero offline
-    // accrual (better than ghost accrual).
     if ctx.db.placed_furniture().restaurant_id().filter(rid).next().is_none() {
         return;
     }
-    // Same gate for staff_actor: no chefs/waiters on the server side
-    // means tickets can't be auto-claimed (auto_claim_queued_tickets
-    // iterates staff_actor).  Spawning a guest in a chef-less
-    // restaurant guarantees they time out without service.  H.74's
-    // resyncAllActorsToCloud populates this once the player logs in
-    // on the new build.
     if ctx.db.staff_actor().restaurant_id().filter(rid).next().is_none() {
         return;
     }
@@ -4253,6 +4259,7 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
             rid, variant,
         );
     }
+    } // end #[allow(unreachable_code, dead_code)] block (H.84 disable)
 }
 
 /// Phase H.25 — per-piece satisfaction contribution of a (kind, tier)
