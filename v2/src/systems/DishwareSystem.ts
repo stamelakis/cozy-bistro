@@ -256,22 +256,56 @@ export class DishwareSystem {
     const pool = this.poolFor(row.kind);
     const cur = pool.get(row.tier);
     if (cur && cur.clean === row.clean && cur.dirty === row.dirty) return;
+
+    // Phase I (H.78) — SELF-HEALING CAP.  If accepting this cloud row
+    // would push the total owned past the canonical lifetime, REJECT
+    // it and push our local truth back to cloud instead.
+    //
+    // Why this matters: previous sessions persisted bloated values to
+    // cloud's dishware_pool (the 534-plate ratchet).  H.76 makes
+    // local hydrate to a clean canonical count, but the cloud
+    // subscription's INITIAL sync replays those stale rows back at
+    // the client — overwriting the freshly-trimmed local back to
+    // bloated.  Combined with mirrorBump elsewhere, the user sees
+    // "fixed at 40 → jumped to 500 instantly" right after first
+    // delivery of the subscription cache.
+    //
+    // Now: applyPoolRow simulates the row, checks if owned would
+    // exceed lifetime, and if so leaves local alone + pushes our
+    // canonical truth back to cloud (one bumpDishwarePool per
+    // mismatch).  The cloud's row self-heals to canonical, and
+    // subsequent subscription deltas match.
+    const lifetime = row.kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
+    // Simulate accepting the row + sum the other tiers' owned.
+    let otherTiersOwned = 0;
+    for (const [tier, e] of pool) {
+      if (tier !== row.tier) otherTiersOwned += e.clean + e.dirty;
+    }
+    const proposedOwned = otherTiersOwned + row.clean + row.dirty;
+    if (proposedOwned > lifetime) {
+      console.warn(
+        `[Dishware] H.78 rejected cloud row that would push owned past lifetime: ` +
+        `kind=${row.kind} tier=${row.tier} cloudClean=${row.clean} cloudDirty=${row.dirty} ` +
+        `→ proposed owned=${proposedOwned}, lifetime=${lifetime}.  Pushing local truth back.`,
+      );
+      // Force local back to canonical (in case some prior code
+      // already mutated it) and push every tier of this kind UP to
+      // cloud so the bloated row gets overwritten.
+      this.reconcilePoolToLifetime(row.kind);
+      if (this.cloud && isServerSim("dishware")) {
+        for (const [tier, e] of pool) {
+          this.cloud.updateDishwarePool(row.kind, tier, e.clean, e.dirty);
+        }
+      }
+      return;
+    }
+
     this.suppressMirrorForReload = true;
     try {
       pool.set(row.tier, { clean: row.clean, dirty: row.dirty });
-      // Phase I (H.76) — REMOVED the lifetime self-heal bump.  It was
-      // the SECOND source of the 534-plate spiral: any transient
-      // bloated `owned` from a subscription replay or another device's
-      // race would bump `lifetimeAddedPlate` UP, save would persist
-      // the new high-water mark, next session's hydrate would top
-      // up to match, mirror would push back to cloud, and the
-      // subscription would bump lifetime again.  Pure positive
-      // feedback loop.
-      //
-      // Lifetime is now strictly derived from STARTER + sum(purchaseLog)
-      // — never from the pool's owned count.  See computeLifetimeFromLog
-      // and the comment in restoreFromCloud.  buySet remains the only
-      // way to grow lifetime, via bumpLifetime → purchaseLog.push.
+      // Phase I (H.76) — REMOVED the lifetime self-heal bump.  Lifetime
+      // is strictly derived from STARTER + sum(purchaseLog) — never
+      // from the pool's owned count.
     } finally {
       this.suppressMirrorForReload = false;
     }

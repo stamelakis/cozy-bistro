@@ -119,7 +119,14 @@ function getRecipeUpgradeDurationMinutes(tier: number, currentLevel: number): nu
   return tierScale * levelScale;
 }
 const MIN_STOCK_TARGET = 3;
-const MAX_STOCK_TARGET = 50;
+// Phase I (H.78b) — was 50 (an arbitrary hard cap that capped late-
+// game players who'd placed enough fridges to want more).  Bumped
+// to 500 so the meaningful limit is now the sum of placed fridge /
+// pantry / walk-in stockCapacity (Game.getFridgeStockBonus).  Place
+// more fridges → set higher target.  500 is still finite so a
+// runaway auto-shop can't drain the player's cash; that's the only
+// reason there's a number here at all.
+const MAX_STOCK_TARGET = 500;
 /** Auto-shop runs this often (seconds). */
 const AUTOSHOP_INTERVAL = 4;
 /** Max TOTAL units one errand trip can carry back. Tunes the supply
