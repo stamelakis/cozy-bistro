@@ -2819,12 +2819,14 @@ export class SpacetimeClient {
 
   /** Hook Game / SaveSystem events to mirror them into the DB. */
   private wireGameHooks(): void {
-    // 1) On every local save, schedule a debounced cloud save.
-    const originalSaveNow = this.saver.saveNow.bind(this.saver);
-    this.saver.saveNow = () => {
-      originalSaveNow();
-      this.scheduleCloudSave();
-    };
+    // Phase H.64 — REMOVED: was scheduling a cloud save_snapshot
+    // upload on every local autosave tick (every 5 s).  Now that
+    // every gameplay field has its own per-table cloud mirror
+    // (H.31-H.63), the JSON blob is only useful for visit mode's
+    // read path — and a once-per-day-rollover + beforeunload upload
+    // is more than enough for that.  Local IndexedDB autosave still
+    // runs at its own cadence; this just stops the cloud upload
+    // piggyback.
 
     // 2) Achievement unlocks → reducer (idempotent server-side).
     const originalUnlock = this.game.achievements.onUnlock;
@@ -2833,7 +2835,12 @@ export class SpacetimeClient {
       this.conn?.reducers.unlockAchievement({ achievementId: a.id });
     };
 
-    // 3) End-of-day → submit_leaderboard for each category.
+    // 3) End-of-day → submit_leaderboard for each category +
+    //    push the save_snapshot blob.  Day rollover is a natural
+    //    consolidation point: low frequency (1 / 12 real-min game
+    //    day) and a coherent moment for visit-mode subscribers
+    //    to pick up the new state.  This + the beforeunload path
+    //    are the only two places save_snapshot is uploaded now.
     const originalDayEnd = this.game.onDayEnded;
     this.game.onDayEnded = (s) => {
       originalDayEnd?.(s);
@@ -2849,37 +2856,18 @@ export class SpacetimeClient {
         score: BigInt(Math.max(0, s.served)),
         dayNumber: s.dayNumber,
       });
+      // H.64 — consolidate the day's state into the visit-mode blob.
+      // Visit mode reads player_save; no other path needs the
+      // save_snapshot upsert.
+      this.cloudSaveNow();
     };
   }
 
-  /** Phase I energy audit — minimum gap between cloud save_snapshot
-   * uploads.  Was 2 s (every autosave fired one).  Bumped to 5 min
-   * because the per-table mirrors (H.31 furniture, H.36 pantry, H.39
-   * staff, H.41 restock, H.42 dispatch, H.43-46 timers/totals, H.53
-   * recipe levels, etc.) cover every gameplay-relevant field — the
-   * save_snapshot blob is now a once-per-session backup of the
-   * straggler fields (reputation history, transaction log, achievement
-   * unlock list — though achievements ARE also already mirrored via
-   * unlock_achievement reducer).
-   *
-   * Once Phase I.5 finishes migrating the last straggler fields,
-   * save_snapshot is retired entirely and this field goes with it. */
-  private static readonly CLOUD_SAVE_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-  private lastCloudSaveAt = 0;
-
-  private scheduleCloudSave(): void {
-    if (this.saveDebounce != null) window.clearTimeout(this.saveDebounce);
-    const sinceLast = Date.now() - this.lastCloudSaveAt;
-    if (sinceLast < SpacetimeClient.CLOUD_SAVE_MIN_INTERVAL_MS) {
-      // Too soon — skip this upload.  The local autosave still wrote
-      // to IndexedDB so we don't lose anything on a refresh.
-      return;
-    }
-    this.saveDebounce = window.setTimeout(() => {
-      this.lastCloudSaveAt = Date.now();
-      this.cloudSaveNow();
-    }, 2000);
-  }
+  // Phase H.64 — REMOVED: scheduleCloudSave was the per-autosave-tick
+  // throttle for cloud save_snapshot uploads.  All gameplay fields
+  // are now mirrored to dedicated cloud tables (H.31-H.63), so the
+  // JSON blob is upload only at day rollover + beforeunload via
+  // explicit cloudSaveNow() calls.  No need for a throttle.
 
   /** Push the current game state to the save_snapshot table. Skips if
    * we don't have an authoritative restaurantId yet.
