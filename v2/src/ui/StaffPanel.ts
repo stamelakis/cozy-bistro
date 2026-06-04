@@ -138,6 +138,52 @@ export class StaffPanel {
     this.root.appendChild(restRow);
   }
 
+  /** Phase I (H.72) — pick the right emoji + count + tooltip for the
+   * per-member workload badge by role.  Returns null when the role
+   * has no workload accessor wired yet (defensive — keeps the UI
+   * silent rather than throwing on an unknown role).  Same color
+   * ramp logic in the caller works against any role's count.
+   *
+   * Counts:
+   *   chef    — queued + cooking tickets routed to this chef
+   *   barman  — queued + cooking BAR tickets routed to this barman
+   *   waiter  — concurrent tasks they own (deliver + wash + take-order)
+   *   errand  — 1 if on a trip, 0 if loitering by the counter
+   */
+  private workloadBadgeInfo(
+    role: StaffRole,
+    memberId: string,
+  ): { emoji: string; count: number; tooltip: string } | null {
+    switch (role) {
+      case "chef": {
+        const n = this.game.getChefBacklog?.(memberId) ?? 0;
+        return { emoji: "🍳", count: n, tooltip:
+          `${n} tickets in this chef's backlog (queued + cooking). ` +
+          `Hire another chef if this stays high — waiters spill to other floors when same-floor chefs hit 4+.` };
+      }
+      case "barman": {
+        const n = this.game.getBarmanBacklog?.(memberId) ?? 0;
+        return { emoji: "🍸", count: n, tooltip:
+          `${n} drinks in this barman's queue (queued + mixing). ` +
+          `Hire another barman if this stays high.` };
+      }
+      case "waiter": {
+        const n = this.game.getWaiterBacklog?.(memberId) ?? 0;
+        return { emoji: "🍽", count: n, tooltip:
+          `${n} active task(s) — meal delivery, wash trip, and take-order count together.` };
+      }
+      case "errand": {
+        const n = this.game.getErrandBacklog?.(memberId) ?? 0;
+        return { emoji: "📦", count: n, tooltip:
+          n > 0
+            ? "On a shopping trip."
+            : "Idle by the supply counter." };
+      }
+      default:
+        return null;
+    }
+  }
+
   /** Phase I (H.68) — Update the rest-spot status label after a
    * hydrate / set / clear.  Engine calls this so the panel reflects
    * the live cloud value. */
@@ -227,13 +273,15 @@ export class StaffPanel {
     // tier (gates the active floor buttons), the member list (id +
     // current home floor). If two consecutive ticks produce the
     // same string, the existing DOM is correct as-is.
-    // Signature also includes the per-chef backlog so the row
-    // rebuilds whenever any backlog changes (otherwise the badge
-    // would stay stale at the original value). Non-chef members
-    // contribute a constant "0" so adding waiters / barmen / errands
-    // doesn't churn the sig on unrelated state.
-    const backlogFor = (m: { id: string }): number =>
-      role === "chef" ? (this.game.getChefBacklog?.(m.id) ?? 0) : 0;
+    // Signature also includes the per-member workload count so the
+    // row rebuilds whenever any backlog changes (otherwise the
+    // badge would stay stale at the original value).  Phase I
+    // (H.72) — extended from chef-only to all four roles so the
+    // barman / waiter / errand badges also live-update.
+    const backlogFor = (m: { id: string }): number => {
+      const info = this.workloadBadgeInfo(role, m.id);
+      return info?.count ?? 0;
+    };
     const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}`).join(",");
     if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
       return;
@@ -256,38 +304,37 @@ export class StaffPanel {
         whiteSpace: "nowrap", opacity: "0.9",
       } as Partial<CSSStyleDeclaration>);
       row.appendChild(name);
-      // Per-chef backlog badge. Counts queued + cooking tickets
-      // assigned to this specific chef. Shown only for chefs (waiters
-      // / barmen / errands don't have per-individual backlogs). Color
-      // ramps with load so a glance tells the player who's drowning:
-      //   0     — hidden (idle chef, nothing to draw attention to)
-      //   1-2   — green / fine
-      //   3-4   — amber / catching up
-      //   5+    — red / hire help
-      if (role === "chef") {
-        const backlog = this.game.getChefBacklog?.(member.id) ?? 0;
-        if (backlog > 0) {
-          const badge = document.createElement("span");
-          badge.textContent = `🍳 ${backlog}`;
-          badge.title = `${backlog} tickets in this chef's backlog (queued + cooking). Hire another chef if this stays high — waiters spill to other floors when same-floor chefs hit 4+.`;
-          const bg = backlog >= 5
-            ? "rgba(220, 80, 80, 0.55)"
-            : backlog >= 3
-              ? "rgba(220, 170, 80, 0.45)"
-              : "rgba(120, 200, 120, 0.35)";
-          Object.assign(badge.style, {
-            fontSize: "10px",
-            fontWeight: "700",
-            padding: "1px 5px",
-            borderRadius: "3px",
-            background: bg,
-            color: "#fff5dc",
-            marginRight: "4px",
-            flex: "0 0 auto",
-            fontVariantNumeric: "tabular-nums",
-          } as Partial<CSSStyleDeclaration>);
-          row.appendChild(badge);
-        }
+      // Per-member workload badge — Phase I (H.72) generalised what
+      // used to be a chef-only "🍳 N" indicator so every role gets a
+      // visual cue when they're busy.  Each role picks a different
+      // emoji (cooking pan / mixing glass / serving tray / shopping
+      // bag) and queries its own Game accessor.  Same color ramp
+      // applies across the board — green = fine, amber = catching
+      // up, red = hire help — so the player learns one visual
+      // language and reads any role's load at a glance.
+      const badgeInfo = this.workloadBadgeInfo(role, member.id);
+      if (badgeInfo && badgeInfo.count > 0) {
+        const badge = document.createElement("span");
+        badge.textContent = `${badgeInfo.emoji} ${badgeInfo.count}`;
+        badge.title = badgeInfo.tooltip;
+        const n = badgeInfo.count;
+        const bg = n >= 5
+          ? "rgba(220, 80, 80, 0.55)"
+          : n >= 3
+            ? "rgba(220, 170, 80, 0.45)"
+            : "rgba(120, 200, 120, 0.35)";
+        Object.assign(badge.style, {
+          fontSize: "10px",
+          fontWeight: "700",
+          padding: "1px 5px",
+          borderRadius: "3px",
+          background: bg,
+          color: "#fff5dc",
+          marginRight: "4px",
+          flex: "0 0 auto",
+          fontVariantNumeric: "tabular-nums",
+        } as Partial<CSSStyleDeclaration>);
+        row.appendChild(badge);
       }
       if (showFloorButtons) {
         const current = member.homeFloor ?? 0;

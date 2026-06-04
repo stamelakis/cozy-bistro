@@ -1370,8 +1370,40 @@ export class StaffRouter {
     let count = 0;
     for (const t of this.tickets) {
       if (t.assignedChefId !== chefMemberId) continue;
+      if (t.appliance === "bar") continue; // those count under barman
       if (t.state === "queued" || t.state === "cooking") count += 1;
     }
+    return count;
+  }
+
+  /** Phase I (H.72) — barman version of getChefBacklog.  Counts
+   * queued+cooking bar-appliance tickets assigned to this barman.
+   * The Router's ticket dispatcher writes `assignedChefId` for
+   * barmen too (the field is just "this is whose station it
+   * is"); filtering by appliance==="bar" tells barman queue from
+   * chef queue.  Same O(N) over a short ticket list. */
+  getBarmanBacklog(barmanMemberId: string): number {
+    let count = 0;
+    for (const t of this.tickets) {
+      if (t.assignedChefId !== barmanMemberId) continue;
+      if (t.appliance !== "bar") continue;
+      if (t.state === "queued" || t.state === "cooking") count += 1;
+    }
+    return count;
+  }
+
+  /** Phase I (H.72) — waiter workload indicator.  Counts the
+   * concurrent tasks this waiter owns: a meal being delivered, an
+   * active wash trip, or a take-order trip in flight.  Each is
+   * O(1) lookup against their StaffActor row; no list scan needed.
+   * Returns 0 when fully idle. */
+  getWaiterBacklog(waiterMemberId: string): number {
+    const w = this.waiters.find((x) => x.memberId === waiterMemberId);
+    if (!w) return 0;
+    let count = 0;
+    if (w.ticketId) count += 1;
+    if (w.washTrip) count += 1;
+    if (w.takeOrderRequest) count += 1;
     return count;
   }
 

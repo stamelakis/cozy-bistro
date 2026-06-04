@@ -245,6 +245,17 @@ export class ErrandRouter {
     return null;
   }
 
+  /** Phase I (H.72) — workload indicator for the StaffPanel "working"
+   * badge.  Returns 1 if this helper is currently on a trip
+   * (carrying / shopping / returning), 0 if they're idle by the
+   * counter.  Same shape as StaffRouter.getWaiterBacklog so the
+   * UI can render a single per-row badge uniformly across roles. */
+  getHelperWorkload(memberId: string): number {
+    const h = this.helpers.find((x) => x.memberId === memberId);
+    if (!h) return 0;
+    return h.state === "idle" ? 0 : 1;
+  }
+
   /** Snapshot for the status-bubble layer. Skips offscreen helpers so
    * we don't render a bubble floating over the empty road. */
   snapshotStatus(): { character: AnimatedCharacter; label: string }[] {

@@ -287,6 +287,13 @@ export class Game {
    * badge next to each chef's name so the player can see who's
    * drowning and decide whether to hire another chef. */
   getChefBacklog?: (chefMemberId: string) => number;
+  /** Phase I (H.72) — sibling accessors for the OTHER roles, so the
+   * StaffPanel can render a uniform "currently working" badge for
+   * every member instead of only chefs.  Same pattern Engine wires
+   * for getChefBacklog. */
+  getBarmanBacklog?: (barmanMemberId: string) => number;
+  getWaiterBacklog?: (waiterMemberId: string) => number;
+  getErrandBacklog?: (helperMemberId: string) => number;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */

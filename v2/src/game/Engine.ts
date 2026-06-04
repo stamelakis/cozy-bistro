@@ -825,6 +825,14 @@ export class Engine {
     this.game.getChefBacklog = (chefMemberId: string) => {
       return this.router?.getChefBacklog?.(chefMemberId) ?? 0;
     };
+    // Phase I (H.72) — same wiring for the other roles so StaffPanel
+    // can render a per-member "currently working" badge across the
+    // board.  Each accessor returns 0 when the router isn't ready
+    // yet (pre-staffReady) — that's harmless since the badge then
+    // just doesn't appear, matching the "idle" visual.
+    this.game.getBarmanBacklog = (id: string) => this.router?.getBarmanBacklog?.(id) ?? 0;
+    this.game.getWaiterBacklog = (id: string) => this.router?.getWaiterBacklog?.(id) ?? 0;
+    this.game.getErrandBacklog = (id: string) => this.errand?.getHelperWorkload?.(id) ?? 0;
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     this.buildMenu = buildMenu;
