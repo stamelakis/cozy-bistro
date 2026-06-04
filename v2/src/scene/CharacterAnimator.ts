@@ -116,11 +116,28 @@ export class CharacterAnimator {
       wz = this.worldRoot!.position.z;
     }
     for (const c of this.characters) {
+      // CRITICAL: ALWAYS sync root.position from groundPos BEFORE
+      // the cull decision.  Three.js does its own frustum cull at
+      // GPU-draw time using root.position; if root.position is
+      // stale (because the previous frame skipped tickCharacter
+      // for being off-frustum, or because the character was just
+      // added and has never been ticked), three.js culls them at
+      // their stale spot — which for a fresh spawn is the model's
+      // (0, baseY, 0) origin in the kitchen, making everyone
+      // "blob together" there.
+      //
+      // This is the cheap part of tickCharacter — three Vector3
+      // writes per character, ~0.5 µs at N=50.  The expensive part
+      // (breathing math, per-action switch + trig) is what we
+      // actually skip via the cull below.
+      const baseY = c._baseY ?? 0;
+      c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
+      c.root.rotation.set(0, c.facingY, 0);
+
       if (cull) {
-        // Sphere centred on the character's head (groundPos + ~0.9 m
+        // Sphere centred on the character's torso (groundPos + ~0.45 m
         // up the body) so a tall character isn't false-culled when
         // their feet are below the bottom plane.
-        const baseY = c._baseY ?? 0;
         this.cullSphere.center.set(
           c.groundPos.x + wx,
           baseY + wy + 0.45,
