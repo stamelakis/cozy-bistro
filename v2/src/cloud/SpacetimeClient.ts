@@ -2360,19 +2360,56 @@ export class SpacetimeClient {
    * controls whether the identity token is stored in localStorage
    * (true, default — survives browser restart) or sessionStorage
    * (false — cleared on tab close). */
-  signUp(username: string, password: string, rememberMe = true): Promise<void> {
+  async signUp(username: string, password: string, rememberMe = true): Promise<void> {
     this.setRememberMe(rememberMe);
-    return this.callReducer("signUp", () => this.conn!.reducers.signUp({ username, password }));
+    await this.callReducer("signUp", () => this.conn!.reducers.signUp({ username, password }));
+    // Same race fix as login() — the auth_record insert needs to
+    // round-trip via subscription before isAuthenticated() returns true.
+    await this.waitForAuthRecord();
+  }
+
+  /** Poll the local auth_record cache for up to AUTH_WAIT_TIMEOUT_MS
+   * waiting for a row matching the current identity to appear.
+   * Called by login()/signUp() right after the reducer applies so
+   * the caller sees a consistent isAuthenticated()=true on return.
+   *
+   * No-op when there's no connection (caller will see "Not
+   * connected" elsewhere).  Silently times out (logs a warn) if
+   * the row never arrives — the LoginModal will then surface
+   * "Login failed" which prompts a retry; better than throwing
+   * from inside a successful reducer call.  10 ms poll interval +
+   * 3000 ms cap is plenty for a same-region SpacetimeDB host. */
+  private async waitForAuthRecord(): Promise<void> {
+    const AUTH_WAIT_TIMEOUT_MS = 3000;
+    const POLL_INTERVAL_MS = 25;
+    const deadline = Date.now() + AUTH_WAIT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (this.isAuthenticated()) return;
+      await new Promise<void>((r) => window.setTimeout(r, POLL_INTERVAL_MS));
+    }
+    console.warn("[SpacetimeClient] auth_record didn't arrive within "
+      + `${AUTH_WAIT_TIMEOUT_MS}ms after login — likely a subscription delay; `
+      + "caller will surface 'Login failed'.");
   }
 
   /** Call login. Resolves on success, rejects with the reducer's
    * error string (e.g. "Wrong password"). `rememberMe` controls
    * whether the identity token is stored in localStorage (true,
    * default — survives browser restart) or sessionStorage (false —
-   * cleared on tab close). */
-  login(username: string, password: string, rememberMe = true): Promise<void> {
+   * cleared on tab close).
+   *
+   * After the reducer applies, this also WAITS for the resulting
+   * auth_record row to propagate back via subscription so that
+   * `isAuthenticated()` returns true the moment we resolve.
+   * Without this, callers (LoginModal) would see the row missing
+   * on the very next line and flash "Login failed" even though
+   * the server happily accepted the credentials.  Timing race
+   * became visible after publishes that disconnect all clients
+   * — the auth_record subscription cache starts cold on reconnect. */
+  async login(username: string, password: string, rememberMe = true): Promise<void> {
     this.setRememberMe(rememberMe);
-    return this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
+    await this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
+    await this.waitForAuthRecord();
   }
 
   /** Call logout. Releases this identity's claim on the account so
