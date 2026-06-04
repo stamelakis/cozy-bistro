@@ -758,6 +758,36 @@ export class WorldScene {
     this.threeScene.add(this.skyDome);
   }
 
+  /** Phase I (UX) — return every perimeter wall mesh currently
+   * rendered in SOLID mode (i.e. not ghosted by the see-through
+   * camera-aware swap).  StatusBubbles raycasts against this list
+   * to hide bubbles whose character is behind a wall the player
+   * can't see through.  Walls in "ghost" mode are translucent
+   * (the player CAN see through them), so we skip them — the
+   * bubble should still render in that case.
+   *
+   * Floor slabs are NOT included; the storey-focus filter already
+   * handles the case where a Floor 1 character's bubble would
+   * leak down into Floor 0's view.  Adding slabs here would
+   * needlessly trigger a raycast hit on the slab the character is
+   * standing on.
+   *
+   * Output is a fresh array each call (no shared mutation hazard
+   * for the caller).  Walk is O(#walls); at typical N≈30 segments
+   * this is sub-millisecond. */
+  getSolidWallOccluders(): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    for (const floorMap of this.perimeterWalls.values()) {
+      for (const wallState of floorMap.values()) {
+        if (wallState.currentMat !== "solid") continue;
+        for (const mesh of wallState.meshes) {
+          if (mesh.visible) out.push(mesh);
+        }
+      }
+    }
+    return out;
+  }
+
   /** Engine calls this every frame as the day-night cycle changes the
    * sky tint. We update the dome material colour so the void matches
    * the fog haze at every time of day. */

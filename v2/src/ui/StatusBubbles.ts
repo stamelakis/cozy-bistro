@@ -58,6 +58,26 @@ export class StatusBubbles {
    * Y so it sits above the head instead of below the ceiling. */
   getStoreyHeight?: () => number;
 
+  /** Phase I (UX) — optional accessor for the list of opaque wall
+   * meshes the bubble should be hidden behind.  Engine wires this
+   * to WorldScene.getSolidWallOccluders().  When set, every visible
+   * bubble fires a single raycast from the character's head toward
+   * the camera; if it hits a wall before reaching the camera, the
+   * bubble is hidden this frame.  Without this hook the bubble
+   * leaks through walls just like any HTML overlay.
+   *
+   * Walls in "ghost" (see-through) mode are intentionally omitted
+   * from the returned list, so a bubble behind a ghosted wall
+   * still renders — matching what the player can actually see. */
+  getOccluders?: () => readonly THREE.Object3D[];
+  // Reused raycast scratch — Three.js Raycaster + the two Vector3s
+  // it needs to be configured each call.  Pre-allocated to avoid
+  // per-frame GC churn.
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly camWorld = new THREE.Vector3();
+  private readonly headWorld = new THREE.Vector3();
+  private readonly rayDir = new THREE.Vector3();
+
   constructor(host: HTMLElement, camera: THREE.Camera, canvas: HTMLCanvasElement) {
     this.host = host;
     this.camera = camera;
@@ -70,6 +90,11 @@ export class StatusBubbles {
     const stillActive = new Set<string>();
     const focused = this.getFocusedFloor?.();
     const storeyH = this.getStoreyHeight?.() ?? 3;
+    // Phase I (UX) — fetch the wall occluder list ONCE per frame.
+    // Same list is reused for every bubble's raycast below.
+    const occluders = this.getOccluders?.();
+    const hasOccluders = !!occluders && occluders.length > 0;
+    if (hasOccluders) this.camera.getWorldPosition(this.camWorld);
     for (const entry of entries) {
       if (!entry.label) continue;
       // Primary filter: walk the character's parent chain. If ANY
@@ -106,6 +131,33 @@ export class StatusBubbles {
       if (this.tmp.z > 1) {
         bubble.el.style.display = "none";
         continue;
+      }
+      // Phase I (UX) — wall-occlusion raycast.  Cast from the
+      // character's head (~0.9 m above feet, mid-torso) toward the
+      // camera; if a solid wall sits between, hide the bubble so
+      // it doesn't bleed through.  Far is shortened by 0.3 m so
+      // the camera's own near plane (or a wall the camera is
+      // pressed against) can't itself count as a blocker.
+      if (hasOccluders) {
+        this.headWorld.set(entry.character.groundPos.x, charY + 0.9, entry.character.groundPos.y);
+        this.rayDir.subVectors(this.camWorld, this.headWorld);
+        const dist = this.rayDir.length();
+        if (dist > 0.4) {
+          this.rayDir.multiplyScalar(1 / dist); // normalize without re-length
+          this.raycaster.set(this.headWorld, this.rayDir);
+          this.raycaster.near = 0.05;
+          this.raycaster.far = dist - 0.3;
+          // intersectObjects(non-recursive) — occluders is a flat
+          // mesh list, so traversal into children is unnecessary
+          // and would be wasteful.  Cast to mutable Object3D[] — the
+          // three.js signature requires mutable but the method only
+          // reads, so the readonly source list is safe.
+          const hits = this.raycaster.intersectObjects(occluders as THREE.Object3D[], false);
+          if (hits.length > 0) {
+            bubble.el.style.display = "none";
+            continue;
+          }
+        }
       }
       bubble.el.style.display = "block";
       bubble.el.style.transform = `translate(${x - bubble.el.offsetWidth / 2}px, ${y - bubble.el.offsetHeight}px)`;

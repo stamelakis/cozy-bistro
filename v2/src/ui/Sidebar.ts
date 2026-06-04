@@ -39,6 +39,10 @@ export class Sidebar {
       display: "flex",
       flexDirection: "column",
       overflow: "hidden",
+      // Phase I (UX) — explicit z-index so status bubbles can't bleed
+      // through.  Matches ChatPanel + MenuPanel (100).  All side / HUD
+      // panels need to sit above the bubble layer.
+      zIndex: "100",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 

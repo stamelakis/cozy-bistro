@@ -607,6 +607,13 @@ export class Engine {
     // for a moment behind the login modal on every fresh load.
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
+    // Phase I (UX) — wire the wall-occluder source so bubbles hide
+    // when their character is behind a solid wall the player can't
+    // see through.  WorldScene.getSolidWallOccluders() returns only
+    // walls currently in non-ghost mode, so a wall the camera has
+    // swapped to translucent (player CAN see through) doesn't trigger
+    // false occlusion.
+    this.statusBubbles.getOccluders = () => this.scene.getSolidWallOccluders();
     // Furniture registry — tracks every placed item so it persists, supports
     // overlap detection, and can be sold via the build-menu sell mode.
     // Pass a getStoreyMount callback so the registry can park each

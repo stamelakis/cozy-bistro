@@ -106,6 +106,11 @@ export class MenuPanel {
       borderRadius: "8px",
       pointerEvents: "auto",
       boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+      // Phase I (UX) — explicit z-index so status bubbles (z=3 after
+      // the bubble-layer fix) can't bleed through the panel.  Matches
+      // ChatPanel (100) — both are side / centre HUD panels that need
+      // to sit above the bubble layer but below modals (1000+).
+      zIndex: "100",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 

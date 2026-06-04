@@ -27,6 +27,22 @@ export class UpgradeModal {
   private selectedTier: LuxuryTier = 1;
   private selectedSection: Section = "recipes";
 
+  /** Phase I (UX) — 1 Hz tickers for "🧪 Cooking Ns" and "📚 Training Ns"
+   * labels.  refresh() rebuilds this list as it renders each in-flight
+   * row; show() kicks off a 1 s setInterval that calls each ticker.
+   * Each ticker returns `true` when the deadline elapses so the modal
+   * can refresh() once to flip the row back from "Cooking" / "Training"
+   * to the regular Upgrade / Train button.  Without this, the timer
+   * label was static — players had to close + reopen the modal to see
+   * the countdown move.
+   *
+   * Stored as () => boolean (true = expired) instead of () => void
+   * so the tick batcher can collapse multiple expirations into one
+   * refresh() at the end of the tick rather than refreshing mid-walk
+   * (which would invalidate the updaters array we're still iterating). */
+  private countdownUpdaters: Array<() => boolean> = [];
+  private countdownInterval: number | null = null;
+
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
     this.root = document.createElement("div");
@@ -99,10 +115,41 @@ export class UpgradeModal {
     body.appendChild(this.body);
   }
 
-  show(): void { this.refresh(); this.root.style.display = "flex"; }
-  hide(): void { this.root.style.display = "none"; }
+  show(): void {
+    this.refresh();
+    this.root.style.display = "flex";
+    // Phase I (UX) — kick off 1 Hz countdown refresh.  Stays running
+    // only while the modal is visible (cleared in hide()).
+    if (this.countdownInterval === null) {
+      this.countdownInterval = window.setInterval(() => this.tickCountdowns(), 1000);
+    }
+  }
+  hide(): void {
+    this.root.style.display = "none";
+    if (this.countdownInterval !== null) {
+      window.clearInterval(this.countdownInterval);
+      this.countdownInterval = null;
+    }
+  }
+
+  /** Phase I (UX) — called once per second while the modal is open.
+   * Runs every registered countdown updater.  If any reported expired
+   * (return value true), refresh() the whole modal so the row that
+   * just finished flips back to its Upgrade / Train button. */
+  private tickCountdowns(): void {
+    let needsFullRefresh = false;
+    for (const update of this.countdownUpdaters) {
+      try { if (update()) needsFullRefresh = true; }
+      catch (e) { console.warn("[UpgradeModal] countdown updater threw:", e); }
+    }
+    if (needsFullRefresh) this.refresh();
+  }
 
   private refresh(): void {
+    // Phase I (UX) — drop any countdown updaters from the previous
+    // render.  Each render pass registers fresh closures bound to
+    // the row elements that were just created.
+    this.countdownUpdaters = [];
     this.renderSectionTabs();
     if (this.selectedSection === "recipes") {
       this.title.textContent = "RECIPE UPGRADES";
@@ -249,9 +296,16 @@ export class UpgradeModal {
         btn.style.opacity = "0.5";
       } else if (this.game.isRecipeTraining(recipe)) {
         // This specific recipe is mid-upgrade — countdown instead of
-        // the Upgrade button.
-        const remaining = this.game.getRecipeTrainingRemainingSeconds(recipe) ?? 0;
-        btn.innerHTML = `🧪 Cooking<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+        // the Upgrade button.  Phase I (UX) — wrap the label compute
+        // in a closure registered with countdownUpdaters so the
+        // 1 Hz tick refreshes "Ns" without rebuilding the row.
+        const updateRecipeCooking = (): boolean => {
+          const remaining = this.game.getRecipeTrainingRemainingSeconds(recipe) ?? 0;
+          btn.innerHTML = `🧪 Cooking<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+          return remaining <= 0; // signals "expired → please refresh"
+        };
+        updateRecipeCooking();
+        this.countdownUpdaters.push(updateRecipeCooking);
         btn.disabled = true;
         btn.style.opacity = "0.7";
         btn.style.background = "rgba(120, 160, 220, 0.22)";
@@ -385,20 +439,27 @@ export class UpgradeModal {
       } else if (this.game.isMemberTraining(m.id)) {
         // In-flight training — show a countdown instead of the Train
         // button. Update the row label too so the "now / next" text
-        // reads "Training to L(n+1)".
-        const remaining = this.game.getMemberTrainingRemainingSeconds(m.id) ?? 0;
-        btn.innerHTML = `📚 Training<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+        // reads "Training to L(n+1)".  Phase I (UX) — wrap both the
+        // button label and the detail row in a closure registered
+        // with countdownUpdaters so the "Ns left" updates live.
+        const targetLevel = level + 1;
+        const hours = getTrainingDurationHours(targetLevel);
+        const updateMemberTraining = (): boolean => {
+          const remaining = this.game.getMemberTrainingRemainingSeconds(m.id) ?? 0;
+          btn.innerHTML = `📚 Training<br><span style="font-size:10px;opacity:0.85">${formatHM(remaining)}</span>`;
+          // Replace the "next" preview line with the target level + the
+          // expected total duration so the player sees the deal.
+          detail.innerHTML =
+            `<span style="opacity:0.7">Now:</span> ${meta.current(level)} ` +
+            `&nbsp; · &nbsp; ` +
+            `<span style="color:#a8d4f0">📚 Training to L${targetLevel} — ${hours}h real, ${formatHM(remaining)} left</span>`;
+          return remaining <= 0; // expired → caller will refresh()
+        };
+        updateMemberTraining();
+        this.countdownUpdaters.push(updateMemberTraining);
         btn.disabled = true;
         btn.style.opacity = "0.7";
         btn.style.background = "rgba(120, 160, 220, 0.22)";
-        // Replace the "next" preview line with the target level + the
-        // expected total duration so the player sees the deal.
-        const targetLevel = level + 1;
-        const hours = getTrainingDurationHours(targetLevel);
-        detail.innerHTML =
-          `<span style="opacity:0.7">Now:</span> ${meta.current(level)} ` +
-          `&nbsp; · &nbsp; ` +
-          `<span style="color:#a8d4f0">📚 Training to L${targetLevel} — ${hours}h real, ${formatHM(remaining)} left</span>`;
       } else {
         const cost = this.game.getMemberUpgradeCost(m.id);
         const requiredTier = this.game.getMemberUpgradeRequiredTier(m.id);
