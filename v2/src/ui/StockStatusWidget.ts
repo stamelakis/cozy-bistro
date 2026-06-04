@@ -297,6 +297,7 @@ export class StockStatusWidget {
     const glassAccount = glassClean + glassDirty + glassInWash + glassInUse;
     const plateLeak = plateLifetime - plateAccount;
     const glassLeak = glassLifetime - glassAccount;
+    const anyLeak = plateLeak !== 0 || glassLeak !== 0;
     dishLines.push(
       `<div style="margin-top:4px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12)">` +
         `<div style="color:#a8c8e8;font-weight:700;margin-bottom:2px">Account</div>` +
@@ -306,6 +307,14 @@ export class StockStatusWidget {
         `<div>Glasses: <b>${glassClean}</b> clean · ${glassDirty} dirty · ${glassInWash} washing · ${glassInUse} in use = <b>${glassAccount}</b> / ${glassLifetime}` +
           (glassLeak !== 0 ? ` <span style="color:#ff9a9a">(${glassLeak > 0 ? "LEAK" : "OVER"} ${Math.abs(glassLeak)})</span>` : "") +
         `</div>` +
+        // Phase I (H.87) — Recalibrate button.  Only shown when
+        // there's actually a non-zero leak / over to fix.  Clicking
+        // it sets canonical lifetime to the current real total
+        // (clean + dirty + washing + in_use), absorbing the
+        // historical drift.  Future buys append normally on top.
+        (anyLeak
+          ? `<div style="margin-top:6px"><button id="dish-recalibrate-btn" style="background:rgba(120,180,200,0.25);color:#fff5dc;border:1px solid rgba(120,180,200,0.5);border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:10px;font-weight:600">Recalibrate to current total</button></div>`
+          : ""),
       `</div>`,
     );
     // Wash is driven by waiter trips — no abstract interval to surface.
@@ -323,6 +332,18 @@ export class StockStatusWidget {
     // duplicate info.
     this.dishTooltip.innerHTML = dishLines.join("");
     this.dishTooltip.scrollTop = dishScroll;
+    // Phase I (H.87) — Wire the Recalibrate button (only present when
+    // anyLeak above).  Captured the in-flight counts in this update()
+    // pass so the click resets to the precise current snapshot.
+    if (anyLeak) {
+      const btn = this.dishTooltip.querySelector("#dish-recalibrate-btn") as HTMLButtonElement | null;
+      if (btn) {
+        btn.onclick = (): void => {
+          dish.recalibrateLifetime(plateInUse, glassInUse);
+          this.update(); // re-render immediately so leak label vanishes
+        };
+      }
+    }
 
     // === Storage badge ===
     // Phase I (H.80) — Show ACTUAL pantry stock vs total capacity,

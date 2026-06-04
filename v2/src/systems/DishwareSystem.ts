@@ -610,6 +610,47 @@ export class DishwareSystem {
     this.log(`reconcileToPurchaseLog → ${target.plate} plates, ${target.glass} glasses (starter + ${this.purchaseLog.length} purchases)`);
   }
 
+  /** Phase I (H.87) — User-invokable LEAK RECOVERY.
+   *
+   * Accumulated state from before the H.83 fixes left some users with
+   * a permanent gap: total in-pool + in-wash + in-use < canonical
+   * lifetime, showing as "LEAK N" in the Account block.  H.83
+   * removed every auto-restore mechanism (correct — they were
+   * duping), so the leak just sits there now.
+   *
+   * This method takes the ACTUAL current total per kind (clean +
+   * dirty + washing + caller-supplied in_use) as the new canonical
+   * lifetime — effectively "forgive the loss, accept reality."
+   * Rewrites purchaseLog into ONE synthetic entry that summarises
+   * "you have this many" so STARTER + sum(log) still equals the
+   * new lifetime invariant.
+   *
+   * After call: leak = 0, total stable, future buys append normally,
+   * future bugs that leak again will be visible (no auto-recovery
+   * to mask them).  User can re-invoke when they notice drift. */
+  recalibrateLifetime(inFlightPlates: number, inFlightGlasses: number): void {
+    const plateInWash = this.getDishwasherInFlight("plate");
+    const glassInWash = this.getDishwasherInFlight("glass");
+    const platesNow = this.getOwned("plate") + plateInWash + inFlightPlates;
+    const glassesNow = this.getOwned("glass") + glassInWash + inFlightGlasses;
+    const prevPlate = this.lifetimeAddedPlate;
+    const prevGlass = this.lifetimeAddedGlass;
+    this.lifetimeAddedPlate = platesNow;
+    this.lifetimeAddedGlass = glassesNow;
+    // Rewrite the log to a single synthetic "calibrated" entry per
+    // kind so STARTER + sum(log) still equals the new lifetime.
+    this.purchaseLog = [];
+    const platesBeyondStarter = Math.max(0, platesNow - STARTER_PLATE_COUNT);
+    const glassesBeyondStarter = Math.max(0, glassesNow - STARTER_GLASS_COUNT);
+    if (platesBeyondStarter > 0) {
+      this.purchaseLog.push({ kind: "plate", tier: 1, count: platesBeyondStarter, at: 0 });
+    }
+    if (glassesBeyondStarter > 0) {
+      this.purchaseLog.push({ kind: "glass", tier: 1, count: glassesBeyondStarter, at: 0 });
+    }
+    this.log(`recalibrateLifetime: plate ${prevPlate} → ${platesNow}, glass ${prevGlass} → ${glassesNow} (synth log entries: ${this.purchaseLog.length})`);
+  }
+
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===
 
   /** Wash interval in seconds. Each placed sink shaves 0.6s, each
