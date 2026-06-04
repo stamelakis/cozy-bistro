@@ -90,6 +90,19 @@ const IDLE_ZONE_HALF_Z = 0.6;
 
 export class ErrandRouter {
   private readonly helpers: ErrandActor[] = [];
+
+  /** Phase I (H.65) — cloud handle for mirroring helper position +
+   * state to the staff_actor table (role="errand").  Use setCloud()
+   * to wire this after construction so already-added helpers get
+   * registered too.
+   *
+   * Mirror cadence: 1 Hz (same as StaffRouter), driven from `update`.
+   * Hydrate path applies cloud state on subscription ready so a
+   * refresh mid-trip resumes from where the helper was. */
+  private cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  /** 1Hz publish accumulator (matches StaffRouter.cloudActorAccum). */
+  private cloudActorAccum = 0;
+
   /** Where the helper enters/exits the building. The interior side of
    * the front door — see WorldScene.doorPos. */
   private readonly doorInteriorPos: THREE.Vector2;
@@ -149,7 +162,7 @@ export class ErrandRouter {
     // hired.
     const home = this.pickIdleSpot();
     char.groundPos.copy(home);
-    this.helpers.push({
+    const actor: ErrandActor = {
       character: char,
       memberId,
       home,
@@ -160,7 +173,15 @@ export class ErrandRouter {
       roadEdge: null,
       path: [],
       replanAccum: 0,
-    });
+    };
+    this.helpers.push(actor);
+    // Phase I (H.65) — mirror to cloud so a refresh can hydrate the
+    // helper's last-known pose.  Server's compute_waiter_transition
+    // returns identity for unknown errand states (walkingToDoor etc.),
+    // so the only server-side step is the position interpolation
+    // toward target_x/z — which the 1Hz client mirror overrides
+    // anyway.  Safe to layer on without server changes.
+    this.mirrorActorRegister(actor);
   }
 
   /** Random point in the loiter zone near the supply counter. Picked
@@ -208,6 +229,9 @@ export class ErrandRouter {
     // stray invisible root makes debugging miserable.
     removed.character.root.visible = true;
     this.helpers.splice(idx, 1);
+    // H.65 — drop the cloud row so a re-hydrate after a fire doesn't
+    // resurrect the just-fired helper at a stale position.
+    this.mirrorActorUnregister(removed.memberId);
     return removed.character;
   }
 
@@ -264,8 +288,114 @@ export class ErrandRouter {
     return this.getTotalTripsInProgress() < this.helpers.length;
   }
 
+  /** Phase I (H.65) — wire the cloud handle.  Engine calls this once
+   * the SpacetimeClient is connected.  Because the ErrandRouter's
+   * constructor already added the base helper before the cloud handle
+   * existed, this also mirrors every helper already in the pool.
+   * Idempotent — calling twice with the same client just re-registers
+   * the same rows. */
+  setCloud(cloud: import("../cloud/SpacetimeClient").SpacetimeClient): void {
+    this.cloud = cloud;
+    for (const h of this.helpers) this.mirrorActorRegister(h);
+  }
+
   update(dt: number): void {
     for (const h of this.helpers) this.tickHelper(h, dt);
+    // Phase I (H.65) — periodic publish of helper pose to the cloud
+    // so a refresh / cross-device session resumes from the same spot.
+    this.streamActorsToCloud(dt);
+  }
+
+  /** Phase I (H.65) — 1 Hz position publish.  Matches StaffRouter's
+   * cadence; one reducer call per helper per second is cheap and
+   * keeps the staff_actor row in step with the local state machine. */
+  private streamActorsToCloud(dt: number): void {
+    if (!this.cloud) return;
+    this.cloudActorAccum += dt;
+    if (this.cloudActorAccum < 1.0) return;
+    this.cloudActorAccum = 0;
+    for (const h of this.helpers) this.mirrorActorUpdate(h);
+  }
+
+  private mirrorActorRegister(h: ErrandActor): void {
+    if (!this.cloud) return;
+    this.cloud.registerStaffActor({
+      memberId: h.memberId,
+      role: "errand",
+      homeFloor: 0,
+      homeX: h.home.x,
+      homeZ: h.home.y,
+      spawnX: h.character.groundPos.x,
+      spawnZ: h.character.groundPos.y,
+      spawnFloor: 0,
+    });
+  }
+
+  private mirrorActorUnregister(memberId: string): void {
+    if (!this.cloud) return;
+    this.cloud.unregisterStaffActor(memberId);
+  }
+
+  private mirrorActorUpdate(h: ErrandActor): void {
+    if (!this.cloud) return;
+    this.cloud.updateStaffActor({
+      memberId: h.memberId,
+      state: h.state,
+      ticketId: null,
+      x: h.character.groundPos.x,
+      z: h.character.groundPos.y,
+      floor: 0,
+      targetX: h.target.x,
+      targetZ: h.target.y,
+      targetFloor: 0,
+      assignedStoveUid: "",
+      lastStoveUid: "",
+      washTargetUid: "",
+      washDirtyId: BigInt(-1),
+      washPhase: "",
+      takeOrderGuestId: null,
+    });
+  }
+
+  /** Phase I (H.65) — Apply cloud staff_actor rows (role="errand") to
+   * local helpers.  Engine calls on subscription ready.  Restores
+   * position + ErrandState so a refresh resumes from where the
+   * helper was, not from home.
+   *
+   * Known caveat: the trip's `payload` (Map<ingredient,count>) is NOT
+   * cloud-mirrored — it's a transient closure on the client.  A
+   * helper resumed mid-trip will deliver an empty bag.  Game's
+   * completeErrandDelivery handles an empty Map gracefully (no
+   * units added).  Acceptable for now — the visible bug (teleport to
+   * home) is the major complaint; the payload-loss only matters if
+   * the user happens to refresh during an active shopping run. */
+  hydrateFromCloud(): void {
+    if (!this.cloud) return;
+    const rows = this.cloud.listStaffActors();
+    let updated = 0;
+    for (const row of rows) {
+      if (row.role !== "errand") continue;
+      const h = this.helpers.find((helper) => helper.memberId === row.memberId);
+      if (!h) continue;
+      h.character.groundPos.set(row.x, row.z);
+      if (isErrandState(row.state)) {
+        h.state = row.state;
+        h.target.set(row.targetX, row.targetZ);
+        // Restore visibility — only "offscreen" hides the model.
+        h.character.root.visible = row.state !== "offscreen";
+        h.character.action = errandPoseFor(row.state);
+        // Reset trip-internal flags that aren't persisted.
+        h.clock = 0;
+        h.replanAccum = 0;
+        h.path = [];
+        // For mid-trip resumes, re-plan now so moveActor has a path.
+        if (isWalkingState(row.state)) this.planPath(h);
+      }
+      updated++;
+    }
+    if (updated > 0) {
+      console.log(`[H.65] hydrateFromCloud: ${updated} errand actor(s) restored from cloud`);
+    }
   }
 
   private tickHelper(h: ErrandActor, dt: number): void {
@@ -437,6 +567,63 @@ export class ErrandRouter {
 
   private distance(a: THREE.Vector2, b: THREE.Vector2): number {
     return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+}
+
+/** Phase I (H.65) — type-narrowing guard for cloud-restored state.
+ * The server stores `state` as a free-form String, so an unrecognized
+ * value (e.g. an actor row left over from a chef/waiter that got its
+ * role mis-set somewhere) returns false and the hydrate path skips
+ * setting the local state machine — leaving it idle at the cloud's
+ * x/z, which is the right defensive default. */
+function isErrandState(s: string): s is ErrandState {
+  return (
+    s === "idle" ||
+    s === "walkingToDoor" ||
+    s === "exitingDoor" ||
+    s === "walkingToRoadEdge" ||
+    s === "offscreen" ||
+    s === "walkingFromRoadEdge" ||
+    s === "enteringDoor" ||
+    s === "walkingToCounter" ||
+    s === "atCounter" ||
+    s === "returningHome"
+  );
+}
+
+/** Walk-animation states — used by hydrate to pick the right pose. */
+function isWalkingState(s: ErrandState): boolean {
+  return (
+    s === "walkingToDoor" ||
+    s === "exitingDoor" ||
+    s === "walkingToRoadEdge" ||
+    s === "walkingFromRoadEdge" ||
+    s === "enteringDoor" ||
+    s === "walkingToCounter" ||
+    s === "returningHome"
+  );
+}
+
+/** Map ErrandState → AnimatedCharacter action for the hydrate path.
+ * Mirrors the per-state action setters in tickHelper.  Empty-handed
+ * legs play "walk"; loaded legs ("carry") apply once the helper has
+ * the goods.  Stationary states ("idle"/"atCounter"/"offscreen") use
+ * "idle" (offscreen also has visible=false, so the pose doesn't show). */
+function errandPoseFor(s: ErrandState): "walk" | "carry" | "idle" {
+  switch (s) {
+    case "walkingToDoor":
+    case "exitingDoor":
+    case "walkingToRoadEdge":
+    case "returningHome":
+      return "walk";
+    case "walkingFromRoadEdge":
+    case "enteringDoor":
+    case "walkingToCounter":
+      return "carry";
+    case "idle":
+    case "offscreen":
+    case "atCounter":
+      return "idle";
   }
 }
 

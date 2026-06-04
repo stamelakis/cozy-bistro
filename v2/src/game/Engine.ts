@@ -121,6 +121,12 @@ export class Engine {
    * yoke fires every DAY_SYNC_INTERVAL seconds so the server's
    * day_elapsed_ms doesn't drift away from local in foreground play. */
   private daySyncAccum = 0;
+
+  /** Promise that resolves when the save's furniture has been restored
+   * into the registry.  restoreFromCloud awaits this so the cloud's
+   * fresh state can't be overwritten by a slow save restore.  See the
+   * race-condition comment at the assignment site. */
+  private furnitureRestorePromise: Promise<void> | null = null;
   /** P8 chat panel — bottom-left, always visible after auth. Mounted
    * lazily by installAuthGate so it can subscribe to the chat_message
    * table that the cloud only has after the initial subscription. */
@@ -662,7 +668,15 @@ export class Engine {
       // Walk the restored items to re-attach scene refs (door panel,
       // lamp lighting). Per-stove flames don't need a save-time pin
       // anymore — syncStoveFlames picks them up the next frame.
-      void this.registry.restore(restored).then(() => {
+      //
+      // CRITICAL: capture this promise on `furnitureRestorePromise` so
+      // the LATER restoreFromCloud() call can await it.  Without the
+      // chain, both restores fire as void-then-fire-and-forget and the
+      // save's stale data can finish AFTER the cloud's fresh data —
+      // overwriting it.  Symptom: move a table, refresh, table is
+      // back at the old position because the save (autosaved before
+      // the move) won the race.
+      this.furnitureRestorePromise = this.registry.restore(restored).then(() => {
         for (const it of this.registry.snapshotItems()) {
           if (it.defId === "door") this.scene.attachDoorPanel(it.model);
           // Re-register lamps so a freshly-loaded save still gets the
@@ -1242,6 +1256,13 @@ export class Engine {
         // can't leak the pending counter again by committing money for
         // trips the router drops.
         this.game.canDispatchErrand = () => this.errand?.canAcceptTrip() ?? false;
+        // Phase I (H.65) — wire the cloud handle so the errand helper
+        // mirrors position + state to staff_actor (role="errand") at
+        // 1 Hz.  Without this the helper's pose is purely client-side
+        // and a refresh teleports them back to home — the exact bug
+        // the user reported.  setCloud also re-registers the base
+        // helper that was added in the ctor before we had the handle.
+        this.errand.setCloud(this.cloud);
       }
       // Hire / fire callbacks. We wire these even when staff is missing
       // so future hires can attempt to load (handleStaffHired falls back
@@ -1294,6 +1315,11 @@ export class Engine {
           this.router?.hydrateTicketsFromCloud(
             (serverId) => this.spawner?.findLocalGuestIdByServerId(serverId),
           );
+          // Phase I (H.65) — restore the errand helper's last-known
+          // position + state.  Same shape as the staff hydrate above:
+          // the local sim spawned a fresh helper at home; cloud has
+          // the actual mid-trip pose we want to resume from.
+          this.errand?.hydrateFromCloud();
         });
       } else {
         console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
@@ -1781,7 +1807,15 @@ export class Engine {
         // did via restoreFromCloud. Awaiting the restore ensures
         // applyCloudInsert's "uid already in items" idempotency guard
         // catches the cache replay.
-        void this.registry.restoreFromCloud().then(() => {
+        //
+        // CRITICAL: await the save's restore FIRST.  Otherwise the two
+        // async operations race — and because cloud restore is faster
+        // (no GLB loads), it finishes first, then the save's restore
+        // finishes second and clobbers the cloud's fresh state.  That
+        // race was the cause of the "move a table, refresh, position
+        // reverts" bug.  Sequencing here makes cloud authoritative.
+        const saveDone = this.furnitureRestorePromise ?? Promise.resolve();
+        void saveDone.then(() => this.registry.restoreFromCloud()).then(() => {
           this.registry.subscribeToCloudChanges();
         });
       }

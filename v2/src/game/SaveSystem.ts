@@ -52,7 +52,10 @@ export class SaveSystem {
   private readonly game: Game;
   /** Optional — Engine sets this after the registry is constructed. */
   registry?: FurnitureRegistry;
-  private elapsed = 0;
+  // Phase I (H.67) — `elapsed` accumulator was the per-frame autosave
+  // timer.  The autosave loop is disabled now (see update()); the
+  // field is removed.  Kept the AUTOSAVE_INTERVAL_SECONDS constant
+  // alive as a documentation breadcrumb.
   private readonly activeSlot: number;
   /** Saves performed in this session — surfaced via getSaveStats() for the
    * HUD diagnostic readout. */
@@ -285,13 +288,31 @@ export class SaveSystem {
     }
   }
 
-  /** Per-frame tick. Autosaves on a fixed interval. */
-  update(dt: number): void {
-    this.elapsed += dt;
-    if (this.elapsed >= AUTOSAVE_INTERVAL_SECONDS) {
-      this.elapsed = 0;
-      this.saveNow();
-    }
+  /** Per-frame tick.  Phase I (H.67) — autosave loop DISABLED.
+   *
+   * The game is fully server-authoritative now: every meaningful
+   * mutation (furniture moves, staff hires, money, day clock, recipe
+   * upgrades, salary accrual, transactions, ratings, day history,
+   * achievements) mirrors to a dedicated cloud table.  Cloud is the
+   * source of truth.  A periodic local save was both:
+   *   1. Burning CPU / IndexedDB writes for state that no longer
+   *      needed local persistence, AND
+   *   2. CAUSING DATA-LOSS BUGS: a stale local save could finish
+   *      writing AFTER a fresh cloud mirror, then on reload the
+   *      restore-then-restoreFromCloud race let the stale save win.
+   *      (Race fixed separately in Engine.ts, but the underlying
+   *      duplication of state was the root cause.)
+   *
+   * The beforeunload sync save (Engine.ts saveNowSync) is preserved
+   * as a defense-in-depth offline-fallback for now — if the cloud
+   * connection drops mid-session, the next reload at least gets
+   * the most recent local snapshot.  AUTOSAVE_INTERVAL_SECONDS is
+   * kept for the diagnostic stat output but no longer drives a save.
+   *
+   * Per the user: "an online game doesn't need autosave". */
+  update(_dt: number): void {
+    // Intentionally empty.  See H.67 comment above.
+    void AUTOSAVE_INTERVAL_SECONDS;
   }
 
   /** Build a snapshot the cloud bridge can JSON-stringify and ship. */

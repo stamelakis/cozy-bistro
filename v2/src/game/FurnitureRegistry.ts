@@ -1173,37 +1173,31 @@ export class FurnitureRegistry {
     if (!this.cloud) return;
     const rows = this.cloud.listPlacedFurniture();
     if (rows.length === 0) return;
-    // Safety guard for the Phase H default-on flip. Only restore
-    // from cloud when local is EMPTY — i.e. this is a fresh device
-    // / fresh login that has nothing of its own. Otherwise local
-    // wins and we push local up to cloud so cross-device sync stays
-    // bidirectional.
+    // Phase I (H.66) — CLOUD IS AUTHORITATIVE.  The legacy guard
+    // here used to bail out if local had any items, preserving the
+    // localStorage save's positions over the cloud's.  That was the
+    // root cause of the "move a table, refresh, position reverts"
+    // bug: the user's last move went to cloud, but local save (last
+    // autosaved before the move) still had the old position.  On
+    // reload, restoreFromCloud saw items.length > 0 and refused to
+    // apply cloud, then mirrorFurniturePlace pushed the STALE local
+    // positions BACK UP to cloud, permanently replacing the move.
     //
-    // We check expectedItemCount instead of items.length because
-    // Engine fires `void registry.restore(saved).then(...)` and
-    // `restoreFromCloud()` back-to-back; the cloud restore can run
-    // while the local restore is still inside its Promise.all of
-    // GLB loads. items.length === 0 during that window would falsely
-    // pass the guard and clobber localStorage. expectedItemCount is
-    // set SYNCHRONOUSLY at the start of restore() (commit 8bff1c1
-    // follow-up) so it's stable by the time we read it here.
+    // With server-authoritative state, cloud rows always win when
+    // they exist.  The local save is treated as a write-only offline
+    // cache (still produced by saveNowSync on beforeunload as a
+    // belt-and-suspenders if the cloud connection is unreachable on
+    // next reload), but on connect we ALWAYS prefer cloud.
     //
-    // True cross-device sync still works for the common case: open
-    // your account on a fresh phone, no save snapshot exists,
-    // expectedItemCount stays 0, restoreFromCloud adopts whatever
-    // your laptop already pushed.
-    if (this.expectedItemCount > 0 || this.items.length > 0) {
-      const localCount = Math.max(this.expectedItemCount, this.items.length);
-      console.log(`[FurnitureRegistry] restoreFromCloud: local has ${localCount} items (${this.items.length} loaded so far) — keeping local. Mirroring local up to cloud once load settles.`);
-      // Push every local item up to the cloud so future fresh-device
-      // logins find the latest layout. mirrorFurniturePlace is
-      // idempotent (upsert by uid) so re-runs are safe. If items
-      // are still loading, the per-mutation register() path will
-      // mirror each piece as it lands; we also fire what's already
-      // here so we cover the synchronous window.
-      for (const it of this.items) this.mirrorFurniturePlace(it);
-      return;
-    }
+    // Engine.ts now sequences `restoreFromCloud()` after the local
+    // `registry.restore(save)` promise (see the comment in
+    // setupRunningGame).  So by the time we reach this method, the
+    // save's items have already been instantiated; we wipe them and
+    // re-instantiate from cloud.  Slightly wasteful in load time
+    // (double GLB loads in the common case), but eliminates the
+    // race entirely and the user's `move-then-refresh` flow now
+    // shows the moved position every time.
+    console.log(`[FurnitureRegistry] restoreFromCloud: cloud has ${rows.length} rows — applying as authoritative (replacing any local-save items).`);
     // Wipe local state. Detach models from the scene; the new restore
     // call will reload each item from scratch with a fresh model
     // instance (cheaper than diffing what we'd keep).
@@ -1240,20 +1234,9 @@ export class FurnitureRegistry {
    * default-clobber problem). */
   private suppressMirrorForReload = false;
 
-  /** Number of items the most recent local restore() was asked to
-   * load. Captured at the START of restore() — i.e. synchronously —
-   * BEFORE the async GLB loads have populated this.items. Used by
-   * restoreFromCloud's stale-cloud guard so a returning user with a
-   * mid-flight local restore (items.length still 0) isn't misread
-   * as "fresh device". Stays at 0 until the first restore() call.
-   *
-   * Why not just check the items array? Engine fires
-   * `void registry.restore(saved).then(...)` and `restoreFromCloud()`
-   * back-to-back. The cloud restore can fire while the local restore
-   * is still inside its Promise.all of GLB loads. items.length === 0
-   * during that window doesn't mean local is empty — it means local
-   * is half-loaded. */
-  private expectedItemCount = 0;
+  // Phase I (H.66) — `expectedItemCount` removed.  It was the
+  // stale-cloud guard's race-detector; the guard is gone now that
+  // cloud is always authoritative.  See restoreFromCloud's comment.
 
   /** Subscribe to live placed_furniture changes from the cloud. Engine
    * calls this once after restoreFromCloud completes. From then on,
@@ -1358,11 +1341,9 @@ export class FurnitureRegistry {
    * loads, since placementY's "floor" default would otherwise drop them
    * to y=0. */
   async restore(saved: PersistedPlacement[]): Promise<void> {
-    // Capture the expected count SYNCHRONOUSLY so restoreFromCloud's
-    // guard can read it before the GLB loads below have resolved.
-    // See expectedItemCount's doc-comment for why items.length isn't
-    // sufficient.
-    this.expectedItemCount = saved.length;
+    // Phase I (H.66) — expectedItemCount removed; cloud is the
+    // source of truth and restoreFromCloud unconditionally replaces
+    // whatever this method loaded.
     // Load every item first — order doesn't matter for tile/wall/edge/
     // ceiling items, and the surface re-snap happens AFTER everything
     // is in place so each surface child can look up its host.
