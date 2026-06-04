@@ -53,6 +53,11 @@ import {
   GRAPHICS_PRESETS,
   getSavedGraphicsQuality,
   setSavedGraphicsQuality,
+  FPS_CAP_OPTIONS,
+  loadSavedFpsCap,
+  setSavedFpsCap,
+  loadSavedShowFps,
+  setSavedShowFps,
 } from "./GraphicsQuality";
 
 /** Top-level engine. Owns the renderer, scene, camera, and the main loop. */
@@ -139,6 +144,34 @@ export class Engine {
   private running = false;
   private lastResizeCheckAt = 0;
   private hudAccumulator = 0;
+
+  // ===== Phase I — FPS cap + on-screen FPS counter =====
+  // Lets the player pin the frame rate so the GPU / fan don't spin
+  // hard when they don't need 144 Hz, and surfaces the live frame
+  // rate as a small badge for diagnostics.  Both settings persist
+  // to localStorage so they survive reload.
+  /** Cap in frames-per-second, or null for "no cap" (let
+   * requestAnimationFrame run at the display's native refresh).
+   * tick() gates on this; reading null skips the gate entirely. */
+  private fpsCap: number | null = null;
+  /** Timestamp of the LAST frame that actually ran sim+render.
+   * Used together with fpsCap to skip excess rAF callbacks. */
+  private lastRenderedFrameAt = 0;
+  /** Rolling samples of (1000 / interFrameMs) for the FPS counter.
+   * Capped at FPS_SAMPLE_WINDOW so the average tracks the last
+   * ~1 second of frames. */
+  private fpsSamples: number[] = [];
+  /** Smoothed FPS pushed into the HUD widget every 0.5 s.  Read-
+   * only from outside — getter exposes it. */
+  private fpsAvg = 0;
+  /** Accumulator that drives the 0.5 s FPS-widget refresh tick. */
+  private fpsAvgAccum = 0;
+  /** Display the live-FPS badge (top-right HUD).  Persists via
+   * localStorage; default off so users who don't care see no chrome. */
+  private showFps = false;
+  /** The DOM badge that displays current FPS when showFps is on.
+   * Built lazily on first use. */
+  private fpsBadge: HTMLDivElement | null = null;
   /** Current player-facing graphics quality preset. Captured at
    * construct from localStorage, mutated by applyGraphicsQuality. */
   private currentQuality: GraphicsQuality = "medium";
@@ -222,6 +255,12 @@ export class Engine {
     // perf knob in the engine. The dropdown in the sidebar flips
     // this at runtime via applyGraphicsQuality().
     this.currentQuality = getSavedGraphicsQuality();
+    // Phase I — restore FPS settings from localStorage before tick()
+    // starts firing.  Without this the first second of play would run
+    // uncapped + counter-less even if the player had previously
+    // pinned a cap.
+    this.fpsCap = loadSavedFpsCap();
+    this.showFps = loadSavedShowFps();
     this.renderer.setPixelRatio(
       Math.min(window.devicePixelRatio, GRAPHICS_PRESETS[this.currentQuality].pixelRatio),
     );
@@ -1736,13 +1775,22 @@ export class Engine {
       this.chatPanel = new ChatPanel(container, this.cloud);
       this.chatPanel.onMessageSent = () => this.game.bumpPlayerCounter("chatsSent");
       makeDraggableResizable({
-        storageKey: "cozy-bistro.panel.chat.v2",
+        storageKey: "cozy-bistro.panel.chat.v3", // v2 → v3: new minW/minH baseline
         root: this.chatPanel.root,
         handle: this.chatPanel.titleBar,
         collapseSentinel: this.chatPanel.body,
         expandDirection: "up", // bottom-anchored — grow up when expanded
-        minWidth: 200,
-        minHeight: 32,
+        // Bumped from 200×32 → 260×220 so the user can't drag the
+        // chat down to a strip where the input + Send button get
+        // squashed (the in-game screenshot showed it ~200×80, with
+        // "Be the first to say hello!" barely fitting).  The 32 px
+        // minH only applied to the collapsed title bar, but the
+        // resize handles enforce it ALWAYS — so a player who
+        // happens to drag the south edge ends up with an unusable
+        // chat.  Collapsing via the ▾ button still hides the body
+        // entirely via display:none, independent of this resize min.
+        minWidth: 260,
+        minHeight: 220,
       });
     } catch (e) {
       console.warn("[Engine] failed to mount chat panel:", e);
@@ -2129,7 +2177,109 @@ export class Engine {
       buttons.push({ q: tier.q, btn });
     }
     refresh();
+
+    // === Phase I — FPS cap + show-FPS controls (same section) ===
+    const fpsRow = document.createElement("div");
+    Object.assign(fpsRow.style, {
+      display: "flex", gap: "6px", alignItems: "center",
+      marginTop: "6px", fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    const fpsLabel = document.createElement("span");
+    fpsLabel.textContent = "FPS cap";
+    Object.assign(fpsLabel.style, { opacity: "0.8" } as Partial<CSSStyleDeclaration>);
+    fpsLabel.title =
+      "Pin the frame rate so your GPU / fan don't push higher than you need.\n" +
+      "• Unlimited — runs at your display's native refresh (default).\n" +
+      "• 30 / 60 / 75 / 120 / 144 — caps at the chosen rate.";
+    fpsRow.appendChild(fpsLabel);
+    const fpsSelect = document.createElement("select");
+    Object.assign(fpsSelect.style, {
+      flex: "1",
+      padding: "3px 4px",
+      background: "rgba(120, 180, 200, 0.14)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.20)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    for (const cap of FPS_CAP_OPTIONS) {
+      const opt = document.createElement("option");
+      opt.value = cap === null ? "none" : String(cap);
+      opt.textContent = cap === null ? "Unlimited" : `${cap} fps`;
+      if (cap === this.fpsCap) opt.selected = true;
+      fpsSelect.appendChild(opt);
+    }
+    fpsSelect.onchange = () => {
+      const v = fpsSelect.value;
+      this.setFpsCap(v === "none" ? null : parseInt(v, 10));
+    };
+    fpsRow.appendChild(fpsSelect);
+    wrap.appendChild(fpsRow);
+
+    const showRow = document.createElement("label");
+    Object.assign(showRow.style, {
+      display: "flex", gap: "6px", alignItems: "center",
+      marginTop: "4px", cursor: "pointer", fontSize: "11px",
+    } as Partial<CSSStyleDeclaration>);
+    showRow.title = "Toggle a small live frame-rate badge in the top-right corner.";
+    const showChk = document.createElement("input");
+    showChk.type = "checkbox";
+    showChk.checked = this.showFps;
+    showChk.onchange = () => this.setShowFps(showChk.checked);
+    showRow.appendChild(showChk);
+    const showLab = document.createElement("span");
+    showLab.textContent = "Show FPS counter";
+    showRow.appendChild(showLab);
+    wrap.appendChild(showRow);
+
     this.sidebar.body.appendChild(wrap);
+
+    // Build the FPS badge lazily on demand.  When showFps starts true
+    // (restored from localStorage), unhide it right away.
+    if (this.showFps) this.setShowFps(true);
+  }
+
+  /** Phase I — runtime setter for the FPS cap.  Updates the persisted
+   * value, the live cap field, and resets the rolling sample window
+   * so the counter doesn't average across the rate change. */
+  setFpsCap(cap: number | null): void {
+    this.fpsCap = cap;
+    setSavedFpsCap(cap);
+    this.fpsSamples.length = 0;
+  }
+
+  /** Phase I — runtime setter for the FPS badge visibility.  Builds
+   * the badge element on first show; toggles `display` on subsequent
+   * calls.  Persists the choice so reload doesn't reset it. */
+  setShowFps(show: boolean): void {
+    this.showFps = show;
+    setSavedShowFps(show);
+    if (show) {
+      if (!this.fpsBadge) {
+        this.fpsBadge = document.createElement("div");
+        Object.assign(this.fpsBadge.style, {
+          position: "fixed",
+          top: "8px",
+          right: "8px",
+          padding: "4px 8px",
+          background: "rgba(0,0,0,0.55)",
+          color: "#7fffa1",
+          font: "11px/1 system-ui, monospace",
+          fontWeight: "700",
+          letterSpacing: "0.04em",
+          borderRadius: "4px",
+          pointerEvents: "none",
+          zIndex: "10001", // above tooltips so it never hides
+          minWidth: "54px",
+          textAlign: "right",
+        } as Partial<CSSStyleDeclaration>);
+        this.fpsBadge.textContent = "— FPS";
+        this.container.appendChild(this.fpsBadge);
+      }
+      this.fpsBadge.style.display = "block";
+    } else if (this.fpsBadge) {
+      this.fpsBadge.style.display = "none";
+    }
   }
 
   /** Build the always-bottom Reset-Save section. Lives in its own
@@ -2418,6 +2568,35 @@ export class Engine {
     if (!this.running) return;
     requestAnimationFrame(this.tick);
 
+    // Phase I — FPS cap gate.  When fpsCap is non-null, skip this
+    // whole tick body (including the renderer.render call) if we
+    // ran a frame less than 1000/cap ms ago.  rAF still keeps
+    // scheduling so input handlers attached elsewhere stay live
+    // — only the sim + render are throttled.  THREE.Clock.getDelta
+    // accumulates between calls, so the next non-skipped frame
+    // sees the full elapsed time and advances the sim by the
+    // right amount.
+    //
+    // Small grace (-1 ms) so a frame that lands just barely under
+    // the budget on a high-refresh display still runs — without it,
+    // a 60 Hz cap on a 60 Hz display alternates run/skip.
+    const now = performance.now();
+    if (this.fpsCap !== null) {
+      const minFrameMs = 1000 / this.fpsCap - 1;
+      if (now - this.lastRenderedFrameAt < minFrameMs) return;
+    }
+    // Push frame timing into the FPS counter rolling window AFTER
+    // the cap gate so the value reflects the actual rendered rate,
+    // not the rAF rate.
+    if (this.lastRenderedFrameAt > 0) {
+      const frameMs = now - this.lastRenderedFrameAt;
+      if (frameMs > 0) {
+        this.fpsSamples.push(1000 / frameMs);
+        if (this.fpsSamples.length > 60) this.fpsSamples.shift();
+      }
+    }
+    this.lastRenderedFrameAt = now;
+
     if (performance.now() - this.lastResizeCheckAt < 1000) {
       this.resizeIfNeeded();
     }
@@ -2622,6 +2801,26 @@ export class Engine {
     this.camera.update(rawDt);
     this.floatingText.update(rawDt);
     this.saver.update(rawDt);
+
+    // Phase I — FPS badge refresh, same 5 Hz cadence as the HUD.
+    // We average the rolling sample window into fpsAvg then push to
+    // the badge element if it's visible.  Keeping the badge update
+    // alongside the rest of the 5 Hz block instead of inside the
+    // 60+ Hz tick body avoids per-frame DOM churn (the badge text
+    // doesn't need to change 144 times a second — the player can't
+    // read that fast).
+    this.fpsAvgAccum += rawDt;
+    if (this.fpsAvgAccum >= 0.2) {
+      this.fpsAvgAccum = 0;
+      if (this.fpsSamples.length > 0) {
+        let sum = 0;
+        for (const s of this.fpsSamples) sum += s;
+        this.fpsAvg = sum / this.fpsSamples.length;
+      }
+      if (this.showFps && this.fpsBadge) {
+        this.fpsBadge.textContent = `${this.fpsAvg.toFixed(0)} FPS`;
+      }
+    }
 
     // HUD only needs ~5 Hz; updating every frame is wasteful DOM work.
     this.hudAccumulator += dt;

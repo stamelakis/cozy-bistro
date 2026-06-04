@@ -60,3 +60,52 @@ export function setSavedGraphicsQuality(q: GraphicsQuality): void {
 export function getCurrentGraphicsPreset(): GraphicsPreset {
   return GRAPHICS_PRESETS[getSavedGraphicsQuality()];
 }
+
+// =====================================================================
+//                Phase I — FPS cap + on-screen counter
+// =====================================================================
+// Independent of the quality preset because cap / counter are usable
+// at any quality (a Low-tier laptop might still want a 30 fps cap to
+// reduce fan noise; a High-tier desktop might want the counter to
+// verify their cap is holding).
+
+/** Allowed cap values surfaced in the sidebar dropdown.  null = no
+ * cap (run at the display's native refresh, the original behaviour). */
+export const FPS_CAP_OPTIONS: readonly (number | null)[] = [null, 30, 60, 75, 120, 144];
+
+const FPS_CAP_STORAGE_KEY = "cozy-bistro.fps-cap";
+const FPS_SHOW_STORAGE_KEY = "cozy-bistro.fps-show";
+
+/** Read the saved FPS cap; null = uncapped. */
+export function loadSavedFpsCap(): number | null {
+  try {
+    const raw = localStorage.getItem(FPS_CAP_STORAGE_KEY);
+    if (raw === null || raw === "" || raw === "none") return null;
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 15 && n <= 360) return n;
+  } catch { /* private mode — fall through */ }
+  return null;
+}
+
+/** Persist the FPS cap.  Pass null to clear (uncapped). */
+export function setSavedFpsCap(cap: number | null): void {
+  try {
+    if (cap === null) localStorage.removeItem(FPS_CAP_STORAGE_KEY);
+    else localStorage.setItem(FPS_CAP_STORAGE_KEY, String(cap));
+  } catch { /* ignore */ }
+}
+
+/** Read whether the FPS counter badge should be visible. */
+export function loadSavedShowFps(): boolean {
+  try {
+    return localStorage.getItem(FPS_SHOW_STORAGE_KEY) === "1";
+  } catch { return false; }
+}
+
+/** Persist the show-FPS toggle. */
+export function setSavedShowFps(show: boolean): void {
+  try {
+    if (show) localStorage.setItem(FPS_SHOW_STORAGE_KEY, "1");
+    else localStorage.removeItem(FPS_SHOW_STORAGE_KEY);
+  } catch { /* ignore */ }
+}

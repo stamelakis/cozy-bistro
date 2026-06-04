@@ -93,9 +93,13 @@ export class ChatPanel {
       // narrower chat keeps that overlap to a bearable strip on
       // expand, and the panel no longer needs to fly up the screen
       // to find space.
-      width: "min(260px, calc(100vw - 920px))",
-      minWidth: "220px",
-      maxWidth: "280px",
+      width: "min(280px, calc(100vw - 920px))",
+      // Bumped minWidth from 220 → 260 so the "Say something in
+      // Global..." input + Send button always have enough breathing
+      // room — the user reported the resize handle let them shrink
+      // it past the point where the input was unusable.
+      minWidth: "260px",
+      maxWidth: "320px",
       // No maxHeight here — PanelDragResize owns the root's height.
       // The body starts display:none (set by applyMinimizedStyles in
       // the constructor) so the root collapses naturally to the
@@ -105,7 +109,12 @@ export class ChatPanel {
       background: "rgba(20, 14, 10, 0.86)",
       color: "#fff5dc",
       font: "12px/1.4 system-ui, sans-serif",
-      borderRadius: "10px 10px 0 0",
+      // All four corners rounded so the minimized "title-bar only"
+      // state matches the rest of the UI (Sidebar, MenuPanel etc).
+      // Previously the bottom corners were sharp ("10px 10px 0 0")
+      // which looked unfinished when collapsed.  overflow:hidden
+      // below still clips the body neatly against the rounded edges.
+      borderRadius: "10px",
       pointerEvents: "auto",
       boxShadow: "0 -4px 14px rgba(0,0,0,0.35)",
       zIndex: "100",
