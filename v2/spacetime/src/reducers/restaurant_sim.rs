@@ -4044,6 +4044,25 @@ pub(crate) fn try_spawn_arrival_guest(
     door_x: f32,
     door_z: f32,
 ) -> bool {
+    // Phase I (H.86) — DISABLED at the source.
+    //
+    // H.84 disabled try_server_spawn_guest (the restaurant_tick
+    // spawn loop), but try_arrival_handoff in pedestrians.rs ALSO
+    // calls into here when a pedestrian's walk-to-plot ends at an
+    // offline owner's door.  That call site bypassed H.84's gate
+    // and kept creating ghost guests (seat_uid="", invisible at
+    // the door) — exactly the rows the user saw on rid=1 after
+    // 24 h offline.
+    //
+    // Hard-stop the function until we port the client-side
+    // seat-picker logic to the server.  Both call sites
+    // (try_server_spawn_guest + try_arrival_handoff) get the same
+    // "no spawn" return value and skip cleanly.
+    let _ = (ctx, restaurant_id, variant, door_x, door_z);
+    return false;
+
+    #[allow(unreachable_code, dead_code)]
+    {
     /// Cap — don't pile up server-spawned guests past a sane limit.
     /// Matches the rough order of the foreground client's effective
     /// guest pool size; prevents a long-backgrounded tab with no
@@ -4160,6 +4179,7 @@ pub(crate) fn try_spawn_arrival_guest(
         restaurant_id, variant, will_use_toilet, will_wash_only, patience_mult_x100,
     );
     true
+    } // end #[allow(unreachable_code, dead_code)] block (H.86 disable)
 }
 
 /// Phase I (H.71) — continuous server-side guest spawning while the
