@@ -1391,23 +1391,19 @@ export class Engine {
         // last autosaved positions; cloud has the actual server-driven
         // mid-trip positions (H.6/H.8/H.34/H.35 may have moved them
         // during the offline window).
+        // Phase I (H.74/H.77) — fire the roster push IMMEDIATELY (not
+        // inside the .then() below).  syncStaffToHeadcount awaits GLB
+        // loads which can reject; if it does, the .then() never runs
+        // and the cloud roster stays empty forever.  pushRosterToCloud
+        // iterates the LOCAL members array — it doesn't need actors
+        // to exist yet, just StaffSystem.cloud to be wired (it is by
+        // this point in the connect flow).
+        this.game.staff.pushRosterToCloud();
         void this.syncStaffToHeadcount().then(() => {
-          // Phase I (H.74) — Critical for offline continuity.  After
-          // syncStaffToHeadcount has spawned all actors locally,
-          // PUSH the roster up to cloud (both `hired_staff_member`
-          // and `staff_actor`).  The save-hydrate path
-          // (StaffSystem.hydrate) appends members directly into the
-          // local list without going through addStaff, so the
-          // setHiredStaffMember mirror never fired for them — cloud
-          // ended up empty even after several sessions.  Without
-          // server-side roster rows, auto_claim_queued_tickets has
-          // no idle chefs/barmen to assign work to → tickets pile
-          // up → guests time out → user sees "only customers
-          // leaving" on reconnect.
-          //
-          // Both methods are idempotent: server reducers no-op when
-          // the row already matches.  Safe to fire every login.
-          this.game.staff.pushRosterToCloud();
+          // Phase I (H.74) — actor resync goes here because we DO need
+          // syncStaffToHeadcount to have run first (it spawns the
+          // extra-staff actors).  Same robustness story below: any
+          // throw in syncStaffToHeadcount kills these.
           this.router?.resyncAllActorsToCloud();
           this.errand?.resyncAllActorsToCloud();
           this.router?.hydrateFromCloud();
@@ -1424,6 +1420,18 @@ export class Engine {
           // the local sim spawned a fresh helper at home; cloud has
           // the actual mid-trip pose we want to resume from.
           this.errand?.hydrateFromCloud();
+        }).catch((err) => {
+          // Phase I (H.77) — surface failures.  Without a catch, any
+          // rejected promise inside syncStaffToHeadcount (e.g. one of
+          // the GLB loads inside spawnExtraStaff) would swallow the
+          // entire chain — including the actor-resync push that
+          // populates the cloud's staff_actor table.  Logging here
+          // means we still see the error AND fire a best-effort
+          // resync so the cloud roster fills even on partial GLB
+          // failure.
+          console.error("[Engine] syncStaffToHeadcount chain failed:", err);
+          this.router?.resyncAllActorsToCloud();
+          this.errand?.resyncAllActorsToCloud();
         });
       } else {
         console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
