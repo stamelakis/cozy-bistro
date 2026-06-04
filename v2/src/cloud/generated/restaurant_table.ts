@@ -39,4 +39,8 @@ export default __t.row({
   cloudRatingHistoryCsv: __t.option(__t.string()).name("cloud_rating_history_csv"),
   cloudTransactionLogJson: __t.option(__t.string()).name("cloud_transaction_log_json"),
   cloudDayHistoryJson: __t.option(__t.string()).name("cloud_day_history_json"),
+  waiterRestSet: __t.bool().name("waiter_rest_set"),
+  waiterRestX: __t.f32().name("waiter_rest_x"),
+  waiterRestZ: __t.f32().name("waiter_rest_z"),
+  waiterRestFloor: __t.u32().name("waiter_rest_floor"),
 });

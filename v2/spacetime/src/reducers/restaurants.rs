@@ -59,6 +59,13 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // foreground client pushes periodically.
         cloud_transaction_log_json: None,
         cloud_day_history_json: None,
+        // H.68 — waiter rest spot starts unset.  Client falls back
+        // to a default position (near a counter / door) until the
+        // player explicitly picks one via the sidebar tool.
+        waiter_rest_set: false,
+        waiter_rest_x: 0.0,
+        waiter_rest_z: 0.0,
+        waiter_rest_floor: 0,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

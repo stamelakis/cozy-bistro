@@ -364,6 +364,10 @@ export const Restaurant = __t.object("Restaurant", {
   cloudRatingHistoryCsv: __t.option(__t.string()),
   cloudTransactionLogJson: __t.option(__t.string()),
   cloudDayHistoryJson: __t.option(__t.string()),
+  waiterRestSet: __t.bool(),
+  waiterRestX: __t.f32(),
+  waiterRestZ: __t.f32(),
+  waiterRestFloor: __t.u32(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

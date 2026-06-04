@@ -51,6 +51,7 @@ import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
+import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
 import ConsumePendingRecipeUpgradesReducer from "./consume_pending_recipe_upgrades_reducer";
 import ConsumePendingRestockCostReducer from "./consume_pending_restock_cost_reducer";
@@ -103,6 +104,7 @@ import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRecipeLevelReducer from "./set_recipe_level_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
+import SetWaiterRestSpotReducer from "./set_waiter_rest_spot_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
@@ -634,6 +636,7 @@ const reducersSchema = __reducers(
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
+  __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
   __reducerSchema("consume_pending_recipe_upgrades", ConsumePendingRecipeUpgradesReducer),
   __reducerSchema("consume_pending_restock_cost", ConsumePendingRestockCostReducer),
@@ -686,6 +689,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_recipe_level", SetRecipeLevelReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
+  __reducerSchema("set_waiter_rest_spot", SetWaiterRestSpotReducer),
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),

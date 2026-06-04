@@ -25,6 +25,21 @@ export class StaffPanel {
    * re-parented + Y-shifted to the new storey. */
   onStaffFloorChanged?: (memberId: string, oldFloor: number, newFloor: number) => void;
 
+  /** Phase I (H.68) — Fired when the player clicks "Set Waiter Rest
+   * Spot".  Engine handles entering placement mode (click-on-floor
+   * → fire reducer).  Optional so the panel works in isolation
+   * during tests / visit mode. */
+  onSetWaiterRestSpot?: () => void;
+
+  /** Phase I (H.68) — Fired when the player clicks "Clear" next to
+   * the rest spot label.  Engine handles the cloud round-trip. */
+  onClearWaiterRestSpot?: () => void;
+
+  /** Phase I (H.68) — Renders "📍 Rest spot: set / not set" + the
+   * Set / Clear buttons.  Engine pokes this label via setWaiterRestStatus
+   * after a hydrate or after a reducer round-trip. */
+  private waiterRestLabel?: HTMLElement;
+
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
     // Inline section — Sidebar handles the position/background/padding.
@@ -67,6 +82,74 @@ export class StaffPanel {
       textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.payrollLine);
+
+    // Phase I (H.68) — waiter rest-spot controls.  Chefs / helpers /
+    // barmen already auto-anchor near their station; waiters had no
+    // resting position before this, so they'd hover wherever they
+    // last finished a delivery.  This block lets the player click a
+    // tile to pin where idle waiters should congregate.
+    const restRow = document.createElement("div");
+    Object.assign(restRow.style, {
+      marginTop: "6px",
+      paddingTop: "6px",
+      borderTop: "1px solid rgba(255,245,220,0.15)",
+      display: "flex", gap: "4px", alignItems: "center",
+      fontSize: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    this.waiterRestLabel = document.createElement("span");
+    this.waiterRestLabel.textContent = "📍 Waiter rest: not set";
+    Object.assign(this.waiterRestLabel.style, {
+      flex: "1", opacity: "0.85",
+    } as Partial<CSSStyleDeclaration>);
+    attachTooltip(this.waiterRestLabel,
+      "Where your waiters go when they have nothing to do.\n" +
+      "Click Set, then click on any floor tile inside your restaurant.\n" +
+      "Chefs / helpers / barmen automatically rest near their station;\n" +
+      "waiters get this manual control because they have no fixed anchor."
+    );
+    restRow.appendChild(this.waiterRestLabel);
+
+    const setBtn = document.createElement("button");
+    setBtn.textContent = "Set";
+    Object.assign(setBtn.style, {
+      padding: "3px 7px",
+      background: "rgba(120, 180, 200, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.25)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "10px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    setBtn.onclick = () => this.onSetWaiterRestSpot?.();
+    restRow.appendChild(setBtn);
+
+    const clearBtn = document.createElement("button");
+    clearBtn.textContent = "Clear";
+    Object.assign(clearBtn.style, {
+      padding: "3px 7px",
+      background: "rgba(200, 120, 100, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(200, 120, 100, 0.35)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "10px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    clearBtn.onclick = () => this.onClearWaiterRestSpot?.();
+    restRow.appendChild(clearBtn);
+
+    this.root.appendChild(restRow);
+  }
+
+  /** Phase I (H.68) — Update the rest-spot status label after a
+   * hydrate / set / clear.  Engine calls this so the panel reflects
+   * the live cloud value. */
+  setWaiterRestStatus(spot: { x: number; z: number; floor: number } | null): void {
+    if (!this.waiterRestLabel) return;
+    if (spot) {
+      const floorLabel = spot.floor === 0 ? "G" : `F${spot.floor}`;
+      this.waiterRestLabel.textContent =
+        `📍 Waiter rest: ${floorLabel} (${spot.x.toFixed(1)}, ${spot.z.toFixed(1)})`;
+    } else {
+      this.waiterRestLabel.textContent = "📍 Waiter rest: not set";
+    }
   }
 
   private addRow(role: StaffRole): void {

@@ -381,6 +381,31 @@ pub struct Restaurant {
     /// cross-device source for the stats modal's trend charts.
     #[default(None::<String>)]
     pub cloud_day_history_json: Option<String>,
+
+    // ----- Phase I (H.68) — player-set waiter rest spot -----
+    //
+    // Dunnin's design note (from in-game chat, Jercy + Dunnin
+    // discussion): chefs already idle near a stove, helpers near the
+    // supply counter, barmen near the bar — waiters are the gap.
+    // These fields let the player pin a rest position the waiter
+    // walks back to whenever their state machine returns to idle
+    // / returningHome.  `set` distinguishes "no override → use the
+    // built-in default" from "player cleared it → also default".
+    //
+    // x/z are in restaurant-local world units (same frame as
+    // furniture).  floor records which storey the spot is on so a
+    // Floor-1 rest spot doesn't pull the waiter through the slab.
+    //
+    // All primitives with const-evaluable defaults → migration-safe
+    // for existing public rows on Maincloud / ownsun.
+    #[default(false)]
+    pub waiter_rest_set: bool,
+    #[default(0.0f32)]
+    pub waiter_rest_x: f32,
+    #[default(0.0f32)]
+    pub waiter_rest_z: f32,
+    #[default(0u32)]
+    pub waiter_rest_floor: u32,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

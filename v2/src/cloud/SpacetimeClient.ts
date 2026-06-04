@@ -814,6 +814,56 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase I (H.68) — Set the player-pinned waiter rest spot.  Pass
+   * world-local x/z (same coords as furniture) + floor index.  Used
+   * by the BuildMode-style sidebar tool: player clicks a tile, this
+   * fires once. */
+  setWaiterRestSpot(x: number, z: number, floor: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setWaiterRestSpot({
+        restaurantId: this.restaurantId,
+        x, z, floor,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setWaiterRestSpot failed:", e);
+    }
+  }
+
+  /** Phase I (H.68) — Clear the waiter rest spot, falling back to
+   * the built-in default position. */
+  clearWaiterRestSpot(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.clearWaiterRestSpot({
+        restaurantId: this.restaurantId,
+      });
+    } catch (e) {
+      console.warn("[Cloud] clearWaiterRestSpot failed:", e);
+    }
+  }
+
+  /** Phase I (H.68) — Read the current waiter rest spot, or null if
+   * none is set (client should fall back to the built-in default).
+   * Engine calls on subscription ready + after any
+   * setWaiterRestSpot / clearWaiterRestSpot reducer to refresh the
+   * cached value for StaffRouter. */
+  getWaiterRestSpot(): { x: number; z: number; floor: number } | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row || !row.waiterRestSet) return null;
+      return {
+        x: row.waiterRestX,
+        z: row.waiterRestZ,
+        floor: row.waiterRestFloor,
+      };
+    } catch (e) {
+      console.warn("[Cloud] getWaiterRestSpot failed:", e);
+      return null;
+    }
+  }
+
   /** H.63 — Read the persisted day history off Restaurant.  Returns
    * the raw JSON-parsed array; caller (DayHistory.hydrate) does the
    * shape coercion. */

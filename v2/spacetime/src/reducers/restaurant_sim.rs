@@ -607,6 +607,68 @@ pub fn set_cloud_day_history(
     Ok(())
 }
 
+/// Phase I (H.68) — Set the player-pinned waiter rest spot.  When
+/// waiters' state machines return to idle / returningHome they walk
+/// to this position (any free waiter rests here, not just one).
+/// Idempotent — same args produce same row.  Owner-only.
+///
+/// Position is in restaurant-local world units (same coordinate
+/// frame as furniture x/z) and `floor` is 0 = ground / 1+ = upper
+/// storey.  Client sanity-checks the floor against current tier;
+/// the server only enforces ownership + the basic schema.
+#[reducer]
+pub fn set_waiter_rest_spot(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    x: f32,
+    z: f32,
+    floor: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set the waiter rest spot".into());
+    }
+    if r.waiter_rest_set && r.waiter_rest_x == x && r.waiter_rest_z == z
+        && r.waiter_rest_floor == floor {
+        return Ok(()); // idempotent no-op
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        waiter_rest_set: true,
+        waiter_rest_x: x,
+        waiter_rest_z: z,
+        waiter_rest_floor: floor,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase I (H.68) — Clear the player-pinned waiter rest spot, so
+/// the client falls back to the built-in default (a position near
+/// the supply counter).  Owner-only.  Idempotent.
+#[reducer]
+pub fn clear_waiter_rest_spot(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can clear the waiter rest spot".into());
+    }
+    if !r.waiter_rest_set {
+        return Ok(()); // already unset
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        waiter_rest_set: false,
+        waiter_rest_x: 0.0,
+        waiter_rest_z: 0.0,
+        waiter_rest_floor: 0,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.30 — Foreground client periodically yokes the cloud's
 /// day_elapsed_ms to its local value so the cloud clock doesn't drift
 /// out from under the player while the tab is alive. Also clears

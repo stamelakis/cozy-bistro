@@ -439,6 +439,16 @@ export class Engine {
         this.router?.updateActorHomeFloor(memberId, oldFloor, newFloor, WorldScene.getStoreyHeight());
       }
     };
+    // Phase I (H.68) — waiter rest-spot tool.  Set fires a click-to-
+    // place mode (next canvas click is captured + raycast against the
+    // focused storey's floor plane); Clear fires the cloud reducer
+    // and falls the StaffRouter back to the built-in default.
+    this.staffPanel.onSetWaiterRestSpot = () => this.enterWaiterRestPlacement();
+    this.staffPanel.onClearWaiterRestSpot = () => {
+      this.cloud.clearWaiterRestSpot();
+      this.staffPanel.setWaiterRestStatus(null);
+      this.floatingText?.pop(0, 1, "📍 Waiter rest spot cleared", "#ffd986");
+    };
     // Modals still live on the page-level container so they overlay the world.
     // (SfxPlayer + kickAudio listeners constructed earlier — see above.)
     this.pantryModal = new PantryModal(container, this.game);
@@ -1174,6 +1184,20 @@ export class Engine {
         }
       } catch (e) {
         console.warn("[Engine] H.63 day-history hydrate failed:", e);
+      }
+
+      // Phase I (H.68) — hydrate the StaffPanel's waiter-rest-spot
+      // status label from cloud.  StaffRouter.pickWaiterIdleSpot
+      // reads the cloud value live each tick so no client-side
+      // cache to sync — just the UI label needs a one-time pull.
+      try {
+        const restSpot = this.cloud.getWaiterRestSpot();
+        this.staffPanel.setWaiterRestStatus(restSpot);
+        if (restSpot) {
+          console.log(`[H.68] waiter rest spot hydrate: F${restSpot.floor} (${restSpot.x.toFixed(1)}, ${restSpot.z.toFixed(1)})`);
+        }
+      } catch (e) {
+        console.warn("[Engine] H.68 waiter-rest-spot hydrate failed:", e);
       }
 
       // H.41 — drain any auto-shop debt the server accrued while
@@ -2238,6 +2262,87 @@ export class Engine {
     // (restored from localStorage), unhide it right away.
     if (this.showFps) this.setShowFps(true);
   }
+
+  /** Phase I (H.68) — enter waiter-rest-spot placement mode.  Shows
+   * a banner with instructions, captures the next canvas click, and
+   * raycasts against the focused storey's floor plane to derive
+   * world-local x/z.  Bails on Escape or click-outside-canvas.
+   *
+   * Capture-phase listener so we win over CameraControls (which
+   * also listens on the canvas).  Removed in `cleanup()` regardless
+   * of how the mode exits. */
+  private enterWaiterRestPlacement(): void {
+    if (this.waiterRestPlacementActive) return; // re-entry guard
+    this.waiterRestPlacementActive = true;
+    // Banner explaining what to do.
+    const banner = document.createElement("div");
+    Object.assign(banner.style, {
+      position: "fixed", top: "12px", left: "50%",
+      transform: "translateX(-50%)",
+      padding: "8px 14px",
+      background: "rgba(20, 14, 10, 0.92)",
+      color: "#fff5dc",
+      font: "12px/1.3 system-ui, sans-serif",
+      fontWeight: "600",
+      border: "1px solid #d8b98f",
+      borderRadius: "6px",
+      boxShadow: "0 4px 16px rgba(0,0,0,0.45)",
+      zIndex: "10001",
+      pointerEvents: "none",
+    } as Partial<CSSStyleDeclaration>);
+    banner.textContent = "📍 Click on a floor tile to set the waiter rest spot — ESC to cancel";
+    this.container.appendChild(banner);
+
+    const canvas = this.renderer.domElement;
+    const cleanup = (): void => {
+      this.waiterRestPlacementActive = false;
+      canvas.removeEventListener("pointerdown", onCanvasPointer, true);
+      window.removeEventListener("keydown", onKey, true);
+      banner.remove();
+    };
+    const onCanvasPointer = (e: PointerEvent): void => {
+      // Left-click only.  Right-click would otherwise interfere
+      // with the camera's pan/rotate.
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera.threeCamera);
+      const focused = this.scene.getFocusedStorey();
+      const storeyH = WorldScene.getStoreyHeight();
+      const planeY = focused * storeyH;
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
+      const hitWorld = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(plane, hitWorld)) {
+        this.floatingText?.pop(0, 1, "📍 Couldn't find a floor under that click", "#ff8866");
+        cleanup();
+        return;
+      }
+      // Convert world → restaurant-local (subtract worldRoot's
+      // translation, which is the city-shift offset).
+      const localX = hitWorld.x - this.scene.worldRoot.position.x;
+      const localZ = hitWorld.z - this.scene.worldRoot.position.z;
+      this.cloud.setWaiterRestSpot(localX, localZ, focused);
+      this.staffPanel.setWaiterRestStatus({ x: localX, z: localZ, floor: focused });
+      this.floatingText?.pop(localX, planeY, `📍 Waiter rest spot set`, "#86ff86");
+      cleanup();
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        cleanup();
+      }
+    };
+    canvas.addEventListener("pointerdown", onCanvasPointer, true);
+    window.addEventListener("keydown", onKey, true);
+  }
+
+  /** Latch so re-clicking the Set button while placement is already
+   * active doesn't stack two listener sets.  Reset by cleanup(). */
+  private waiterRestPlacementActive = false;
 
   /** Phase I — runtime setter for the FPS cap.  Updates the persisted
    * value, the live cap field, and resets the rolling sample window

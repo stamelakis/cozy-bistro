@@ -2257,6 +2257,23 @@ export class StaffRouter {
    * Returns the {pos, floor} pair callers feed into target +
    * targetFloor + planPath. */
   private pickWaiterIdleSpot(w: StaffActor): { pos: THREE.Vector2; floor: number } {
+    // Phase I (H.68) — player-pinned rest spot.  Reads the current
+    // cloud value (null if unset).  When set, ALL waiters target the
+    // same spot; small per-waiter jitter avoids them landing on the
+    // exact same tile and t-posing through each other (PersonalSpace
+    // already pushes them apart but the jitter reads more natural).
+    //
+    // The spot may live on a different floor than the waiter is
+    // currently on — that's fine, the returningHome state machine
+    // already handles cross-floor traversal via the stairs.
+    const rest = this.cloud?.getWaiterRestSpot();
+    if (rest) {
+      const pos = new THREE.Vector2(
+        rest.x + (Math.random() - 0.5) * 0.8,
+        rest.z + (Math.random() - 0.5) * 0.8,
+      );
+      return { pos, floor: rest.floor };
+    }
     if (w.currentFloor === w.homeFloor) {
       // Already on the right floor — stay put. The returningHome
       // arrival check trips on the first tick and they go straight to
