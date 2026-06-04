@@ -457,6 +457,17 @@ export class AchievementSystem {
   count(): number { return this.unlocked.size; }
   total(): number { return ACHIEVEMENTS.length; }
 
+  /** Phase I.5 (H.59) — Mark an achievement as unlocked WITHOUT firing
+   * the onUnlock callback (no toast, no cloud reducer re-fire).  Used
+   * by the hydrate path on connect to import unlocks the server already
+   * recorded.  Returns true when the id was newly added (i.e. wasn't
+   * already in the set).  Safe to call repeatedly. */
+  markUnlockedSilent(id: string): boolean {
+    if (this.unlocked.has(id)) return false;
+    this.unlocked.add(id);
+    return true;
+  }
+
   /** Per-tick check; rate-limited to once a second to keep predicate cost low. */
   update(dt: number, game: Game): void {
     this.elapsedSinceCheck += dt;

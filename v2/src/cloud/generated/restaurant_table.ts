@@ -36,4 +36,5 @@ export default __t.row({
   cloudBasePayrollPerMinCents: __t.i64().name("cloud_base_payroll_per_min_cents"),
   cloudDailyRevenueCents: __t.i64().name("cloud_daily_revenue_cents"),
   cloudDailyExpensesCents: __t.i64().name("cloud_daily_expenses_cents"),
+  cloudRatingHistoryCsv: __t.option(__t.string()).name("cloud_rating_history_csv"),
 });

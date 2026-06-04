@@ -472,6 +472,39 @@ pub fn sync_cloud_daily_totals(
     Ok(())
 }
 
+/// Phase H.60 — Foreground client mirrors the full rating history
+/// snapshot on every Game.reputation.recordRating call.  The CSV is
+/// a comma-separated list of 1-5 ints, capped at 500 entries
+/// (~1KB max).  Owner-only.  Idempotent on identical content.
+///
+/// Replaces save_snapshot.ratingHistory as the canonical
+/// cross-device source for the rating list.  Hydrate on connect
+/// reads this value back; if Some, it overrides whatever the local
+/// save's ratingHistory had.
+#[reducer]
+pub fn set_cloud_rating_history(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    csv: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set rating history".into());
+    }
+    if csv.len() > 4096 {
+        return Err("rating history too long (>4KB)".into());
+    }
+    let current = r.cloud_rating_history_csv.as_deref().unwrap_or("");
+    if current == csv { return Ok(()); }
+    let new_val = if csv.is_empty() { None } else { Some(csv) };
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_rating_history_csv: new_val,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.30 — Foreground client periodically yokes the cloud's
 /// day_elapsed_ms to its local value so the cloud clock doesn't drift
 /// out from under the player while the tab is alive. Also clears

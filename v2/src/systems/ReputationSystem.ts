@@ -10,6 +10,12 @@ export class ReputationSystem {
   private satisfactionPercent: number;
   private ratingHistory: number[] = [];
 
+  /** Phase I.5 (H.60) — cloud handle for mirroring the rating
+   * history to Restaurant.cloud_rating_history_csv on every
+   * recordRating call.  Engine wires this after connect; null in
+   * tests / pre-cloud boot. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+
   constructor(reputation = 1, satisfactionPercent = 100) {
     this.reputation = reputation;
     this.satisfactionPercent = satisfactionPercent;
@@ -64,6 +70,22 @@ export class ReputationSystem {
     if (this.ratingHistory.length > maxRatingHistory) {
       this.ratingHistory = this.ratingHistory.slice(-maxRatingHistory);
     }
+    // H.60 — mirror the full snapshot.  Server-side idempotency
+    // skips writes when content unchanged; the value is small (~1KB
+    // max) so push-every-time is cheaper than diffing.
+    if (this.cloud) {
+      this.cloud.setCloudRatingHistory(this.ratingHistory);
+    }
+  }
+
+  /** Phase I.5 (H.60) — override the local rating list from a fresh
+   * cloud snapshot (called by Engine on subscription ready, after
+   * save.hydrate has restored stale values).  Clamps each entry to
+   * [1, 5] for safety.  Does NOT re-fire the cloud mirror. */
+  applyCloudRatingHistory(history: readonly number[]): void {
+    this.ratingHistory = history
+      .map((r) => clamp(Math.round(r), 1, 5))
+      .slice(-maxRatingHistory);
   }
 
   getRatingHistory(): readonly number[] {

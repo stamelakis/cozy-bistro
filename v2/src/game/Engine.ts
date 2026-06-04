@@ -1046,6 +1046,40 @@ export class Engine {
           this.cloud.setRecipeLevel(r.id, this.game.cooking.getRecipeUpgradeLevel(r));
         }
       });
+      // H.59 — hydrate achievement unlocks from the cloud's
+      // achievement_unlock table.  The server already records every
+      // unlock (via the unlock_achievement reducer fired in
+      // wireGameHooks); this is the read-side pickup so a fresh
+      // device sees the same unlocked set, and a save that's behind
+      // doesn't "re-unlock" milestones the server already has.
+      try {
+        const cloudUnlocks = this.cloud.listMyAchievements();
+        let added = 0;
+        for (const id of cloudUnlocks) {
+          if (this.game.achievements.markUnlockedSilent(id)) added += 1;
+        }
+        if (added > 0) {
+          console.log(`[H.59] achievement hydrate: ${added} unlock(s) imported from cloud (total ${this.game.achievements.count()}/${this.game.achievements.total()})`);
+        }
+      } catch (e) {
+        console.warn("[Engine] H.59 achievement hydrate failed:", e);
+      }
+
+      // H.60 — wire ReputationSystem's cloud handle so every future
+      // recordRating mirrors the full list; then hydrate from cloud
+      // if it has a fresher version than the save did.  Cloud is
+      // authoritative — if it's set, override local.
+      this.game.reputation.cloud = this.cloud;
+      try {
+        const cloudHistory = this.cloud.getCloudRatingHistory();
+        if (cloudHistory && cloudHistory.length > 0) {
+          this.game.reputation.applyCloudRatingHistory(cloudHistory);
+          console.log(`[H.60] rating-history hydrate: ${cloudHistory.length} ratings imported from cloud (avg ${this.game.reputation.getAverageRating().toFixed(2)})`);
+        }
+      } catch (e) {
+        console.warn("[Engine] H.60 rating-history hydrate failed:", e);
+      }
+
       // H.41 — drain any auto-shop debt the server accrued while
       // this client was offline.  Server has been billing
       // Restaurant.pending_restock_cost_cents on every backgrounded

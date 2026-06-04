@@ -699,6 +699,47 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.60 — Push the full rating-history snapshot (the rolling 1-5
+   * vote list, capped at 500 entries / ~1KB) to Restaurant.  Fires
+   * from ReputationSystem on every recordRating.  Idempotent
+   * server-side.  Caller passes a fresh array; we serialize to
+   * "v1,v2,v3,..." CSV. */
+  setCloudRatingHistory(history: readonly number[]): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      // Truncate defensively in case the caller passed more than the
+      // server's 4KB cap — should not happen with maxRatingHistory=500.
+      const trimmed = history.length > 500 ? history.slice(-500) : history;
+      const csv = trimmed.join(",");
+      this.conn.reducers.setCloudRatingHistory({
+        restaurantId: this.restaurantId,
+        csv,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setCloudRatingHistory failed:", e);
+    }
+  }
+
+  /** H.60 — Read the persisted rating history off Restaurant.
+   * Engine calls this on subscription ready and overrides the local
+   * ReputationSystem's list when cloud has one.  Returns null when
+   * no row exists or the column is None (legacy / fresh restaurant). */
+  getCloudRatingHistory(): number[] | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return null;
+      const csv = row.cloudRatingHistoryCsv;
+      if (csv == null || csv === "") return null;
+      return csv.split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+    } catch (e) {
+      console.warn("[Cloud] getCloudRatingHistory failed:", e);
+      return null;
+    }
+  }
+
   /** H.46 — Push today's running revenue + expense totals (in
    * DOLLARS — converted to cents server-side) to Restaurant for
    * visitors / leaderboard / cross-device.  Fires on the same
@@ -2073,6 +2114,23 @@ export class SpacetimeClient {
     } catch (e) {
       console.warn("[Cloud] updateDishwasherBatch failed:", e);
     }
+  }
+
+  /** Phase I.5 (H.59) — List the achievement ids the server has
+   * recorded as unlocked for the current identity.  Caller is
+   * Engine.onSubscriptionReady, which calls
+   * AchievementSystem.markUnlockedSilent for each id so toasts don't
+   * re-fire for already-unlocked achievements. */
+  listMyAchievements(): string[] {
+    if (!this.conn || !this.identity) return [];
+    const me = this.identity;
+    const out: string[] = [];
+    try {
+      for (const row of this.conn.db.achievement_unlock.player.filter(me)) {
+        out.push(row.achievementId);
+      }
+    } catch { /* table not wired yet */ }
+    return out;
   }
 
   /** Fetch the cached save snapshot for the given identity (returns

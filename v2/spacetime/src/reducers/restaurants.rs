@@ -52,6 +52,9 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // syncs after each economy update.
         cloud_daily_revenue_cents: 0,
         cloud_daily_expenses_cents: 0,
+        // H.60 — rating history starts empty (None); client pushes
+        // the full snapshot on every recordRating.
+        cloud_rating_history_csv: None,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

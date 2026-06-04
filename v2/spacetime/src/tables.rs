@@ -344,6 +344,19 @@ pub struct Restaurant {
     pub cloud_daily_revenue_cents: i64,
     #[default(0i64)]
     pub cloud_daily_expenses_cents: i64,
+
+    /// Phase H.60 — Comma-separated 1-5 rating history (the rolling
+    /// window the ReputationSystem maintains, capped at 500 entries
+    /// = ~1KB max).  Foreground client pushes the full snapshot on
+    /// every recordRating; hydrate on reconnect overrides local.
+    /// Replaces save_snapshot.ratingHistory as the canonical
+    /// cross-device source for the rating list.
+    ///
+    /// Option<String> with `default(None)` for migration safety —
+    /// pre-H.60 rows read as None which falls back to the save's
+    /// list during the deprecation window.
+    #[default(None::<String>)]
+    pub cloud_rating_history_csv: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

@@ -87,6 +87,7 @@ import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetActiveMenuReducer from "./set_active_menu_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
 import SetCloudPayrollRateReducer from "./set_cloud_payroll_rate_reducer";
+import SetCloudRatingHistoryReducer from "./set_cloud_rating_history_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
@@ -666,6 +667,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_active_menu", SetActiveMenuReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
   __reducerSchema("set_cloud_payroll_rate", SetCloudPayrollRateReducer),
+  __reducerSchema("set_cloud_rating_history", SetCloudRatingHistoryReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
