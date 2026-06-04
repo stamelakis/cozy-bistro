@@ -46,6 +46,49 @@ pub fn bootstrap_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
     Ok(())
 }
 
+/// Energy audit — re-install every restaurant's tick schedule with
+/// the CURRENT SIM_TICK_INTERVAL_MICROS.  Existing schedule rows
+/// bake the interval at insert time; changing the constant doesn't
+/// re-apply to live rows.  Call once after publishing a new
+/// SIM_TICK_INTERVAL_MICROS to actually take effect on all
+/// restaurants:
+///
+///     spacetime call cozy-bistro-andre reset_sim_schedules
+///
+/// Deletes every existing restaurant_tick_schedule + restaurant_tick_state
+/// row, then re-installs each schedule at the new interval.  Safe
+/// because: (1) tick_state is just diagnostic bookkeeping, (2) the
+/// dropped schedule's pending fire (if any) is replaced by the new
+/// row's first fire (one interval later), (3) all server-tracked
+/// state lives in active_guest / active_ticket / etc., not in the
+/// schedule rows.
+#[reducer]
+pub fn reset_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
+    let schedule_ids: Vec<u64> = ctx.db.restaurant_tick_schedule().iter()
+        .map(|s| s.id)
+        .collect();
+    for id in schedule_ids {
+        ctx.db.restaurant_tick_schedule().id().delete(id);
+    }
+    let state_rids: Vec<u64> = ctx.db.restaurant_tick_state().iter()
+        .map(|s| s.restaurant_id)
+        .collect();
+    for rid in state_rids {
+        ctx.db.restaurant_tick_state().restaurant_id().delete(rid);
+    }
+    // Now reinstall at the current interval.
+    let rids: Vec<u64> = ctx.db.restaurant().iter().map(|r| r.id).collect();
+    let count = rids.len();
+    for rid in rids {
+        ensure_tick_schedule(ctx, rid);
+    }
+    log::info!(
+        "reset_sim_schedules: re-installed {} schedules at {}µs interval",
+        count, SIM_TICK_INTERVAL_MICROS,
+    );
+    Ok(())
+}
+
 // === Phase B state-machine constants ===
 
 /// Initial patience pool, in milliseconds. Mirrors the client's
