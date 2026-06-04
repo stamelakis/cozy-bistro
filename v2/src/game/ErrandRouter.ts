@@ -310,6 +310,19 @@ export class ErrandRouter {
     for (const h of this.helpers) this.mirrorActorRegister(h);
   }
 
+  /** Phase I (H.74) — Same as StaffRouter.resyncAllActorsToCloud.
+   * Re-pushes every helper currently in the pool up to cloud's
+   * `staff_actor` table so the server knows about them even if
+   * the original add path predated the mirror code. */
+  resyncAllActorsToCloud(): void {
+    if (!this.cloud) return;
+    let n = 0;
+    for (const h of this.helpers) { this.mirrorActorRegister(h); n += 1; }
+    if (n > 0) {
+      console.log(`[H.74] re-registered ${n} errand helper(s) to cloud staff_actor`);
+    }
+  }
+
   update(dt: number): void {
     for (const h of this.helpers) this.tickHelper(h, dt);
     // Phase I (H.65) — periodic publish of helper pose to the cloud

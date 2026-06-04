@@ -1392,6 +1392,24 @@ export class Engine {
         // mid-trip positions (H.6/H.8/H.34/H.35 may have moved them
         // during the offline window).
         void this.syncStaffToHeadcount().then(() => {
+          // Phase I (H.74) — Critical for offline continuity.  After
+          // syncStaffToHeadcount has spawned all actors locally,
+          // PUSH the roster up to cloud (both `hired_staff_member`
+          // and `staff_actor`).  The save-hydrate path
+          // (StaffSystem.hydrate) appends members directly into the
+          // local list without going through addStaff, so the
+          // setHiredStaffMember mirror never fired for them — cloud
+          // ended up empty even after several sessions.  Without
+          // server-side roster rows, auto_claim_queued_tickets has
+          // no idle chefs/barmen to assign work to → tickets pile
+          // up → guests time out → user sees "only customers
+          // leaving" on reconnect.
+          //
+          // Both methods are idempotent: server reducers no-op when
+          // the row already matches.  Safe to fire every login.
+          this.game.staff.pushRosterToCloud();
+          this.router?.resyncAllActorsToCloud();
+          this.errand?.resyncAllActorsToCloud();
           this.router?.hydrateFromCloud();
           // Phase I.1 (H.48b) — once staff are hydrated AND H.47 has
           // imported any cloud-only guests, reconstruct local tickets

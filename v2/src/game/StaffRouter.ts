@@ -1647,6 +1647,25 @@ export class StaffRouter {
     });
   }
 
+  /** Phase I (H.74) — Re-register every actor currently in the
+   * router (all chefs / waiters / barmen) up to cloud's
+   * `staff_actor` table.  Used at connect-ready to backfill any
+   * actors that exist locally but never made it to cloud (e.g.
+   * because the staff_actor register code landed AFTER they were
+   * first hired into the local save).  Idempotent — the server
+   * reducer's existing-row branch refreshes metadata on re-register
+   * without disturbing in-flight state. */
+  resyncAllActorsToCloud(): void {
+    if (!isServerSim("staff") || !this.cloud) return;
+    let n = 0;
+    for (const c of this.chefs) { this.mirrorActorRegister(c); n += 1; }
+    for (const w of this.waiters) { this.mirrorActorRegister(w); n += 1; }
+    for (const b of this.barmen) { this.mirrorActorRegister(b); n += 1; }
+    if (n > 0) {
+      console.log(`[H.74] re-registered ${n} staff actor(s) to cloud staff_actor`);
+    }
+  }
+
   private mirrorActorUnregister(memberId: string): void {
     if (!isServerSim("staff") || !this.cloud) return;
     this.cloud.unregisterStaffActor(memberId);

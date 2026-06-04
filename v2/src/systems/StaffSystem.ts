@@ -87,6 +87,36 @@ export class StaffSystem {
       this.suppressStaffMirror = prev;
     }
   }
+
+  /** Phase I (H.74) — Push the entire local roster up to cloud's
+   * `hired_staff_member` table.  Critical for the offline-continuity
+   * flow: when the player is away the server's auto_claim helpers
+   * try to assign queued tickets to idle chefs / barmen — but if
+   * those roster rows never made it to cloud (because hydrate()
+   * pushes directly into the local list without going through
+   * addStaff), the server thinks there are zero hires and the
+   * tickets pile up unworked.
+   *
+   * Engine calls this on subscription-ready, after the H.44 training-
+   * deadline sync.  Idempotent — set_hired_staff_member returns
+   * early when the row already matches.  Bails when no cloud handle
+   * or when mirror is suppressed (e.g. an active hydrate). */
+  pushRosterToCloud(): void {
+    if (!this.cloud || this.suppressStaffMirror) return;
+    let pushed = 0;
+    for (const m of this.members) {
+      this.cloud.setHiredStaffMember({
+        memberId: m.id,
+        role: m.role,
+        name: m.name,
+        upgradeLevel: m.upgradeLevel,
+      });
+      pushed += 1;
+    }
+    if (pushed > 0) {
+      console.log(`[H.74] pushed ${pushed} staff member(s) to cloud's hired_staff_member`);
+    }
+  }
   /** Monotonic counter for generating unique member ids within a
    * session. The persisted ids are namespaced by session timestamp,
    * but within one session this avoids collisions when the player
