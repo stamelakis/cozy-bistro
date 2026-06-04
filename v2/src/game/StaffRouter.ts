@@ -2139,7 +2139,12 @@ export class StaffRouter {
       const station = this.claimFreeStation("bar", b.homeFloor, b.character.groundPos);
       if (!station) continue;
       b.assignedStoveUid = station.uid;
-      const target = this.chefStandPosFor(station);
+      // Phase I (H.79) — Cook stand uses the centroid-aware "inside"
+      // picker (same as the idle spot) so the barman walks BEHIND
+      // the bar to mix instead of around to the customer side.
+      const allBars = this.getCookStations?.()
+        .filter((s) => s.provides === "bar" && s.floor === b.homeFloor) ?? [station];
+      const target = this.barmanInsideStandFor(station, allBars);
       ticket.state = "cooking";
       ticket.clock = 0;
       const chefMult = this.getChefCookMultiplier?.(b.memberId) ?? 1;
@@ -2158,25 +2163,63 @@ export class StaffRouter {
     return false;
   }
 
+  /** Phase I (H.79) — Compute the "behind the bar" stand position for
+   * a given bar tile, using the centroid of ALL bar tiles on the
+   * floor to detect which side is "inside".  Replaces the naive
+   * chefStandPosFor(station) for barman positions.
+   *
+   * For a U / O-shaped bar: centroid is INSIDE the ring, so the
+   * candidate (front or back) closer to the centroid is the
+   * barman-side regardless of which way the player rotated the
+   * individual tile.
+   *
+   * For a single straight bar tile: both candidates are equidistant
+   * to the centroid (= the tile itself), so we tiebreak to BACK
+   * (-rotY side).  Bar counter defs put their seats on the +rotY
+   * face, so the back is the natural barman side.
+   *
+   * Returns the world-position the barman should stand at to be
+   * BEHIND that bar tile from the customer's POV. */
+  private barmanInsideStandFor(station: StationInfo, allBars: readonly StationInfo[]): THREE.Vector2 {
+    const sin = Math.sin(station.rotY);
+    const cos = Math.cos(station.rotY);
+    const front = new THREE.Vector2(station.x + sin, station.z + cos);
+    const back  = new THREE.Vector2(station.x - sin, station.z - cos);
+    if (allBars.length <= 1) return back; // single bar → barman side = back
+    let cx = 0, cz = 0;
+    for (const s of allBars) { cx += s.x; cz += s.z; }
+    cx /= allBars.length;
+    cz /= allBars.length;
+    const dFront = Math.hypot(front.x - cx, front.y - cz);
+    const dBack  = Math.hypot(back.x  - cx, back.y  - cz);
+    return dFront < dBack ? front : back;
+  }
+
   /** Barman loiter spot — prefers their last bar counter, then any
    * bar counter on home floor, then the spawn home. Mirrors
-   * pickChefIdleSpot but locked to "bar" stations. */
+   * pickChefIdleSpot but locked to "bar" stations + uses the
+   * centroid-aware "inside" picker so the barman lands BEHIND the
+   * bar instead of on the customer side. */
   private pickBarmanIdleSpot(b: StaffActor): THREE.Vector2 {
     const jitter = (v: THREE.Vector2): THREE.Vector2 => {
       v.x += (Math.random() - 0.5) * 1.2;
       v.y += (Math.random() - 0.5) * 0.8;
       return v;
     };
-    if (b.lastStoveUid) {
-      const station = this.getCookStations?.().find((s) => s.uid === b.lastStoveUid && s.provides === "bar");
-      if (station) return jitter(this.chefStandPosFor(station));
+    if (!this.getCookStations) return b.home.clone();
+    const bars = this.getCookStations()
+      .filter((s) => s.provides === "bar" && s.floor === b.homeFloor);
+    if (bars.length === 0) {
       b.lastStoveUid = null;
+      return b.home.clone();
     }
-    if (this.getCookStations) {
-      const bar = this.getCookStations().find((s) => s.provides === "bar" && s.floor === b.homeFloor);
-      if (bar) return jitter(this.chefStandPosFor(bar));
+    let pickStation = bars[0];
+    if (b.lastStoveUid) {
+      const last = bars.find((s) => s.uid === b.lastStoveUid);
+      if (last) pickStation = last;
+      else b.lastStoveUid = null;
     }
-    return b.home.clone();
+    return jitter(this.barmanInsideStandFor(pickStation, bars));
   }
 
   /** Walk a list of candidate queued tickets and start cooking the
