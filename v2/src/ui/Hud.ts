@@ -569,17 +569,23 @@ export class Hud {
     this.fields.dishes.textContent = `${dishes} / ${totalDish}`;
     this.fields.dishes.style.color = this.game.isDishPileOverwhelming() ? "#ff9a9a" : "#e8b878";
     this.fields.rent.textContent = `$${rent}`;
-    // Pantry stock target / max allowed. The target is what the
-    // auto-shop refills toward; the max is capped by fridges +
-    // storage furniture. Shows e.g. "10 / 22" — the player's chosen
-    // level vs the highest they can currently set it.
+    // Phase I (H.80) — Show actual pantry stock vs total capacity
+    // (numIngredients × per-item target) instead of the bare
+    // "target / max" pair.  Same change as the StockStatusWidget;
+    // gives the player a quick "how full is my pantry?" read.
     const stockTarget = this.game.getStockTarget();
-    const stockMax = this.game.getMaxStockTarget();
-    this.fields.storage.textContent = `${stockTarget} / ${stockMax}`;
-    // Amber when the player is already at the ceiling (more fridges
-    // would raise it), neutral otherwise.
-    this.fields.storage.style.color = (stockMax > 0 && stockTarget >= stockMax)
-      ? "#e8c89a" : "#e0c898";
+    const pantryRaw = this.game.cooking.getPantryRaw();
+    const totalStocked = pantryRaw.reduce((acc, p) => acc + p.quantity, 0);
+    const totalCap = pantryRaw.length > 0
+      ? pantryRaw.length * stockTarget
+      : this.game.getMaxStockTarget();
+    this.fields.storage.textContent = `${totalStocked} / ${totalCap}`;
+    // Red when low (< 30% stocked), amber mid, neutral when comfortably
+    // full.  Matches the StockStatusWidget's color ramp.
+    const pct = totalCap > 0 ? totalStocked / totalCap : 0;
+    this.fields.storage.style.color = pct < 0.3 ? "#ff9a9a"
+      : pct < 0.6 ? "#ffd47a"
+      : "#e0c898";
     // Total payroll per in-game minute = base × headcount + sum of
     // training levels ($1/min per level per member). Read from
     // StaffSystem so the HUD matches the per-row breakdown in the

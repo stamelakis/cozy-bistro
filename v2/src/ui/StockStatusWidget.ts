@@ -259,15 +259,23 @@ export class StockStatusWidget {
     this.dishTooltip.scrollTop = dishScroll;
 
     // === Storage badge ===
-    const cap = this.game.getMaxStockTarget();
-    const current = this.game.getStockTarget();
-    const pct = cap > 0 ? current / cap : 0;
-    const capColor = pct >= 1 ? "#ff9a9a" : pct >= 0.85 ? "#ffd47a" : "#a8e2a8";
+    // Phase I (H.80) — Show ACTUAL pantry stock vs total capacity,
+    // not just the per-item target.  Reads as
+    //   "❄️ Stock 145/2400  · cap 30/item"
+    // where 145 = sum of every ingredient's current quantity,
+    // 2400 = numIngredients × per-item target, 30 = per-item target.
+    const perItemTarget = target;                // already declared above
+    const perItemMax = this.game.getMaxStockTarget();
+    const totalStocked = pantry.reduce((acc, p) => acc + p.quantity, 0);
+    const ingredientCount = pantry.length;
+    const totalCap = ingredientCount > 0 ? ingredientCount * perItemTarget : perItemMax;
+    const usagePct = totalCap > 0 ? totalStocked / totalCap : 0;
+    const usageColor = usagePct >= 0.95 ? "#a8e2a8" : usagePct >= 0.6 ? "#fff5dc" : usagePct >= 0.3 ? "#ffd47a" : "#ff9a9a";
     this.storageBadge.innerHTML =
-      `❄️ Storage ` +
-      `<span style="color:${capColor};font-weight:700">${current}</span>` +
-      `<span style="opacity:0.6">/${cap}</span>` +
-      ` <span style="opacity:0.6">per item</span>`;
+      `❄️ Stock ` +
+      `<span style="color:${usageColor};font-weight:700">${totalStocked}</span>` +
+      `<span style="opacity:0.6">/${totalCap}</span>` +
+      ` <span style="opacity:0.5">· cap ${perItemTarget}/item</span>`;
 
     // === Storage tooltip body ===
     const storageScroll = this.storageTooltip.scrollTop;
@@ -298,8 +306,11 @@ export class StockStatusWidget {
     }
     lines.push(
       `<div style="margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12);color:#a8e2a8">` +
-        `Cap: <b>${cap}</b> · using <b>${current}</b>` +
+        `Per-item cap: <b>${perItemMax}</b> · current target <b>${perItemTarget}</b>` +
       `</div>`
+    );
+    lines.push(
+      `<div style="opacity:0.75;margin-top:2px">Total stocked: <b>${totalStocked}</b> / ${totalCap} units (${(usagePct * 100).toFixed(0)}%)</div>`
     );
     this.storageTooltip.innerHTML = lines.join("");
     this.storageTooltip.scrollTop = storageScroll;
