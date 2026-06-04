@@ -212,33 +212,77 @@ export class StockStatusWidget {
       this.autoShop.textContent = "🛒 Auto-shop OFF — restock manually";
     }
 
-    // === Dishware badge — Phase I (H.81) availability/total ===
-    // Format: "Plates 5/458 (3 dirty) · Glasses 24/26 (2 dirty)"
-    //   N/M = clean ready / total owned
-    //   color tracks clean count low/empty
+    // === Dishware badge — Phase I (H.82) STABLE denominator ===
+    //
+    // User feedback: "the total must be a specific number, not a
+    // fluctuating one.  Write x/y (u on the way, i served, o
+    // washing, etc.)"
+    //
+    // Old display used clean+dirty as the denominator, which dropped
+    // by 1 every time a dish moved into a dishwasher or into a
+    // customer's hand.  Fluctuating "total" hid leaks and made the
+    // user think dishes were vanishing.
+    //
+    // New format keeps the denominator pinned to canonical lifetime
+    // (STARTER + sum(purchaseLog), the H.76 invariant — never
+    // changes during play) and breaks down the difference by state:
+    //
+    //   Plates 5 / 81  (3 dirty · 8 washing · 65 in use)
+    //   Glasses 24 / 30  (1 washing · 5 in use)
+    //
+    // If everything is clean the breakdown disappears entirely:
+    //   Plates 81 / 81
+    //   Glasses 30 / 30
+    //
+    // Mathematical invariant: clean + dirty + washing + in_use == lifetime.
+    // If they don't add up, that's a real leak — the tooltip shows
+    // both sides so the player can spot it.
     const dish = this.game.dishware;
     const plateClean = dish.getClean("plate");
     const plateDirty = dish.getDirty("plate");
-    const plateTotal = plateClean + plateDirty;
+    const plateInWash = dish.getDishwasherInFlight("plate");
     const glassClean = dish.getClean("glass");
     const glassDirty = dish.getDirty("glass");
-    const glassTotal = glassClean + glassDirty;
-    const totalDirty = plateDirty + glassDirty;
+    const glassInWash = dish.getDishwasherInFlight("glass");
+    const lifetimes = dish.getLifetimeAddedByKind();
+    const plateLifetime = lifetimes.plate;
+    const glassLifetime = lifetimes.glass;
+    // "In use" = held by an eating customer or in transit on a
+    // waiter's tray.  Pulled from the snapshot the SaveSystem uses.
+    const allInFlight = this.game.getInFlightDishesForSave();
+    let plateInUse = 0, glassInUse = 0;
+    for (const e of allInFlight) {
+      if (e.kind === "plate") plateInUse += e.count;
+      else if (e.kind === "glass") glassInUse += e.count;
+    }
+
     const plateColor = plateClean === 0 ? "#ff9a9a" : plateClean <= 4 ? "#ffd47a" : "#a8e2a8";
     const glassColor = glassClean === 0 ? "#ff9a9a" : glassClean <= 4 ? "#ffd47a" : "#a8e2a8";
-    const plateDirtyTag = plateDirty > 0 ? ` <span style="opacity:0.55">(${plateDirty} dirty)</span>` : "";
-    const glassDirtyTag = glassDirty > 0 ? ` <span style="opacity:0.55">(${glassDirty} dirty)</span>` : "";
+
+    const breakdownTag = (parts: { label: string; n: number }[]): string => {
+      const live = parts.filter((p) => p.n > 0).map((p) => `${p.n} ${p.label}`);
+      if (live.length === 0) return "";
+      return ` <span style="opacity:0.55">(${live.join(" · ")})</span>`;
+    };
+    const plateExtra = breakdownTag([
+      { label: "dirty", n: plateDirty },
+      { label: "washing", n: plateInWash },
+      { label: "in use", n: plateInUse },
+    ]);
+    const glassExtra = breakdownTag([
+      { label: "dirty", n: glassDirty },
+      { label: "washing", n: glassInWash },
+      { label: "in use", n: glassInUse },
+    ]);
     this.dishBadge.innerHTML =
       `Plates ` +
       `<span style="color:${plateColor};font-weight:700">${plateClean}</span>` +
-      `<span style="opacity:0.6">/${plateTotal}</span>` +
-      plateDirtyTag +
+      `<span style="opacity:0.6"> / ${plateLifetime}</span>` +
+      plateExtra +
       `<br>Glasses ` +
       `<span style="color:${glassColor};font-weight:700">${glassClean}</span>` +
-      `<span style="opacity:0.6">/${glassTotal}</span>` +
-      glassDirtyTag;
-    // suppress unused-var warning when totalDirty isn't shown inline
-    void totalDirty;
+      `<span style="opacity:0.6"> / ${glassLifetime}</span>` +
+      glassExtra;
 
     // === Dishware tooltip body ===
     const dishScroll = this.dishTooltip.scrollTop;
@@ -247,32 +291,36 @@ export class StockStatusWidget {
     dishLines.push(renderDishSection("Plates", "plate", dish));
     dishLines.push(`<div style="height:4px"></div>`);
     dishLines.push(renderDishSection("Glasses", "glass", dish));
-    const totalOwned = dish.getTotalOwned();
-    const dishCap = dish.getCapacity();
+    // Phase I (H.82) — canonical account.  Show every state bucket
+    // and confirm the sum matches the lifetime invariant.
+    const plateAccount = plateClean + plateDirty + plateInWash + plateInUse;
+    const glassAccount = glassClean + glassDirty + glassInWash + glassInUse;
+    const plateLeak = plateLifetime - plateAccount;
+    const glassLeak = glassLifetime - glassAccount;
     dishLines.push(
-      `<div style="margin-top:4px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12);color:#a8c8e8">` +
-        `Stored: <b>${totalOwned}</b> / ${dishCap} slots` +
+      `<div style="margin-top:4px;padding-top:3px;border-top:1px solid rgba(255,245,220,0.12)">` +
+        `<div style="color:#a8c8e8;font-weight:700;margin-bottom:2px">Account</div>` +
+        `<div>Plates: <b>${plateClean}</b> clean · ${plateDirty} dirty · ${plateInWash} washing · ${plateInUse} in use = <b>${plateAccount}</b> / ${plateLifetime}` +
+          (plateLeak !== 0 ? ` <span style="color:#ff9a9a">(${plateLeak > 0 ? "LEAK" : "OVER"} ${Math.abs(plateLeak)})</span>` : "") +
+        `</div>` +
+        `<div>Glasses: <b>${glassClean}</b> clean · ${glassDirty} dirty · ${glassInWash} washing · ${glassInUse} in use = <b>${glassAccount}</b> / ${glassLifetime}` +
+          (glassLeak !== 0 ? ` <span style="color:#ff9a9a">(${glassLeak > 0 ? "LEAK" : "OVER"} ${Math.abs(glassLeak)})</span>` : "") +
+        `</div>` +
       `</div>`,
     );
     // Wash is driven by waiter trips — no abstract interval to surface.
     // We only need to warn the player when their kitchen LITERALLY
     // can't wash anything (no sink + no dishwasher) AND dirty pieces
     // are piling up.
+    const totalDirty = plateDirty + glassDirty;
     const washInterval = dish.getWashInterval();
     if (!Number.isFinite(washInterval) && totalDirty > 0) {
       dishLines.push(`<div style="color:#ff9a9a;margin-top:2px">No sink or dishwasher — wash paused.</div>`);
     }
-    // Surface how much is mid-cycle inside dishwashers so the "dirty"
-    // count drifting upward while plates wait for a batch flush doesn't
-    // look like a stuck system.
-    const inDwPlates = dish.getDishwasherInFlight("plate");
-    const inDwGlasses = dish.getDishwasherInFlight("glass");
-    if (inDwPlates + inDwGlasses > 0) {
-      const parts: string[] = [];
-      if (inDwPlates > 0) parts.push(`${inDwPlates} plate${inDwPlates === 1 ? "" : "s"}`);
-      if (inDwGlasses > 0) parts.push(`${inDwGlasses} glass${inDwGlasses === 1 ? "" : "es"}`);
-      dishLines.push(`<div style="opacity:0.7;margin-top:2px">Washing in dishwashers: ${parts.join(", ")}</div>`);
-    }
+    // Phase I (H.82) — dropped the "Washing in dishwashers: X plates,
+    // Y glasses" extra line; the canonical Account block above
+    // already breaks out the `washing` bucket per kind, so this was
+    // duplicate info.
     this.dishTooltip.innerHTML = dishLines.join("");
     this.dishTooltip.scrollTop = dishScroll;
 
