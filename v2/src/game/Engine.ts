@@ -970,68 +970,80 @@ export class Engine {
       // (client stays the source of truth in foreground); cloud row
       // gives visit mode + leaderboard access to the live roster.
       this.game.staff.cloud = this.cloud;
-      // H.37 — seed recipe_ingredients lookup so the server's
-      // auto_place_next_course can decrement pantry_stock on
-      // backgrounded-tab ticket creation. Idempotent on the server
-      // side; cheap to re-fire every connect (and matters when the
-      // catalog has changed between client + server). Catalog is
-      // small (~50 recipes), so the burst of N reducer calls is
-      // fine.
-      void Promise.all([
-        import("../data/recipes"),
-        import("../systems/CookingSystem"),
-      ]).then(([{ recipes }, { getRecipeLuxuryTier }]) => {
+      // Energy audit (D) — skip catalog reseed if we already did one
+      // recently.  Catalog data (recipe_ingredients, recipe_meta,
+      // customer_archetype, ingredient_cost) is essentially static —
+      // it only changes when a build ships a new game data file.
+      // Resetting on every connect (~190 reducer calls) was burning
+      // energy for no real benefit.  24-hour TTL gives us a daily
+      // re-seed window that catches any catalog edits the player
+      // hasn't reloaded for, without paying the cost per session.
+      //
+      // The per-restaurant recipe_level mirror is gated separately
+      // since it's owner-specific state — H.43 reconciles those on
+      // every connect via the drain path, not via this seed loop.
+      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed";
+      const CATALOG_SEED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+      const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY);
+      const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw, 10) : 0;
+      const seedAgeMs = Date.now() - lastSeed;
+      const needsCatalogReseed = !lastSeed || seedAgeMs > CATALOG_SEED_TTL_MS;
+      if (needsCatalogReseed) {
+        console.log("[Engine] catalog reseed (lastSeed:",
+          lastSeed ? `${Math.round(seedAgeMs / 1000 / 60 / 60)}h ago` : "never", ")");
+        // H.37 + H.40 + H.53 — seed recipe_ingredients + recipe_meta
+        // (the per-recipe static catalog data).  Server's
+        // auto_place_next_course + build_server_order read these.
+        void Promise.all([
+          import("../data/recipes"),
+          import("../systems/CookingSystem"),
+        ]).then(([{ recipes }, { getRecipeLuxuryTier }]) => {
+          for (const r of recipes) {
+            this.cloud.setRecipeIngredients(r.id, r.ingredients);
+            const appliance = r.category === "drink"
+              ? "bar"
+              : (r.appliances?.[0] ?? r.stationNeeded ?? "stove");
+            this.cloud.setRecipeMeta({
+              recipeId: r.id,
+              baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1000),
+              appliance,
+              sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
+              satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),
+              category: r.category,
+              tier: getRecipeLuxuryTier(r),
+            });
+          }
+        });
+        // H.38 — same shape for customer_archetype.
+        void import("../data/customerArchetypes").then(({ customerArchetypes }) => {
+          for (const a of customerArchetypes) {
+            this.cloud.setCustomerArchetype({
+              archetypeId: a.id,
+              weight: a.weight,
+              patienceMultX100: Math.round(a.patienceMultiplier * 100),
+              tipMultX100: Math.round(a.tipMultiplier * 100),
+              orderSizeBias: a.orderSizeBias,
+              wcUseChanceX100: Math.round(a.wcUseChance * 100),
+            });
+          }
+        });
+        // H.41 — seed ingredient_cost.
+        void import("../data/ingredients").then(({ INGREDIENT_COSTS }) => {
+          for (const [id, dollars] of Object.entries(INGREDIENT_COSTS)) {
+            this.cloud.setIngredientCost(id, Math.round(dollars * 100));
+          }
+        });
+        localStorage.setItem(LAST_CATALOG_SEED_KEY, String(Date.now()));
+      } else {
+        console.log("[Engine] catalog reseed skipped (last seed",
+          `${Math.round(seedAgeMs / 1000 / 60)}m ago, < ${CATALOG_SEED_TTL_MS / 1000 / 60 / 60}h TTL)`);
+      }
+      // Per-restaurant recipe_level mirror — H.53.  Owner-specific
+      // state, fires regardless of catalog reseed gate.  Idempotent;
+      // server skips writes when the level matches.
+      void import("../data/recipes").then(({ recipes }) => {
         for (const r of recipes) {
-          this.cloud.setRecipeIngredients(r.id, r.ingredients);
-          // H.53 — also push the CURRENT per-restaurant upgrade level
-          // so server's build_server_order has it before the first
-          // server-spawned guest's order is computed.  Idempotent —
-          // server skips writes when the level matches.
           this.cloud.setRecipeLevel(r.id, this.game.cooking.getRecipeUpgradeLevel(r));
-          // H.40 — seed the full meta too (sibling table). Server
-          // uses this to build orders for backgrounded-only guests.
-          // Pick a sensible default appliance: "bar" for drinks,
-          // else r.appliances[0] ?? r.stationNeeded ?? "stove".
-          const appliance = r.category === "drink"
-            ? "bar"
-            : (r.appliances?.[0] ?? r.stationNeeded ?? "stove");
-          this.cloud.setRecipeMeta({
-            recipeId: r.id,
-            baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1000),
-            appliance,
-            sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
-            satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),
-            category: r.category,
-            // H.53 — mirror luxury tier so server can compute the
-            // tier × upgrade-level price bonus.
-            tier: getRecipeLuxuryTier(r),
-          });
-        }
-      });
-      // H.38 — same shape for customer_archetype. Server's
-      // try_spawn_arrival_guest picks weighted random archetype from
-      // this table; without it the H.33 fallback uses hardcoded
-      // "regular" with neutral defaults. ~7 archetypes total.
-      void import("../data/customerArchetypes").then(({ customerArchetypes }) => {
-        for (const a of customerArchetypes) {
-          this.cloud.setCustomerArchetype({
-            archetypeId: a.id,
-            weight: a.weight,
-            patienceMultX100: Math.round(a.patienceMultiplier * 100),
-            tipMultX100: Math.round(a.tipMultiplier * 100),
-            orderSizeBias: a.orderSizeBias,
-            wcUseChanceX100: Math.round(a.wcUseChance * 100),
-          });
-        }
-      });
-      // H.41 — seed the ingredient_cost catalog so the server's
-      // auto-shop knows what to bill when it restocks a backgrounded
-      // empty pantry slot. Mirrors INGREDIENT_COSTS in
-      // src/data/ingredients.ts; ~30 entries.  Per-unit cost stored
-      // in cents (the catalog is in dollars).  Idempotent.
-      void import("../data/ingredients").then(({ INGREDIENT_COSTS }) => {
-        for (const [id, dollars] of Object.entries(INGREDIENT_COSTS)) {
-          this.cloud.setIngredientCost(id, Math.round(dollars * 100));
         }
       });
       // H.41 — drain any auto-shop debt the server accrued while

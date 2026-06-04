@@ -114,7 +114,17 @@ fn is_waiting_state(s: &str) -> bool {
 /// matches the rate planned in docs/server-authoritative-plan.md.
 /// Pedestrians fire at 0.5 Hz; the live game sim needs finer
 /// resolution so patience countdowns + cook timers feel right.
-pub const SIM_TICK_INTERVAL_MICROS: i64 = 100_000; // 100ms
+///
+/// Energy audit (post-H.53) — original 100ms (10 Hz) was driving the
+/// bulk of Maincloud energy burn since each tick triggers ~20 full
+/// table scans across guests/tickets/staff_actor/furniture/etc. for
+/// just one restaurant's worth of work.  Dropped to 500ms (2 Hz):
+/// patience timers still feel responsive, cook timers tick on 500ms
+/// granularity (under the per-recipe ~5s scale, fine), and per-tick
+/// cost drops ~5×.  Sub-second client smoothing is the visual
+/// interpolator's job — server doesn't need to push positions more
+/// often than the network round-trip anyway.
+pub const SIM_TICK_INTERVAL_MICROS: i64 = 500_000; // 500ms (2 Hz)
 
 /// Insert a per-restaurant tick schedule row if one doesn't exist yet.
 /// Idempotent — used both by create_restaurant for new restaurants
@@ -215,12 +225,16 @@ pub fn restaurant_tick(
     // step its state machine (patience countdown, leaving dwell,
     // etc.). Phase B owns this branch.
     let dt_ms = compute_dt_ms(now, previous_tick_at);
+    // Energy audit — use btree-index access (active_guest has
+    // #[index(btree)] on restaurant_id) instead of iter().filter()
+    // which is a full table scan.  Same change applied to every
+    // per-restaurant iteration below.
     let guest_ids: Vec<u64> = ctx.db
         .active_guest()
-        .iter()
-        .filter(|g| g.restaurant_id == rid)
+        .restaurant_id().filter(rid)
         .map(|g| g.id)
         .collect();
+    let has_guests = !guest_ids.is_empty();
     for guest_id in guest_ids {
         tick_guest_state(ctx, guest_id, dt_ms);
     }
@@ -229,10 +243,10 @@ pub fn restaurant_tick(
     // active_ticket rows + step each one's state-clock + cook timer.
     let ticket_ids: Vec<u64> = ctx.db
         .active_ticket()
-        .iter()
-        .filter(|t| t.restaurant_id == rid)
+        .restaurant_id().filter(rid)
         .map(|t| t.id)
         .collect();
+    let has_tickets = !ticket_ids.is_empty();
     for ticket_id in ticket_ids {
         tick_ticket_state(ctx, ticket_id, dt_ms);
     }
@@ -244,10 +258,10 @@ pub fn restaurant_tick(
     // pathfinder + station registry are also server-side.
     let actor_ids: Vec<String> = ctx.db
         .staff_actor()
-        .iter()
-        .filter(|a| a.restaurant_id == rid)
+        .restaurant_id().filter(rid)
         .map(|a| a.member_id.clone())
         .collect();
+    let has_actors = !actor_ids.is_empty();
     for actor_id in actor_ids {
         tick_staff_actor(ctx, &actor_id, dt_ms);
     }
@@ -261,12 +275,34 @@ pub fn restaurant_tick(
     // cycle — no client-side update() needed for that subsystem.
     let batch_uids: Vec<String> = ctx.db
         .dishwasher_batch()
-        .iter()
-        .filter(|b| b.restaurant_id == rid)
+        .restaurant_id().filter(rid)
         .map(|b| b.furniture_uid.clone())
         .collect();
+    let has_batches = !batch_uids.is_empty();
     for uid in batch_uids {
         tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
+    }
+
+    // Energy audit (C) — early-out: if this restaurant has NOTHING
+    // going on (no guests, no tickets, no actors, no dishwasher
+    // batches, no in-flight recipe upgrades, no in-flight staff
+    // training), skip every heavy dispatch helper.  Just bump the
+    // day clock so visual time still advances + return.  Day-clock
+    // tick is cheap (one find + maybe one update); the dispatch
+    // helpers below each iterate at least one table per call.
+    //
+    // The "any in-flight" probe is also cheap: btree-indexed
+    // restaurant_id lookups, take() short-circuits at the first row.
+    if !has_guests && !has_tickets && !has_actors && !has_batches {
+        let any_upgrade = ctx.db.recipe_upgrade_in_flight()
+            .restaurant_id().filter(rid).next().is_some();
+        let any_training = ctx.db.hired_staff_member()
+            .restaurant_id().filter(rid)
+            .any(|m| m.training_completes_at_micros > 0);
+        if !any_upgrade && !any_training {
+            tick_day_clock(ctx, rid, dt_ms);
+            return Ok(());
+        }
     }
 
     // Phase H.6 — auto-claim queued tickets. Iterates queued tickets
@@ -593,8 +629,8 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
 
     let queued_ids: Vec<u64> = ctx.db
         .active_ticket()
-        .iter()
-        .filter(|t| t.restaurant_id == rid && t.state == "queued")
+        .restaurant_id().filter(rid)
+        .filter(|t| t.state == "queued")
         .map(|t| t.id)
         .collect();
     if queued_ids.is_empty() {
@@ -605,17 +641,15 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
     // each actor is only claimed once per tick.
     let mut idle_chefs: Vec<StaffActor> = ctx.db
         .staff_actor()
-        .iter()
-        .filter(|a| a.restaurant_id == rid
-            && a.role == "chef"
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "chef"
             && a.state == "idle"
             && a.ticket_id.is_none())
         .collect();
     let mut idle_barmen: Vec<StaffActor> = ctx.db
         .staff_actor()
-        .iter()
-        .filter(|a| a.restaurant_id == rid
-            && a.role == "barman"
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "barman"
             && a.state == "idle"
             && a.ticket_id.is_none())
         .collect();
@@ -628,8 +662,8 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
     // station can't be claimed twice in one tick.
     let mut occupied: std::collections::HashSet<String> = ctx.db
         .staff_actor()
-        .iter()
-        .filter(|a| a.restaurant_id == rid && !a.assigned_stove_uid.is_empty())
+        .restaurant_id().filter(rid)
+        .filter(|a| !a.assigned_stove_uid.is_empty())
         .map(|a| a.assigned_stove_uid.clone())
         .collect();
 
@@ -648,8 +682,7 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         // StaffRouter's nearest-wins behavior.
         let pool: &Vec<StaffActor> = if is_bar { &idle_barmen } else { &idle_chefs };
         let mut best: Option<(PlacedFurniture, usize, f32)> = None; // (station, actor_idx, total_dist)
-        for f in ctx.db.placed_furniture().iter() {
-            if f.restaurant_id != rid { continue; }
+        for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
             if def_provides(&f.def_id) != Some(ticket.appliance.as_str()) { continue; }
             if occupied.contains(&f.uid) { continue; }
             // Cheapest actor for this candidate station.
@@ -753,8 +786,8 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
 fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
     let ready_ids: Vec<u64> = ctx.db
         .active_ticket()
-        .iter()
-        .filter(|t| t.restaurant_id == rid && t.state == "ready")
+        .restaurant_id().filter(rid)
+        .filter(|t| t.state == "ready")
         .map(|t| t.id)
         .collect();
     if ready_ids.is_empty() { return; }
@@ -762,9 +795,8 @@ fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
     // Idle waiters with no current ticket binding.
     let mut idle_waiters: Vec<StaffActor> = ctx.db
         .staff_actor()
-        .iter()
-        .filter(|a| a.restaurant_id == rid
-            && a.role == "waiter"
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter"
             && a.state == "idle"
             && a.ticket_id.is_none())
         .collect();
@@ -976,8 +1008,8 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     // if total dirty pieces across the restaurant exceed 8, drop the
     // rating by 1 star (floor at 1).
     const DIRTY_PILE_THRESHOLD: u32 = 8;
-    let total_dirty: u32 = ctx.db.dishware_pool().iter()
-        .filter(|p| p.restaurant_id == g.restaurant_id)
+    let total_dirty: u32 = ctx.db.dishware_pool()
+        .restaurant_id().filter(g.restaurant_id)
         .map(|p| p.dirty)
         .sum();
     if total_dirty > DIRTY_PILE_THRESHOLD {
@@ -993,8 +1025,7 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     let mut hood_count: i32 = 0;
     let mut toilet_count: i32 = 0;
     let mut sink_count: i32 = 0;
-    for f in ctx.db.placed_furniture().iter() {
-        if f.restaurant_id != g.restaurant_id { continue; }
+    for f in ctx.db.placed_furniture().restaurant_id().filter(g.restaurant_id) {
         match f.def_id.as_str() {
             "stove" | "stove-electric" => stove_count += 1,
             "kitchen-hood" | "kitchen-hood-l" => hood_count += 1,
@@ -1913,8 +1944,9 @@ pub fn consume_pending_recipe_upgrades(
 fn tick_recipe_upgrade_completions(ctx: &ReducerContext, rid: u64) {
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     // Collect completed rows first; iterator can't outlive deletes.
-    let completed: Vec<(String, String)> = ctx.db.recipe_upgrade_in_flight().iter()
-        .filter(|f| f.restaurant_id == rid && now_micros >= f.completes_at_micros)
+    let completed: Vec<(String, String)> = ctx.db.recipe_upgrade_in_flight()
+        .restaurant_id().filter(rid)
+        .filter(|f| now_micros >= f.completes_at_micros)
         .map(|f| (f.key.clone(), f.recipe_id.clone()))
         .collect();
     if completed.is_empty() { return; }
@@ -2014,9 +2046,9 @@ pub fn consume_pending_training_completions(
 const STAFF_UPGRADE_MAX_SERVER: u32 = 5;
 fn tick_training_completions(ctx: &ReducerContext, rid: u64) {
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    let completed: Vec<HiredStaffMember> = ctx.db.hired_staff_member().iter()
-        .filter(|m| m.restaurant_id == rid
-            && m.training_completes_at_micros > 0
+    let completed: Vec<HiredStaffMember> = ctx.db.hired_staff_member()
+        .restaurant_id().filter(rid)
+        .filter(|m| m.training_completes_at_micros > 0
             && now_micros >= m.training_completes_at_micros)
         .collect();
     if completed.is_empty() { return; }
@@ -2201,8 +2233,7 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     // Compute total per-minute payroll: base × headcount + Σ level × 100.
     let mut headcount: i64 = 0;
     let mut levels_sum: i64 = 0;
-    for m in ctx.db.hired_staff_member().iter() {
-        if m.restaurant_id != rid { continue; }
+    for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
         headcount += 1;
         levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
     }
@@ -2428,15 +2459,15 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
     // avoid double-assigning. We treat ANY waiter with take_order_guest_id
     // set as "covering" that guest — whether they're walking to it or
     // already at the seat dwelling.
-    let mut covered: std::collections::HashSet<u64> = ctx.db.staff_actor().iter()
-        .filter(|a| a.restaurant_id == rid)
+    let mut covered: std::collections::HashSet<u64> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
         .filter_map(|a| a.take_order_guest_id)
         .collect();
 
     // Idle waiters available for dispatch this tick. Pop as we assign.
-    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor().iter()
-        .filter(|a| a.restaurant_id == rid
-            && a.role == "waiter"
+    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter"
             && a.state == "idle"
             && a.ticket_id.is_none()
             && a.take_order_guest_id.is_none()
@@ -2447,8 +2478,7 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
     // Walk ordering guests in this restaurant. Skip bar customers
     // (barman path, no walk needed) and any guest already covered
     // by an existing waiter assignment.
-    for g in ctx.db.active_guest().iter() {
-        if g.restaurant_id != rid { continue; }
+    for g in ctx.db.active_guest().restaurant_id().filter(rid) {
         if g.state != "ordering" { continue; }
         if g.seat_at_bar { continue; }
         if covered.contains(&g.id) { continue; }
@@ -2502,26 +2532,27 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
     if owner_online { return; }
 
     // Need at least one dirty piece somewhere in the pool.
-    let any_dirty = ctx.db.dishware_pool().iter()
-        .any(|p| p.restaurant_id == rid && p.dirty > 0);
+    let any_dirty = ctx.db.dishware_pool()
+        .restaurant_id().filter(rid)
+        .any(|p| p.dirty > 0);
     if !any_dirty { return; }
 
     // Collect wash stations — dishwasher or kitchen sink. We may
     // pair across multiple (e.g. one upstairs, one downstairs) so
     // the cheapest waiter→station match wins, not the first found.
-    let stations: Vec<PlacedFurniture> = ctx.db.placed_furniture().iter()
-        .filter(|f| f.restaurant_id == rid
-            && (f.def_id == "dishwasher"
-                || f.def_id == "dishwasher-pro"
-                || f.def_id == "sink"
-                || f.def_id == "kitchen-sink"))
+    let stations: Vec<PlacedFurniture> = ctx.db.placed_furniture()
+        .restaurant_id().filter(rid)
+        .filter(|f| f.def_id == "dishwasher"
+            || f.def_id == "dishwasher-pro"
+            || f.def_id == "sink"
+            || f.def_id == "kitchen-sink")
         .collect();
     if stations.is_empty() { return; }
 
     // Idle waiters not already on another trip.
-    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor().iter()
-        .filter(|a| a.restaurant_id == rid
-            && a.role == "waiter"
+    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter"
             && a.state == "idle"
             && a.ticket_id.is_none()
             && a.take_order_guest_id.is_none()
@@ -2551,12 +2582,10 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
     // floor as the wash station so the visual route doesn't yo-yo
     // between floors.  Fall back to any seat if the station's
     // floor has none (rare; small upstairs without seating yet).
-    let seat = ctx.db.placed_furniture().iter()
-        .find(|f| f.restaurant_id == rid
-            && f.floor == station.floor
-            && is_seat_providing_def(&f.def_id))
-        .or_else(|| ctx.db.placed_furniture().iter()
-            .find(|f| f.restaurant_id == rid && is_seat_providing_def(&f.def_id)));
+    let seat = ctx.db.placed_furniture().restaurant_id().filter(rid)
+        .find(|f| f.floor == station.floor && is_seat_providing_def(&f.def_id))
+        .or_else(|| ctx.db.placed_furniture().restaurant_id().filter(rid)
+            .find(|f| is_seat_providing_def(&f.def_id)));
     let Some(seat) = seat else { return; };
 
     let member_id = actor.member_id.clone();
@@ -2697,10 +2726,9 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     const STALE_WASH_MS: i64 = 60_000;
 
     // (1) Foreground guard — any non-stale client wash trip in flight?
-    let client_active = ctx.db.staff_actor().iter()
+    let client_active = ctx.db.staff_actor().restaurant_id().filter(rid)
         .any(|a|
-            a.restaurant_id == rid
-                && !a.wash_target_uid.is_empty()
+            !a.wash_target_uid.is_empty()
                 && a.state_clock_ms < STALE_WASH_MS
         );
     if client_active { return; }
@@ -2710,8 +2738,7 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     //     client's flush_one_dish preference order so the rendered
     //     state lines up if the client foregrounds soon.
     let mut best: Option<DishwarePool> = None;
-    for p in ctx.db.dishware_pool().iter() {
-        if p.restaurant_id != rid { continue; }
+    for p in ctx.db.dishware_pool().restaurant_id().filter(rid) {
         if p.dirty == 0 { continue; }
         // Prefer plate; otherwise pick higher tier.
         let take = match &best {
@@ -2728,8 +2755,7 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
 
     // (2 + 4) Find a dishwasher with capacity for this kind.
     let mut dishwasher: Option<PlacedFurniture> = None;
-    for f in ctx.db.placed_furniture().iter() {
-        if f.restaurant_id != rid { continue; }
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if f.def_id != "dishwasher" && f.def_id != "dishwasher-pro" { continue; }
         let batch = ctx.db.dishwasher_batch().furniture_uid().find(f.uid.clone());
         let has_capacity = match &batch {
@@ -2804,8 +2830,7 @@ fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str) {
     // Find the highest-tier row with dirty > 0.
     let mut candidate: Option<(String, u32, u32)> = None; // (key, tier, clean)
     let mut best_tier = 0u32;
-    for p in ctx.db.dishware_pool().iter() {
-        if p.restaurant_id != restaurant_id { continue; }
+    for p in ctx.db.dishware_pool().restaurant_id().filter(restaurant_id) {
         if p.kind != kind { continue; }
         if p.dirty == 0 { continue; }
         if p.tier >= best_tier {
@@ -3810,8 +3835,8 @@ pub(crate) fn try_spawn_arrival_guest(
     /// guest pool size; prevents a long-backgrounded tab with no
     /// seating from accruing a runaway count.
     const MAX_ACTIVE_GUESTS: usize = 12;
-    let active_count = ctx.db.active_guest().iter()
-        .filter(|g| g.restaurant_id == restaurant_id)
+    let active_count = ctx.db.active_guest()
+        .restaurant_id().filter(restaurant_id)
         .count();
     if active_count >= MAX_ACTIVE_GUESTS {
         return false;
@@ -4082,8 +4107,7 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
     -> Option<(String, f32, f32, u32)> {
     let rid = g.restaurant_id;
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for other in ctx.db.active_guest().iter() {
-        if other.restaurant_id != rid { continue; }
+    for other in ctx.db.active_guest().restaurant_id().filter(rid) {
         if other.id == g.id { continue; }
         if let Some(uid) = &other.wc_target_uid {
             if !uid.is_empty() { taken.insert(uid.clone()); }
@@ -4095,8 +4119,7 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
     };
     let mut best: Option<(String, f32, f32, u32)> = None;
     let mut best_dist = f32::INFINITY;
-    for f in ctx.db.placed_furniture().iter() {
-        if f.restaurant_id != rid { continue; }
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if !predicate(&f.def_id) { continue; }
         if taken.contains(&f.uid) { continue; }
         // Stand-in-front position — one tile ahead along facing axis.
@@ -4149,8 +4172,7 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
     // SEAT_OCCUPANCY_RADIUS_SQ of a chair as "taken too".
     const SEAT_OCCUPANCY_RADIUS_SQ: f32 = 0.25; // 0.5m radius
     let mut taken_targets: Vec<(f32, f32)> = Vec::new();
-    for other in ctx.db.active_guest().iter() {
-        if other.restaurant_id != rid { continue; }
+    for other in ctx.db.active_guest().restaurant_id().filter(rid) {
         if other.id == g.id { continue; }
         if !other.seat_uid.is_empty() {
             taken_uids.insert(other.seat_uid.clone());
@@ -4164,8 +4186,7 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
     // Find the closest free table.
     let mut best: Option<(String, f32, f32, u32)> = None;
     let mut best_dist = f32::INFINITY;
-    for f in ctx.db.placed_furniture().iter() {
-        if f.restaurant_id != rid { continue; }
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if !is_seat_providing_def(&f.def_id) { continue; }
         if taken_uids.contains(&f.uid) { continue; }
         // Skip chairs another guest is walking toward (catches the
