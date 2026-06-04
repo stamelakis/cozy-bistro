@@ -2412,10 +2412,21 @@ export class SpacetimeClient {
     await this.waitForAuthRecord();
   }
 
-  /** Call logout. Releases this identity's claim on the account so
-   * the row can be re-claimed via a fresh login. */
-  logout(): Promise<void> {
-    return this.callReducer("logout", () => this.conn!.reducers.logout({}));
+  /** Call logout. Releases this identity's claim on the account on
+   * the server, then wipes the stored auth token from both
+   * localStorage and sessionStorage so the next reload starts as
+   * an anonymous client and the LoginModal pops fresh.  Without
+   * the token clear, a re-login under a DIFFERENT username would
+   * still inherit the old identity from the cached token — the
+   * server logout drops the auth_record link, but the wallet-style
+   * identity stays the same per-browser. */
+  async logout(): Promise<void> {
+    await this.callReducer("logout", () => this.conn!.reducers.logout({}));
+    try {
+      const key = tokenStorageKeyFor(this.cfg.host);
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    } catch { /* private-mode storage — ignore */ }
   }
 
   /** Submit a forgot-password ticket for the admin to action. The

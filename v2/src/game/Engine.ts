@@ -2401,6 +2401,35 @@ export class Engine {
    * the busier modal-icon row at the top of the HUD. */
   private installResetSaveSection(): void {
     this.sidebar.addSeparator();
+
+    // Phase I (H.73) — Logout button.  Sits just above Reset save in
+    // the same section so the two account-level controls live
+    // together, with Logout the safer / more common one on top.
+    // Differentiated by both colour (cool blue/cyan vs. Reset save's
+    // alarming red) and copy ("→") so they don't read as twins.
+    const logoutWrap = document.createElement("div");
+    Object.assign(logoutWrap.style, { marginBottom: "6px" } as Partial<CSSStyleDeclaration>);
+    const logoutBtn = document.createElement("button");
+    logoutBtn.textContent = "→ Log out";
+    Object.assign(logoutBtn.style, {
+      display: "block", width: "100%",
+      padding: "6px 8px",
+      background: "rgba(100, 160, 200, 0.20)",
+      color: "#fff5dc",
+      border: "1px solid rgba(100, 160, 200, 0.45)",
+      borderRadius: "4px", cursor: "pointer",
+      font: "inherit", fontSize: "11px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    logoutBtn.title =
+      "Log out — disconnects this session from your account, clears\n" +
+      "the saved auth token, then reloads the page.  Your save and\n" +
+      "plot stay intact; the next login pops you back in where you\n" +
+      "left off.  Use this when switching accounts or handing the\n" +
+      "browser to someone else.";
+    logoutBtn.onclick = () => this.logout();
+    logoutWrap.appendChild(logoutBtn);
+    this.sidebar.body.appendChild(logoutWrap);
+
     const wrap = document.createElement("div");
     Object.assign(wrap.style, { marginBottom: "4px" } as Partial<CSSStyleDeclaration>);
     const btn = document.createElement("button");
@@ -2423,6 +2452,32 @@ export class Engine {
     btn.onclick = () => this.resetSave();
     wrap.appendChild(btn);
     this.sidebar.body.appendChild(wrap);
+  }
+
+  /** Phase I (H.73) — log out the current session.  Fires the server
+   * logout reducer (drops the auth_record link for this identity),
+   * clears the per-host token from local + session storage so a
+   * reload doesn't silently re-claim the same wallet, then hard-
+   * reloads.  After reload the connect flow sees no token, the SDK
+   * generates a fresh anonymous identity, isAuthenticated() returns
+   * false, and the LoginModal pops. */
+  private async logout(): Promise<void> {
+    const ok = window.confirm(
+      "Log out of this session?\n\n" +
+      "Your restaurant and progress stay on the server — you can\n" +
+      "log back in with the same username + password anytime.",
+    );
+    if (!ok) return;
+    try {
+      await this.cloud.logout();
+    } catch (e) {
+      console.warn("[Engine] cloud.logout reducer failed (continuing with local clear):", e);
+    }
+    // Reload regardless of whether the reducer succeeded — the token
+    // is already wiped client-side so the next session is fresh
+    // even if the server didn't get the logout call (e.g. dropped
+    // connection at the moment of click).
+    window.location.reload();
   }
 
   /** Character wipe. Releases the player's plot, deletes their
