@@ -281,6 +281,12 @@ export class Engine {
       this.saver.saveNow();
       this.sidebar.updateSaveStatus(this.saver.getSaveStats());
     };
+    // UI request — Expand / Boost / Grant pinned at the very top of
+    // the sidebar (above cash/weather) so the three economy actions
+    // are the first thing the eye lands on. Constructed first so
+    // its DOM nodes appear above the HUD's stacked sections.
+    this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);
+    this.sidebar.addSeparator();
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,
@@ -357,8 +363,6 @@ export class Engine {
         return { avail: stats.seatsAvail, total: stats.seatsTotal };
       },
     });
-    this.sidebar.addSeparator();
-    this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
