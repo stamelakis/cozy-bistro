@@ -1589,6 +1589,24 @@ export class SpacetimeClient {
    * "stop cheating" fix) ships in a follow-up — H.37 adds a recipe
    * → ingredient lookup so auto_claim_queued_tickets can decrement
    * autonomously. */
+  /** Phase I.1 (H.48d) — Snapshot every pantry_stock row for this
+   * restaurant.  Used by CookingSystem.restorePantryFromCloud on
+   * connect so local pantry counts match server reality (server may
+   * have consumed ingredients via H.37 + restocked via H.41 during
+   * the offline window).  Returns empty when not connected. */
+  listPantryStock(): { ingredientId: string; quantity: number }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: { ingredientId: string; quantity: number }[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const p of this.conn.db.pantry_stock.iter()) {
+        if (p.restaurantId !== rid) continue;
+        out.push({ ingredientId: p.ingredientId, quantity: p.quantity });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
   bumpPantryStock(ingredientId: string, delta: number): void {
     if (!this.conn || this.restaurantId == null) return;
     if (delta === 0 || !ingredientId) return;

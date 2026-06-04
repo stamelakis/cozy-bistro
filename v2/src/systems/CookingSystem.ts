@@ -531,6 +531,43 @@ export class CookingSystem {
     this.errandInTransit = {};
   }
 
+  /** Phase I.1 (H.48d) — Override local pantry counts with cloud
+   * pantry_stock values.  Called by Engine on subscription ready,
+   * AFTER load() seeds from the save.  Cloud has the true state
+   * (server may have consumed via H.37 + restocked via H.41 during
+   * offline play); local save is a snapshot from autosave time.
+   *
+   * Idempotent — if cloud and local agree (typical foreground
+   * mid-session), it's a no-op write.  Skips when not connected. */
+  restorePantryFromCloud(): void {
+    if (!this.cloud) return;
+    const rows = this.cloud.listPantryStock();
+    if (rows.length === 0) {
+      console.log("[H.48d] restorePantryFromCloud: no cloud pantry_stock rows");
+      return;
+    }
+    let updated = 0;
+    for (const row of rows) {
+      const stock = this.pantry.find((s) => s.id === row.ingredientId);
+      if (stock) {
+        if (stock.quantity !== row.quantity) {
+          stock.quantity = row.quantity;
+          updated += 1;
+        }
+      } else {
+        // Cloud has an ingredient the local pantry didn't initialize
+        // (e.g. an H.41 restock added stock for a new ingredient).
+        // Append it — name defaults to capitalized id since the cloud
+        // doesn't carry display strings; the local catalog usually
+        // overrides anyway.
+        const name = row.ingredientId.charAt(0).toUpperCase() + row.ingredientId.slice(1);
+        this.pantry.push({ id: row.ingredientId, name, quantity: row.quantity });
+        updated += 1;
+      }
+    }
+    console.log(`[H.48d] restorePantryFromCloud: ${updated} pantry entries reconciled (cloud had ${rows.length} rows)`);
+  }
+
   /** Kept for backwards compat with any external callers — equivalent to filtering by getUnlockedRecipeIds(). */
   getAvailableRecipes(unlockedRecipeIds: string[]): typeof recipes {
     return recipes.filter((recipe) => unlockedRecipeIds.includes(recipe.id));

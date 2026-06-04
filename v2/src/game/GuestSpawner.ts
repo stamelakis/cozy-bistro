@@ -1272,6 +1272,19 @@ export class GuestSpawner {
     return undefined;
   }
 
+  /** Reverse of lookupGuestServerId: given a server-side u64 guest id,
+   * return the matching local guest's string id (or undefined when
+   * the guest isn't represented locally, e.g. the cloud row points
+   * at a guest the H.47 hydrate hadn't yet imported).  Used by
+   * StaffRouter.hydrateTicketsFromCloud to map active_ticket.guest_id
+   * back to a local Guest. */
+  findLocalGuestIdByServerId(serverId: bigint): string | undefined {
+    for (const g of this.guests) {
+      if (g.serverMirrorId === serverId) return g.id;
+    }
+    return undefined;
+  }
+
   // ======================================================================
   //              Phase I.1 — H.47 cloud hydrate on reconnect
   // ======================================================================

@@ -1201,6 +1201,14 @@ export class Engine {
         // during the offline window).
         void this.syncStaffToHeadcount().then(() => {
           this.router?.hydrateFromCloud();
+          // Phase I.1 (H.48b) — once staff are hydrated AND H.47 has
+          // imported any cloud-only guests, reconstruct local tickets
+          // from active_ticket.  Skips tickets whose guest_id has no
+          // matching local guest (their guest was server-settled
+          // before reconnect).
+          this.router?.hydrateTicketsFromCloud(
+            (serverId) => this.spawner?.findLocalGuestIdByServerId(serverId),
+          );
         });
       } else {
         console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
@@ -1701,6 +1709,12 @@ export class Engine {
         this.game.dishware.restoreFromCloud();
         this.game.dishware.subscribeToCloudChanges();
       }
+      // Phase I.1 (H.48d) — same pattern for pantry.  H.36 pantry
+      // mirror gives the server live counts (incl. H.41 restock during
+      // offline); save's ingredient list might be stale.  Cloud wins
+      // post-load — pantry counts get reconciled to whatever the
+      // server has.
+      this.game.cooking.restorePantryFromCloud();
       // Render the rest of the city — every OTHER player's plot
       // gets a small Greek-Island shell so the world reads as
       // multiplayer even before we ship per-other-restaurant

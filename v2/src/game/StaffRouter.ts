@@ -4,6 +4,7 @@ import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
+import { recipes } from "../data/recipes";
 
 /**
  * Drives staff (chef + waiter) movement & state machines so they actually
@@ -708,6 +709,79 @@ export class StaffRouter {
     for (const w of this.waiters) if (w.memberId === memberId) return w;
     for (const b of this.barmen) if (b.memberId === memberId) return b;
     return undefined;
+  }
+
+  /** Phase I.1 (H.48b) — Reconstruct local Ticket rows from cloud's
+   * active_ticket table.  Bridges the gap between save (which has
+   * tickets at the last autosave time — potentially stale or absent
+   * if the server cooked them through during offline) and the live
+   * server state.
+   *
+   * Caller supplies a guestServerId → localId lookup (the GuestSpawner
+   * owns the mapping); rows whose cloud guest_id has no matching
+   * local guest are skipped (their guest was either already settled
+   * or doesn't exist on this client). */
+  hydrateTicketsFromCloud(
+    guestLocalIdByServerId: (serverId: bigint) => string | undefined,
+  ): void {
+    if (!this.cloud) return;
+    const rows = this.cloud.listActiveTickets();
+    if (rows.length === 0) {
+      console.log("[H.48b] hydrateTicketsFromCloud: no cloud active_ticket rows");
+      return;
+    }
+    // Build local server-id set so we don't double-import.
+    const localServerIds = new Set<bigint>();
+    for (const t of this.tickets) {
+      if (t.serverMirrorId != null) localServerIds.add(t.serverMirrorId);
+    }
+    let imported = 0;
+    let skippedNoGuest = 0;
+    for (const row of rows) {
+      if (localServerIds.has(row.id)) continue;
+      const localGuestId = guestLocalIdByServerId(row.guestId);
+      if (!localGuestId) {
+        skippedNoGuest += 1;
+        continue;
+      }
+      // Look up recipe for the base cook time + appliance fallback.
+      const recipe = recipes.find((r) => r.id === row.recipeId);
+      const appliance = recipe?.appliances?.[0]
+        ?? recipe?.stationNeeded
+        ?? "stove";
+      const baseCookSeconds = recipe?.preparationTimeSeconds ?? 5;
+      // Map cloud ticket state to local TicketState.  Server has
+      // "queued"/"cooking"/"ready"/"delivering"; local has the same
+      // set + "delivered" terminal which the server reaches by
+      // deleting the row (so we never see it here).
+      const state: TicketState =
+        (row.state === "queued" || row.state === "cooking"
+         || row.state === "ready" || row.state === "delivering")
+          ? row.state : "queued";
+      const ticket: Ticket = {
+        id: `cloud-tk-${row.id}`,
+        guestId: localGuestId,
+        recipeId: row.recipeId,
+        state,
+        seatPos: new THREE.Vector2(row.seatX, row.seatZ),
+        clock: Number(row.stateClockMs) / 1000,
+        baseCookSeconds,
+        cookSeconds: Number(row.cookSeconds) / 1000 || baseCookSeconds,
+        appliance,
+        seatFloor: row.seatFloor,
+        pickupPos: new THREE.Vector2(row.pickupX, row.pickupZ),
+        pickupFloor: row.pickupFloor,
+        seatAtBar: row.seatAtBar,
+        assignedChefId: row.assignedChefId || null,
+        serverMirrorId: row.id,
+      };
+      this.tickets.push(ticket);
+      imported += 1;
+    }
+    console.log(
+      `[H.48b] hydrateTicketsFromCloud: ${imported} tickets imported` +
+      (skippedNoGuest > 0 ? ` (${skippedNoGuest} skipped — no matching local guest)` : ""),
+    );
   }
 
   /** Apply cloud staff_actor state to every matching local actor.
