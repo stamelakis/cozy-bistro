@@ -1949,6 +1949,31 @@ export class StaffRouter {
           break;
         }
         const ticket = this.tickets.find((t) => t.id === b.ticketId);
+        // Phase I — bar-only deliver dwell.  When cooking completes
+        // for a bar-seated customer, the upstream branch flips the
+        // ticket to "delivering" + sets the barman's pose to "carry"
+        // WITHOUT moving them away from the cook stand.  Dwell here
+        // for BAR_DELIVER_DWELL_SECONDS so the player visually
+        // registers the handoff, then mark delivered + return to
+        // idle.  Without this branch the desync guard below would
+        // bounce the barman home the instant ticket.state flipped
+        // off "cooking", and the "carry" pose would flash for one
+        // frame.  Dunnin: barmen "stay and operate from BEHIND the
+        // bar only" — this is the enforcement.
+        const BAR_DELIVER_DWELL_SECONDS = 0.8;
+        if (ticket && ticket.state === "delivering" && ticket.seatAtBar) {
+          if (b.clock >= BAR_DELIVER_DWELL_SECONDS) {
+            ticket.state = "delivered";
+            this.mirrorTicketDeliver(ticket);
+            b.ticketId = null;
+            b.target = this.pickBarmanIdleSpot(b);
+            this.planPath(b);
+            b.state = "returningHome";
+            b.character.action = "walk";
+            b.clock = 0;
+          }
+          break;
+        }
         // C5 — same defensive desync guard as the chef. Ticket
         // vanished OR bounced out of "cooking" → drop the station
         // and return home; the bar idle handler will re-pick it
@@ -1982,12 +2007,19 @@ export class StaffRouter {
             ticket.state = "delivering";
             ticket.clock = 0;
             this.mirrorTicketPickup(ticket);
-            // b.ticketId stays set — the movingToWork branch checks
-            // ticket.state === "delivering" to know it's a deliver leg.
-            b.target = ticket.seatPos.clone();
-            b.targetFloor = ticket.seatFloor;
-            this.planPath(b);
-            b.state = "movingToWork";
+            // Dunnin's design note (from in-game chat): barmen
+            // "stay and operate from BEHIND the bar only".  Don't
+            // walk around to ticket.seatPos (the customer's stool
+            // on the +Z side of the counter).  Instead, hold a
+            // brief "carry" pose at the cook stand — the drink
+            // visually appears at the seat via the customer's
+            // eat animation while the barman stays put.  The
+            // tickBarman working-branch deliver dwell handles the
+            // transition to "delivered" + returningHome below.
+            //
+            // No state flip needed — already in "working".  We just
+            // reset the clock so the deliver dwell timer is fresh,
+            // and switch the pose so the player gets a visual cue.
             b.character.action = "carry";
             b.clock = 0;
           } else {
