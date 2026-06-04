@@ -1192,7 +1192,16 @@ export class Engine {
         // characters (1 chef, 1 waiter, 1 errand) are already in the
         // world; if the save shows more, spawn the difference. Sync
         // tolerates a missing errand router internally.
-        void this.syncStaffToHeadcount();
+        //
+        // Phase I.1 (H.48) — once syncStaffToHeadcount has registered
+        // every saved staff member into the router, hydrate each one's
+        // STATE from cloud's staff_actor table.  Save brings back the
+        // last autosaved positions; cloud has the actual server-driven
+        // mid-trip positions (H.6/H.8/H.34/H.35 may have moved them
+        // during the offline window).
+        void this.syncStaffToHeadcount().then(() => {
+          this.router?.hydrateFromCloud();
+        });
       } else {
         console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
       }

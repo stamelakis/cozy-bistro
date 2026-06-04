@@ -685,6 +685,98 @@ export class StaffRouter {
     }
   }
 
+  // ======================================================================
+  //              Phase I.1 — H.48 cloud hydrate on reconnect
+  // ======================================================================
+  //
+  // Mirror-shape of H.47 but for staff actors.  The local sim seeds
+  // staff from the save's HiredStaffMember list (their last-saved
+  // positions and state), but the server's staff_actor table has the
+  // CURRENT state after any H.6/H.8/H.34/H.35 dispatches the server
+  // tick fired while we were offline.  hydrateFromCloud updates each
+  // local actor in place to match.
+
+  /** True once hydrateFromCloud has run at least once.  Re-runs are
+   * idempotent but tracked to keep the log noise down. */
+  private cloudHydratedStaff = false;
+
+  /** Look up a local actor across all role pools by HiredStaffMember
+   * id.  Returns undefined when the actor hasn't been added to the
+   * router yet (member hired but character GLB still loading). */
+  private findActorByMemberId(memberId: string): StaffActor | undefined {
+    for (const c of this.chefs) if (c.memberId === memberId) return c;
+    for (const w of this.waiters) if (w.memberId === memberId) return w;
+    for (const b of this.barmen) if (b.memberId === memberId) return b;
+    return undefined;
+  }
+
+  /** Apply cloud staff_actor state to every matching local actor.
+   * Save-restored positions get overwritten with whatever the
+   * server's mid-trip state was when we reconnected.  Mid-trip
+   * detail (wash trip dirty-piece lookup, ticket binding) is best-
+   * effort — Phase I.1 covers visual continuity; H.49 will close
+   * the remaining gaps via live subscriptions. */
+  hydrateFromCloud(): void {
+    if (!this.cloud) return;
+    if (this.cloudHydratedStaff) return;
+    const rows = this.cloud.listStaffActors();
+    this.cloudHydratedStaff = true;
+    if (rows.length === 0) {
+      console.log("[H.48] hydrateFromCloud: no cloud staff_actor rows to apply");
+      return;
+    }
+    let updated = 0;
+    let missing = 0;
+    for (const row of rows) {
+      const actor = this.findActorByMemberId(row.memberId);
+      if (!actor) {
+        missing += 1;
+        continue;
+      }
+      // ---- Body position + floor ----
+      actor.character.groundPos.set(row.x, row.z);
+      actor.currentFloor = row.floor;
+      actor.target.set(row.targetX, row.targetZ);
+      actor.targetFloor = row.targetFloor;
+      // Re-parent the character to its current storey so visit-mode
+      // -style floor focus shows them on the right slab.
+      if (this.reparentCharacter && row.floor > 0) {
+        this.reparentCharacter(actor.character, row.floor);
+      }
+      // ---- State machine ----
+      const cloudState = row.state;
+      if (cloudState === "idle" || cloudState === "movingToWork"
+          || cloudState === "working" || cloudState === "returningHome") {
+        actor.state = cloudState;
+      } else {
+        actor.state = "idle"; // unknown state defaults safe
+      }
+      // ---- Work assignment ----
+      actor.ticketId = row.ticketId != null
+        ? `cloud-tk-${row.ticketId}`
+        : null;
+      if (row.assignedStoveUid && (actor.role === "chef" || actor.role === "barman")) {
+        actor.assignedStoveUid = row.assignedStoveUid;
+      }
+      // ---- Wash trip ----
+      // Best-effort: cloud only exposes the station uid + phase.  We
+      // can't reconstruct the full WashTrip (needs dirty piece +
+      // station def_id + position + dwell).  Leave null and let the
+      // next StaffRouter dispatch tick re-claim if appropriate.
+      if (actor.role === "waiter") {
+        actor.washTrip = null;
+      }
+      // ---- Action / animation ----
+      actor.character.action = (actor.state === "idle"
+                                || actor.state === "returningHome") ? "idle" : "walk";
+      updated += 1;
+    }
+    console.log(
+      `[H.48] hydrateFromCloud: ${updated} staff actors updated from cloud` +
+      (missing > 0 ? ` (${missing} cloud rows skipped — local actor not found)` : ""),
+    );
+  }
+
   /** Append a chef to the pool. Their current ground position becomes home. */
   addChef(char: AnimatedCharacter, memberId: string, homeFloor = 0): void {
     this.cacheFeetLift(char, homeFloor);
