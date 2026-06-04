@@ -55,6 +55,10 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
         // H.60 — rating history starts empty (None); client pushes
         // the full snapshot on every recordRating.
         cloud_rating_history_csv: None,
+        // H.61 + H.63 — transaction log + day history start empty;
+        // foreground client pushes periodically.
+        cloud_transaction_log_json: None,
+        cloud_day_history_json: None,
     });
     // Boot the simulation tick for this restaurant. Idempotent; skips
     // if a schedule row already exists for the id (e.g. someone

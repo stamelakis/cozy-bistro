@@ -37,4 +37,6 @@ export default __t.row({
   cloudDailyRevenueCents: __t.i64().name("cloud_daily_revenue_cents"),
   cloudDailyExpensesCents: __t.i64().name("cloud_daily_expenses_cents"),
   cloudRatingHistoryCsv: __t.option(__t.string()).name("cloud_rating_history_csv"),
+  cloudTransactionLogJson: __t.option(__t.string()).name("cloud_transaction_log_json"),
+  cloudDayHistoryJson: __t.option(__t.string()).name("cloud_day_history_json"),
 });

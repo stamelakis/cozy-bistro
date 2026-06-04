@@ -78,6 +78,7 @@ import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
+import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
 import SellFurnitureReducer from "./sell_furniture_reducer";
@@ -85,9 +86,11 @@ import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetActiveMenuReducer from "./set_active_menu_reducer";
+import SetCloudDayHistoryReducer from "./set_cloud_day_history_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
 import SetCloudPayrollRateReducer from "./set_cloud_payroll_rate_reducer";
 import SetCloudRatingHistoryReducer from "./set_cloud_rating_history_reducer";
+import SetCloudTransactionLogReducer from "./set_cloud_transaction_log_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
@@ -658,6 +661,7 @@ const reducersSchema = __reducers(
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),
+  __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
   __reducerSchema("sell_furniture", SellFurnitureReducer),
@@ -665,9 +669,11 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_active_menu", SetActiveMenuReducer),
+  __reducerSchema("set_cloud_day_history", SetCloudDayHistoryReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
   __reducerSchema("set_cloud_payroll_rate", SetCloudPayrollRateReducer),
   __reducerSchema("set_cloud_rating_history", SetCloudRatingHistoryReducer),
+  __reducerSchema("set_cloud_transaction_log", SetCloudTransactionLogReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),

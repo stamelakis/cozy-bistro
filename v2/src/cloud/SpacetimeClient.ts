@@ -720,6 +720,89 @@ export class SpacetimeClient {
     }
   }
 
+  /** H.61 — Push the EconomySystem transaction log snapshot.  Caller
+   * passes the array; we cap at last 100, JSON-encode, send.  The
+   * server is idempotent on identical content. */
+  setCloudTransactionLog(
+    entries: readonly { at: number; transaction: string; amount: number; balance: number }[],
+  ): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      const trimmed = entries.length > 100 ? entries.slice(-100) : entries;
+      const json = JSON.stringify(trimmed);
+      // Bail if the encoded form exceeds the server cap.  Shouldn't
+      // happen with 100 entries (~10KB worst case) but be safe.
+      if (json.length > 16000) return;
+      this.conn.reducers.setCloudTransactionLog({
+        restaurantId: this.restaurantId,
+        json,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setCloudTransactionLog failed:", e);
+    }
+  }
+
+  /** H.61 — Read the persisted transaction log off Restaurant. */
+  getCloudTransactionLog(): { at: number; transaction: string; amount: number; balance: number }[] | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return null;
+      const json = row.cloudTransactionLogJson;
+      if (json == null || json === "") return null;
+      const parsed = JSON.parse(json);
+      if (!Array.isArray(parsed)) return null;
+      // Defensive shape check — drop entries missing required fields.
+      return parsed.filter((e) =>
+        e && typeof e.at === "number"
+          && typeof e.transaction === "string"
+          && typeof e.amount === "number"
+          && typeof e.balance === "number");
+    } catch (e) {
+      console.warn("[Cloud] getCloudTransactionLog failed:", e);
+      return null;
+    }
+  }
+
+  /** H.63 — Push the DayHistory ring buffer snapshot.  Caller passes
+   * the array; we cap at 60, JSON-encode, send.  Fires once per
+   * Game.rolloverDay. */
+  setCloudDayHistory(
+    days: readonly unknown[],
+  ): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      const trimmed = days.length > 60 ? days.slice(-60) : days;
+      const json = JSON.stringify(trimmed);
+      if (json.length > 16000) return;
+      this.conn.reducers.setCloudDayHistory({
+        restaurantId: this.restaurantId,
+        json,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setCloudDayHistory failed:", e);
+    }
+  }
+
+  /** H.63 — Read the persisted day history off Restaurant.  Returns
+   * the raw JSON-parsed array; caller (DayHistory.hydrate) does the
+   * shape coercion. */
+  getCloudDayHistory(): unknown[] | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    try {
+      const row = this.conn.db.restaurant.id.find(this.restaurantId);
+      if (!row) return null;
+      const json = row.cloudDayHistoryJson;
+      if (json == null || json === "") return null;
+      const parsed = JSON.parse(json);
+      if (!Array.isArray(parsed)) return null;
+      return parsed;
+    } catch (e) {
+      console.warn("[Cloud] getCloudDayHistory failed:", e);
+      return null;
+    }
+  }
+
   /** H.60 — Read the persisted rating history off Restaurant.
    * Engine calls this on subscription ready and overrides the local
    * ReputationSystem's list when cloud has one.  Returns null when

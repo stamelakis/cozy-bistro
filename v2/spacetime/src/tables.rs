@@ -357,6 +357,30 @@ pub struct Restaurant {
     /// list during the deprecation window.
     #[default(None::<String>)]
     pub cloud_rating_history_csv: Option<String>,
+
+    /// Phase H.61 — JSON-encoded array of the last ~100 transaction
+    /// log entries (each: {at, transaction, amount, balance}).
+    /// EconomySystem pushes the snapshot periodically (5 s cadence
+    /// like cloud_money / cloud_daily_totals) so we don't fire a
+    /// reducer on every individual transaction.
+    ///
+    /// Server caps this at 16 KB to bound row size; the client
+    /// caps the array at ~100 entries before serializing.
+    /// Replaces save_snapshot.transactionLog as the canonical
+    /// cross-device source for the ledger view.
+    #[default(None::<String>)]
+    pub cloud_transaction_log_json: Option<String>,
+
+    /// Phase H.63 — JSON-encoded DayHistory ring buffer (last 60
+    /// daily summaries).  Each entry: {dayNumber, served, lost,
+    /// revenue, expenses, net, rating, weatherEmoji, weatherLabel}.
+    /// Foreground client pushes on every Game.rolloverDay (low
+    /// frequency — once per 12 real-minute day).
+    ///
+    /// Replaces save_snapshot.dayHistory as the canonical
+    /// cross-device source for the stats modal's trend charts.
+    #[default(None::<String>)]
+    pub cloud_day_history_json: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

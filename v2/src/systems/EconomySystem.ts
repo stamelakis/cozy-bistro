@@ -12,6 +12,16 @@ export class EconomySystem {
   private dailyRevenueTotal = 0;
   private dailyExpensesTotal = 0;
 
+  /** Phase I.5 (H.61) — cloud handle for periodic transaction-log
+   * mirror.  Engine wires this on connect.  Push cadence is driven
+   * from Engine.update's daySyncAccum tick (5 s), NOT every record
+   * call — busy play can fire many transactions per second.
+   *
+   * `transactionLogDirty` is set whenever a record fires so the
+   * sync tick knows whether to bother pushing. */
+  cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  private transactionLogDirty = false;
+
   constructor(startingMoney = 0) {
     // Default is 0 because the Engine's enterGame flow grants the
     // size-specific starter cash on first claim (small=$1000,
@@ -122,6 +132,34 @@ export class EconomySystem {
     if (this.transactionLog.length > maxTransactionLogEntries) {
       this.transactionLog = this.transactionLog.slice(-maxTransactionLogEntries);
     }
+    // H.61 — mark dirty so the next Engine sync tick pushes the
+    // snapshot to cloud.  Don't push here — busy play can fire
+    // many transactions per second.
+    this.transactionLogDirty = true;
+  }
+
+  /** Phase I.5 (H.61) — Push the transaction log snapshot to cloud
+   * if dirty.  Called from Engine's daySyncAccum tick (5 s cadence,
+   * piggybacking on syncCloudMoney / syncCloudDailyTotals).  No-op
+   * when no transactions have been recorded since last push. */
+  syncTransactionLogToCloud(): void {
+    if (!this.cloud) return;
+    if (!this.transactionLogDirty) return;
+    this.transactionLogDirty = false;
+    // Last 100 is plenty for the ledger view.  Server caps at
+    // 16 KB; client caps the array before serializing.
+    this.cloud.setCloudTransactionLog(this.transactionLog.slice(-100));
+  }
+
+  /** Phase I.5 (H.61) — Override the local log from a fresh cloud
+   * snapshot.  Engine calls on subscription ready; cloud is
+   * authoritative if it has entries. */
+  applyCloudTransactionLog(entries: readonly TransactionLogEntry[]): void {
+    this.transactionLog = entries
+      .filter((e) => Number.isFinite(e.at) && typeof e.transaction === "string"
+        && Number.isFinite(e.amount) && Number.isFinite(e.balance))
+      .slice(-maxTransactionLogEntries);
+    this.transactionLogDirty = false;
   }
 
   /** Restore economy state from a save snapshot. Includes money — the

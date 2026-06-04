@@ -1080,6 +1080,34 @@ export class Engine {
         console.warn("[Engine] H.60 rating-history hydrate failed:", e);
       }
 
+      // H.61 — wire EconomySystem's cloud handle (transaction log
+      // mirror).  Push cadence is driven from Engine.update's
+      // daySyncAccum tick (every 5 s), not on every recordTransaction
+      // — busy play can fire many transactions per second.
+      this.game.economy.cloud = this.cloud;
+      try {
+        const cloudLog = this.cloud.getCloudTransactionLog();
+        if (cloudLog && cloudLog.length > 0) {
+          this.game.economy.applyCloudTransactionLog(cloudLog);
+          console.log(`[H.61] transaction-log hydrate: ${cloudLog.length} entries imported from cloud`);
+        }
+      } catch (e) {
+        console.warn("[Engine] H.61 transaction-log hydrate failed:", e);
+      }
+
+      // H.63 — wire DayHistory's cloud handle so every Game.rolloverDay
+      // mirrors the ring buffer.  Hydrate from cloud if populated.
+      this.game.history.cloud = this.cloud;
+      try {
+        const cloudDays = this.cloud.getCloudDayHistory();
+        if (cloudDays && cloudDays.length > 0) {
+          this.game.history.applyCloudSnapshot(cloudDays);
+          console.log(`[H.63] day-history hydrate: ${cloudDays.length} days imported from cloud`);
+        }
+      } catch (e) {
+        console.warn("[Engine] H.63 day-history hydrate failed:", e);
+      }
+
       // H.41 — drain any auto-shop debt the server accrued while
       // this client was offline.  Server has been billing
       // Restaurant.pending_restock_cost_cents on every backgrounded
@@ -2378,6 +2406,11 @@ export class Engine {
         this.game.economy.getDailyRevenue(),
         this.game.economy.getDailyExpenses(),
       );
+      // H.61 — push the transaction log snapshot if dirty.  No-op
+      // when no transactions have been recorded since the last
+      // push.  Same cadence as the money / daily-totals sync to
+      // avoid multiplying network calls.
+      this.game.economy.syncTransactionLogToCloud();
     }
     this.router?.update(dt);
     this.errand?.update(dt);

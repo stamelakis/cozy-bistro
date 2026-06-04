@@ -362,6 +362,8 @@ export const Restaurant = __t.object("Restaurant", {
   cloudDailyRevenueCents: __t.i64(),
   cloudDailyExpensesCents: __t.i64(),
   cloudRatingHistoryCsv: __t.option(__t.string()),
+  cloudTransactionLogJson: __t.option(__t.string()),
+  cloudDayHistoryJson: __t.option(__t.string()),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

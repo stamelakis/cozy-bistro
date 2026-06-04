@@ -548,6 +548,65 @@ pub fn set_cloud_rating_history(
     Ok(())
 }
 
+/// Phase H.61 — Mirror the EconomySystem transaction log as a
+/// JSON-encoded array.  Foreground client pushes periodically
+/// (every ~5 s) — NOT on every individual transaction, since
+/// transactions can fire many times per second during busy play.
+/// Server caps the column at 16 KB; client caps the array at the
+/// last 100 entries before serializing.  Idempotent on identical
+/// content.  Owner-only.
+#[reducer]
+pub fn set_cloud_transaction_log(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    json: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set transaction log".into());
+    }
+    if json.len() > 16384 {
+        return Err("transaction log too large (>16KB)".into());
+    }
+    let current = r.cloud_transaction_log_json.as_deref().unwrap_or("");
+    if current == json { return Ok(()); }
+    let new_val = if json.is_empty() { None } else { Some(json) };
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_transaction_log_json: new_val,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase H.63 — Mirror the DayHistory ring buffer as a JSON-encoded
+/// array.  Client pushes on every Game.rolloverDay (once per 12-min
+/// game day; low frequency).  Server caps at 16 KB; client caps at
+/// 60 entries.  Owner-only.  Idempotent.
+#[reducer]
+pub fn set_cloud_day_history(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    json: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set day history".into());
+    }
+    if json.len() > 16384 {
+        return Err("day history too large (>16KB)".into());
+    }
+    let current = r.cloud_day_history_json.as_deref().unwrap_or("");
+    if current == json { return Ok(()); }
+    let new_val = if json.is_empty() { None } else { Some(json) };
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_day_history_json: new_val,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.30 — Foreground client periodically yokes the cloud's
 /// day_elapsed_ms to its local value so the cloud clock doesn't drift
 /// out from under the player while the tab is alive. Also clears
