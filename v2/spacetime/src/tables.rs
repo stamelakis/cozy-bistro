@@ -1271,6 +1271,24 @@ pub struct DishwasherBatch {
     pub plates: u32,
     pub glasses: u32,
     pub cycle_time_remaining_ms: i64,
+
+    /// Phase I (H.93) — Tier of every plate / glass inside the
+    /// batch, encoded as a CSV (e.g. "5,5,3" = three plates: two T5
+    /// + one T3). plates_tiers.split(',').count() == plates;
+    /// glasses_tiers analogous for glasses. Preserves tier through
+    /// the wash cycle so a T5 dish loaded comes out as a T5 dish
+    /// (vs. the H.88 behaviour where flush picked "any existing
+    /// tier" and a T5 wash could degrade to T1 if the pool's last
+    /// T5 row was deleted between load and flush).
+    ///
+    /// Migration-safe: Option<String> with #[default(None)] is
+    /// non-destructive for existing rows. When None we fall back to
+    /// the legacy "pick best existing tier" behaviour so pre-H.93
+    /// rows still flush sensibly.
+    #[default(None::<String>)]
+    pub plates_tiers: Option<String>,
+    #[default(None::<String>)]
+    pub glasses_tiers: Option<String>,
 }
 
 /// Phase H.36 — per-restaurant pantry stock mirror. One row per

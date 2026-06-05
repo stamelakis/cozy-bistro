@@ -56,6 +56,12 @@ export interface DishwasherBatchRow {
   plates: number;
   glasses: number;
   cycleTimeRemainingMs: bigint;
+  /** H.93 — per-piece tier CSV. "5,5,3" = three plates: two T5, one
+   * T3. Length matches `plates`. Empty when the batch is from a
+   * pre-H.93 row that didn't track tiers. */
+  platesTiers: string;
+  /** H.93 — analogous to platesTiers but for glasses. */
+  glassesTiers: string;
 }
 
 /** Public shape of one staff_actor row — one per active staff member.
@@ -2164,6 +2170,11 @@ export class SpacetimeClient {
           plates: b.plates,
           glasses: b.glasses,
           cycleTimeRemainingMs: b.cycleTimeRemainingMs,
+          // H.93 — server field is Option<String>; the generated SDK
+          // surfaces null/undefined for None. Empty string at the
+          // call site means "no tier info, fall back to legacy pick".
+          platesTiers: (b as { platesTiers?: string | null }).platesTiers ?? "",
+          glassesTiers: (b as { glassesTiers?: string | null }).glassesTiers ?? "",
         });
       }
     } catch { /* table not wired yet */ }
@@ -2234,13 +2245,24 @@ export class SpacetimeClient {
     if (!this.conn) return;
     const rid = restaurantId ?? this.restaurantId;
     if (rid == null) return;
-    type ServerRow = { furnitureUid: string; restaurantId: bigint; defId: string; plates: number; glasses: number; cycleTimeRemainingMs: bigint };
+    type ServerRow = {
+      furnitureUid: string;
+      restaurantId: bigint;
+      defId: string;
+      plates: number;
+      glasses: number;
+      cycleTimeRemainingMs: bigint;
+      platesTiers?: string | null;
+      glassesTiers?: string | null;
+    };
     const toClientRow = (r: ServerRow): DishwasherBatchRow => ({
       furnitureUid: r.furnitureUid,
       defId: r.defId,
       plates: r.plates,
       glasses: r.glasses,
       cycleTimeRemainingMs: r.cycleTimeRemainingMs,
+      platesTiers: r.platesTiers ?? "",
+      glassesTiers: r.glassesTiers ?? "",
     });
     try {
       if (handlers.onInsert) {
@@ -2266,13 +2288,24 @@ export class SpacetimeClient {
     }
   }
 
-  /** Upsert one dishwasher's mid-cycle state. */
-  updateDishwasherBatch(furnitureUid: string, defId: string, plates: number, glasses: number, cycleTimeRemainingMs: bigint): void {
+  /** Upsert one dishwasher's mid-cycle state. H.93 adds the tier
+   * CSVs so the wash cycle preserves per-plate tier (was being lost
+   * pre-H.93 — T5 wash returned T1). */
+  updateDishwasherBatch(
+    furnitureUid: string,
+    defId: string,
+    plates: number,
+    glasses: number,
+    cycleTimeRemainingMs: bigint,
+    platesTiers: string = "",
+    glassesTiers: string = "",
+  ): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
       this.conn.reducers.updateDishwasherBatch({
         restaurantId: this.restaurantId,
         furnitureUid, defId, plates, glasses, cycleTimeRemainingMs,
+        platesTiers, glassesTiers,
       });
     } catch (e) {
       console.warn("[Cloud] updateDishwasherBatch failed:", e);

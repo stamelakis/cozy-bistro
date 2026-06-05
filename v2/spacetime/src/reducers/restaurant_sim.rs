@@ -1149,14 +1149,46 @@ fn tick_dishwasher_batch(ctx: &ReducerContext, furniture_uid: &str, restaurant_i
         return;
     }
     // Cycle finished — convert each loaded piece to a clean pool entry,
-    // then delete the batch row.
-    for _ in 0..b.plates { flush_one_dish(ctx, restaurant_id, "plate"); }
-    for _ in 0..b.glasses { flush_one_dish(ctx, restaurant_id, "glass"); }
+    // preserving its tier via the H.93 CSV. Pre-H.93 batches with
+    // plates_tiers=None fall back to "highest existing tier" inside
+    // flush_one_dish (legacy behaviour).
+    let plate_tiers = parse_tier_csv(b.plates_tiers.as_deref());
+    let glass_tiers = parse_tier_csv(b.glasses_tiers.as_deref());
+    for i in 0..b.plates as usize {
+        flush_one_dish(ctx, restaurant_id, "plate", plate_tiers.get(i).copied());
+    }
+    for i in 0..b.glasses as usize {
+        flush_one_dish(ctx, restaurant_id, "glass", glass_tiers.get(i).copied());
+    }
     ctx.db.dishwasher_batch().furniture_uid().delete(furniture_uid.to_string());
     log::info!(
         "dishwasher {} cycle finished: flushed {} plate(s) + {} glass(es) to clean pool",
         furniture_uid, b.plates, b.glasses,
     );
+}
+
+/// Phase I (H.93) — Parse a comma-separated list of u32 tier
+/// numbers (e.g. "5,5,3" → [5, 5, 3]). Empty / None / unparseable
+/// entries are silently skipped — the loaded count is the source of
+/// truth, and missing tier entries get a None hint in flush_one_dish.
+fn parse_tier_csv(csv: Option<&str>) -> Vec<u32> {
+    let Some(s) = csv else { return Vec::new() };
+    s.split(',')
+        .filter_map(|t| t.trim().parse::<u32>().ok())
+        .filter(|t| (1..=5).contains(t))
+        .collect()
+}
+
+/// Phase I (H.93) — Append one tier to an existing tier CSV.
+/// `None` / empty input produces `"<tier>"`; otherwise produces
+/// `"<existing>,<tier>"`. Used by load paths to extend the batch's
+/// tier list one piece at a time.
+fn append_tier_csv(existing: Option<&str>, tier: u32) -> String {
+    match existing {
+        None => tier.to_string(),
+        Some(s) if s.is_empty() => tier.to_string(),
+        Some(s) => format!("{},{}", s, tier),
+    }
 }
 
 /// Phase H.22 — accumulate the just-despawned guest's approximate
@@ -3029,16 +3061,28 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     apply_pool_delta(ctx, rid, &kind, tier, 0, -1, "try_server_wash_load");
 
     // Load into the dishwasher's batch (insert if first piece).
+    // Append the tier to the kind-appropriate CSV so flush at cycle
+    // end can preserve it (H.93).
     if let Some(b) = ctx.db.dishwasher_batch().furniture_uid().find(dw.uid.clone()) {
         let new_plates = if kind == "plate" { b.plates + 1 } else { b.plates };
         let new_glasses = if kind == "glass" { b.glasses + 1 } else { b.glasses };
+        let new_plate_csv = if kind == "plate" {
+            Some(append_tier_csv(b.plates_tiers.as_deref(), tier))
+        } else { b.plates_tiers.clone() };
+        let new_glass_csv = if kind == "glass" {
+            Some(append_tier_csv(b.glasses_tiers.as_deref(), tier))
+        } else { b.glasses_tiers.clone() };
         ctx.db.dishwasher_batch().furniture_uid().update(DishwasherBatch {
             plates: new_plates,
             glasses: new_glasses,
             cycle_time_remaining_ms: b.cycle_time_remaining_ms.saturating_add(wash_extension_ms),
+            plates_tiers: new_plate_csv,
+            glasses_tiers: new_glass_csv,
             ..b
         });
     } else {
+        let plate_csv = if kind == "plate" { Some(tier.to_string()) } else { None };
+        let glass_csv = if kind == "glass" { Some(tier.to_string()) } else { None };
         ctx.db.dishwasher_batch().insert(DishwasherBatch {
             furniture_uid: dw.uid.clone(),
             restaurant_id: rid,
@@ -3046,6 +3090,8 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
             plates: if kind == "plate" { 1 } else { 0 },
             glasses: if kind == "glass" { 1 } else { 0 },
             cycle_time_remaining_ms: wash_extension_ms,
+            plates_tiers: plate_csv,
+            glasses_tiers: glass_csv,
         });
     }
     log::info!(
@@ -3064,23 +3110,29 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
 /// consistent across edge cases). Mirrors update_dishware_pool's
 /// delete-on-zero semantics: we never insert "0/0" rows, but the
 /// flush always produces at least 1 clean so a row exists post-call.
-fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str) {
-    // Phase I (H.88 + H.91) — ONLY increment clean, via the central
-    // mutator. The corresponding dirty decrement happened at LOAD
-    // time (try_server_wash_load on the server, loadDishwasher on
-    // the client). Tier choice: prefer the highest-tier row,
-    // biasing the freshly washed plate toward the player's nicest
-    // stock. Falls back to tier 1 if no rows exist for this kind.
-    let mut best_tier: u32 = 0;
-    let mut found = false;
-    for p in ctx.db.dishware_pool().restaurant_id().filter(restaurant_id) {
-        if p.kind != kind { continue; }
-        if !found || p.tier > best_tier {
-            best_tier = p.tier;
-            found = true;
+fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str, tier_hint: Option<u32>) {
+    // Phase I (H.93) — Use the tier the plate was loaded with
+    // (preserved through the wash cycle via dishwasher_batch's
+    // plates_tiers / glasses_tiers CSVs). Pre-H.93 batches don't
+    // carry tier info; in that case tier_hint=None and we fall
+    // back to the legacy "highest existing tier in the pool"
+    // heuristic. New batches always pass the precise tier so a T5
+    // wash returns a T5 plate, not a T1 one.
+    let tier = match tier_hint {
+        Some(t) if (1..=5).contains(&t) => t,
+        _ => {
+            let mut best_tier: u32 = 0;
+            let mut found = false;
+            for p in ctx.db.dishware_pool().restaurant_id().filter(restaurant_id) {
+                if p.kind != kind { continue; }
+                if !found || p.tier > best_tier {
+                    best_tier = p.tier;
+                    found = true;
+                }
+            }
+            if found { best_tier } else { 1 }
         }
-    }
-    let tier = if found { best_tier } else { 1 };
+    };
     apply_pool_delta(ctx, restaurant_id, kind, tier, 1, 0, "flush_one_dish");
 }
 
@@ -5857,6 +5909,11 @@ pub fn update_dishwasher_batch(
     plates: u32,
     glasses: u32,
     cycle_time_remaining_ms: i64,
+    // Phase I (H.93) — per-piece tier lists. CSV strings, "5,5,3"
+    // means three plates (T5, T5, T3). Empty string == "no tier
+    // info" — flush falls back to legacy tier picking for those.
+    plates_tiers: String,
+    glasses_tiers: String,
 ) -> Result<(), String> {
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
@@ -5876,6 +5933,8 @@ pub fn update_dishwasher_batch(
         plates,
         glasses,
         cycle_time_remaining_ms,
+        plates_tiers: if plates_tiers.is_empty() { None } else { Some(plates_tiers) },
+        glasses_tiers: if glasses_tiers.is_empty() { None } else { Some(glasses_tiers) },
     };
     if ctx.db.dishwasher_batch().furniture_uid().find(furniture_uid).is_some() {
         ctx.db.dishwasher_batch().furniture_uid().update(row);

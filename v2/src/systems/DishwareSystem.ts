@@ -27,6 +27,20 @@ import { isServerSim } from "../game/featureFlags";
  * tier reservePlate() / reserveGlass() pick first, so newer / shinier
  * dishware shows up on tables as soon as the player buys it.
  */
+/** Phase I (H.93) — Parse a comma-separated tier list (e.g. "5,5,3")
+ * into [5, 5, 3]. `expectedLength` pads with tier 1 when the CSV is
+ * shorter than expected (pre-H.93 batches with no tier info — the
+ * count is authoritative, the tiers default to T1). Trims excess
+ * entries beyond expected length. */
+function parseTierCsv(csv: string | undefined, expectedLength: number): number[] {
+  const raw = (csv ?? "").split(",")
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 5);
+  while (raw.length < expectedLength) raw.push(1);
+  raw.length = expectedLength;
+  return raw;
+}
+
 /** Per-dishwasher background batch state. Plates / glasses get loaded
  * by the waiter on a "drop and walk away" trip (short dwell); the
  * cycle clock counts down independently and flushes everything in the
@@ -40,6 +54,14 @@ interface DishwasherBatch {
   plates: number;
   glasses: number;
   cycleTimeRemaining: number;
+  /** H.93 — per-piece tier list, parallel to `plates` / `glasses`.
+   * loadDishwasher pushes the tier; flushBatchPiece pops one. The
+   * separate `plates` / `glasses` counts are kept for backwards
+   * compat with widgets that just want a total, but the tiered
+   * arrays are the source of truth. Length should always equal the
+   * count field. */
+  platesTiers: number[];
+  glassesTiers: number[];
 }
 
 /** Per-kind capacity inside one dishwasher. Same for regular and pro
@@ -139,7 +161,9 @@ export class DishwareSystem {
   }
 
   /** Push the current state of one dishwasher's batch to the cloud.
-   * Same delete-on-zero semantics — empty cycles drop the row. */
+   * Same delete-on-zero semantics — empty cycles drop the row.
+   * H.93 — Includes per-piece tier CSVs so the server preserves
+   * tier through the wash cycle. */
   private mirrorBatch(uid: string): void {
     if (this.suppressMirrorForReload) return;
     if (!isServerSim("dishware") || !this.cloud) return;
@@ -147,7 +171,7 @@ export class DishwareSystem {
     if (!batch) {
       // Local batch was cleared (cycle finished) — push an empty
       // update so the server deletes its row too.
-      this.cloud.updateDishwasherBatch(uid, "", 0, 0, BigInt(0));
+      this.cloud.updateDishwasherBatch(uid, "", 0, 0, BigInt(0), "", "");
       return;
     }
     this.cloud.updateDishwasherBatch(
@@ -156,6 +180,8 @@ export class DishwareSystem {
       batch.plates,
       batch.glasses,
       BigInt(Math.round(batch.cycleTimeRemaining * 1000)),
+      batch.platesTiers.join(","),
+      batch.glassesTiers.join(","),
     );
   }
 
@@ -224,6 +250,8 @@ export class DishwareSystem {
           plates: b.plates,
           glasses: b.glasses,
           cycleTimeRemaining: Number(b.cycleTimeRemainingMs) / 1000,
+          platesTiers: parseTierCsv(b.platesTiers, b.plates),
+          glassesTiers: parseTierCsv(b.glassesTiers, b.glasses),
         });
       }
     } finally {
@@ -304,6 +332,8 @@ export class DishwareSystem {
         plates: row.plates,
         glasses: row.glasses,
         cycleTimeRemaining: newRemaining,
+        platesTiers: parseTierCsv(row.platesTiers, row.plates),
+        glassesTiers: parseTierCsv(row.glassesTiers, row.glasses),
       });
     } finally {
       this.suppressMirrorForReload = false;
@@ -510,21 +540,28 @@ export class DishwareSystem {
     this.applyPoolDelta(kind, tier, 0, +1, "markDirty");
   }
 
-  /** Phase I (H.88) — Cycle-complete clean credit. Called once per
-   * loaded piece when a dishwasher batch finishes. Increments clean
-   * (highest tier with existing stock, biasing toward the player's
-   * nicest plates) WITHOUT touching dirty — the dirty decrement
-   * already happened at loadDishwasher time. Used by both the local
-   * update() cycle loop and conceptually mirrors the server's
-   * flush_one_dish. Falls back to tier 1 if no rows exist for this
-   * kind yet (cold pool). */
-  flushBatchPiece(kind: DishKind): void {
-    const pool = this.poolFor(kind);
-    let bestTier: number | null = null;
-    for (const [tier] of pool) {
-      if (bestTier === null || tier > bestTier) bestTier = tier;
+  /** Phase I (H.88 + H.93) — Cycle-complete clean credit. Called
+   * once per loaded piece when a dishwasher batch finishes.
+   * Increments clean at the SPECIFIC tier the piece was loaded
+   * with (via H.93's batch tier tracking) — preserves T5 → T5
+   * across a wash cycle instead of degrading to T1.
+   *
+   * `tierHint`: the tier the piece had when it was loaded. Pass
+   * undefined ONLY when the batch is from a pre-H.93 row (no tier
+   * info preserved); we fall back to "highest existing tier in
+   * pool" which is the legacy degradation behaviour. */
+  flushBatchPiece(kind: DishKind, tierHint?: number): void {
+    let tier: number;
+    if (tierHint !== undefined && tierHint >= 1 && tierHint <= 5) {
+      tier = tierHint;
+    } else {
+      const pool = this.poolFor(kind);
+      let bestTier: number | null = null;
+      for (const [t] of pool) {
+        if (bestTier === null || t > bestTier) bestTier = t;
+      }
+      tier = bestTier ?? 1;
     }
-    const tier = bestTier ?? 1;
     this.applyPoolDelta(kind, tier, +1, 0, "flushBatchPiece");
   }
 
@@ -799,14 +836,19 @@ export class DishwareSystem {
         continue;
       }
       // Cycle complete — all loaded pieces become clean simultaneously.
-      // Phase I (H.88) — Use flushBatchPiece (NOT washOne). The
-      // corresponding dirty decrement happened at loadDishwasher
-      // time (Model B), so doing dirty-- again here would double-
-      // decrement and lose a dish per cycle.
-      for (let i = 0; i < batch.plates; i += 1) this.flushBatchPiece("plate");
-      for (let i = 0; i < batch.glasses; i += 1) this.flushBatchPiece("glass");
+      // H.93 — flush each piece at the specific tier it was loaded
+      // with (taken from the batch's parallel tier arrays). Without
+      // this, a T5 plate could come out as T1.
+      for (let i = 0; i < batch.plates; i += 1) {
+        this.flushBatchPiece("plate", batch.platesTiers[i]);
+      }
+      for (let i = 0; i < batch.glasses; i += 1) {
+        this.flushBatchPiece("glass", batch.glassesTiers[i]);
+      }
       batch.plates = 0;
       batch.glasses = 0;
+      batch.platesTiers = [];
+      batch.glassesTiers = [];
       batch.cycleTimeRemaining = 0;
       this.mirrorBatch(uid); // empty → server deletes the row
     }
@@ -849,7 +891,10 @@ export class DishwareSystem {
   loadDishwasher(uid: string, defId: string, kind: DishKind): boolean {
     let batch = this.dishwasherBatches.get(uid);
     if (!batch) {
-      batch = { defId, plates: 0, glasses: 0, cycleTimeRemaining: 0 };
+      batch = {
+        defId, plates: 0, glasses: 0, cycleTimeRemaining: 0,
+        platesTiers: [], glassesTiers: [],
+      };
       this.dishwasherBatches.set(uid, batch);
     } else {
       // If the same uid somehow gets a different def (move / replace),
@@ -873,12 +918,19 @@ export class DishwareSystem {
     } else {
       // No matching dirty piece anywhere — load anyway (waiter
       // physically carries one). The flush at cycle end will create
-      // a clean piece without a matching dirty source; visually this
-      // is the server's "no dirty found, materialise a clean" path.
-      this.log(`loadDishwasher: no dirty ${kind} found in pool — loading anyway, flush will materialise a clean piece`);
+      // a clean piece without a matching dirty source. We default
+      // the tier to 1 in that case; flushBatchPiece will see the
+      // tier hint and materialise a T1 clean.
+      this.log(`loadDishwasher: no dirty ${kind} found in pool — loading anyway, flush will materialise a clean T1 piece`);
+      pulledTier = 1;
     }
-    if (kind === "plate") batch.plates += 1;
-    else batch.glasses += 1;
+    if (kind === "plate") {
+      batch.plates += 1;
+      batch.platesTiers.push(pulledTier);
+    } else {
+      batch.glasses += 1;
+      batch.glassesTiers.push(pulledTier);
+    }
     batch.cycleTimeRemaining += dishwasherWashPerItem(defId);
     this.mirrorBatch(uid);
     return true;
@@ -929,12 +981,19 @@ export class DishwareSystem {
       }
     }
     // Drain dishwasher batches → clean pool through the same
-    // flushBatchPiece path used at normal cycle completion.
+    // flushBatchPiece path used at normal cycle completion,
+    // preserving per-piece tier (H.93).
     for (const [uid, batch] of this.dishwasherBatches) {
-      for (let i = 0; i < batch.plates; i += 1) this.flushBatchPiece("plate");
-      for (let i = 0; i < batch.glasses; i += 1) this.flushBatchPiece("glass");
+      for (let i = 0; i < batch.plates; i += 1) {
+        this.flushBatchPiece("plate", batch.platesTiers[i]);
+      }
+      for (let i = 0; i < batch.glasses; i += 1) {
+        this.flushBatchPiece("glass", batch.glassesTiers[i]);
+      }
       batch.plates = 0;
       batch.glasses = 0;
+      batch.platesTiers = [];
+      batch.glassesTiers = [];
       batch.cycleTimeRemaining = 0;
       this.mirrorBatch(uid);
     }
