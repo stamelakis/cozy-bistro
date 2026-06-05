@@ -4048,25 +4048,17 @@ pub(crate) fn try_spawn_arrival_guest(
     door_x: f32,
     door_z: f32,
 ) -> bool {
-    // Phase I (H.86) — DISABLED at the source.
+    // Phase I (H.89) — RE-ENABLED with seat pre-assignment.
     //
-    // H.84 disabled try_server_spawn_guest (the restaurant_tick
-    // spawn loop), but try_arrival_handoff in pedestrians.rs ALSO
-    // calls into here when a pedestrian's walk-to-plot ends at an
-    // offline owner's door.  That call site bypassed H.84's gate
-    // and kept creating ghost guests (seat_uid="", invisible at
-    // the door) — exactly the rows the user saw on rid=1 after
-    // 24 h offline.
-    //
-    // Hard-stop the function until we port the client-side
-    // seat-picker logic to the server.  Both call sites
-    // (try_server_spawn_guest + try_arrival_handoff) get the same
-    // "no spawn" return value and skip cleanly.
-    let _ = (ctx, restaurant_id, variant, door_x, door_z);
-    return false;
+    // H.84/H.86 disabled this entirely because the previous version
+    // inserted with seat_uid="" and the client couldn't render those
+    // ghost guests. We now pick a free table via try_assign_seat_for
+    // BEFORE inserting; if no table is free we just don't spawn (no
+    // ghost row created). On success the guest's seat_uid +
+    // seat_x/z/floor are populated up front, so the client's H.47
+    // hydrate path renders them correctly the moment the player
+    // foregrounds.
 
-    #[allow(unreachable_code, dead_code)]
-    {
     /// Cap — don't pile up server-spawned guests past a sane limit.
     /// Matches the rough order of the foreground client's effective
     /// guest pool size; prevents a long-backgrounded tab with no
@@ -4078,6 +4070,18 @@ pub(crate) fn try_spawn_arrival_guest(
     if active_count >= MAX_ACTIVE_GUESTS {
         return false;
     }
+
+    // Seat pre-assignment — gates the spawn. No free table → no
+    // spawn. This is what was missing pre-H.89 and produced ghosts.
+    let Some((seat_uid, seat_x, seat_z, seat_floor)) =
+        try_assign_seat_for(ctx, restaurant_id, door_x, door_z, None)
+    else {
+        log::info!(
+            "try_spawn_arrival_guest: no free seat in restaurant {} — skipping spawn",
+            restaurant_id,
+        );
+        return false;
+    };
 
     // Pseudo-random rolls — Date.now()/random() are disallowed in
     // scheduled-reducer context, so we hash (timestamp ^ restaurant_id
@@ -4137,20 +4141,28 @@ pub(crate) fn try_spawn_arrival_guest(
         state: "walkingIn".to_string(),
         state_clock_ms: 0,
         patience_ms: scale_patience(ORDER_PATIENCE_BASE_MS, patience_mult_x100),
-        seat_uid: String::new(),
-        seat_x: 0.0,
-        seat_z: 0.0,
-        seat_facing_y: 0.0,
-        seat_floor: 0,
+        // H.89 — populate seat fields from try_assign_seat_for above.
+        // Without these the row would render as a ghost (client's
+        // hydrate path keys on seat_uid being non-empty to mount the
+        // guest on a chair).
+        seat_uid: seat_uid.clone(),
+        seat_x,
+        seat_z,
+        seat_facing_y: 0.0, // chair facing unknown server-side; client recomputes on hydrate
+        seat_floor,
         seat_at_bar: false,
-        plate_x: 0.0,
-        plate_z: 0.0,
+        plate_x: seat_x,
+        plate_z: seat_z,
         x: door_x,
         z: door_z,
         floor: 0,
-        target_x: door_x,
-        target_z: door_z,
-        target_floor: 0,
+        // Target the assigned seat so tick_guest_state walks them
+        // there. Without this they'd sit at the door (target = door)
+        // until the H.12 fallback re-picked a seat after the grace
+        // period — wasting cycles and looking glitchy.
+        target_x: seat_x,
+        target_z: seat_z,
+        target_floor: seat_floor,
         // H.40 — pre-populate the order CSVs so the guest actually
         // orders something. Empty string here = "no menu / no meta
         // seeded yet"; guest will sit and leave on patience timeout.
@@ -4179,11 +4191,10 @@ pub(crate) fn try_spawn_arrival_guest(
         wc_completed: false,
     });
     log::info!(
-        "try_spawn_arrival_guest: spawned for offline owner in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
-        restaurant_id, variant, will_use_toilet, will_wash_only, patience_mult_x100,
+        "try_spawn_arrival_guest: spawned guest at seat {} in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
+        seat_uid, restaurant_id, variant, will_use_toilet, will_wash_only, patience_mult_x100,
     );
     true
-    } // end #[allow(unreachable_code, dead_code)] block (H.86 disable)
 }
 
 /// Phase I (H.71) — continuous server-side guest spawning while the
@@ -4200,28 +4211,15 @@ pub(crate) fn try_spawn_arrival_guest(
 /// 12-guest cap immediately.  The 30 s last_seen_at threshold
 /// matches pedestrians.rs's try_arrival_handoff for consistency.
 fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
-    // Phase I (H.84) — DISABLED.  Server-side spawning was creating
-    // ghost guests (empty seat_uid, stuck in "waitingForFood" forever)
-    // because try_spawn_arrival_guest inserts a guest in "walkingIn"
-    // at (0, 0) and the server has no logic to pick a chair from
-    // placed_furniture and seat them — that lives client-side.  The
-    // state machine then times the guest out without ever sitting
-    // them down, and the client's H.47 hydrate imports them but
-    // can't render them (no seat_uid → no chair → invisible at the
-    // door).  Result: every offline tick produced more invisible
-    // accrual that made the user say "still no customers when I
-    // reload".
-    //
-    // True offline continuity requires server-side seat assignment
-    // (or moving the seat picker to the server), which is a larger
-    // change.  Until then: zero server-side spawning.  H.70's
-    // client-side burst-fill on reconnect makes the restaurant
-    // feel lively as soon as the player loads back in.
-    let _ = (ctx, rid, now);
-    return;
+    // Phase I (H.89) — RE-ENABLED.  H.84 disabled this because the
+    // underlying try_spawn_arrival_guest couldn't pick a chair and
+    // produced "ghost" rows the client couldn't render.  H.89 added
+    // server-side seat pre-assignment via try_assign_seat_for, so
+    // the spawn now either places the guest at a real seat or
+    // returns false without inserting anything.  Net effect: the
+    // restaurant stays populated while the player is offline AND
+    // those guests show up correctly when the player foregrounds.
 
-    #[allow(unreachable_code, dead_code)]
-    {
     const SERVER_SPAWN_INTERVAL_MICROS: i64 = 5_500_000; // 5.5 s
     const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;    // 30 s
 
@@ -4283,7 +4281,6 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
             rid, variant,
         );
     }
-    } // end #[allow(unreachable_code, dead_code)] block (H.84 disable)
 }
 
 /// Phase H.25 — per-piece satisfaction contribution of a (kind, tier)
@@ -4480,15 +4477,33 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
 /// ASSIGN_SEAT_GRACE_MS without the client having mirrored a seat
 /// target. Picks the closest unoccupied table.
 ///
+/// Thin wrapper around `try_assign_seat_for` — see that for details.
+fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32, f32, u32)> {
+    try_assign_seat_for(ctx, g.restaurant_id, g.x, g.z, Some(g.id))
+}
+
+/// Phase I (H.89) — Generalised seat picker, callable both during
+/// state-machine fallback (try_assign_seat) and during initial
+/// spawn (try_spawn_arrival_guest). Previously the seat-pick logic
+/// was wedged into try_assign_seat which required an existing
+/// &ActiveGuest, so the spawn path couldn't reuse it — it instead
+/// inserted with seat_uid="" and produced "ghost" guests that the
+/// client could never render. H.84/H.86 disabled spawning entirely
+/// to stop the ghost flood; this helper unblocks re-enabling it.
+///
+/// Returns (uid, x, z, floor) of the assigned table, or None if no
+/// free table exists. Caller is responsible for writing it back to
+/// the guest row.
+///
+/// `exclude_guest_id` is Some(id) when an existing guest is being
+/// re-assigned (skip themselves in the occupancy check), or None
+/// when called pre-insert during a fresh spawn (no self to skip).
+///
 /// "Unoccupied" = no other active_guest in the same restaurant has
 /// this table's uid in their seat_uid field. Conservative — a guest
-/// who's mid-meal still holds the seat even on their leaving leg
+/// mid-meal still holds the seat even on their leaving leg
 /// (intentional; prevents instant double-booking when one guest
 /// leaves and another spawns the same tick).
-///
-/// Returns the (uid, x, z, floor) of the assigned table, or None if
-/// no free table exists. Caller is responsible for writing it back
-/// to the guest row.
 ///
 /// Limitations vs the client's pickBestSeatForTaste:
 /// - Distance-based pick only; no scoring on decor / window / taste /
@@ -4498,8 +4513,13 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
 ///   subscribers see the guest standing at the table centre, not on
 ///   a specific chair. The client's local sim, if running, will
 ///   override with proper chair coords.
-fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32, f32, u32)> {
-    let rid = g.restaurant_id;
+fn try_assign_seat_for(
+    ctx: &ReducerContext,
+    rid: u64,
+    from_x: f32,
+    from_z: f32,
+    exclude_guest_id: Option<u64>,
+) -> Option<(String, f32, f32, u32)> {
     // Build set of taken seat uids (other guests' seat_uid).
     let mut taken_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Audit fix (B.5) — also collect other guests' walking targets.
@@ -4511,7 +4531,9 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
     const SEAT_OCCUPANCY_RADIUS_SQ: f32 = 0.25; // 0.5m radius
     let mut taken_targets: Vec<(f32, f32)> = Vec::new();
     for other in ctx.db.active_guest().restaurant_id().filter(rid) {
-        if other.id == g.id { continue; }
+        if let Some(self_id) = exclude_guest_id {
+            if other.id == self_id { continue; }
+        }
         if !other.seat_uid.is_empty() {
             taken_uids.insert(other.seat_uid.clone());
         } else if other.state == "walkingIn" {
@@ -4535,8 +4557,8 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
             dx * dx + dz * dz < SEAT_OCCUPANCY_RADIUS_SQ
         });
         if occupied_by_target { continue; }
-        let dx = f.x - g.x;
-        let dz = f.z - g.z;
+        let dx = f.x - from_x;
+        let dz = f.z - from_z;
         let dist = dx * dx + dz * dz;
         if dist < best_dist {
             best_dist = dist;
