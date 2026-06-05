@@ -4047,17 +4047,22 @@ pub(crate) fn try_spawn_arrival_guest(
     // hydrate path renders them correctly the moment the player
     // foregrounds.
 
-    /// Cap — don't pile up server-spawned guests past a sane limit.
-    /// Matches the rough order of the foreground client's effective
-    /// guest pool size; prevents a long-backgrounded tab with no
-    /// seating from accruing a runaway count.
-    const MAX_ACTIVE_GUESTS: usize = 12;
+    // Phase I (H.92) — REMOVED the MAX_ACTIVE_GUESTS=12 cap. It
+    // was a defensive backstop from the H.84-era code when the
+    // server could create ghost guests with no seat; we kept it
+    // to bound runaway accrual. Now that try_assign_seat_for
+    // gates every spawn on an actual free table, the real cap is
+    // "how many seats the restaurant has" — which is the right
+    // answer. A 30-seat restaurant should fill 30 seats while
+    // offline, not 12.
+    //
+    // active_count still gets read because the entropy seed below
+    // mixes it in for spawn-roll diversity (without it, two
+    // back-to-back spawns at the same micro-timestamp would
+    // produce the same archetype roll).
     let active_count = ctx.db.active_guest()
         .restaurant_id().filter(restaurant_id)
         .count();
-    if active_count >= MAX_ACTIVE_GUESTS {
-        return false;
-    }
 
     // Seat pre-assignment — gates the spawn. No free table → no
     // spawn. This is what was missing pre-H.89 and produced ghosts.
