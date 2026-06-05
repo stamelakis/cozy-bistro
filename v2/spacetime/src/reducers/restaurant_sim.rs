@@ -2483,7 +2483,10 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
 }
 
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
-/// Owner-only.
+/// Owner-only. Reducer wrapper around `apply_pool_delta` — every
+/// client-originated mutation lands here, validates ownership, and
+/// then routes through the single internal mutator that the server
+/// also uses for its own wash / settle paths (H.91).
 #[reducer]
 pub fn bump_dishware_pool(
     ctx: &ReducerContext,
@@ -2498,10 +2501,32 @@ pub fn bump_dishware_pool(
     if r.owner != ctx.sender {
         return Err("Only the owner can bump dishware pool".into());
     }
-    if clean_delta == 0 && dirty_delta == 0 {
-        return Ok(());
-    }
-    let key = pool_key(restaurant_id, &kind, tier);
+    apply_pool_delta(ctx, restaurant_id, &kind, tier, clean_delta, dirty_delta, "bump_dishware_pool");
+    Ok(())
+}
+
+/// Phase I (H.91) — SOLE internal pool mutator. Every server-side
+/// path that increments or decrements dishware_pool counts (the
+/// bump_dishware_pool reducer above, try_server_wash_load,
+/// flush_one_dish, settle_guest_dishes's bump_dishware helper)
+/// routes through this function. Centralising the read-modify-
+/// write logic means: one place that handles the saturating
+/// arithmetic, one place that prunes empty rows, one place that
+/// emits the audit log. The H.88 bug (load and flush both
+/// decremented dirty) was structurally possible because the
+/// arithmetic lived in two different functions; with one path
+/// that class of bug needs an intentional double-call to recur.
+fn apply_pool_delta(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: &str,
+    tier: u32,
+    clean_delta: i32,
+    dirty_delta: i32,
+    source: &str,
+) {
+    if clean_delta == 0 && dirty_delta == 0 { return; }
+    let key = pool_key(restaurant_id, kind, tier);
     let existing = ctx.db.dishware_pool().key().find(key.clone());
     let (cur_clean, cur_dirty) = match &existing {
         Some(p) => (p.clean, p.dirty),
@@ -2521,12 +2546,16 @@ pub fn bump_dishware_pool(
         if existing.is_some() {
             ctx.db.dishware_pool().key().delete(key);
         }
-        return Ok(());
+        log::info!(
+            "[apply_pool_delta {}] {} t{} clean {:+}, dirty {:+} (row now empty, deleted)",
+            source, kind, tier, clean_delta, dirty_delta,
+        );
+        return;
     }
     let row = DishwarePool {
         key,
         restaurant_id,
-        kind,
+        kind: kind.to_string(),
         tier,
         clean: new_clean,
         dirty: new_dirty,
@@ -2536,7 +2565,10 @@ pub fn bump_dishware_pool(
     } else {
         ctx.db.dishware_pool().insert(row);
     }
-    Ok(())
+    log::info!(
+        "[apply_pool_delta {}] {} t{} clean {:+} → {}, dirty {:+} → {}",
+        source, kind, tier, clean_delta, new_clean, dirty_delta, new_dirty,
+    );
 }
 
 /// Phase H.28 — client pushes the latest aggregate furniture stats
@@ -2987,25 +3019,14 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     // Compute the cycle extension for this piece.
     let wash_extension_ms = if dw.def_id == "dishwasher-pro" { WASH_MS_PRO } else { WASH_MS_REGULAR };
 
-    // Decrement dirty (delete the row entirely when both clean +
-    // dirty would reach zero, matching update_dishware_pool's
-    // delete-on-empty semantics). The plate is now LOGICALLY in the
-    // batch — pool[dirty] excludes it. flush_one_dish at cycle
-    // completion should ONLY increment clean (NOT decrement dirty
-    // again) — that fix is in flush_one_dish itself (H.88).
+    // Decrement dirty via the central mutator. The plate is now
+    // LOGICALLY in the batch — pool[dirty] excludes it.
+    // flush_one_dish at cycle completion ONLY increments clean (the
+    // H.88 fix); the dirty decrement that previously also happened
+    // there has been removed.
     let kind = dirty_row.kind.clone();
     let tier = dirty_row.tier;
-    let key = dirty_row.key.clone();
-    let clean_count = dirty_row.clean;
-    let new_dirty = dirty_row.dirty - 1; // safe: filter above guarantees > 0
-    if new_dirty == 0 && clean_count == 0 {
-        ctx.db.dishware_pool().key().delete(key);
-    } else {
-        ctx.db.dishware_pool().key().update(DishwarePool {
-            dirty: new_dirty,
-            ..dirty_row
-        });
-    }
+    apply_pool_delta(ctx, rid, &kind, tier, 0, -1, "try_server_wash_load");
 
     // Load into the dishwasher's batch (insert if first piece).
     if let Some(b) = ctx.db.dishwasher_batch().furniture_uid().find(dw.uid.clone()) {
@@ -3044,56 +3065,23 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
 /// delete-on-zero semantics: we never insert "0/0" rows, but the
 /// flush always produces at least 1 clean so a row exists post-call.
 fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str) {
-    // Phase I (H.88) — ONLY increment clean. The corresponding dirty
-    // decrement happened at LOAD time (try_server_wash_load on the
-    // server, loadDishwasher on the client — both decrement at load
-    // post-H.88). Decrementing dirty again here was the long-standing
-    // bug: each background wash cycle stole an extra dirty plate from
-    // the pool (or, if no other dirty existed, materialised a phantom
-    // clean via the safety-net branch). Over many cycles this is the
-    // source of the "LEAK N" the user has been chasing.
-    //
-    // Tier choice: prefer the highest-tier row, biasing the freshly
-    // washed plate toward the player's nicest stock. The actual
-    // identity of the plate is abstract — the batch only knows "1
-    // plate" not "1 T3 plate" — so picking a tier here is a stylistic
-    // call, not bookkeeping. Falls back to tier 1 if no rows exist.
-    let mut candidate: Option<(String, u32, u32)> = None; // (key, tier, clean)
-    let mut best_tier = 0u32;
+    // Phase I (H.88 + H.91) — ONLY increment clean, via the central
+    // mutator. The corresponding dirty decrement happened at LOAD
+    // time (try_server_wash_load on the server, loadDishwasher on
+    // the client). Tier choice: prefer the highest-tier row,
+    // biasing the freshly washed plate toward the player's nicest
+    // stock. Falls back to tier 1 if no rows exist for this kind.
+    let mut best_tier: u32 = 0;
+    let mut found = false;
     for p in ctx.db.dishware_pool().restaurant_id().filter(restaurant_id) {
         if p.kind != kind { continue; }
-        if p.tier >= best_tier {
+        if !found || p.tier > best_tier {
             best_tier = p.tier;
-            candidate = Some((p.key.clone(), p.tier, p.clean));
+            found = true;
         }
     }
-    if let Some((key, tier, _clean)) = candidate {
-        // Need fresh row for the update since the local fields can drift.
-        let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) else { return };
-        let new_clean = p.clean.saturating_add(1);
-        ctx.db.dishware_pool().key().update(DishwarePool {
-            clean: new_clean, ..p
-        });
-        log::info!(
-            "flush_one_dish: {} tier {} → clean +1 (now {}), dirty unchanged (now {})",
-            kind, tier, new_clean, p.dirty,
-        );
-        return;
-    }
-    // No row at all for this kind — create one at tier 1.
-    let key = pool_key(restaurant_id, kind, 1);
-    ctx.db.dishware_pool().insert(DishwarePool {
-        key,
-        restaurant_id,
-        kind: kind.to_string(),
-        tier: 1,
-        clean: 1,
-        dirty: 0,
-    });
-    log::info!(
-        "flush_one_dish: no {} row found for restaurant {}, materialised one clean at tier 1",
-        kind, restaurant_id,
-    );
+    let tier = if found { best_tier } else { 1 };
+    apply_pool_delta(ctx, restaurant_id, kind, tier, 1, 0, "flush_one_dish");
 }
 
 /// Per-role base walking speed in meters per second. Mirrors the
@@ -4988,9 +4976,11 @@ fn settle_guest_dishes(ctx: &ReducerContext, g: &ActiveGuest) {
     );
 }
 
-/// Increment a dishware_pool row's clean + dirty counts by the given
-/// deltas, inserting the row if it doesn't exist yet. Shared by
-/// settle_guest_dishes + any future server-side settlement path.
+/// Phase I (H.91) — Increment-only thin wrapper around the central
+/// apply_pool_delta. Kept as a separate function only because
+/// settle_guest_dishes uses u32 deltas (no decrements), so the
+/// caller doesn't have to cast to i32 at every call site. Truly
+/// negative-delta mutations go straight through apply_pool_delta.
 fn bump_dishware(
     ctx: &ReducerContext,
     restaurant_id: u64,
@@ -4999,24 +4989,11 @@ fn bump_dishware(
     clean_delta: u32,
     dirty_delta: u32,
 ) {
-    if clean_delta == 0 && dirty_delta == 0 { return; }
-    let key = pool_key(restaurant_id, kind, tier);
-    if let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) {
-        ctx.db.dishware_pool().key().update(DishwarePool {
-            clean: p.clean.saturating_add(clean_delta),
-            dirty: p.dirty.saturating_add(dirty_delta),
-            ..p
-        });
-    } else {
-        ctx.db.dishware_pool().insert(DishwarePool {
-            key,
-            restaurant_id,
-            kind: kind.to_string(),
-            tier,
-            clean: clean_delta,
-            dirty: dirty_delta,
-        });
-    }
+    apply_pool_delta(
+        ctx, restaurant_id, kind, tier,
+        clean_delta as i32, dirty_delta as i32,
+        "bump_dishware",
+    );
 }
 
 /// Client-driven position update — replaces the body coords on a

@@ -431,6 +431,64 @@ export class DishwareSystem {
   }
 
   // === Mutations ===
+  //
+  // Phase I (H.91) — All pool writes go through `applyPoolDelta`.
+  // Before this refactor, six different functions (reserveOne,
+  // markDirty, washOne, addClean, loadDishwasher, flushBatchPiece,
+  // plus the reconcile / adminWashAll paths) each manipulated the
+  // pool directly AND called mirrorBump separately. Easy to forget
+  // one or the other; the H.88 server bug was exactly that — load
+  // and flush both decremented dirty because the symmetry wasn't
+  // enforced in one place. Now every clean/dirty delta passes
+  // through a single function that handles: bounds checking, empty-
+  // row pruning, cloud mirror, logging. Any future bug lives in one
+  // file, in one function — easy to find, easy to fix.
+
+  /** SOLE pool mutator. Every clean/dirty change in the dishware
+   * system goes through here. Apply a (cleanDelta, dirtyDelta)
+   * change to the (kind, tier) entry, clamping negative results to
+   * zero (with a warning) and deleting the entry when both fields
+   * reach zero. Mirrors the delta to the cloud and emits a log line
+   * tagged with `source` so the audit trail names what called us.
+   *
+   * Bulk-reload paths (restoreFromCloud, applyPoolRow, hydrate)
+   * still write the pool directly — they're SETS not deltas, and
+   * they already suppress the mirror via suppressMirrorForReload. */
+  private applyPoolDelta(
+    kind: DishKind,
+    tier: number,
+    cleanDelta: number,
+    dirtyDelta: number,
+    source: string,
+  ): void {
+    if (cleanDelta === 0 && dirtyDelta === 0) return;
+    const pool = this.poolFor(kind);
+    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
+    const newClean = entry.clean + cleanDelta;
+    const newDirty = entry.dirty + dirtyDelta;
+    if (newClean < 0 || newDirty < 0) {
+      console.warn(
+        `[Dishware] negative pool from ${source}: ${kind} t${tier} ` +
+        `clean ${entry.clean}${cleanDelta >= 0 ? "+" : ""}${cleanDelta}=${newClean}, ` +
+        `dirty ${entry.dirty}${dirtyDelta >= 0 ? "+" : ""}${dirtyDelta}=${newDirty}. ` +
+        `Clamping. This is a real bug — please report.`,
+      );
+    }
+    entry.clean = Math.max(0, newClean);
+    entry.dirty = Math.max(0, newDirty);
+    if (entry.clean === 0 && entry.dirty === 0) {
+      pool.delete(tier);
+    } else {
+      pool.set(tier, entry);
+    }
+    this.log(
+      `[${source}] ${kind} t${tier} ` +
+      `clean ${cleanDelta >= 0 ? "+" : ""}${cleanDelta}, ` +
+      `dirty ${dirtyDelta >= 0 ? "+" : ""}${dirtyDelta} → ` +
+      `clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`,
+    );
+    this.mirrorBump(kind, tier, cleanDelta, dirtyDelta);
+  }
 
   /** Try to reserve one clean piece — picks the highest tier first so
    * the player's nicest plates lead. Returns the tier that was reserved
@@ -442,34 +500,24 @@ export class DishwareSystem {
       this.log(`reserveOne(${kind}) → null (no clean stock)`);
       return null;
     }
-    const pool = this.poolFor(kind);
-    const entry = pool.get(tier)!;
-    entry.clean -= 1;
-    if (entry.clean === 0 && entry.dirty === 0) pool.delete(tier);
-    this.log(`reserveOne(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorBump(kind, tier, -1, 0); // H.31
+    this.applyPoolDelta(kind, tier, -1, 0, "reserveOne");
     return tier;
   }
 
   /** Move one piece of the given tier into the dirty pool. Called when
    * a guest finishes their course. */
   markDirty(kind: DishKind, tier: number): void {
-    const pool = this.poolFor(kind);
-    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
-    entry.dirty += 1;
-    pool.set(tier, entry);
-    this.log(`markDirty(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorBump(kind, tier, 0, +1); // H.31
+    this.applyPoolDelta(kind, tier, 0, +1, "markDirty");
   }
 
   /** Phase I (H.88) — Cycle-complete clean credit. Called once per
    * loaded piece when a dishwasher batch finishes. Increments clean
    * (highest tier with existing stock, biasing toward the player's
    * nicest plates) WITHOUT touching dirty — the dirty decrement
-   * already happened at loadDishwasher time (Model B). Used by both
-   * the local update() cycle loop and conceptually mirrors the
-   * server's flush_one_dish. Falls back to tier 1 if no rows exist
-   * for this kind yet (cold pool). */
+   * already happened at loadDishwasher time. Used by both the local
+   * update() cycle loop and conceptually mirrors the server's
+   * flush_one_dish. Falls back to tier 1 if no rows exist for this
+   * kind yet (cold pool). */
   flushBatchPiece(kind: DishKind): void {
     const pool = this.poolFor(kind);
     let bestTier: number | null = null;
@@ -477,11 +525,7 @@ export class DishwareSystem {
       if (bestTier === null || tier > bestTier) bestTier = tier;
     }
     const tier = bestTier ?? 1;
-    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
-    entry.clean += 1;
-    pool.set(tier, entry);
-    this.log(`flushBatchPiece(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorBump(kind, tier, +1, 0);
+    this.applyPoolDelta(kind, tier, +1, 0, "flushBatchPiece");
   }
 
   /** Wash one dirty piece (any tier — picks the highest-tier dirty so
@@ -498,12 +542,8 @@ export class DishwareSystem {
       this.log(`washOne(${kind}) → null (nothing dirty)`);
       return null;
     }
-    const entry = pool.get(best)!;
-    entry.dirty -= 1;
-    entry.clean += 1;
+    this.applyPoolDelta(kind, best, +1, -1, "washOne");
     this.onDishWashed?.(kind, best);
-    this.log(`washOne(${kind}, t${best}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorBump(kind, best, +1, -1); // H.31
     return best;
   }
 
@@ -526,18 +566,13 @@ export class DishwareSystem {
       }
       take = Math.min(count, free);
     }
-    const pool = this.poolFor(kind);
-    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
-    entry.clean += take;
-    pool.set(tier, entry);
     // NOTE: lifetimeAdded is NOT bumped here. addClean is the shared
     // "move into the clean pool" path, used both by buySet (genuinely
     // new dishware) and by GuestSpawner.settleGuestDishes (returning a
     // reservation that was already counted in lifetimeAdded). buySet
     // bumps lifetimeAdded itself so only real purchases inflate the
     // expected total.
-    this.log(`addClean(${kind}, t${tier}, +${take}${force ? " forced" : ""}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
-    this.mirrorBump(kind, tier, +take, 0); // H.31
+    this.applyPoolDelta(kind, tier, +take, 0, force ? "addClean(forced)" : "addClean");
     return take;
   }
 
@@ -611,14 +646,22 @@ export class DishwareSystem {
     const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
     for (const tier of tiersDesc) {
       if (excess <= 0) break;
-      const e = map.get(tier)!;
+      const e = map.get(tier);
+      if (!e) continue;
       const trimClean = Math.min(excess, e.clean);
-      e.clean -= trimClean;
-      excess -= trimClean;
+      if (trimClean > 0) {
+        this.applyPoolDelta(kind, tier, -trimClean, 0, "hydrate-trim");
+        excess -= trimClean;
+      }
       if (excess <= 0) break;
-      const trimDirty = Math.min(excess, e.dirty);
-      e.dirty -= trimDirty;
-      excess -= trimDirty;
+      // Re-fetch after first delta in case the entry was deleted.
+      const e2 = map.get(tier);
+      if (!e2) continue;
+      const trimDirty = Math.min(excess, e2.dirty);
+      if (trimDirty > 0) {
+        this.applyPoolDelta(kind, tier, 0, -trimDirty, "hydrate-trim");
+        excess -= trimDirty;
+      }
     }
     this.log(`hydrate: trimmed ${owned - target} excess ${kind}(s) → canonical ${target} (was ${owned}: pool+wash+inFlight)`);
   }
@@ -681,26 +724,31 @@ export class DishwareSystem {
       this.log(`reconcileToLifetime(${kind}): restored ${missing} missing (was ${owned}/${target})`);
       return;
     }
-    // OVER — trim excess (same algorithm as reconcilePoolToLifetime).
+    // OVER — trim excess via applyPoolDelta (same algorithm as
+    // reconcilePoolToLifetime). Each delta mirrors itself, so we
+    // don't need the bulk mirrorAllPools after.
     const map = kind === "plate" ? this.plates : this.glasses;
     let excess = owned - target;
     const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
     for (const tier of tiersDesc) {
       if (excess <= 0) break;
-      const e = map.get(tier)!;
+      const e = map.get(tier);
+      if (!e) continue;
       const trimClean = Math.min(excess, e.clean);
-      e.clean -= trimClean;
-      excess -= trimClean;
+      if (trimClean > 0) {
+        this.applyPoolDelta(kind, tier, -trimClean, 0, "reconcile-trim");
+        excess -= trimClean;
+      }
       if (excess <= 0) break;
-      const trimDirty = Math.min(excess, e.dirty);
-      e.dirty -= trimDirty;
-      excess -= trimDirty;
+      const e2 = map.get(tier);
+      if (!e2) continue;
+      const trimDirty = Math.min(excess, e2.dirty);
+      if (trimDirty > 0) {
+        this.applyPoolDelta(kind, tier, 0, -trimDirty, "reconcile-trim");
+        excess -= trimDirty;
+      }
     }
     this.log(`reconcileToLifetime(${kind}): trimmed ${owned - target} excess (was ${owned}/${target})`);
-    // Push the trimmed pool back up to the cloud so the server's
-    // view matches local; otherwise next subscription tick would
-    // restore the over-count from the cloud side.
-    this.mirrorAllPools();
   }
 
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===
@@ -810,8 +858,9 @@ export class DishwareSystem {
     }
     const current = kind === "plate" ? batch.plates : batch.glasses;
     if (current >= DISHWASHER_CAPACITY[kind]) return false;
-    // Pull one dirty piece (any tier) into the batch — pool dirty --
-    // before we increment batch so accounting is monotonic.
+    // Pull one dirty piece (any tier) into the batch via applyPoolDelta
+    // — pool dirty -- before we increment batch so accounting is
+    // monotonic.
     const pool = this.poolFor(kind);
     let pulledTier: number | null = null;
     let bestTier = -1;
@@ -820,10 +869,7 @@ export class DishwareSystem {
       if (tier > bestTier) { bestTier = tier; pulledTier = tier; }
     }
     if (pulledTier !== null) {
-      const entry = pool.get(pulledTier)!;
-      entry.dirty -= 1;
-      if (entry.clean === 0 && entry.dirty === 0) pool.delete(pulledTier);
-      this.mirrorBump(kind, pulledTier, 0, -1);
+      this.applyPoolDelta(kind, pulledTier, 0, -1, "loadDishwasher");
     } else {
       // No matching dirty piece anywhere — load anyway (waiter
       // physically carries one). The flush at cycle end will create
@@ -869,23 +915,29 @@ export class DishwareSystem {
    * post-rush "everything is clean again" state without waiting for
    * the wash cycles. */
   adminWashAll(): void {
-    for (const entry of this.plates.values()) {
-      entry.clean += entry.dirty;
-      entry.dirty = 0;
+    // Move dirty → clean for every (kind, tier) via the central
+    // mutator. Snapshot keys first because applyPoolDelta may
+    // delete entries (when clean+dirty both reach zero) and mutating
+    // the map during iteration is undefined.
+    for (const kind of ["plate", "glass"] as const) {
+      const map = this.poolFor(kind);
+      const tiers = Array.from(map.keys());
+      for (const tier of tiers) {
+        const e = map.get(tier);
+        if (!e || e.dirty === 0) continue;
+        this.applyPoolDelta(kind, tier, +e.dirty, -e.dirty, "adminWashAll");
+      }
     }
-    for (const entry of this.glasses.values()) {
-      entry.clean += entry.dirty;
-      entry.dirty = 0;
-    }
+    // Drain dishwasher batches → clean pool through the same
+    // flushBatchPiece path used at normal cycle completion.
     for (const [uid, batch] of this.dishwasherBatches) {
-      for (let i = 0; i < batch.plates; i += 1) this.washOne("plate");
-      for (let i = 0; i < batch.glasses; i += 1) this.washOne("glass");
+      for (let i = 0; i < batch.plates; i += 1) this.flushBatchPiece("plate");
+      for (let i = 0; i < batch.glasses; i += 1) this.flushBatchPiece("glass");
       batch.plates = 0;
       batch.glasses = 0;
       batch.cycleTimeRemaining = 0;
       this.mirrorBatch(uid);
     }
-    this.mirrorAllPools();
     this.log(`adminWashAll → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}`);
   }
 
