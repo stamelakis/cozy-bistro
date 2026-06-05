@@ -640,45 +640,67 @@ export class DishwareSystem {
     this.log(`reconcileToPurchaseLog → ${target.plate} plates, ${target.glass} glasses (starter + ${this.purchaseLog.length} purchases)`);
   }
 
-  /** Phase I (H.87) — User-invokable LEAK RECOVERY.
+  /** Phase I (H.90) — User-invokable LEAK RECOVERY (restore-mode).
    *
-   * Accumulated state from before the H.83 fixes left some users with
-   * a permanent gap: total in-pool + in-wash + in-use < canonical
-   * lifetime, showing as "LEAK N" in the Account block.  H.83
-   * removed every auto-restore mechanism (correct — they were
-   * duping), so the leak just sits there now.
+   * Replaces H.87's write-off behaviour ("just delete the missing
+   * plates") which the user (correctly) objected to: they paid for
+   * those dishes; they should get them back.
    *
-   * This method takes the ACTUAL current total per kind (clean +
-   * dirty + washing + caller-supplied in_use) as the new canonical
-   * lifetime — effectively "forgive the loss, accept reality."
-   * Rewrites purchaseLog into ONE synthetic entry that summarises
-   * "you have this many" so STARTER + sum(log) still equals the
-   * new lifetime invariant.
+   * For each kind:
+   *   - If total < lifetime (LEAK): add the missing count back to
+   *     pool[clean] at tier 1 (force=true so cap doesn't drop them).
+   *     Lifetime stays unchanged; purchaseLog stays unchanged.
+   *   - If total > lifetime (OVER): trim the excess from highest-
+   *     tier clean → dirty → walk down (same algorithm as
+   *     reconcilePoolToLifetime). Lifetime stays unchanged.
+   *   - If total == lifetime: no-op.
    *
-   * After call: leak = 0, total stable, future buys append normally,
-   * future bugs that leak again will be visible (no auto-recovery
-   * to mask them).  User can re-invoke when they notice drift. */
-  recalibrateLifetime(inFlightPlates: number, inFlightGlasses: number): void {
-    const plateInWash = this.getDishwasherInFlight("plate");
-    const glassInWash = this.getDishwasherInFlight("glass");
-    const platesNow = this.getOwned("plate") + plateInWash + inFlightPlates;
-    const glassesNow = this.getOwned("glass") + glassInWash + inFlightGlasses;
-    const prevPlate = this.lifetimeAddedPlate;
-    const prevGlass = this.lifetimeAddedGlass;
-    this.lifetimeAddedPlate = platesNow;
-    this.lifetimeAddedGlass = glassesNow;
-    // Rewrite the log to a single synthetic "calibrated" entry per
-    // kind so STARTER + sum(log) still equals the new lifetime.
-    this.purchaseLog = [];
-    const platesBeyondStarter = Math.max(0, platesNow - STARTER_PLATE_COUNT);
-    const glassesBeyondStarter = Math.max(0, glassesNow - STARTER_GLASS_COUNT);
-    if (platesBeyondStarter > 0) {
-      this.purchaseLog.push({ kind: "plate", tier: 1, count: platesBeyondStarter, at: 0 });
+   * Future bugs that leak again will be visible (no auto-recovery
+   * to mask them) — the user re-invokes via the button when they
+   * notice drift. Net effect: this is the OLD auto-restore path
+   * H.83 removed, but USER-INVOKED instead of silent, so it can
+   * never mask a duping path (LEAK appears only after an actual
+   * loss). */
+  reconcileToLifetime(inFlightPlates: number, inFlightGlasses: number): void {
+    this.reconcileOneKind("plate", inFlightPlates);
+    this.reconcileOneKind("glass", inFlightGlasses);
+  }
+
+  private reconcileOneKind(kind: DishKind, inFlightForKind: number): void {
+    const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
+    const inWash = this.getDishwasherInFlight(kind);
+    const owned = this.getOwned(kind) + inWash + inFlightForKind;
+    if (owned === target) {
+      this.log(`reconcileToLifetime(${kind}): already balanced (${owned}/${target})`);
+      return;
     }
-    if (glassesBeyondStarter > 0) {
-      this.purchaseLog.push({ kind: "glass", tier: 1, count: glassesBeyondStarter, at: 0 });
+    if (owned < target) {
+      // LEAK — restore the missing count to tier-1 clean.
+      const missing = target - owned;
+      this.addClean(kind, 1, missing, true);
+      this.log(`reconcileToLifetime(${kind}): restored ${missing} missing (was ${owned}/${target})`);
+      return;
     }
-    this.log(`recalibrateLifetime: plate ${prevPlate} → ${platesNow}, glass ${prevGlass} → ${glassesNow} (synth log entries: ${this.purchaseLog.length})`);
+    // OVER — trim excess (same algorithm as reconcilePoolToLifetime).
+    const map = kind === "plate" ? this.plates : this.glasses;
+    let excess = owned - target;
+    const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
+    for (const tier of tiersDesc) {
+      if (excess <= 0) break;
+      const e = map.get(tier)!;
+      const trimClean = Math.min(excess, e.clean);
+      e.clean -= trimClean;
+      excess -= trimClean;
+      if (excess <= 0) break;
+      const trimDirty = Math.min(excess, e.dirty);
+      e.dirty -= trimDirty;
+      excess -= trimDirty;
+    }
+    this.log(`reconcileToLifetime(${kind}): trimmed ${owned - target} excess (was ${owned}/${target})`);
+    // Push the trimmed pool back up to the cloud so the server's
+    // view matches local; otherwise next subscription tick would
+    // restore the over-count from the cloud side.
+    this.mirrorAllPools();
   }
 
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===

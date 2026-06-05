@@ -307,13 +307,15 @@ export class StockStatusWidget {
         `<div>Glasses: <b>${glassClean}</b> clean · ${glassDirty} dirty · ${glassInWash} washing · ${glassInUse} in use = <b>${glassAccount}</b> / ${glassLifetime}` +
           (glassLeak !== 0 ? ` <span style="color:#ff9a9a">(${glassLeak > 0 ? "LEAK" : "OVER"} ${Math.abs(glassLeak)})</span>` : "") +
         `</div>` +
-        // Phase I (H.87) — Recalibrate button.  Only shown when
-        // there's actually a non-zero leak / over to fix.  Clicking
-        // it sets canonical lifetime to the current real total
-        // (clean + dirty + washing + in_use), absorbing the
-        // historical drift.  Future buys append normally on top.
+        // Phase I (H.90) — Restore-mode reconcile button.  Only
+        // shown when there's a non-zero leak / over.  Clicking it:
+        //   LEAK: adds the missing dishes back to clean (you paid
+        //     for them, you get them back).
+        //   OVER: trims excess from highest-tier clean → dirty.
+        // Lifetime stays unchanged either way — purchaseLog is
+        // never rewritten.
         (anyLeak
-          ? `<div style="margin-top:6px"><button id="dish-recalibrate-btn" style="background:rgba(120,180,200,0.25);color:#fff5dc;border:1px solid rgba(120,180,200,0.5);border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:10px;font-weight:600">Recalibrate to current total</button></div>`
+          ? `<div style="margin-top:6px"><button id="dish-recalibrate-btn" style="background:rgba(120,180,200,0.25);color:#fff5dc;border:1px solid rgba(120,180,200,0.5);border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:10px;font-weight:600">${plateLeak > 0 || glassLeak > 0 ? "Restore missing dishes" : "Trim excess dishes"}</button></div>`
           : ""),
       `</div>`,
     );
@@ -332,14 +334,14 @@ export class StockStatusWidget {
     // duplicate info.
     this.dishTooltip.innerHTML = dishLines.join("");
     this.dishTooltip.scrollTop = dishScroll;
-    // Phase I (H.87) — Wire the Recalibrate button (only present when
-    // anyLeak above).  Captured the in-flight counts in this update()
-    // pass so the click resets to the precise current snapshot.
+    // Phase I (H.90) — Wire the restore/trim button.  Captured the
+    // in-flight counts in this update() pass so the click reconciles
+    // against the precise current snapshot.
     if (anyLeak) {
       const btn = this.dishTooltip.querySelector("#dish-recalibrate-btn") as HTMLButtonElement | null;
       if (btn) {
         btn.onclick = (): void => {
-          dish.recalibrateLifetime(plateInUse, glassInUse);
+          dish.reconcileToLifetime(plateInUse, glassInUse);
           this.update(); // re-render immediately so leak label vanishes
         };
       }
