@@ -2989,7 +2989,10 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
 
     // Decrement dirty (delete the row entirely when both clean +
     // dirty would reach zero, matching update_dishware_pool's
-    // delete-on-empty semantics).
+    // delete-on-empty semantics). The plate is now LOGICALLY in the
+    // batch — pool[dirty] excludes it. flush_one_dish at cycle
+    // completion should ONLY increment clean (NOT decrement dirty
+    // again) — that fix is in flush_one_dish itself (H.88).
     let kind = dirty_row.kind.clone();
     let tier = dirty_row.tier;
     let key = dirty_row.key.clone();
@@ -3041,53 +3044,54 @@ fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
 /// delete-on-zero semantics: we never insert "0/0" rows, but the
 /// flush always produces at least 1 clean so a row exists post-call.
 fn flush_one_dish(ctx: &ReducerContext, restaurant_id: u64, kind: &str) {
-    // Find the highest-tier row with dirty > 0.
+    // Phase I (H.88) — ONLY increment clean. The corresponding dirty
+    // decrement happened at LOAD time (try_server_wash_load on the
+    // server, loadDishwasher on the client — both decrement at load
+    // post-H.88). Decrementing dirty again here was the long-standing
+    // bug: each background wash cycle stole an extra dirty plate from
+    // the pool (or, if no other dirty existed, materialised a phantom
+    // clean via the safety-net branch). Over many cycles this is the
+    // source of the "LEAK N" the user has been chasing.
+    //
+    // Tier choice: prefer the highest-tier row, biasing the freshly
+    // washed plate toward the player's nicest stock. The actual
+    // identity of the plate is abstract — the batch only knows "1
+    // plate" not "1 T3 plate" — so picking a tier here is a stylistic
+    // call, not bookkeeping. Falls back to tier 1 if no rows exist.
     let mut candidate: Option<(String, u32, u32)> = None; // (key, tier, clean)
     let mut best_tier = 0u32;
     for p in ctx.db.dishware_pool().restaurant_id().filter(restaurant_id) {
         if p.kind != kind { continue; }
-        if p.dirty == 0 { continue; }
         if p.tier >= best_tier {
             best_tier = p.tier;
             candidate = Some((p.key.clone(), p.tier, p.clean));
         }
     }
-    if let Some((key, tier, clean)) = candidate {
+    if let Some((key, tier, _clean)) = candidate {
         // Need fresh row for the update since the local fields can drift.
         let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) else { return };
-        let new_clean = clean.saturating_add(1);
-        let new_dirty = p.dirty.saturating_sub(1);
-        if new_clean == 0 && new_dirty == 0 {
-            ctx.db.dishware_pool().key().delete(key);
-        } else {
-            ctx.db.dishware_pool().key().update(DishwarePool {
-                clean: new_clean, dirty: new_dirty, ..p
-            });
-        }
+        let new_clean = p.clean.saturating_add(1);
+        ctx.db.dishware_pool().key().update(DishwarePool {
+            clean: new_clean, ..p
+        });
         log::info!(
-            "flush_one_dish: {} tier {} → clean +1 (now {}), dirty -1 (now {})",
-            kind, tier, new_clean, new_dirty,
+            "flush_one_dish: {} tier {} → clean +1 (now {}), dirty unchanged (now {})",
+            kind, tier, new_clean, p.dirty,
         );
         return;
     }
-    // No dirty inventory — bump tier 1 clean as a safety net.
+    // No row at all for this kind — create one at tier 1.
     let key = pool_key(restaurant_id, kind, 1);
-    if let Some(p) = ctx.db.dishware_pool().key().find(key.clone()) {
-        ctx.db.dishware_pool().key().update(DishwarePool {
-            clean: p.clean.saturating_add(1), ..p
-        });
-    } else {
-        ctx.db.dishware_pool().insert(DishwarePool {
-            key,
-            restaurant_id,
-            kind: kind.to_string(),
-            tier: 1,
-            clean: 1,
-            dirty: 0,
-        });
-    }
+    ctx.db.dishware_pool().insert(DishwarePool {
+        key,
+        restaurant_id,
+        kind: kind.to_string(),
+        tier: 1,
+        clean: 1,
+        dirty: 0,
+    });
     log::info!(
-        "flush_one_dish: no dirty {} found for restaurant {}, materialised one clean at tier 1",
+        "flush_one_dish: no {} row found for restaurant {}, materialised one clean at tier 1",
         kind, restaurant_id,
     );
 }

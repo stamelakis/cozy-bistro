@@ -462,6 +462,28 @@ export class DishwareSystem {
     this.mirrorBump(kind, tier, 0, +1); // H.31
   }
 
+  /** Phase I (H.88) — Cycle-complete clean credit. Called once per
+   * loaded piece when a dishwasher batch finishes. Increments clean
+   * (highest tier with existing stock, biasing toward the player's
+   * nicest plates) WITHOUT touching dirty — the dirty decrement
+   * already happened at loadDishwasher time (Model B). Used by both
+   * the local update() cycle loop and conceptually mirrors the
+   * server's flush_one_dish. Falls back to tier 1 if no rows exist
+   * for this kind yet (cold pool). */
+  flushBatchPiece(kind: DishKind): void {
+    const pool = this.poolFor(kind);
+    let bestTier: number | null = null;
+    for (const [tier] of pool) {
+      if (bestTier === null || tier > bestTier) bestTier = tier;
+    }
+    const tier = bestTier ?? 1;
+    const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
+    entry.clean += 1;
+    pool.set(tier, entry);
+    this.log(`flushBatchPiece(${kind}, t${tier}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.mirrorBump(kind, tier, +1, 0);
+  }
+
   /** Wash one dirty piece (any tier — picks the highest-tier dirty so
    * VIP plates come back online first). Returns the tier that was
    * washed, or null when there's nothing dirty. */
@@ -485,17 +507,25 @@ export class DishwareSystem {
     return best;
   }
 
-  /** Add `count` clean pieces of a given tier to the pool. Caps at the
-   * current storage capacity — returns the count actually added so
-   * callers can refund the unused portion or show a "no room" warning. */
-  addClean(kind: DishKind, tier: number, count: number): number {
+  /** Add `count` clean pieces of a given tier to the pool. By default
+   * caps at the current storage capacity — returns the count actually
+   * added so callers can refund the unused portion or show a "no room"
+   * warning. Pass `force: true` to bypass the cap; that's used when
+   * RESTORING an existing reservation (settleGuestDishes returning an
+   * unstarted course's plate) because the dish is already counted in
+   * lifetime — dropping it would create a leak. Cap-check is only
+   * meaningful for genuinely NEW dishes (buySet). */
+  addClean(kind: DishKind, tier: number, count: number, force: boolean = false): number {
     if (count <= 0) return 0;
-    const free = this.getFreeCapacity();
-    if (free <= 0) {
-      this.log(`addClean(${kind}, t${tier}, +${count}) → 0 (capacity full)`);
-      return 0;
+    let take = count;
+    if (!force) {
+      const free = this.getFreeCapacity();
+      if (free <= 0) {
+        this.log(`addClean(${kind}, t${tier}, +${count}) → 0 (capacity full)`);
+        return 0;
+      }
+      take = Math.min(count, free);
     }
-    const take = Math.min(count, free);
     const pool = this.poolFor(kind);
     const entry = pool.get(tier) ?? { clean: 0, dirty: 0 };
     entry.clean += take;
@@ -506,7 +536,7 @@ export class DishwareSystem {
     // reservation that was already counted in lifetimeAdded). buySet
     // bumps lifetimeAdded itself so only real purchases inflate the
     // expected total.
-    this.log(`addClean(${kind}, t${tier}, +${take}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
+    this.log(`addClean(${kind}, t${tier}, +${take}${force ? " forced" : ""}) → clean ${this.getClean(kind)}, dirty ${this.getDirty(kind)}`);
     this.mirrorBump(kind, tier, +take, 0); // H.31
     return take;
   }
@@ -699,10 +729,12 @@ export class DishwareSystem {
         continue;
       }
       // Cycle complete — all loaded pieces become clean simultaneously.
-      // washOne picks the highest-tier dirty piece globally; the
-      // dishwasher is abstract about WHICH piece it holds.
-      for (let i = 0; i < batch.plates; i += 1) this.washOne("plate");
-      for (let i = 0; i < batch.glasses; i += 1) this.washOne("glass");
+      // Phase I (H.88) — Use flushBatchPiece (NOT washOne). The
+      // corresponding dirty decrement happened at loadDishwasher
+      // time (Model B), so doing dirty-- again here would double-
+      // decrement and lose a dish per cycle.
+      for (let i = 0; i < batch.plates; i += 1) this.flushBatchPiece("plate");
+      for (let i = 0; i < batch.glasses; i += 1) this.flushBatchPiece("glass");
       batch.plates = 0;
       batch.glasses = 0;
       batch.cycleTimeRemaining = 0;
@@ -729,7 +761,21 @@ export class DishwareSystem {
   /** Drop one piece into the named dishwasher. Returns false when
    * the batch is full for that kind (callers should fall back to a
    * sink or another dishwasher). The cycle timer extends by
-   * washPerItem so a steady drip of plates keeps the cycle running. */
+   * washPerItem so a steady drip of plates keeps the cycle running.
+   *
+   * Phase I (H.88) — Decrements pool[dirty] at load time. The plate
+   * is now LOGICALLY inside the batch; pool[dirty] excludes it.
+   * Mirrors the server's try_server_wash_load behaviour so both load
+   * paths (foreground waiter trip + background server fallback)
+   * agree on what pool[dirty] means. Without this, the foreground
+   * path would leave pool[dirty] elevated while the batch ALSO
+   * counted it — and the widget's account block would double-count
+   * the in-batch plates, surfacing as a phantom "OVER N" or, after
+   * cycle completion, "LEAK N" depending on flush timing.
+   *
+   * Returns false WITHOUT touching the pool when the batch is full —
+   * caller (StaffRouter) falls back to sink wash, which DOES want
+   * pool[dirty] decremented in its own washOne path. */
   loadDishwasher(uid: string, defId: string, kind: DishKind): boolean {
     let batch = this.dishwasherBatches.get(uid);
     if (!batch) {
@@ -742,6 +788,27 @@ export class DishwareSystem {
     }
     const current = kind === "plate" ? batch.plates : batch.glasses;
     if (current >= DISHWASHER_CAPACITY[kind]) return false;
+    // Pull one dirty piece (any tier) into the batch — pool dirty --
+    // before we increment batch so accounting is monotonic.
+    const pool = this.poolFor(kind);
+    let pulledTier: number | null = null;
+    let bestTier = -1;
+    for (const [tier, entry] of pool) {
+      if (entry.dirty <= 0) continue;
+      if (tier > bestTier) { bestTier = tier; pulledTier = tier; }
+    }
+    if (pulledTier !== null) {
+      const entry = pool.get(pulledTier)!;
+      entry.dirty -= 1;
+      if (entry.clean === 0 && entry.dirty === 0) pool.delete(pulledTier);
+      this.mirrorBump(kind, pulledTier, 0, -1);
+    } else {
+      // No matching dirty piece anywhere — load anyway (waiter
+      // physically carries one). The flush at cycle end will create
+      // a clean piece without a matching dirty source; visually this
+      // is the server's "no dirty found, materialise a clean" path.
+      this.log(`loadDishwasher: no dirty ${kind} found in pool — loading anyway, flush will materialise a clean piece`);
+    }
     if (kind === "plate") batch.plates += 1;
     else batch.glasses += 1;
     batch.cycleTimeRemaining += dishwasherWashPerItem(defId);

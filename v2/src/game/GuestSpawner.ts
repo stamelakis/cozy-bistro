@@ -1145,11 +1145,18 @@ export class GuestSpawner {
       this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
     }
     // In-flight (not-yet-eaten) reservations return to the clean pool.
+    // Pass force=true so the cap check never drops the restored
+    // reservation — these dishes were already counted in lifetime at
+    // beginNextCourse's reserveOne. Without force, a guest leaving
+    // while storage is at cap silently loses the unstarted course's
+    // plate, which over many sessions surfaces as "LEAK N" in the
+    // dishware tooltip.  See DishwareSystem.addClean for the cap
+    // rationale.
     for (let i = g.orderIndex; i < g.reservedDishTiers.length; i += 1) {
       const recipe = g.order[i];
       if (!recipe) continue;
       const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
-      this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1);
+      this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1, true);
     }
   }
 
