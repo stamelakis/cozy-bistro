@@ -182,6 +182,8 @@ export const DishwasherBatch = __t.object("DishwasherBatch", {
   plates: __t.u32(),
   glasses: __t.u32(),
   cycleTimeRemainingMs: __t.i64(),
+  platesTiers: __t.option(__t.string()),
+  glassesTiers: __t.option(__t.string()),
 });
 export type DishwasherBatch = __Infer<typeof DishwasherBatch>;
 

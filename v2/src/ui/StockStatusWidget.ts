@@ -346,6 +346,23 @@ export class StockStatusWidget {
         };
       }
     }
+    // Phase I (H.94) — Wire per-tier "−1" delete buttons. One handler
+    // per row, reads kind + tier off data attrs and calls
+    // dish.deleteOne. Re-renders immediately so the row updates / vanishes.
+    const delButtons = this.dishTooltip.querySelectorAll("button.dish-del-btn");
+    delButtons.forEach((el) => {
+      const btn = el as HTMLButtonElement;
+      const kind = btn.getAttribute("data-del-kind") as DishKind | null;
+      const tierStr = btn.getAttribute("data-del-tier");
+      if (!kind || !tierStr) return;
+      const tier = parseInt(tierStr, 10);
+      if (!Number.isInteger(tier)) return;
+      btn.onclick = (): void => {
+        const ok = dish.deleteOne(kind, tier);
+        if (!ok) return;
+        this.update();
+      };
+    });
 
     // === Storage badge ===
     // Phase I (H.80) — Show ACTUAL pantry stock vs total capacity,
@@ -498,7 +515,10 @@ function makeFloatingTooltip(): HTMLElement {
 }
 
 /** Renders the per-tier breakdown for plates or glasses inside the
- * dishware tooltip. Sorts tiers descending so the prestige rows lead. */
+ * dishware tooltip. Sorts tiers descending so the prestige rows lead.
+ * H.94 — each row has a "−1" button so the player can clear out
+ * lower-tier stock they've outgrown. Buttons carry data-attrs that
+ * the post-innerHTML wiring in update() reads to call deleteOne. */
 function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"]): string {
   const lines: string[] = [];
   lines.push(`<div style="font-weight:700;opacity:0.85">${label}</div>`);
@@ -512,7 +532,13 @@ function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"]
       const dirtySpan = r.dirty > 0
         ? ` · <span style="color:#ffd47a">${r.dirty} dirty</span>`
         : "";
-      lines.push(`<div style="padding-left:4px">${tierBadge} · ${cleanSpan}${dirtySpan}</div>`);
+      const delBtn = `<button class="dish-del-btn" data-del-kind="${kind}" data-del-tier="${r.tier}" `
+        + `title="Permanently delete one ${kind} of T${r.tier} (clean first, then dirty). `
+        + `Lowers lifetime by 1." `
+        + `style="margin-left:6px;background:rgba(255,90,90,0.15);color:#ffb0b0;`
+        + `border:1px solid rgba(255,90,90,0.35);border-radius:3px;padding:0 5px;`
+        + `cursor:pointer;font:inherit;font-size:9px">−1</button>`;
+      lines.push(`<div style="padding-left:4px">${tierBadge} · ${cleanSpan}${dirtySpan}${delBtn}</div>`);
     }
   }
   return lines.join("");

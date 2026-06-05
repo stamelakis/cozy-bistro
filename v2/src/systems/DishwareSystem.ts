@@ -638,6 +638,41 @@ export class DishwareSystem {
     return this.purchaseLog;
   }
 
+  /** Phase I (H.94) — Player-invokable single-piece delete. Removes
+   * ONE clean (or, if no clean, one dirty) piece of the given
+   * (kind, tier), AND decrements lifetime / appends a negative
+   * purchase-log entry so the canonical "you should have N" total
+   * stays consistent. Use case the user asked for: clear out
+   * lower-tier dishware they've outgrown so the storage cap
+   * (and the per-tier list) only shows what they actually use.
+   *
+   * Returns true if a piece was deleted, false if nothing at that
+   * tier was available (caller can re-render and the button
+   * disappears alongside the now-empty row). */
+  deleteOne(kind: DishKind, tier: number): boolean {
+    const pool = this.poolFor(kind);
+    const entry = pool.get(tier);
+    if (!entry) return false;
+    if (entry.clean > 0) {
+      this.applyPoolDelta(kind, tier, -1, 0, "deleteOne(clean)");
+    } else if (entry.dirty > 0) {
+      this.applyPoolDelta(kind, tier, 0, -1, "deleteOne(dirty)");
+    } else {
+      return false;
+    }
+    // Lifetime tracks "how many should I have"; deleting a piece
+    // physically takes one away, so lifetime -- too. purchaseLog
+    // mirrors with a negative entry so computeLifetimeFromLog
+    // stays consistent (STARTER + sum(log) == lifetime).
+    if (kind === "plate") {
+      this.lifetimeAddedPlate = Math.max(0, this.lifetimeAddedPlate - 1);
+    } else {
+      this.lifetimeAddedGlass = Math.max(0, this.lifetimeAddedGlass - 1);
+    }
+    this.purchaseLog.push({ kind, tier, count: -1, at: Date.now() });
+    return true;
+  }
+
   /** Recompute the "expected" lifetime totals straight from STARTER
    * + sum(purchaseLog). This is the canonical formula — if the
    * mutable lifetime counters ever disagree, this is the value

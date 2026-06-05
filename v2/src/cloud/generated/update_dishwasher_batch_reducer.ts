@@ -17,4 +17,6 @@ export default {
   plates: __t.u32(),
   glasses: __t.u32(),
   cycleTimeRemainingMs: __t.i64(),
+  platesTiers: __t.string(),
+  glassesTiers: __t.string(),
 };

@@ -17,4 +17,6 @@ export default __t.row({
   plates: __t.u32(),
   glasses: __t.u32(),
   cycleTimeRemainingMs: __t.i64().name("cycle_time_remaining_ms"),
+  platesTiers: __t.option(__t.string()).name("plates_tiers"),
+  glassesTiers: __t.option(__t.string()).name("glasses_tiers"),
 });
