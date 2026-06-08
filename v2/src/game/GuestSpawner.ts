@@ -647,6 +647,29 @@ const WC_PATIENCE_SECONDS = 10.0;
 // peak modifiers. Below ~4 s the chef pipeline starts to choke at
 // typical staff levels.
 const SPAWN_INTERVAL_SECONDS = 5.5;
+
+/** Phase I (H.99) — Pick the nearest fixture, with STRONG same-floor
+ * preference. First partition candidates by `floor === currentFloor`;
+ * only consider the cross-floor pool if NO same-floor option exists.
+ * Within the chosen partition, pick the smallest `cost(item)`. Used
+ * by findFreeToilet + findFreeSink so guests don't trek upstairs for
+ * a bathroom when there's a closer one on their own storey. */
+function pickNearestOnSameFloorFirst<T extends { floor: number }>(
+  items: T[],
+  currentFloor: number,
+  cost: (item: T) => number,
+): T | null {
+  const sameFloor = items.filter((i) => i.floor === currentFloor);
+  const pool = sameFloor.length > 0 ? sameFloor : items;
+  if (pool.length === 0) return null;
+  let best: T | null = null;
+  let bestDist = Infinity;
+  for (const it of pool) {
+    const d = cost(it);
+    if (d < bestDist) { bestDist = d; best = it; }
+  }
+  return best;
+}
 /** Guests give up if not served within this many seconds total. Scaled by
  * the recipe's cook time so slow recipes don't unfairly anger guests. */
 // Two-phase patience budget. Was a single PATIENCE_BASE_SECONDS pool
@@ -1863,42 +1886,39 @@ export class GuestSpawner {
     if (!this.registry) return null;
     const toilets = this.registry.getToilets().filter((t) => !this.reservedToilets.has(t.uid));
     if (toilets.length === 0) return null;
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < toilets.length; i += 1) {
-      const t = toilets[i];
-      const dist = this.pathwayDistance(g, t.standPos, t.floor);
-      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
-    }
-    if (bestIdx < 0) return null;
-    const t = toilets[bestIdx];
+    // Phase I (H.99) — Same-floor STRONG preference. Pre-H.99 a tiny
+    // STAIR_PENALTY in pathwayDistance only broke ties; an upstairs
+    // toilet a few metres closer would still win, sending guests up
+    // a flight of stairs to wash hands. Now we partition: try
+    // same-floor first; only if NONE are available do we look
+    // cross-floor. Within each partition, nearest by pathway dist.
+    const best = pickNearestOnSameFloorFirst(
+      toilets, g.currentFloor, (t) => this.pathwayDistance(g, t.standPos, t.floor),
+    );
+    if (!best) return null;
     return {
-      uid: t.uid,
-      rotY: t.rotY,
-      center: new THREE.Vector2(t.x, t.z),
-      standPos: t.standPos.clone(),
-      floor: t.floor,
+      uid: best.uid,
+      rotY: best.rotY,
+      center: new THREE.Vector2(best.x, best.z),
+      standPos: best.standPos.clone(),
+      floor: best.floor,
     };
   }
 
   /** Nearest UNRESERVED sink, same pathway-distance ranking as
    * findFreeToilet. Returns rotY too so atSink can face the guest
    * toward the basin, and the sink's floor so the trip path targets
-   * the right storey. */
+   * the right storey. H.99 — same-floor strong preference applied
+   * via the shared pickNearestOnSameFloorFirst helper. */
   private findFreeSink(g: ActiveGuest): { uid: string; rotY: number; standPos: THREE.Vector2; floor: number } | null {
     if (!this.registry) return null;
     const sinks = this.registry.getBathroomSinks().filter((s) => !this.reservedSinks.has(s.uid));
     if (sinks.length === 0) return null;
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < sinks.length; i += 1) {
-      const s = sinks[i];
-      const dist = this.pathwayDistance(g, s.standPos, s.floor);
-      if (dist < bestDist) { bestDist = dist; bestIdx = i; }
-    }
-    if (bestIdx < 0) return null;
-    const s = sinks[bestIdx];
-    return { uid: s.uid, rotY: s.rotY, standPos: s.standPos.clone(), floor: s.floor };
+    const best = pickNearestOnSameFloorFirst(
+      sinks, g.currentFloor, (s) => this.pathwayDistance(g, s.standPos, s.floor),
+    );
+    if (!best) return null;
+    return { uid: best.uid, rotY: best.rotY, standPos: best.standPos.clone(), floor: best.floor };
   }
 
   /** Walking distance from a guest's current position to a fixed XZ

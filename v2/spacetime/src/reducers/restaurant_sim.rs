@@ -4497,24 +4497,37 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
         WcKind::Toilet => is_toilet_def,
         WcKind::Sink => is_sink_def,
     };
-    let mut best: Option<(String, f32, f32, u32)> = None;
-    let mut best_dist = f32::INFINITY;
+    // Phase I (H.99) — STRONG same-floor preference. Collect every
+    // viable fixture with its (stand_xz, floor, dist²). First pick
+    // the nearest on the guest's CURRENT floor; only if there's no
+    // same-floor candidate do we fall back to cross-floor (nearest
+    // by straight-line — stair-cost approximation is best-effort,
+    // the client's pathwayDistance is the better solver). Without
+    // this gate, an upstairs fixture a few metres closer in XZ
+    // wins, sending guests up the stairs for a wash.
+    let mut same_floor_best: Option<(String, f32, f32, u32)> = None;
+    let mut same_floor_best_dist = f32::INFINITY;
+    let mut any_floor_best: Option<(String, f32, f32, u32)> = None;
+    let mut any_floor_best_dist = f32::INFINITY;
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if !predicate(&f.def_id) { continue; }
         if taken.contains(&f.uid) { continue; }
-        // Stand-in-front position — one tile ahead along facing axis.
-        // Matches client FurnitureRegistry.getToilets exactly.
         let stand_x = f.x + f.rot_y.sin();
         let stand_z = f.z + f.rot_y.cos();
         let dx = stand_x - g.x;
         let dz = stand_z - g.z;
         let dist = dx * dx + dz * dz;
-        if dist < best_dist {
-            best_dist = dist;
-            best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
+        if f.floor == g.floor {
+            if dist < same_floor_best_dist {
+                same_floor_best_dist = dist;
+                same_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
+            }
+        } else if dist < any_floor_best_dist {
+            any_floor_best_dist = dist;
+            any_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
         }
     }
-    best
+    same_floor_best.or(any_floor_best)
 }
 
 /// H.12 — Server-side fallback seat assignment. Called from
