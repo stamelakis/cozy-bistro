@@ -899,10 +899,19 @@ export class DishwareSystem {
    * that kind. The waiter trip system reads this before claiming a
    * station so a full dishwasher doesn't lock out other waiters. */
   canDishwasherLoad(uid: string, kind: DishKind): boolean {
+    return this.canDishwasherLoadN(uid, kind, 1) > 0;
+  }
+
+  /** H.95 — Returns how many MORE pieces of `kind` the named
+   * dishwasher can accept right now, capped at `max`. Used by the
+   * batch-pickup planner to decide how many extras to claim. */
+  canDishwasherLoadN(uid: string, kind: DishKind, max: number): number {
+    if (max <= 0) return 0;
     const batch = this.dishwasherBatches.get(uid);
-    if (!batch) return true;
+    if (!batch) return Math.min(max, DISHWASHER_CAPACITY[kind]);
     const current = kind === "plate" ? batch.plates : batch.glasses;
-    return current < DISHWASHER_CAPACITY[kind];
+    const remaining = DISHWASHER_CAPACITY[kind] - current;
+    return Math.max(0, Math.min(max, remaining));
   }
 
   /** Drop one piece into the named dishwasher. Returns false when

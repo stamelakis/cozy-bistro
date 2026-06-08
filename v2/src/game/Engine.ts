@@ -1023,6 +1023,7 @@ export class Engine {
           })),
           washOne: (kind) => { dishware.washOne(kind); },
           canDishwasherLoad: (uid, kind) => dishware.canDishwasherLoad(uid, kind),
+          canDishwasherLoadN: (uid, kind, max) => dishware.canDishwasherLoadN(uid, kind, max),
           loadDishwasher: (uid, defId, kind) => dishware.loadDishwasher(uid, defId, kind),
         };
       }

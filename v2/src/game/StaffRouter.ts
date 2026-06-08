@@ -155,7 +155,13 @@ export interface WashStationInfo {
 }
 
 /** Waiter wash trip state. The waiter walks from idle → pickup the
- * specified dirty piece → wash at the specified station → home. */
+ * specified dirty piece → wash at the specified station → home.
+ *
+ * Phase I (H.95) — Batch carry. `extraDirtyIds` holds additional
+ * dirty pieces claimed at trip-start time that the waiter picks up
+ * alongside the primary one and loads at the same station. Reduces
+ * the per-piece round-trip cost from O(1 plate / 5 s) to O(N plates
+ * / 5 s) where N = 1 + extras (max 4 total). */
 interface WashTrip {
   dirtyId: number;
   dirtyPos: THREE.Vector2;
@@ -163,6 +169,10 @@ interface WashTrip {
    * the stair when this differs from the waiter's currentFloor. */
   dirtyFloor: number;
   kind: DishKind;
+  /** H.95 — additional dirty ids the waiter is carrying with them.
+   * Their visual meshes are removed in the same pickup step as the
+   * primary; loaded sequentially at the wash station. */
+  extraDirtyIds: number[];
   stationUid: string;
   /** Catalog id of the wash station ("sink", "dishwasher",
    * "dishwasher-pro"). Drives the dwell-completion branch in the
@@ -176,6 +186,16 @@ interface WashTrip {
   dwell: number;
   phase: "pickup" | "wash";
 }
+
+/** H.95 — Max dishes a waiter can carry in one trip. 4 plates is
+ * a reasonable serving-tray equivalent and gives ~4× throughput
+ * without making the waiter unrealistic. */
+const WASH_MAX_CARRY = 4;
+/** H.95 — Max distance (metres) from the primary dirty piece at
+ * which extras can be claimed in the same trip. Small enough that
+ * the visual "extras vanish as the waiter passes" reads as the
+ * waiter scooping nearby plates, not teleporting them. */
+const WASH_BATCH_RADIUS = 4.0;
 
 interface StaffActor {
   character: AnimatedCharacter;
@@ -491,6 +511,12 @@ export class StaffRouter {
      * this kind? Drives the start-of-trip station picker — full
      * dishwashers are skipped in favour of empty ones or sinks. */
     canDishwasherLoad: (uid: string, kind: DishKind) => boolean;
+    /** H.95 — How many MORE pieces of `kind` can this dishwasher
+     * accept right now (cap N). Used by the batch-pickup planner
+     * to decide how many extras a waiter can claim for one trip
+     * before the target station fills up. Returns min(remaining
+     * capacity, max). */
+    canDishwasherLoadN: (uid: string, kind: DishKind, max: number) => number;
     /** Dishwasher path: drop the piece in. Returns false if the
      * batch is full (rare — the canDishwasherLoad check should keep
      * trips from reaching here on a full unit, but waiters in flight
@@ -1138,11 +1164,20 @@ export class StaffRouter {
     // it's leaking pieces. Treat the carried dish as auto-washed:
     // the fired waiter dropped it in the sink on the way out.
     if (removed.washTrip) {
-      this.dishwareLogger?.(`staff-removed mid-washTrip(phase=${removed.washTrip.phase}, kind=${removed.washTrip.kind})`);
+      this.dishwareLogger?.(`staff-removed mid-washTrip(phase=${removed.washTrip.phase}, kind=${removed.washTrip.kind}, extras=${removed.washTrip.extraDirtyIds.length})`);
+      // H.95 — Per-piece total includes the batched extras. Each
+      // gets the same treatment as the primary: auto-wash if
+      // carried, release if still claimed-but-not-picked-up.
+      const totalPieces = 1 + removed.washTrip.extraDirtyIds.length;
       if (removed.washTrip.phase === "wash") {
-        this.washCallbacks?.washOne(removed.washTrip.kind);
+        for (let i = 0; i < totalPieces; i++) {
+          this.washCallbacks?.washOne(removed.washTrip.kind);
+        }
       } else {
         this.washCallbacks?.releaseDirtyPickup(removed.washTrip.dirtyId);
+        for (const id of removed.washTrip.extraDirtyIds) {
+          this.washCallbacks?.releaseDirtyPickup(id);
+        }
       }
       this.busyWashUids.delete(removed.washTrip.stationUid);
       removed.washTrip = null;
@@ -2556,6 +2591,20 @@ export class StaffRouter {
                 this.abandonWashTrip(w);
                 break;
               }
+              // H.95 — Also "pick up" all batched extras. Their
+              // visual meshes vanish at the same moment (visually
+              // the waiter scoops nearby plates as they pass). If
+              // any extra's mesh is already gone (mid-wash race),
+              // skip it but keep the rest of the trip going.
+              if (w.washTrip.extraDirtyIds.length > 0) {
+                const survivingExtras: number[] = [];
+                for (const id of w.washTrip.extraDirtyIds) {
+                  if (this.washCallbacks?.pickupDirty(id)) {
+                    survivingExtras.push(id);
+                  }
+                }
+                w.washTrip.extraDirtyIds = survivingExtras;
+              }
               // Show the held-plate mesh as a "carrying dirty" cue.
               if (!w.heldPlate) {
                 w.heldPlate = makePlate();
@@ -2647,26 +2696,41 @@ export class StaffRouter {
           if (w.clock >= w.washTrip.dwell) {
             const trip = w.washTrip;
             const isDishwasher = trip.stationDefId.startsWith("dishwasher");
+            // H.95 — Total pieces to deposit at this station =
+            // primary + extras the waiter scooped up at pickup.
+            const totalPieces = 1 + trip.extraDirtyIds.length;
             if (isDishwasher) {
-              // The carried dirty piece was already removed from the
-              // world by pickupDirty — if loadDishwasher fails (batch
-              // filled up between trip-start and arrival, or the
-              // dishwasher was sold mid-walk), the dish would silently
-              // vanish from the inventory. Fall back to washOne so the
-              // piece still becomes clean ("waiter dumped it in the
-              // sink on the way past"). Without this, an inventory leak
-              // is hard to spot in playtesting.
-              const loaded = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
-              if (!loaded) {
-                this.dishwareLogger?.(`dishwasher-load-failed kind=${trip.kind} uid=${trip.stationUid} → washOne fallback`);
-                this.washCallbacks?.washOne(trip.kind);
+              // The carried dirty piece(s) were already removed from
+              // the world by pickupDirty. Each loadDishwasher call
+              // moves one piece from pool[dirty] into the batch. If
+              // loadDishwasher fails (batch filled up between trip-
+              // start and arrival, or the dishwasher was sold mid-
+              // walk), fall back to washOne so the piece still
+              // becomes clean ("waiter dumped it in the sink on the
+              // way past"). Without this fallback, the loaded dish
+              // would silently leak from the inventory.
+              let loadedCount = 0;
+              for (let i = 0; i < totalPieces; i++) {
+                const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+                if (ok) {
+                  loadedCount++;
+                } else {
+                  this.dishwareLogger?.(`dishwasher-load-failed kind=${trip.kind} uid=${trip.stationUid} (piece ${i + 1}/${totalPieces}) → washOne fallback`);
+                  this.washCallbacks?.washOne(trip.kind);
+                }
+              }
+              if (loadedCount < totalPieces) {
+                this.dishwareLogger?.(`batch-trip partial: ${loadedCount}/${totalPieces} into dishwasher, rest sink-fallback`);
               }
               // Dishwashers don't lock — clearing busyWashUids is a
               // safety net for legacy code paths that may still have
               // claimed it.
               this.busyWashUids.delete(trip.stationUid);
             } else {
-              this.washCallbacks?.washOne(trip.kind);
+              // Sink path: scrub each carried piece into clean.
+              for (let i = 0; i < totalPieces; i++) {
+                this.washCallbacks?.washOne(trip.kind);
+              }
               this.busyWashUids.delete(trip.stationUid);
             }
             if (w.heldPlate) w.heldPlate.visible = false;
@@ -2801,17 +2865,50 @@ export class StaffRouter {
       // limit; sinks get the busy-set claim so a second waiter
       // doesn't queue up at the same basin.
       const isSink = !pair.station.defId.startsWith("dishwasher");
+      const isDishwasher = !isSink;
       if (isSink) this.busyWashUids.add(pair.station.uid);
+
+      // H.95 — Opportunistically claim additional nearby dirties
+      // of the SAME KIND, same floor, within WASH_BATCH_RADIUS of
+      // the primary. Cap at WASH_MAX_CARRY total. For dishwashers
+      // we also gate on per-piece capacity — claiming 4 plates
+      // when the target only has room for 2 would strand the
+      // overflow. Sinks are unbounded so we always claim up to the
+      // tray cap there.
+      const extraIds: number[] = [];
+      let capacityBudget = isDishwasher
+        ? this.washCallbacks.canDishwasherLoadN(pair.station.uid, pair.dirty.kind, WASH_MAX_CARRY)
+        : WASH_MAX_CARRY;
+      // The primary itself uses one capacity slot.
+      capacityBudget = Math.max(0, capacityBudget - 1);
+      if (capacityBudget > 0) {
+        for (const d of dirties) {
+          if (extraIds.length >= capacityBudget) break;
+          if (d.id === pair.dirty.id) continue;
+          if (d.kind !== pair.dirty.kind) continue;
+          if (d.floor !== pair.dirty.floor) continue;
+          const dx = d.pos.x - pair.dirty.pos.x;
+          const dz = d.pos.y - pair.dirty.pos.y;
+          if (dx * dx + dz * dz > WASH_BATCH_RADIUS * WASH_BATCH_RADIUS) continue;
+          if (!this.washCallbacks.claimDirtyPickup(d.id, w.memberId)) continue;
+          extraIds.push(d.id);
+        }
+      }
+
       return {
         dirtyId: pair.dirty.id,
         dirtyPos: pair.dirty.pos.clone(),
         dirtyFloor: pair.dirty.floor,
         kind: pair.dirty.kind,
+        extraDirtyIds: extraIds,
         stationUid: pair.station.uid,
         stationDefId: pair.station.defId,
         stationPos: pair.station.standPos.clone(),
         stationFloor: pair.station.floor,
-        dwell: pair.station.dwell,
+        // H.95 — Slight dwell scale per extra piece so loading 4
+        // plates takes a bit longer than 1 (not 4× longer — the
+        // bottleneck was always the walk, not the loading itself).
+        dwell: pair.station.dwell * (1 + extraIds.length * 0.25),
         phase: "pickup",
       };
     }
@@ -2824,6 +2921,13 @@ export class StaffRouter {
   private abandonWashTrip(w: StaffActor): void {
     if (w.washTrip) {
       this.washCallbacks?.releaseDirtyPickup(w.washTrip.dirtyId);
+      // H.95 — Release any extras claimed alongside the primary so
+      // another waiter can pick them up. Without this, a bailed
+      // trip would leave nearby dirties claimed-but-untouched
+      // until a save reload.
+      for (const id of w.washTrip.extraDirtyIds) {
+        this.washCallbacks?.releaseDirtyPickup(id);
+      }
       this.busyWashUids.delete(w.washTrip.stationUid);
       w.washTrip = null;
     }
