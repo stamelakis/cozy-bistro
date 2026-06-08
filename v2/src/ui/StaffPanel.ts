@@ -282,7 +282,7 @@ export class StaffPanel {
       const info = this.workloadBadgeInfo(role, m.id);
       return info?.count ?? 0;
     };
-    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}`).join(",");
+    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}`).join(",");
     if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
       return;
     }
@@ -297,6 +297,32 @@ export class StaffPanel {
         padding: "2px 0",
         fontSize: "10px",
       } as Partial<CSSStyleDeclaration>);
+      // H.97 — Per-member level chip BEFORE the name, so the player
+      // sees at a glance who's mentored. upgradeLevel starts at 0 and
+      // climbs with each completed training. Capped visual at 5 to
+      // match the recipe-tier ceiling; the underlying number keeps
+      // accumulating for fractional speed bonuses but the player
+      // doesn't see "Lv 12" cluttering the row.
+      const levelChip = document.createElement("span");
+      const lvl = Math.max(0, Math.min(5, member.upgradeLevel | 0));
+      levelChip.textContent = `Lv${lvl}`;
+      Object.assign(levelChip.style, {
+        fontSize: "9px",
+        fontWeight: "700",
+        padding: "1px 4px",
+        borderRadius: "3px",
+        background: lvl >= 4 ? "rgba(255,200,90,0.35)"
+          : lvl >= 2 ? "rgba(170,200,255,0.25)"
+          : "rgba(255,255,255,0.10)",
+        color: "#fff5dc",
+        marginRight: "5px",
+        flex: "0 0 auto",
+        fontVariantNumeric: "tabular-nums",
+        opacity: lvl === 0 ? "0.55" : "1",
+      } as Partial<CSSStyleDeclaration>);
+      levelChip.title = `Training level ${lvl}. Higher = faster cook / wash / errand times.`;
+      row.appendChild(levelChip);
+
       const name = document.createElement("span");
       name.textContent = member.name;
       Object.assign(name.style, {

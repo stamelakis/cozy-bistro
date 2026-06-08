@@ -69,7 +69,11 @@ export class StockStatusWidget {
     //   ─── 🍳 KITCHEN ───
     //   5 queued · 0 cooking · 2 delivering
 
-    this.root.appendChild(makeSectionHeader("🥫 INGREDIENTS"));
+    // Phase I (H.97) — Three labelled CARDS instead of free-flowing
+    // text with thin separators. Each card has its own tinted
+    // background, accent-colored left border, and padded inset so
+    // the three sub-panels read as distinct blocks.
+    const ingredientsCard = makeSectionCard("🥫 INGREDIENTS", "rgba(255,200,90,0.7)");
 
     // Storage badge moved to TOP of ingredients section — that's the
     // "how full is my pantry" headline number the user wanted to see
@@ -79,7 +83,7 @@ export class StockStatusWidget {
     this.storageCaret = makeCaret();
     this.storageRow.appendChild(this.storageBadge);
     this.storageRow.appendChild(this.storageCaret);
-    this.root.appendChild(this.storageRow);
+    ingredientsCard.appendChild(this.storageRow);
     this.storageTooltip = makeFloatingTooltip();
     document.body.appendChild(this.storageTooltip);
     attachHoverTooltip(this.storageRow, this.storageTooltip, this.storageCaret);
@@ -90,7 +94,7 @@ export class StockStatusWidget {
     this.needCaret = makeCaret();
     this.needRow.appendChild(this.needBadge);
     this.needRow.appendChild(this.needCaret);
-    this.root.appendChild(this.needRow);
+    ingredientsCard.appendChild(this.needRow);
     this.needTooltip = makeFloatingTooltip();
     document.body.appendChild(this.needTooltip);
     attachHoverTooltip(this.needRow, this.needTooltip, this.needCaret);
@@ -99,27 +103,30 @@ export class StockStatusWidget {
     Object.assign(this.autoShop.style, {
       fontSize: "10px", marginTop: "1px", textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.autoShop);
+    ingredientsCard.appendChild(this.autoShop);
+    this.root.appendChild(ingredientsCard);
 
-    this.root.appendChild(makeSectionHeader("🍽 DISHWARE"));
+    const dishwareCard = makeSectionCard("🍽 DISHWARE", "rgba(170,200,255,0.7)");
 
     this.dishRow = makeHoverRow();
     this.dishBadge = document.createElement("span");
     this.dishCaret = makeCaret();
     this.dishRow.appendChild(this.dishBadge);
     this.dishRow.appendChild(this.dishCaret);
-    this.root.appendChild(this.dishRow);
+    dishwareCard.appendChild(this.dishRow);
     this.dishTooltip = makeFloatingTooltip();
     document.body.appendChild(this.dishTooltip);
     attachHoverTooltip(this.dishRow, this.dishTooltip, this.dishCaret);
+    this.root.appendChild(dishwareCard);
 
-    this.root.appendChild(makeSectionHeader("🍳 KITCHEN"));
+    const kitchenCard = makeSectionCard("🍳 KITCHEN", "rgba(140,210,140,0.7)");
 
     this.pipeline = document.createElement("div");
     Object.assign(this.pipeline.style, {
       fontSize: "10px", textAlign: "center", opacity: "0.85",
     } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.pipeline);
+    kitchenCard.appendChild(this.pipeline);
+    this.root.appendChild(kitchenCard);
 
     this.update();
   }
@@ -453,31 +460,35 @@ function makeHoverRow(): HTMLElement {
   return row;
 }
 
-/** Phase I (H.81) — Section header for the three sub-panels
- * (INGREDIENTS / DISHWARE / KITCHEN).  A thin separator line + a
- * small uppercase label so each section reads as its own block. */
-function makeSectionHeader(label: string): HTMLElement {
-  const wrap = document.createElement("div");
-  Object.assign(wrap.style, {
-    display: "flex", alignItems: "center", gap: "5px",
-    marginTop: "8px", marginBottom: "1px",
-    fontSize: "10px", fontWeight: "700",
-    letterSpacing: "0.06em", opacity: "0.55",
+/** Phase I (H.97) — Section CARD container with a header inside.
+ * Replaces the thin-separator makeSectionHeader. Each card has a
+ * tinted background and an accent-colored left border, so the three
+ * sub-panels read as distinct blocks rather than a flat run-on of
+ * text. The accent color is per-section (warm yellow for stock,
+ * cool blue for dishware, green for kitchen) so the player can
+ * scan and find the section they care about by color, not just
+ * label. */
+function makeSectionCard(label: string, accentColor: string): HTMLElement {
+  const card = document.createElement("div");
+  Object.assign(card.style, {
+    marginTop: "6px",
+    padding: "5px 7px 5px 8px",
+    background: "rgba(255,245,220,0.045)",
+    borderLeft: `3px solid ${accentColor}`,
+    borderRadius: "0 4px 4px 0",
   } as Partial<CSSStyleDeclaration>);
-  const line = (): HTMLElement => {
-    const l = document.createElement("div");
-    Object.assign(l.style, {
-      flex: "1", height: "1px",
-      background: "rgba(255,245,220,0.18)",
-    } as Partial<CSSStyleDeclaration>);
-    return l;
-  };
-  wrap.appendChild(line());
-  const lab = document.createElement("span");
-  lab.textContent = label;
-  wrap.appendChild(lab);
-  wrap.appendChild(line());
-  return wrap;
+  const header = document.createElement("div");
+  Object.assign(header.style, {
+    fontSize: "10px",
+    fontWeight: "700",
+    letterSpacing: "0.06em",
+    opacity: "0.75",
+    marginBottom: "3px",
+    color: accentColor.replace(/,[\d.]+\)$/, ",1)"), // opacify
+  } as Partial<CSSStyleDeclaration>);
+  header.textContent = label;
+  card.appendChild(header);
+  return card;
 }
 
 /** Down-caret beside an expandable summary; flips to up-caret while

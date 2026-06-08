@@ -1885,16 +1885,33 @@ export class Engine {
           mine.kind === "small" ? 0.6 :
           mine.kind === "large" ? 1.4 :
           1.0;
-        if (didClaim) {
-          // Starter cash scales WITH plot size — bigger plot, bigger
-          // grant. A larger restaurant takes more furniture to fill
-          // out a viable opening day, so the extra cash offsets the
-          // higher build-out cost. EconomySystem now starts at $0
-          // (instead of $6000) so this grant IS the player's total
-          // opening pot.
-          const bonus = mine.kind === "small" ? 1000 : mine.kind === "medium" ? 1500 : 2000;
+        const bonus = mine.kind === "small" ? 1000 : mine.kind === "medium" ? 1500 : 2000;
+        // Phase I (H.97) — Starter grant is RECURRING every 3h, not
+        // a one-time-on-claim. didClaim still forces the first grant
+        // (so a brand-new player gets opening cash immediately) but
+        // subsequent logins check the localStorage cooldown and
+        // auto-claim if 3 hours have elapsed since the last one. The
+        // timestamp key is host-scoped so cookie-mode (per-tab) and
+        // localStorage-mode (cross-tab) both work.
+        const GRANT_COOLDOWN_MS = 3 * 60 * 60 * 1000;
+        const grantKey = `cozy-bistro-last-grant:${(window.location.host || "local")}`;
+        const lastGrantStr = localStorage.getItem(grantKey);
+        const lastGrant = lastGrantStr ? parseInt(lastGrantStr, 10) : 0;
+        const now = Date.now();
+        const cooldownElapsed = (now - lastGrant) >= GRANT_COOLDOWN_MS;
+        if (didClaim || cooldownElapsed) {
           this.game.economy.earnMoney(bonus, "grant");
-          console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot`);
+          localStorage.setItem(grantKey, String(now));
+          const reason = didClaim ? "fresh claim" : `3h grant (last was ${Math.floor((now - lastGrant) / 3600000)}h ago)`;
+          console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot — ${reason}`);
+          // Floating text so the player sees the bonus land. Same
+          // pattern as the existing rating / payment popups.
+          try {
+            this.floatingText?.pop?.(0, 0, `+$${bonus} grant`, "#ffd966");
+          } catch { /* floatingText may not be wired yet on first claim */ }
+        } else {
+          const hoursLeft = Math.ceil((GRANT_COOLDOWN_MS - (now - lastGrant)) / 3600000);
+          console.log(`[Engine] starter grant on cooldown — ${hoursLeft}h to next $${bonus} grant`);
         }
       }
       this.game.setAuthGated(false);

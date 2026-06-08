@@ -2182,6 +2182,15 @@ export class StaffRouter {
       const target = this.barmanInsideStandFor(station, allBars);
       ticket.state = "cooking";
       ticket.clock = 0;
+      // Phase I (H.97) — Set assignedChefId on the LOCAL ticket so
+      // getBarmanBacklog can attribute it. Bar tickets enqueue with
+      // assignedChefId=null (line 1302) because the chef-pool picker
+      // doesn't apply to barmen, but without this assignment after
+      // claim the per-member badge query would never find them
+      // (filter is assignedChefId === barmanMemberId) and the
+      // "1 working" header would be visible while no individual
+      // barman row had a badge.
+      ticket.assignedChefId = b.memberId;
       const chefMult = this.getChefCookMultiplier?.(b.memberId) ?? 1;
       ticket.cookSeconds = Math.max(1, ticket.baseCookSeconds * chefMult);
       this.mirrorTicketClaim(ticket, b.memberId);
