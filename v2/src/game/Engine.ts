@@ -1878,6 +1878,40 @@ export class Engine {
     // a returning player whose plot was already on file (no bonus
     // — they already got it on the original claim).
     const enterGame = (didClaim: boolean): void => {
+      // Phase I (H.98) — Belt-and-suspenders guard. afterAuth's
+      // ready() check is supposed to prevent entry without a
+      // Restaurant + Building, but if the player ever lands here
+      // with no Restaurant row (auth race, stale cache, future
+      // refactor regression), force the modal instead of starting
+      // a local-only ghost session that can't sync. The user's
+      // localStorage still has data; once they claim, the H.75
+      // furniture backfill + similar pushes will mirror it up.
+      //
+      // didClaim=true means the modal JUST resolved — the
+      // claim_building reducer has acknowledged but the cloud
+      // subscription may not have echoed the new Restaurant row
+      // yet. Poll for up to 5s before falling back to the modal so
+      // we don't re-show it for a network round-trip.
+      if (this.cloud.getMyRestaurantId() == null) {
+        if (didClaim) {
+          let waited = 0;
+          const wait = (): void => {
+            waited += 200;
+            if (this.cloud.getMyRestaurantId() != null) {
+              enterGame(true);
+              return;
+            }
+            if (waited < 5000) { window.setTimeout(wait, 200); return; }
+            console.warn("[Engine] enterGame(didClaim=true): Restaurant row never arrived after 5s — re-showing modal");
+            new BuildingPickModal(container, this.cloud, () => enterGame(true));
+          };
+          window.setTimeout(wait, 200);
+          return;
+        }
+        console.warn("[Engine] enterGame called with no Restaurant on cloud — forcing BuildingPickModal (cache may be stale; try Ctrl+Shift+R if this repeats)");
+        new BuildingPickModal(container, this.cloud, () => enterGame(true));
+        return;
+      }
       const mine = this.cloud.getMyBuilding();
       if (mine) {
         // Per-plot rent multiplier — small 0.6×, medium 1.0×, large 1.4×.
