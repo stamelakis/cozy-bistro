@@ -5,6 +5,9 @@ import type { AnimatedCharacter, CharacterAction } from "../scene/CharacterAnima
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { fitFurniture, placementY } from "../assets/fitFurniture";
 import { HeldItemVisualizer } from "../scene/HeldItemVisualizer";
+import { SeatPlateVisualizer } from "../scene/SeatPlateVisualizer";
+import { CookingPotVisualizer } from "../scene/CookingPotVisualizer";
+import { WashCycleRingVisualizer } from "../scene/WashCycleRingVisualizer";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -191,6 +194,20 @@ export class VisitMode {
    * will be re-used by the host's view post-H.D when we delete the
    * legacy heldPlate.visible toggling in StaffRouter. */
   private heldItems: HeldItemVisualizer = new HeldItemVisualizer();
+  /** Phase H.A — Renders a plate at the seat position whenever a
+   * guest's state is "eating". Replaces (in visit mode) the host's
+   * showPlateForGuest. */
+  private seatPlates: SeatPlateVisualizer = new SeatPlateVisualizer();
+  /** Phase H.A — Renders a bubbling pot at a chef when they're
+   * cooking a non-bar ticket. */
+  private cookingPots: CookingPotVisualizer = new CookingPotVisualizer();
+  /** Phase H.A — Renders a countdown ring at each dishwasher with
+   * a running batch. Brand-new visual (host didn't have one either). */
+  private washCycleRings: WashCycleRingVisualizer = new WashCycleRingVisualizer();
+  /** Phase H.A — Cache of placed_furniture positions keyed by uid.
+   * Populated alongside the interior render; used by the wash-cycle
+   * ring visualizer to resolve a dishwasher's uid → coords. */
+  private furniturePosByUid: Map<string, { x: number; z: number; floor: number }> = new Map();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -356,6 +373,7 @@ export class VisitMode {
     this.startLiveStaffSubscription(plot);
     this.startLiveTicketSubscription(plot);
     this.startLiveCustomerSubscription(plot);
+    this.startLiveDishwasherSubscription(plot);
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
@@ -419,17 +437,20 @@ export class VisitMode {
         // character GLB has loaded; reconcile() will no-op until
         // setHost arrives in spawnLiveStaffActor's success branch.
         this.heldItems.onStaffActor(row.memberId, row.ticketId);
+        this.cookingPots.onStaffActor(row.memberId, row.ticketId);
         void this.spawnLiveStaffActor(row, targetPlotId);
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.heldItems.onStaffActor(row.memberId, row.ticketId);
+        this.cookingPots.onStaffActor(row.memberId, row.ticketId);
         this.applyLiveStaffUpdate(row);
       },
       onDelete: (memberId) => {
         if (this.activePlot?.id !== targetPlotId) return;
         console.log(`[Visit] live staff onDelete: member=${memberId}`);
         this.heldItems.onStaffActorDelete(memberId);
+        this.cookingPots.onStaffActorDelete(memberId);
         this.removeLiveStaffActor(memberId);
       },
     }, hostRid);
@@ -497,11 +518,11 @@ export class VisitMode {
       this.scene.animator.add(animated);
       this.liveStaffCharacters.set(row.memberId, animated);
       this.liveStaffCount += 1;
-      // H.A — Register the character root with the held-item
-      // visualizer. Any pending ticket assignment (cached from the
-      // pre-load staff_actor.ticketId) gets reconciled now that we
-      // have a host to attach the mesh to.
+      // H.A — Register the character root with the cloud-derived
+      // visualizers. Any pending state cached from pre-load events
+      // gets reconciled now that we have a host to attach to.
       this.heldItems.setHost(row.memberId, { root: animated.root });
+      this.cookingPots.setHost(row.memberId, { root: animated.root });
       this.refreshLivenessLabel();
     } catch (err) {
       console.warn(`[Visit] failed to spawn live staff ${role}:`, err);
@@ -539,9 +560,10 @@ export class VisitMode {
   private removeLiveStaffActor(memberId: string): void {
     const c = this.liveStaffCharacters.get(memberId);
     if (!c) return;
-    // H.A — Detach held mesh BEFORE removing the character root so
-    // the visualizer can clear its parent ref cleanly.
+    // H.A — Detach cloud-derived visuals BEFORE removing the
+    // character root so each visualizer clears its parent ref cleanly.
     this.heldItems.setHost(memberId, null);
+    this.cookingPots.setHost(memberId, null);
     this.scene.animator.remove(c.root);
     c.root.removeFromParent();
     this.liveStaffCharacters.delete(memberId);
@@ -568,9 +590,13 @@ export class VisitMode {
     this.liveCustomerCharacters.clear();
     this.liveCustomerPendingLoads.clear();
     this.liveTicketStates.clear();
-    // H.A — Drop held-item caches + any attached meshes. Next visit
-    // re-subscribes and rebuilds from scratch.
+    // H.A — Drop all cloud-derived visualizer caches + any attached
+    // meshes. Next visit re-subscribes and rebuilds from scratch.
     this.heldItems.dispose();
+    this.seatPlates.dispose();
+    this.cookingPots.dispose();
+    this.washCycleRings.dispose();
+    this.furniturePosByUid.clear();
     this.refreshLivenessLabel();
   }
 
@@ -589,14 +615,18 @@ export class VisitMode {
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         firedCount += 1;
+        // H.A — Plate-on-table reconcile alongside the character spawn.
+        this.seatPlates.onGuest(row);
         void this.spawnLiveCustomerActor(row, targetPlotId);
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.seatPlates.onGuest(row);
         this.applyLiveCustomerUpdate(row);
       },
       onDelete: (id) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.seatPlates.onGuestDelete(id);
         this.removeLiveCustomerActor(String(id));
       },
     }, hostRid);
@@ -688,22 +718,54 @@ export class VisitMode {
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
-        // H.A — Held-item visualizer needs ticket state + appliance to
-        // pick a plate vs glass mesh for whoever's carrying this ticket.
+        // H.A — Cloud-derived visualizers need ticket state +
+        // appliance + assigned chef to pick plate vs glass meshes
+        // and to anchor the cooking pot on the right chef.
         this.heldItems.onTicket(row.id, row.state, row.appliance);
+        this.cookingPots.onTicket(row.id, row.state, row.appliance, row.assignedChefId);
         this.refreshLivenessLabel();
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
         this.heldItems.onTicket(row.id, row.state, row.appliance);
+        this.cookingPots.onTicket(row.id, row.state, row.appliance, row.assignedChefId);
         this.refreshLivenessLabel();
       },
       onDelete: (id) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.delete(String(id));
         this.heldItems.onTicketDelete(id);
+        this.cookingPots.onTicketDelete(id);
         this.refreshLivenessLabel();
+      },
+    }, hostRid);
+  }
+
+  /** Phase H.A — Subscribe to the host's dishwasher_batch rows and
+   * feed each into the WashCycleRingVisualizer. The ring position
+   * resolver (set in loadVisitedInterior) reads furniturePosByUid
+   * which the furniture-load loop populates as it places dishwashers
+   * on the visit scene; if a batch event arrives before the
+   * furniture has loaded, the visualizer no-ops and will pick the
+   * batch up on the next update event after the furniture lands. */
+  private startLiveDishwasherSubscription(plot: VisitablePlot): void {
+    if (!this.cloud) return;
+    const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (hostRid == null) return;
+    const targetPlotId = plot.id;
+    this.cloud.subscribeDishwasherBatchChanges({
+      onInsert: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.washCycleRings.onBatch(row.furnitureUid, Number(row.cycleTimeRemainingMs));
+      },
+      onUpdate: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.washCycleRings.onBatch(row.furnitureUid, Number(row.cycleTimeRemainingMs));
+      },
+      onDelete: (uid) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.washCycleRings.onBatchDelete(uid);
       },
     }, hostRid);
   }
@@ -778,6 +840,15 @@ export class VisitMode {
     this.scene.worldRoot.add(root);
     this.visitorRoot = root;
 
+    // H.A — Wire visualizers that need a scene-mount and/or
+    // furniture-position resolver. SeatPlate plates need a per-floor
+    // mount, but for now we only support floor 0 in visit mode (a
+    // single visitorRoot); the SeatPlateVisualizer falls back to the
+    // single root via setFallbackRoot.
+    this.seatPlates.setFallbackRoot(root);
+    this.washCycleRings.setRoot(root);
+    this.washCycleRings.setResolver((uid) => this.furniturePosByUid.get(uid) ?? null);
+
     // Snapshot the active plot id — if the player exits mid-load
     // we must NOT keep adding meshes to a stale root.
     const targetPlotId = plot.id;
@@ -800,6 +871,15 @@ export class VisitMode {
         rotationRad: ((p.rotation ?? 0) * Math.PI) / 180,
         floor: Math.max(0, p.floor ?? 0),
         category: def.category,
+      });
+      // H.A — Cache every placed piece's position by uid so the
+      // WashCycleRingVisualizer can resolve dishwasher locations
+      // (and future visualizers can too — anchored-to-furniture
+      // visuals are common).
+      this.furniturePosByUid.set(p.uid, {
+        x: p.position.x,
+        z: p.position.y,
+        floor: Math.max(0, p.floor ?? 0),
       });
       try {
         const model = await this.scene.loader.load(def.modelPath);

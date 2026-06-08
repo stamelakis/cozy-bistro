@@ -101,6 +101,15 @@ export interface ActiveGuestRow {
   targetZ: number;
   targetFloor: number;
   seatUid: string;
+  /** Phase H.A — Position where a plate should sit when this guest
+   * is eating. Pre-H.A wasn't surfaced because the host's local sim
+   * computed it from registry geometry; visit-mode visualizers need
+   * it as cloud-supplied truth. */
+  seatX: number;
+  seatZ: number;
+  seatFloor: number;
+  plateX: number;
+  plateZ: number;
 }
 
 /** Phase I.1 (H.47) — Full row shape returned by listActiveGuests.
@@ -1363,12 +1372,16 @@ export class SpacetimeClient {
       x: number; z: number; floor: number;
       targetX: number; targetZ: number; targetFloor: number;
       seatUid: string;
+      seatX: number; seatZ: number; seatFloor: number;
+      plateX: number; plateZ: number;
     };
     const toClientRow = (r: ServerRow): ActiveGuestRow => ({
       id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
       x: r.x, z: r.z, floor: r.floor,
       targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
       seatUid: r.seatUid,
+      seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor,
+      plateX: r.plateX, plateZ: r.plateZ,
     });
     try {
       if (handlers.onInsert) {
@@ -3289,6 +3302,8 @@ export class SpacetimeClient {
             x: g.x, z: g.z, floor: g.floor,
             targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
             seatUid: g.seatUid,
+            seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
+            plateX: g.plateX, plateZ: g.plateZ,
           },
         });
       }
