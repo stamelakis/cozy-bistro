@@ -152,7 +152,9 @@ export class AchievementsModal {
   }
 
   /** Build a single achievement row. Unlocked entries fully opaque
-   * with a trophy + gold name; locked entries dimmed with a padlock. */
+   * with a trophy + gold name; locked entries dimmed with a padlock.
+   * H.100 — show the cash prize on the right side; pre-unlock it's
+   * dimmed ("how much you'll earn"), post-unlock it shows "claimed". */
   private buildRow(a: Achievement): HTMLElement {
     const unlocked = this.game.achievements.isUnlocked(a.id);
     const row = document.createElement("div");
@@ -162,13 +164,14 @@ export class AchievementsModal {
       padding: "6px 6px",
       borderBottom: "1px solid rgba(255,245,220,0.06)",
       opacity: unlocked ? "1" : "0.45",
+      alignItems: "center",
     } as Partial<CSSStyleDeclaration>);
     const icon = document.createElement("span");
     icon.textContent = unlocked ? "🏆" : "🔒";
     Object.assign(icon.style, { fontSize: "18px", flex: "0 0 24px" } as Partial<CSSStyleDeclaration>);
     row.appendChild(icon);
     const text = document.createElement("div");
-    Object.assign(text.style, { flex: "1" } as Partial<CSSStyleDeclaration>);
+    Object.assign(text.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
     const name = document.createElement("div");
     name.textContent = a.name;
     Object.assign(name.style, { fontWeight: "700", fontSize: "12px", color: unlocked ? "#ffd986" : undefined } as Partial<CSSStyleDeclaration>);
@@ -178,6 +181,41 @@ export class AchievementsModal {
     text.appendChild(name);
     text.appendChild(desc);
     row.appendChild(text);
+
+    // H.100 — Prize chip on the right.  Color-codes by reward size so
+    // T1-T2 read as small flavor bonuses while T6-T7 stand out as
+    // genuine milestones. Strikethrough + "claimed" tag once unlocked,
+    // since the cash is already in the till.
+    const reward = a.cashReward ?? 0;
+    if (reward > 0) {
+      const prize = document.createElement("div");
+      const bgByTier =
+        reward >= 50_000 ? "rgba(255,200,90,0.40)" : // T7 gold
+        reward >= 15_000 ? "rgba(255,180,90,0.32)" : // T6
+        reward >=  5_000 ? "rgba(170,200,255,0.25)" : // T5 blue
+        reward >=  1_500 ? "rgba(170,200,255,0.18)" : // T4
+        reward >=    500 ? "rgba(140,210,140,0.18)" : // T3 green
+        reward >=    150 ? "rgba(140,210,140,0.12)" : // T2
+                           "rgba(255,255,255,0.08)";  // T1
+      prize.textContent = `+$${reward.toLocaleString("en-US")}`;
+      prize.title = unlocked
+        ? `Claimed — $${reward.toLocaleString("en-US")} already paid out.`
+        : `Cash bonus paid out when this achievement unlocks.`;
+      Object.assign(prize.style, {
+        fontSize: "11px",
+        fontWeight: "700",
+        padding: "3px 8px",
+        borderRadius: "10px",
+        background: bgByTier,
+        color: unlocked ? "#a8e2a8" : "#fff5dc",
+        flex: "0 0 auto",
+        fontVariantNumeric: "tabular-nums",
+        textDecoration: unlocked ? "line-through" : "none",
+        opacity: unlocked ? "0.7" : "1",
+        whiteSpace: "nowrap",
+      } as Partial<CSSStyleDeclaration>);
+      row.appendChild(prize);
+    }
     return row;
   }
 }

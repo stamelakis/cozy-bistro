@@ -645,9 +645,21 @@ export class Engine {
       if (hit.length > 0) this.signModal.show();
     });
     // Pop a toast above the door whenever an achievement unlocks.
+    // Phase I (H.100) — also pay the cash reward and surface the amount
+    // in the toast so the player sees the bonus land. earnMoney
+    // attributes the income to "achievement" for the daily ledger /
+    // history split. Hydrate path uses markUnlockedSilent which does
+    // NOT call onUnlock, so already-claimed achievements never
+    // re-grant on reload.
     this.game.achievements.onUnlock = (a) => {
-      // Floating text and sound; player can open the AchievementsModal for details.
-      this.floatingText.pop(0, 5, `🏆 ${a.name}`, "#ffd986");
+      const reward = a.cashReward ?? 0;
+      if (reward > 0) {
+        this.game.economy.earnMoney(reward, "achievement");
+      }
+      const label = reward > 0
+        ? `🏆 ${a.name} · +$${reward.toLocaleString("en-US")}`
+        : `🏆 ${a.name}`;
+      this.floatingText.pop(0, 5, label, "#ffd986");
       this.sfx.chime();
     };
     // Auto-show the welcome modal on a brand-new visit — but ONLY

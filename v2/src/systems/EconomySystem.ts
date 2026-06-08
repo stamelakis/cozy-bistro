@@ -2,7 +2,7 @@ import type { SaveGameState, TransactionLogEntry } from "../data/types";
 
 const maxTransactionLogEntries = 5000;
 
-export type EarnReason = "payment" | "refund" | "grant" | "offline";
+export type EarnReason = "payment" | "refund" | "grant" | "offline" | "achievement";
 export type SpendReason = "ingredients" | "staff" | "unlock" | "decor" | "rent";
 export type ForceSpendReason = "rent" | "charge" | "restock" | "salary";
 
@@ -183,6 +183,7 @@ function getEarnTransactionLabel(reason: EarnReason): string {
     refund: "Refund",
     grant: "Grant/reward",
     offline: "Offline earnings",
+    achievement: "Achievement reward",
   };
   return labels[reason];
 }

@@ -48,6 +48,169 @@ export interface Achievement {
   category: AchievementCategory;
   /** Returns true once the milestone is reached. */
   predicate: (game: Game) => boolean;
+  /** Phase I (H.100) — Cash bonus paid out the moment this
+   * achievement unlocks. Derived from REWARD_BY_ID at module load;
+   * never set inline so adjusting the economy is one table edit. */
+  cashReward?: number;
+}
+
+/** Phase I (H.100) — Reward tiers, in dollars.
+ *
+ * T1 trivial          (first session, accidental)
+ * T2 early goal       (first 30 min)
+ * T3 solid run        (first few hours)
+ * T4 committed        (first week of real play)
+ * T5 long-term        (many sessions)
+ * T6 mastery          (deep play)
+ * T7 endgame flex     (legend status)
+ *
+ * Tuned so each reward is ~5-15% of typical bank at that point —
+ * meaningful but never economy-breaking. Full sweep ≈ $700k.
+ */
+export const REWARD_TIERS = {
+  T1:    50,
+  T2:   150,
+  T3:   500,
+  T4: 1_500,
+  T5: 5_000,
+  T6:15_000,
+  T7:50_000,
+} as const;
+
+/** Phase I (H.100) — Per-achievement reward, assigned by tier.
+ * Single source of truth; the modal + the unlock handler both
+ * read from this map. Unknown ids fall back to T2 so a future
+ * achievement added without a tier still pays a sensible amount. */
+const REWARD_BY_ID: Record<string, number> = {
+  // ─── T1 — Trivial ($50) ───
+  "first-sale":           REWARD_TIERS.T1,
+  "first-served":         REWARD_TIERS.T1,
+  "first-recipe":         REWARD_TIERS.T1,
+  "first-furniture":      REWARD_TIERS.T1,
+  "first-staff":          REWARD_TIERS.T1,
+  "first-chat":           REWARD_TIERS.T1,
+  "first-weather":        REWARD_TIERS.T1,
+  "first-shopping":       REWARD_TIERS.T1,
+  "dish-buy-set":         REWARD_TIERS.T1,
+  "boost-1":              REWARD_TIERS.T1,
+  "decor-theme-change":   REWARD_TIERS.T1,
+  "pantry-auto-shop":     REWARD_TIERS.T1,
+
+  // ─── T2 — Early goal ($150) ───
+  "cash-100":             REWARD_TIERS.T2,
+  "cash-250":             REWARD_TIERS.T2,
+  "day-2":                REWARD_TIERS.T2,
+  "day-3":                REWARD_TIERS.T2,
+  "served-5":             REWARD_TIERS.T2,
+  "served-10":            REWARD_TIERS.T2,
+  "menu-3":               REWARD_TIERS.T2,
+  "furniture-5":          REWARD_TIERS.T2,
+  "staff-chef-1":         REWARD_TIERS.T2,
+  "staff-waiter-1":       REWARD_TIERS.T2,
+  "staff-barman-1":       REWARD_TIERS.T2,
+  "staff-errand-1":       REWARD_TIERS.T2,
+  "weather-3":            REWARD_TIERS.T2,
+  "social-chat-10":       REWARD_TIERS.T2,
+
+  // ─── T3 — Solid run ($500) ───
+  "cash-500":             REWARD_TIERS.T3,
+  "cash-1k":              REWARD_TIERS.T3,
+  "day-5":                REWARD_TIERS.T3,
+  "day-7":                REWARD_TIERS.T3,
+  "served-25":            REWARD_TIERS.T3,
+  "served-50":            REWARD_TIERS.T3,
+  "menu-5":               REWARD_TIERS.T3,
+  "furniture-10":         REWARD_TIERS.T3,
+  "decor-3-themes":       REWARD_TIERS.T3,
+  "decor-10-pieces":      REWARD_TIERS.T3,
+  "staff-all-roles":      REWARD_TIERS.T3,
+  "train-staff-3":        REWARD_TIERS.T3,
+  "tier-2":               REWARD_TIERS.T3,
+  "social-visit-1":       REWARD_TIERS.T3,
+  "weather-5":            REWARD_TIERS.T3,
+  "boost-10":             REWARD_TIERS.T3,
+  "rating-first-5":       REWARD_TIERS.T3,
+
+  // ─── T4 — Committed ($1,500) ───
+  "cash-2k":              REWARD_TIERS.T4,
+  "cash-5k":              REWARD_TIERS.T4,
+  "day-10":               REWARD_TIERS.T4,
+  "served-100":           REWARD_TIERS.T4,
+  "menu-10":              REWARD_TIERS.T4,
+  "menu-all-categories":  REWARD_TIERS.T4,
+  "furniture-25":         REWARD_TIERS.T4,
+  "build-2-floors":       REWARD_TIERS.T4,
+  "staff-3-chefs":        REWARD_TIERS.T4,
+  "staff-3-waiters":      REWARD_TIERS.T4,
+  "train-staff-5":        REWARD_TIERS.T4,
+  "upgrade-recipe-3":     REWARD_TIERS.T4,
+  "tier-3":               REWARD_TIERS.T4,
+  "pantry-stock-5":       REWARD_TIERS.T4,
+  "dish-50-plates":       REWARD_TIERS.T4,
+  "dish-50-glasses":      REWARD_TIERS.T4,
+  "dish-t3":              REWARD_TIERS.T4,
+  "rating-10-fives":      REWARD_TIERS.T4,
+  "rating-avg-4":         REWARD_TIERS.T4,
+  "social-visit-5":       REWARD_TIERS.T4,
+  "social-visited-5":     REWARD_TIERS.T4,
+
+  // ─── T5 — Long-term ($5,000) ───
+  "cash-10k":             REWARD_TIERS.T5,
+  "cash-25k":             REWARD_TIERS.T5,
+  "day-20":               REWARD_TIERS.T5,
+  "day-30":               REWARD_TIERS.T5,
+  "served-250":           REWARD_TIERS.T5,
+  "served-500":           REWARD_TIERS.T5,
+  "menu-15":              REWARD_TIERS.T5,
+  "furniture-50":         REWARD_TIERS.T5,
+  "staff-5-chefs":        REWARD_TIERS.T5,
+  "staff-total-10":       REWARD_TIERS.T5,
+  "train-staff-7":        REWARD_TIERS.T5,
+  "upgrade-recipe-5":     REWARD_TIERS.T5,
+  "tier-4":               REWARD_TIERS.T5,
+  "pantry-stock-10":      REWARD_TIERS.T5,
+  "pantry-12-stocked":    REWARD_TIERS.T5,
+  "dish-150-plates":      REWARD_TIERS.T5,
+  "dish-150-glasses":     REWARD_TIERS.T5,
+  "decor-30-pieces":      REWARD_TIERS.T5,
+  "decor-all-themes":     REWARD_TIERS.T5,
+  "rating-50-fives":      REWARD_TIERS.T5,
+  "social-chat-50":       REWARD_TIERS.T5,
+  "social-visit-20":      REWARD_TIERS.T5,
+  "weather-all":          REWARD_TIERS.T5,
+  "boost-50":             REWARD_TIERS.T5,
+
+  // ─── T6 — Mastery ($15,000) ───
+  "cash-50k":             REWARD_TIERS.T6,
+  "cash-100k":            REWARD_TIERS.T6,
+  "day-60":               REWARD_TIERS.T6,
+  "served-1k":            REWARD_TIERS.T6,
+  "furniture-100":        REWARD_TIERS.T6,
+  "staff-total-20":       REWARD_TIERS.T6,
+  "train-staff-max":      REWARD_TIERS.T6,
+  "upgrade-recipe-max":   REWARD_TIERS.T6,
+  "tier-5":               REWARD_TIERS.T6,
+  "pantry-stock-max":     REWARD_TIERS.T6,
+  "dish-300-plates":      REWARD_TIERS.T6,
+  "dish-t5":              REWARD_TIERS.T6,
+  "build-all-floors":     REWARD_TIERS.T6,
+  "rating-100-fives":     REWARD_TIERS.T6,
+  "rating-avg-4.5":       REWARD_TIERS.T6,
+  "weather-festival":     REWARD_TIERS.T6,
+
+  // ─── T7 — Endgame flex ($50,000) ───
+  "cash-250k":            REWARD_TIERS.T7,
+  "cash-500k":            REWARD_TIERS.T7,
+  "day-100":              REWARD_TIERS.T7,
+  "served-2.5k":          REWARD_TIERS.T7,
+  "served-5k":            REWARD_TIERS.T7,
+  "furniture-250":        REWARD_TIERS.T7,
+};
+
+/** Phase I (H.100) — Public lookup. Used by the modal (display) and
+ * Engine.onUnlock (grant). Unknown ids fall back to T2. */
+export function getCashReward(id: string): number {
+  return REWARD_BY_ID[id] ?? REWARD_TIERS.T2;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -434,6 +597,13 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     description: "Trigger the boost button 50 times.",
     predicate: (g) => g.playerCounters.boostsUsed >= 50 },
 ];
+
+// Phase I (H.100) — Stamp cashReward on each achievement at module
+// load. Single source of truth: REWARD_BY_ID above. Future tweaks
+// touch one table, not 100 inline declarations.
+for (const a of ACHIEVEMENTS as Achievement[]) {
+  a.cashReward = getCashReward(a.id);
+}
 
 // ──────────────────────────────────────────────────────────────
 
