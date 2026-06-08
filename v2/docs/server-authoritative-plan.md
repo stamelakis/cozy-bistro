@@ -595,3 +595,152 @@ Before I start Phase A3, give this doc a read and push back on:
 3. The 10 Hz tick rate — could be 5 Hz or 20 Hz
 4. Pathfinding-on-server vs. client-supplied-paths
 5. Anything else
+
+---
+
+# Phase H Completion Plan (post-H.100 reality check)
+
+Written after the visit-mode visualization gap surfaced: visitors see
+empty restaurants because the foreground sim still owns most visuals.
+Below is the honest audit of where each subsystem actually stands and
+the remaining work to make rendering symmetric (host view ↔ visit view).
+
+## Reality check per subsystem
+
+| Subsystem | Flag default | Semantic today | Authoritative? |
+|---|---|---|---|
+| `furniture`  | ON | Cloud wins; local mirrors. Live-diff on writes. | ✅ Yes |
+| `dishware`   | ON | Server's `tick_dishwasher_batch` drives cycles; client mirrors pools. | ✅ Yes |
+| `guests`     | ON | "Additively mirror to cloud" — local sim is source of truth. Cloud is a copy. | ❌ Local |
+| `tickets`    | ON | "Foreground keeps the StaffRouter local sim as truth." Cloud is a copy. | ❌ Local |
+| `staff`      | ON | "Foreground keeps StaffRouter local-sim authoritative." Cloud is a copy. | ❌ Local |
+
+**Net:** 2/5 truly server-authoritative. 3/5 are "the cloud has a mirror
+of what the local sim decided." Visitors read the mirror and miss
+anything the local sim renders without writing to a cloud row
+(held-plate meshes, plate-on-table, dishwasher cycle ring, dirty piles
+on tables).
+
+## Server-side tick functions we already have
+
+| Tick | Coverage | Gap vs. local sim |
+|---|---|---|
+| `tick_guest_state` | Full state machine: walkingIn → seated → ordering → eating → leaving + WC trips | May lag client on seat assignment (pre-H.89 backfill); no plate-on-table state |
+| `tick_ticket_state` | Mostly delivered-dwell cleanup; auto-claim / auto-finish present | Doesn't currently drive ALL ticket transitions on foreground — local StaffRouter does it |
+| `tick_staff_actor` | Position interpolation toward target | Doesn't drive dispatch / wash trips / take-order on foreground — local StaffRouter does it |
+| `tick_dishwasher_batch` | Cycle countdown + flush | Authoritative ✓ |
+
+## What's missing in the cloud schema for full visual fidelity
+
+These are the visual props the local sim renders but doesn't mirror.
+Either add a field/table OR derive from existing rows.
+
+| Visual | Cloud has? | Derivation path |
+|---|---|---|
+| **Held plate / glass on waiter** | Partially | `staff_actor.ticket_id != null && ticket.state == "delivering"` (cloud has both) — no new field needed |
+| **Held plate on chef/barman** | Partially | `staff_actor.assigned_stove_uid != null && ticket.state == "cooking"` — derivable |
+| **Plate at customer's seat (eating)** | Partially | `active_guest.state == "eating"` (cloud has it) — derive plate model from `order_recipes[order_index]` |
+| **Cooking pot/bubbles on stove** | Partially | `active_ticket.state == "cooking"` + `assigned_chef_id` — find the chef's `assigned_stove_uid` |
+| **Dishwasher cycle countdown ring** | Yes | `dishwasher_batch.cycle_time_remaining_ms` exists — just need the visual |
+| **Dirty plate piles on tables** | NO | Add `dirty_pile` table (`restaurant_id, seat_uid, kind, tier, slot_index`) — populated server-side when guest leaves |
+| **Floating text (ratings, +$X)** | NO | Probably fine to stay local — purely cosmetic, no need for visitors |
+
+## Migration sequence
+
+Pick subsystems one at a time. Each subsystem completes when:
+- (a) the server's `tick_*` actually drives all state transitions
+- (b) the client renderer reads from cloud rows, not local sim arrays
+- (c) the local sim becomes a thin "submit input, render echoed state" layer
+
+### H.A — Cloud-derived visuals (lowest risk, biggest visible win)
+
+No schema changes. Add four cloud-driven render systems to the **shared**
+renderer (both host view and visit view use them):
+
+1. **Held-plate visualizer** — subscribe to `staff_actor` + `active_ticket`;
+   attach a plate mesh to actors when their ticket is in
+   delivering/cooking state. Removes the manual `heldPlate.visible`
+   toggling scattered through `StaffRouter`.
+2. **Plate-on-table visualizer** — subscribe to `active_guest`; when
+   state is `eating`, render plate at seat_pos with tier from
+   `reserved_dish_tiers[order_index]`. Replaces local `showPlateForGuest`.
+3. **Cooking-pot visualizer** — subscribe to `active_ticket`; when
+   state is `cooking`, find the assigned chef's stove and render the
+   pot mesh there. Replaces local `chef.assignedStoveUid` cooking visual.
+4. **Cycle-ring visualizer** — subscribe to `dishwasher_batch`; render
+   a countdown ring on each batched dishwasher. New visual; nothing to replace.
+
+Verifies: visit mode now shows held plates, cooking pots, plates on
+tables, dishwasher rings. Host view is unchanged (still has the local
+visuals on top — we delete those in H.D).
+
+### H.B — Dirty-pile sync (one schema migration)
+
+Only item that needs a new table. Add `dirty_pile`:
+
+```rust
+#[table(name = dirty_pile, public)]
+pub struct DirtyPile {
+    #[primary_key] pub id: u64,        // auto_inc
+    #[index(btree)] pub restaurant_id: u64,
+    pub seat_uid: String,
+    pub kind: String,                  // "plate" | "glass"
+    pub tier: u32,
+    pub slot_index: i32,               // which of 4 leftover slots
+    pub floor: u32,
+    pub x: f32, pub z: f32,
+}
+```
+
+Populated by `settle_guest_dishes` when a guest finishes. Cleared by
+`pickup_dirty_pile(id)` when a waiter scoops. Client renderer
+subscribes; visit mode + host view both get dirty piles.
+
+This is the migration-safe pattern from the rules — all fields are
+primitives with const defaults. No risk of wipe.
+
+### H.C — True server-authoritative cutover (the hard part)
+
+Now move ownership: server's `tick_*` becomes the decision-maker;
+local sim becomes a renderer.
+
+Three sub-targets, separate commits:
+
+1. **`tickets`** (smallest — ~15 fields, ~6 states). Migrate first
+   because tickets are mostly server-side already.
+2. **`staff`** (medium — ~25 fields × 4 roles, complex dispatch).
+3. **`guests`** (largest — ~40 fields, ~12 states, biggest blast
+   radius). Last so we have confidence from the other two.
+
+For each: write a test plan listing every state transition the local
+sim drives; verify the server does the same; flip the renderer to
+read from cloud; run for a session; only THEN delete the local sim
+code path.
+
+### H.D — Delete legacy local-sim paths
+
+After H.A/B/C land and bake for a session each, delete:
+- `GuestSpawner.this.guests` array (cloud rows replace it)
+- `StaffRouter.this.tickets`, `this.chefs`, `this.waiters`, `this.barmen` arrays
+- All `mirror*` helpers (no longer needed; mutations go through
+  reducers, cloud subscription drives local renders)
+- `dirtyTableMeshes`, `showPlateForGuest`, `heldPlate.visible`, etc.
+
+Final commit makes the symmetric rendering claim true: host view
+runs the same renderer as visit view, both driven by cloud rows.
+
+## Risk register
+
+| Risk | Mitigation |
+|---|---|
+| Server's `tick_*` has gaps vs. local sim's edge cases (cross-floor handoffs, race conditions, recovery from stalled tickets) | H.C does subsystems one at a time, with explicit transition checklists |
+| Subscribing to active_guest etc. for every visitor is bandwidth-heavy | Filter by restaurant_id (already done); rate-limit position updates |
+| Latency: cloud round-trip on every action would feel sluggish | Local sim still runs FOR THE PLAYER (optimistic prediction); server confirms / corrects. Cloud row is the authoritative state at any moment |
+| Wipe risk on `dirty_pile` table add | Use primitives + const defaults only. Don't click through "BREAKING schema changes" warning — should not appear for additive-only changes |
+
+## Order I'd suggest starting
+
+**H.A first.** No schema, low risk, immediate visible win in visit
+mode. Once host and visitor both see held plates / cooking / eating
+visuals derived from cloud, the gap is 80% closed. Buys time to do
+H.B / H.C with more care.
