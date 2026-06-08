@@ -386,6 +386,15 @@ export class SpacetimeClient {
     return null;
   }
 
+  /** H.96 — Restaurant id this player owns, or null. Used by
+   * Engine.afterAuth to detect "missing restaurant" states caused
+   * by partial migrations / data wipes, and force the
+   * BuildingPickModal so the user re-claims and re-creates one
+   * instead of silently sitting on an empty world. */
+  getMyRestaurantId(): bigint | null {
+    return this.restaurantId;
+  }
+
   /** Claim an unowned building. Resolves when the row updates;
    * rejects with the reducer's error message. */
   claimBuilding(buildingId: bigint): Promise<void> {
@@ -2841,27 +2850,34 @@ export class SpacetimeClient {
 
   private onSubscriptionReady(ctx: SubscriptionEventContext, identity: Identity): void {
     const conn = this.conn!;
-    // Find one of my restaurants, or create one. Note: table accessors
-    // on `ctx.db` are snake_case (matches the schema name), index
-    // accessors are also snake_case (e.g. `.restaurant_id`).
+    // Find one of my restaurants. Note: table accessors on `ctx.db`
+    // are snake_case (matches the schema name), index accessors are
+    // also snake_case (e.g. `.restaurant_id`).
+    //
+    // Phase I (H.96) — Pre-H.96 we auto-created a Restaurant here
+    // when none existed. That race could leave the user with a
+    // Restaurant but no Building (or vice versa) after a wipe /
+    // partial migration. Now claim_building atomically creates the
+    // Restaurant alongside the Building claim, so the only flow
+    // that materialises a Restaurant is the BuildingPickModal +
+    // claim_building one. We still listen for inserts so the late-
+    // arriving row picks up restaurantId when the modal completes.
     const myRestaurants = Array.from(ctx.db.restaurant.iter())
       .filter((r) => identityEquals(r.owner, identity));
     if (myRestaurants.length === 0) {
-      console.log("[SpacetimeDB] no restaurants — creating one");
-      // Listen for our row to arrive before/after the reducer applies.
-      // Without this listener, restaurantId stays null for the whole
-      // session and cloudSaveNow silently skips every save until the
-      // player reloads the page. Idempotent — we capture the first row
-      // owned by this identity and unsubscribe.
+      console.log("[SpacetimeDB] no restaurants for this identity — awaiting BuildingPickModal → claim_building flow");
       const onInsert = (_evCtx: unknown, row: { id: bigint; owner: Identity }): void => {
         if (this.restaurantId != null) return;
         if (!identityEquals(row.owner, identity)) return;
         this.restaurantId = row.id;
-        console.log(`[SpacetimeDB] new restaurant ${row.id} ready — cloud saves enabled`);
+        console.log(`[SpacetimeDB] restaurant ${row.id} arrived — cloud saves enabled`);
         try { ctx.db.restaurant.removeOnInsert(onInsert); } catch { /* SDK quirk */ }
       };
       ctx.db.restaurant.onInsert(onInsert);
-      conn.reducers.createRestaurant({ name: "My Bistro", public: true });
+      // No createRestaurant call — Engine.afterAuth will show the
+      // BuildingPickModal which fires claim_building → server-side
+      // auto-creates the Restaurant atomically.
+      void conn;
     } else {
       this.restaurantId = myRestaurants[0].id;
       const snap = ctx.db.save_snapshot.restaurant_id.find(this.restaurantId);

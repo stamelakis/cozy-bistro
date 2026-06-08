@@ -10,10 +10,26 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
     if trimmed.is_empty() || trimmed.len() > 48 {
         return Err("Name must be 1-48 characters".into());
     }
+    insert_restaurant_for(ctx, ctx.sender, trimmed.to_string(), public);
+    Ok(())
+}
+
+/// Phase I (H.96) — Default-named, public-visible restaurant for
+/// callers that don't care about naming yet. Used by claim_building
+/// to atomically materialise a Restaurant row alongside the new
+/// Building claim, closing the race that produced "owns building
+/// but no restaurant" states after a wipe / partial migration.
+pub fn create_default_restaurant_for(ctx: &ReducerContext, owner: Identity) {
+    insert_restaurant_for(ctx, owner, "My Bistro".to_string(), true);
+}
+
+/// Shared implementation behind create_restaurant + the H.96
+/// claim_building auto-create path.
+fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, public: bool) {
     let inserted = ctx.db.restaurant().insert(Restaurant {
         id: 0, // auto_inc
-        owner: ctx.sender,
-        name: trimmed.to_string(),
+        owner,
+        name,
         public,
         created_at: ctx.timestamp,
         // H.22 — pending rollup counters start at zero for new restaurants.
@@ -74,7 +90,6 @@ pub fn create_restaurant(ctx: &ReducerContext, name: String, public: bool) -> Re
     // if a schedule row already exists for the id (e.g. someone
     // calls create_restaurant twice during init backfill).
     crate::reducers::restaurant_sim::ensure_tick_schedule(ctx, inserted.id);
-    Ok(())
 }
 
 /// Toggle a restaurant's public-ness (whether it appears in friends'

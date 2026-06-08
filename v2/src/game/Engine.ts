@@ -1995,27 +1995,39 @@ export class Engine {
       }
     };
     const afterAuth = (): void => {
-      // Auth complete. Check if this account has a plot; if not,
-      // show BuildingPickModal. The game stays auth-gated until a
-      // plot is owned so the world doesn't render an unrooted
-      // restaurant in some random spot.
-      if (this.cloud.getMyBuilding()) {
+      // Auth complete. The game stays auth-gated until BOTH a plot
+      // is owned AND a Restaurant row exists on the cloud — without
+      // either, the world has nothing to render against.
+      //
+      // Phase I (H.96) — Pre-H.96 only the building was checked,
+      // and the client silently auto-created a Restaurant in
+      // onSubscriptionReady. After a wipe / partial migration that
+      // could leave the user in a "has Building but no Restaurant"
+      // (or inverse) state with no UI prompt to recover. Now
+      // claim_building atomically creates the Restaurant, and the
+      // modal shows when EITHER is missing.
+      const ready = (): boolean =>
+        this.cloud.getMyBuilding() !== null
+        && this.cloud.getMyRestaurantId() !== null;
+      if (ready()) {
         enterGame(false);
         return;
       }
-      // Poll for ~3s — the building cache may not have landed yet
-      // on the same tick as the auth_record. If still unowned
+      // Poll for ~3s — the building / restaurant rows may not have
+      // landed on the same tick as the auth_record. If still missing
       // after the grace period, show the picker.
       let waited = 0;
       const wait = (): void => {
         waited += 200;
-        if (this.cloud.getMyBuilding()) {
+        if (ready()) {
           enterGame(false);
           return;
         }
         if (waited < 3000) { window.setTimeout(wait, 200); return; }
-        // Show the building picker. The fresh claim triggers the
-        // starter cash bonus (via enterGame(true)).
+        // Show the building picker. claim_building auto-creates the
+        // Restaurant atomically (H.96), so the modal completion
+        // means both rows now exist. enterGame(true) triggers the
+        // starter cash bonus.
         new BuildingPickModal(container, this.cloud, () => enterGame(true));
       };
       window.setTimeout(wait, 200);

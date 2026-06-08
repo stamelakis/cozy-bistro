@@ -11,7 +11,7 @@
 //! space each player gets.
 
 use spacetimedb::{reducer, ReducerContext, Table, Identity};
-use crate::tables::{building, Building};
+use crate::tables::{building, restaurant, Building};
 
 /// Seed N unowned buildings on the city map. Called once from the
 /// `init` lifecycle reducer when the module is first published —
@@ -90,12 +90,25 @@ pub fn claim_building(ctx: &ReducerContext, building_id: u64) -> Result<(), Stri
         return Err("That building is already claimed".into());
     }
 
-    ctx.db.building().id().update(Building {
+    ctx.db.building().id().update(crate::tables::Building {
         owner_identity: me,
         claimed_at: Some(ctx.timestamp),
         ..target
     });
     log::info!("Building #{} claimed by {}", building_id, me);
+
+    // Phase I (H.96) — Atomically materialise a Restaurant row for
+    // the new owner if they don't already have one. Pre-H.96 the
+    // client auto-created on subscription-ready, which raced the
+    // claim flow and could leave the user with a Building but no
+    // Restaurant (or vice versa) after a wipe / partial migration.
+    // Doing both in one reducer means the post-condition is always
+    // "owns building => has restaurant".
+    let has_restaurant = ctx.db.restaurant().iter().any(|r| r.owner == me);
+    if !has_restaurant {
+        crate::reducers::restaurants::create_default_restaurant_for(ctx, me);
+        log::info!("Auto-created Restaurant for new building owner {}", me);
+    }
     Ok(())
 }
 
