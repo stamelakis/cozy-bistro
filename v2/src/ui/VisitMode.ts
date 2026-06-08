@@ -4,6 +4,7 @@ import type { WorldScene } from "../scene/WorldScene";
 import type { AnimatedCharacter, CharacterAction } from "../scene/CharacterAnimator";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { fitFurniture, placementY } from "../assets/fitFurniture";
+import { HeldItemVisualizer } from "../scene/HeldItemVisualizer";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -183,6 +184,13 @@ export class VisitMode {
    * update, dispose-on-delete — same pattern as liveStaffCharacters. */
   private liveCustomerCharacters: Map<string, AnimatedCharacter> = new Map();
   private liveCustomerPendingLoads: Set<string> = new Set();
+
+  /** Phase H.A — Attaches plate/glass meshes to staff actors who are
+   * actively transporting an order (ticket.state == "delivering").
+   * Reads cloud rows; doesn't need any local-sim state. Same instance
+   * will be re-used by the host's view post-H.D when we delete the
+   * legacy heldPlate.visible toggling in StaffRouter. */
+  private heldItems: HeldItemVisualizer = new HeldItemVisualizer();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -407,15 +415,21 @@ export class VisitMode {
         if (this.activePlot?.id !== targetPlotId) return;
         firedCount += 1;
         console.log(`[Visit] live staff onInsert #${firedCount}: member=${row.memberId} role=${row.role} state=${row.state} pos=(${row.x.toFixed(1)}, ${row.z.toFixed(1)})`);
+        // H.A — Update the held-item visualizer's cache BEFORE the
+        // character GLB has loaded; reconcile() will no-op until
+        // setHost arrives in spawnLiveStaffActor's success branch.
+        this.heldItems.onStaffActor(row.memberId, row.ticketId);
         void this.spawnLiveStaffActor(row, targetPlotId);
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.heldItems.onStaffActor(row.memberId, row.ticketId);
         this.applyLiveStaffUpdate(row);
       },
       onDelete: (memberId) => {
         if (this.activePlot?.id !== targetPlotId) return;
         console.log(`[Visit] live staff onDelete: member=${memberId}`);
+        this.heldItems.onStaffActorDelete(memberId);
         this.removeLiveStaffActor(memberId);
       },
     }, hostRid);
@@ -483,6 +497,11 @@ export class VisitMode {
       this.scene.animator.add(animated);
       this.liveStaffCharacters.set(row.memberId, animated);
       this.liveStaffCount += 1;
+      // H.A — Register the character root with the held-item
+      // visualizer. Any pending ticket assignment (cached from the
+      // pre-load staff_actor.ticketId) gets reconciled now that we
+      // have a host to attach the mesh to.
+      this.heldItems.setHost(row.memberId, { root: animated.root });
       this.refreshLivenessLabel();
     } catch (err) {
       console.warn(`[Visit] failed to spawn live staff ${role}:`, err);
@@ -520,6 +539,9 @@ export class VisitMode {
   private removeLiveStaffActor(memberId: string): void {
     const c = this.liveStaffCharacters.get(memberId);
     if (!c) return;
+    // H.A — Detach held mesh BEFORE removing the character root so
+    // the visualizer can clear its parent ref cleanly.
+    this.heldItems.setHost(memberId, null);
     this.scene.animator.remove(c.root);
     c.root.removeFromParent();
     this.liveStaffCharacters.delete(memberId);
@@ -546,6 +568,9 @@ export class VisitMode {
     this.liveCustomerCharacters.clear();
     this.liveCustomerPendingLoads.clear();
     this.liveTicketStates.clear();
+    // H.A — Drop held-item caches + any attached meshes. Next visit
+    // re-subscribes and rebuilds from scratch.
+    this.heldItems.dispose();
     this.refreshLivenessLabel();
   }
 
@@ -663,16 +688,21 @@ export class VisitMode {
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
+        // H.A — Held-item visualizer needs ticket state + appliance to
+        // pick a plate vs glass mesh for whoever's carrying this ticket.
+        this.heldItems.onTicket(row.id, row.state, row.appliance);
         this.refreshLivenessLabel();
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
+        this.heldItems.onTicket(row.id, row.state, row.appliance);
         this.refreshLivenessLabel();
       },
       onDelete: (id) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.delete(String(id));
+        this.heldItems.onTicketDelete(id);
         this.refreshLivenessLabel();
       },
     }, hostRid);

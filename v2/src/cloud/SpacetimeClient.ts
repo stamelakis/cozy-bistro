@@ -159,6 +159,10 @@ export interface ActiveTicketRow {
   pickupX: number;
   pickupZ: number;
   pickupFloor: number;
+  /** Phase H.A — Required appliance ("stove" | "bar" | "coffee" |
+   * "toaster" | ...). Used by visualizers to pick a plate vs. glass
+   * mesh for held-by-waiter / on-table renderings. */
+  appliance: string;
 }
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
@@ -1134,23 +1138,7 @@ export class SpacetimeClient {
   //     on the local Ticket for subsequent transition calls.
 
   /** Snapshot every active_ticket row belonging to my restaurant. */
-  listActiveTickets(): {
-    id: bigint;
-    clientTempId: string;
-    guestId: bigint;
-    recipeId: string;
-    state: string;
-    stateClockMs: bigint;
-    cookSeconds: bigint;
-    assignedChefId: string;
-    seatX: number;
-    seatZ: number;
-    seatFloor: number;
-    seatAtBar: boolean;
-    pickupX: number;
-    pickupZ: number;
-    pickupFloor: number;
-  }[] {
+  listActiveTickets(): ActiveTicketRow[] {
     if (!this.conn || this.restaurantId == null) return [];
     const out: ReturnType<SpacetimeClient["listActiveTickets"]> = [];
     const rid = this.restaurantId;
@@ -1173,6 +1161,7 @@ export class SpacetimeClient {
           pickupX: t.pickupX,
           pickupZ: t.pickupZ,
           pickupFloor: t.pickupFloor,
+          appliance: t.appliance,
         });
       }
     } catch { /* table not wired yet (pre-publish build) */ }
@@ -1423,6 +1412,7 @@ export class SpacetimeClient {
       cookSecondsMs: bigint; assignedChefId: string;
       seatX: number; seatZ: number; seatFloor: number; seatAtBar: boolean;
       pickupX: number; pickupZ: number; pickupFloor: number;
+      appliance: string;
     };
     const toClientRow = (r: ServerRow): ActiveTicketRow => ({
       id: r.id, clientTempId: r.clientTempId, guestId: r.guestId,
@@ -1430,6 +1420,7 @@ export class SpacetimeClient {
       cookSeconds: r.cookSecondsMs, assignedChefId: r.assignedChefId,
       seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor, seatAtBar: r.seatAtBar,
       pickupX: r.pickupX, pickupZ: r.pickupZ, pickupFloor: r.pickupFloor,
+      appliance: r.appliance,
     });
     try {
       if (handlers.onInsert) {
@@ -3320,6 +3311,7 @@ export class SpacetimeClient {
             cookSeconds: t.cookSecondsMs, assignedChefId: t.assignedChefId,
             seatX: t.seatX, seatZ: t.seatZ, seatFloor: t.seatFloor, seatAtBar: t.seatAtBar,
             pickupX: t.pickupX, pickupZ: t.pickupZ, pickupFloor: t.pickupFloor,
+            appliance: t.appliance,
           },
         });
       }
