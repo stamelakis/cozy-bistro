@@ -1306,6 +1306,55 @@ pub struct DishwasherBatch {
 /// Server-side consumption ships in H.37 — auto_place_next_course
 /// reads recipe_ingredients to know what to decrement on ticket
 /// insert.
+
+/// Phase I (H.B) — Dirty plates / glasses left on a table by a guest
+/// who finished their meal. One row per piece. Populated by
+/// settle_guest_dishes (server-side) or its client mirror when a
+/// guest leaves; consumed by pickup_dirty_pile when a waiter scoops
+/// the piece during a wash trip.
+///
+/// Pre-H.B these lived purely client-side as `dirtyTableMeshes` in
+/// GuestSpawner — invisible to visitors. With the cloud row,
+/// visit-mode renders the leftovers and the host's view can adopt
+/// the same DirtyPileVisualizer post-H.D.
+///
+/// Position fields (x, z, floor) are restaurant-local — same frame
+/// every other character / furniture row uses.
+///
+/// NEW additive table; all fields are primitives with const-evaluable
+/// defaults (or auto_inc / required) — safe migration, no risk to
+/// existing rows in any other table. id is auto_inc so the server
+/// owns ordering; client just sends the rest.
+#[table(name = dirty_pile, public)]
+pub struct DirtyPile {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// uid of the seat / table the pile sits at — lets the client
+    /// re-anchor leftovers when the table is moved before the
+    /// pickup, and lets the waiter dispatcher target a specific
+    /// table.
+    pub seat_uid: String,
+    /// "plate" | "glass"
+    pub kind: String,
+    /// Dish tier (1..5) — drives the leftover mesh size / glass
+    /// transparency. Cap at the same range as the dishware pools.
+    pub tier: u32,
+    /// Which of the 4 LEFTOVER_SLOTS positions around the seat this
+    /// piece occupies — keeps multiple leftover plates from stacking
+    /// at the same point. Range 0..3.
+    pub slot_index: i32,
+    pub floor: u32,
+    pub x: f32,
+    pub z: f32,
+    /// memberId of a waiter who has claimed this pile for pickup,
+    /// or "" when unclaimed. Mirrors the dirtyTableMeshes.claimedBy
+    /// field. Set by claim_dirty_pile, cleared by release/pickup.
+    pub claimed_by: String,
+}
+
 #[table(name = pantry_stock, public)]
 pub struct PantryStock {
     /// Composite key: "{restaurant_id}:{ingredient_id}".

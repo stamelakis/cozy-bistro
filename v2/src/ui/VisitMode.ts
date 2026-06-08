@@ -8,6 +8,7 @@ import { HeldItemVisualizer } from "../scene/HeldItemVisualizer";
 import { SeatPlateVisualizer } from "../scene/SeatPlateVisualizer";
 import { CookingPotVisualizer } from "../scene/CookingPotVisualizer";
 import { WashCycleRingVisualizer } from "../scene/WashCycleRingVisualizer";
+import { DirtyPileVisualizer } from "../scene/DirtyPileVisualizer";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -204,6 +205,10 @@ export class VisitMode {
   /** Phase H.A — Renders a countdown ring at each dishwasher with
    * a running batch. Brand-new visual (host didn't have one either). */
   private washCycleRings: WashCycleRingVisualizer = new WashCycleRingVisualizer();
+  /** Phase H.B — Renders a leftover plate/glass at each table that
+   * has a dirty_pile row. Replaces (in visit mode) the host's local
+   * dirtyTableMeshes array. */
+  private dirtyPiles: DirtyPileVisualizer = new DirtyPileVisualizer();
   /** Phase H.A — Cache of placed_furniture positions keyed by uid.
    * Populated alongside the interior render; used by the wash-cycle
    * ring visualizer to resolve a dishwasher's uid → coords. */
@@ -374,6 +379,7 @@ export class VisitMode {
     this.startLiveTicketSubscription(plot);
     this.startLiveCustomerSubscription(plot);
     this.startLiveDishwasherSubscription(plot);
+    this.startLiveDirtyPileSubscription(plot);
     // Kick off the interior render — fire-and-forget; the overlay
     // shows "(loading interior…)" until the placements land.
     void this.loadVisitedInterior(plot);
@@ -596,6 +602,7 @@ export class VisitMode {
     this.seatPlates.dispose();
     this.cookingPots.dispose();
     this.washCycleRings.dispose();
+    this.dirtyPiles.dispose();
     this.furniturePosByUid.clear();
     this.refreshLivenessLabel();
   }
@@ -770,6 +777,31 @@ export class VisitMode {
     }, hostRid);
   }
 
+  /** Phase H.B — Subscribe to the host's dirty_pile rows and feed
+   * each into the DirtyPileVisualizer. New cloud table; visit-mode
+   * was previously dead silent on dirty piles because they were
+   * local-sim only. */
+  private startLiveDirtyPileSubscription(plot: VisitablePlot): void {
+    if (!this.cloud) return;
+    const hostRid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (hostRid == null) return;
+    const targetPlotId = plot.id;
+    this.cloud.subscribeDirtyPileChanges({
+      onInsert: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.dirtyPiles.onPile(row);
+      },
+      onUpdate: (row) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.dirtyPiles.onPile(row);
+      },
+      onDelete: (id) => {
+        if (this.activePlot?.id !== targetPlotId) return;
+        this.dirtyPiles.onPileDelete(id);
+      },
+    }, hostRid);
+  }
+
   // ─── Interior render (P4.3) ──────────────────────────────────────
 
   /** Walk the cityBuildings group to find the shell whose visitPlot
@@ -848,6 +880,7 @@ export class VisitMode {
     this.seatPlates.setFallbackRoot(root);
     this.washCycleRings.setRoot(root);
     this.washCycleRings.setResolver((uid) => this.furniturePosByUid.get(uid) ?? null);
+    this.dirtyPiles.setFallbackRoot(root);
 
     // Snapshot the active plot id — if the player exits mid-load
     // we must NOT keep adding meshes to a stale root.

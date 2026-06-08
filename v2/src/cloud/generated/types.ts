@@ -165,6 +165,20 @@ export const CustomerArchetypeDef = __t.object("CustomerArchetypeDef", {
 });
 export type CustomerArchetypeDef = __Infer<typeof CustomerArchetypeDef>;
 
+export const DirtyPile = __t.object("DirtyPile", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  seatUid: __t.string(),
+  kind: __t.string(),
+  tier: __t.u32(),
+  slotIndex: __t.i32(),
+  floor: __t.u32(),
+  x: __t.f32(),
+  z: __t.f32(),
+  claimedBy: __t.string(),
+});
+export type DirtyPile = __Infer<typeof DirtyPile>;
+
 export const DishwarePool = __t.object("DishwarePool", {
   key: __t.string(),
   restaurantId: __t.u64(),

@@ -47,6 +47,23 @@ export interface DishwarePoolRow {
   dirty: number;
 }
 
+/** Phase I (H.B) — Public shape of one dirty_pile row. One per
+ * dirty plate / glass left on a table by a guest who finished their
+ * meal. The host's local sim mirrors via addDirtyPile when a guest
+ * leaves; subscribers (visitors + future symmetric host renderer)
+ * read the cloud rows and render the leftover mesh. */
+export interface DirtyPileRow {
+  id: bigint;
+  seatUid: string;
+  kind: string;
+  tier: number;
+  slotIndex: number;
+  floor: number;
+  x: number;
+  z: number;
+  claimedBy: string;
+}
+
 /** Public shape of one dishwasher_batch row — mid-cycle state for one
  * placed dishwasher (keyed by furnitureUid). cycleTimeRemainingMs is
  * the milliseconds left until the batch flushes to the clean pool. */
@@ -2298,6 +2315,128 @@ export class SpacetimeClient {
       }
     } catch (e) {
       console.warn("[Cloud] subscribeDishwasherBatchChanges failed:", e);
+    }
+  }
+
+  /** Phase I (H.B) — Subscribe to dirty_pile changes for the visited
+   * restaurant. Same insert/update/delete shape as the other live
+   * subscriptions. */
+  subscribeDirtyPileChanges(handlers: {
+    onInsert?: (row: DirtyPileRow) => void;
+    onUpdate?: (row: DirtyPileRow) => void;
+    onDelete?: (id: bigint) => void;
+  }, restaurantId?: bigint): void {
+    if (!this.conn) return;
+    const rid = restaurantId ?? this.restaurantId;
+    if (rid == null) return;
+    type ServerRow = {
+      id: bigint;
+      restaurantId: bigint;
+      seatUid: string;
+      kind: string;
+      tier: number;
+      slotIndex: number;
+      floor: number;
+      x: number;
+      z: number;
+      claimedBy: string;
+    };
+    const toClientRow = (r: ServerRow): DirtyPileRow => ({
+      id: r.id, seatUid: r.seatUid, kind: r.kind, tier: r.tier,
+      slotIndex: r.slotIndex, floor: r.floor, x: r.x, z: r.z,
+      claimedBy: r.claimedBy,
+    });
+    try {
+      if (handlers.onInsert) {
+        this.conn.db.dirty_pile.onInsert((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onInsert!(toClientRow(row));
+        });
+      }
+      if (handlers.onUpdate) {
+        this.conn.db.dirty_pile.onUpdate((_ctx, _old: ServerRow, newRow: ServerRow) => {
+          if (newRow.restaurantId !== rid) return;
+          handlers.onUpdate!(toClientRow(newRow));
+        });
+      }
+      if (handlers.onDelete) {
+        this.conn.db.dirty_pile.onDelete((_ctx, row: ServerRow) => {
+          if (row.restaurantId !== rid) return;
+          handlers.onDelete!(row.id);
+        });
+      }
+    } catch (e) {
+      console.warn("[Cloud] subscribeDirtyPileChanges failed:", e);
+    }
+  }
+
+  /** Phase I (H.B) — Snapshot the dirty piles for the current
+   * restaurant. Used by the host's wash trip dispatcher post-H.D. */
+  listDirtyPiles(): DirtyPileRow[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: DirtyPileRow[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const r of this.conn.db.dirty_pile.iter()) {
+        if (r.restaurantId !== rid) continue;
+        out.push({
+          id: r.id, seatUid: r.seatUid, kind: r.kind, tier: r.tier,
+          slotIndex: r.slotIndex, floor: r.floor, x: r.x, z: r.z,
+          claimedBy: r.claimedBy,
+        });
+      }
+    } catch { /* table not wired */ }
+    return out;
+  }
+
+  /** Phase I (H.B) — Host's mirror call when its local sim spawns a
+   * leftover (settleGuestDishes → spawnLeftoversForGuest). Fire-and-
+   * forget; server assigns the auto_inc id and echoes back via
+   * subscription, where the visualizer picks it up. */
+  addDirtyPile(args: {
+    seatUid: string; kind: "plate" | "glass"; tier: number;
+    slotIndex: number; floor: number; x: number; z: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.addDirtyPile({
+        restaurantId: this.restaurantId,
+        seatUid: args.seatUid,
+        kind: args.kind,
+        tier: args.tier,
+        slotIndex: args.slotIndex,
+        floor: args.floor,
+        x: args.x,
+        z: args.z,
+      });
+    } catch (e) {
+      console.warn("[Cloud] addDirtyPile failed:", e);
+    }
+  }
+
+  pickupDirtyPile(id: bigint): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.pickupDirtyPile({ id });
+    } catch (e) {
+      console.warn("[Cloud] pickupDirtyPile failed:", e);
+    }
+  }
+
+  /** Host-side cleanup: when the local sim's pickupDirty(localId)
+   * fires, we don't have the cloud row's auto_inc id handy. This
+   * deletes the FIRST matching unclaimed pile by (seat_uid, kind)
+   * so the mirror eventually drains. See server reducer doc. */
+  pickupDirtyPileBySeat(seatUid: string, kind: "plate" | "glass"): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.pickupDirtyPileBySeat({
+        restaurantId: this.restaurantId,
+        seatUid,
+        kind,
+      });
+    } catch (e) {
+      console.warn("[Cloud] pickupDirtyPileBySeat failed:", e);
     }
   }
 

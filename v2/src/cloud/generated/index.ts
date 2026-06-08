@@ -34,6 +34,7 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AddDirtyPileReducer from "./add_dirty_pile_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
@@ -50,6 +51,7 @@ import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
 import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
+import ClaimDirtyPileReducer from "./claim_dirty_pile_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
 import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
@@ -69,6 +71,8 @@ import LogoutReducer from "./logout_reducer";
 import MarkGuestDishesSettledReducer from "./mark_guest_dishes_settled_reducer";
 import MarkGuestLeavingReducer from "./mark_guest_leaving_reducer";
 import MoveFurnitureReducer from "./move_furniture_reducer";
+import PickupDirtyPileReducer from "./pickup_dirty_pile_reducer";
+import PickupDirtyPileBySeatReducer from "./pickup_dirty_pile_by_seat_reducer";
 import PickupTicketReducer from "./pickup_ticket_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
 import PlaceFurnitureReducer from "./place_furniture_reducer";
@@ -76,6 +80,7 @@ import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
+import ReleaseDirtyPileReducer from "./release_dirty_pile_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
@@ -134,6 +139,7 @@ import BuildingRow from "./building_table";
 import ChatMessageRow from "./chat_message_table";
 import CoOwnerRow from "./co_owner_table";
 import CustomerArchetypeRow from "./customer_archetype_table";
+import DirtyPileRow from "./dirty_pile_table";
 import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
@@ -308,6 +314,20 @@ const tablesSchema = __schema({
       { name: 'customer_archetype_archetype_id_key', constraint: 'unique', columns: ['archetypeId'] },
     ],
   }, CustomerArchetypeRow),
+  dirty_pile: __table({
+    name: 'dirty_pile',
+    indexes: [
+      { accessor: 'id', name: 'dirty_pile_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'dirty_pile_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'dirty_pile_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, DirtyPileRow),
   dishware_pool: __table({
     name: 'dishware_pool',
     indexes: [
@@ -619,6 +639,7 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("add_dirty_pile", AddDirtyPileReducer),
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
@@ -635,6 +656,7 @@ const reducersSchema = __reducers(
   __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
+  __reducerSchema("claim_dirty_pile", ClaimDirtyPileReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
@@ -654,6 +676,8 @@ const reducersSchema = __reducers(
   __reducerSchema("mark_guest_dishes_settled", MarkGuestDishesSettledReducer),
   __reducerSchema("mark_guest_leaving", MarkGuestLeavingReducer),
   __reducerSchema("move_furniture", MoveFurnitureReducer),
+  __reducerSchema("pickup_dirty_pile", PickupDirtyPileReducer),
+  __reducerSchema("pickup_dirty_pile_by_seat", PickupDirtyPileBySeatReducer),
   __reducerSchema("pickup_ticket", PickupTicketReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
   __reducerSchema("place_furniture", PlaceFurnitureReducer),
@@ -661,6 +685,7 @@ const reducersSchema = __reducers(
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
+  __reducerSchema("release_dirty_pile", ReleaseDirtyPileReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),

@@ -13,12 +13,12 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_menu, active_ticket, customer_archetype, dishware_pool,
-    dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
+    active_guest, active_menu, active_ticket, customer_archetype, dirty_pile,
+    dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
     placed_furniture, player, player_save, recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, staff_actor,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DishwarePool,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
     RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
     RestaurantTickSchedule, RestaurantTickState, StaffActor,
@@ -5953,6 +5953,149 @@ pub fn update_dishwasher_batch(
         ctx.db.dishwasher_batch().furniture_uid().update(row);
     } else {
         ctx.db.dishwasher_batch().insert(row);
+    }
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────
+// Phase I (H.B) — dirty_pile reducers.
+//
+// One row per dirty plate / glass left on a table by a guest who
+// finished their meal. Lifecycle:
+//
+//   add_dirty_pile      — fired when a guest leaves (host's local
+//                         sim or, future H.C, server settle_guest
+//                         _dishes). Server assigns an auto_inc id.
+//   claim_dirty_pile    — waiter starts a wash trip targeting this
+//                         row. Reject if already claimed by someone
+//                         else. Returns id so the caller can stash it.
+//   release_dirty_pile  — waiter aborts the trip (mesh vanished,
+//                         re-route, fired mid-walk). Frees the claim.
+//   pickup_dirty_pile   — waiter arrived at the table; row is
+//                         deleted, dish goes to the wash queue (the
+//                         caller's existing washOne / loadDishwasher
+//                         path handles the pool side).
+//
+// All reducers verify the row belongs to a restaurant the sender
+// owns — prevents another player griefing your dirty piles.
+
+#[reducer]
+pub fn add_dirty_pile(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    seat_uid: String,
+    kind: String,
+    tier: u32,
+    slot_index: i32,
+    floor: u32,
+    x: f32,
+    z: f32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can add dirty piles".into());
+    }
+    if kind != "plate" && kind != "glass" {
+        return Err(format!("Unknown dishware kind: {kind}"));
+    }
+    ctx.db.dirty_pile().insert(DirtyPile {
+        id: 0, // auto_inc
+        restaurant_id,
+        seat_uid,
+        kind,
+        tier: tier.clamp(1, 5),
+        slot_index,
+        floor,
+        x, z,
+        claimed_by: String::new(),
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn claim_dirty_pile(ctx: &ReducerContext, id: u64, member_id: String) -> Result<(), String> {
+    let row = ctx.db.dirty_pile().id().find(id)
+        .ok_or_else(|| format!("Dirty pile {id} not found"))?;
+    let r = ctx.db.restaurant().id().find(row.restaurant_id)
+        .ok_or_else(|| "Restaurant for dirty pile not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim dirty piles".into());
+    }
+    if !row.claimed_by.is_empty() && row.claimed_by != member_id {
+        return Err(format!("Already claimed by {}", row.claimed_by));
+    }
+    ctx.db.dirty_pile().id().update(DirtyPile {
+        claimed_by: member_id,
+        ..row
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn release_dirty_pile(ctx: &ReducerContext, id: u64) -> Result<(), String> {
+    let row = ctx.db.dirty_pile().id().find(id);
+    let Some(row) = row else { return Ok(()); }; // already gone — idempotent
+    let r = ctx.db.restaurant().id().find(row.restaurant_id)
+        .ok_or_else(|| "Restaurant for dirty pile not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can release dirty piles".into());
+    }
+    ctx.db.dirty_pile().id().update(DirtyPile {
+        claimed_by: String::new(),
+        ..row
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn pickup_dirty_pile(ctx: &ReducerContext, id: u64) -> Result<(), String> {
+    let row = ctx.db.dirty_pile().id().find(id);
+    let Some(row) = row else { return Ok(()); }; // already gone — idempotent
+    let r = ctx.db.restaurant().id().find(row.restaurant_id)
+        .ok_or_else(|| "Restaurant for dirty pile not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can pickup dirty piles".into());
+    }
+    ctx.db.dirty_pile().id().delete(id);
+    Ok(())
+}
+
+/// Phase I (H.B) — Host-side mirror cleanup. The local sim's
+/// pickupDirty(id) uses a LOCAL numeric id namespace that doesn't
+/// match the cloud's auto_inc id; rather than thread a
+/// localId→cloudId map through the wash trip plumbing, this reducer
+/// deletes ONE matching unclaimed pile by (seat_uid, kind) so the
+/// mirror eventually drains as the local sim picks plates up.
+///
+/// Behavior:
+///   - Looks up the FIRST dirty_pile row in restaurant_id where
+///     seat_uid + kind match AND claimed_by is empty.
+///   - Deletes that row. No-op if no match (idempotent).
+///
+/// Race window: if two pickups for the same seat+kind fire in the
+/// same tick, both delete different matching rows — which is the
+/// correct outcome (two physical piles → two cloud rows → two
+/// deletes). The "first match" semantics matter only when there's
+/// just one row and it gets stale: a second pickup is a no-op.
+#[reducer]
+pub fn pickup_dirty_pile_by_seat(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    seat_uid: String,
+    kind: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can pickup dirty piles".into());
+    }
+    let target_id = ctx.db.dirty_pile()
+        .restaurant_id().filter(restaurant_id)
+        .find(|p| p.seat_uid == seat_uid && p.kind == kind && p.claimed_by.is_empty())
+        .map(|p| p.id);
+    if let Some(id) = target_id {
+        ctx.db.dirty_pile().id().delete(id);
     }
     Ok(())
 }

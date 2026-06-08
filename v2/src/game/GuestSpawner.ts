@@ -2594,13 +2594,26 @@ export class GuestSpawner {
       // for the served-food icons bleeding through floors below.
       const mount = this.getStoreyMount?.(g.seatFloor) ?? this.scene;
       mount.add(mesh);
+      const localId = this.nextDirtyId;
       this.dirtyTableMeshes.push({
-        id: this.nextDirtyId, mesh, kind, claimedBy: null,
+        id: localId, mesh, kind, claimedBy: null,
         pos: new THREE.Vector2(x, z),
         floor: g.seatFloor,
         seatId,
       });
       this.nextDirtyId += 1;
+      // Phase H.B — Mirror to cloud so visitors (and post-H.D the
+      // host's own renderer) can see this pile. Server assigns the
+      // auto_inc id; we stash the returned cloud id by binding it
+      // to the local mesh handle below via cloudIdByLocal.
+      this.cloud?.addDirtyPile({
+        seatUid: seatId,
+        kind,
+        tier,
+        slotIndex: Math.min(startSlot + i, LEFTOVER_SLOTS.length - 1),
+        floor: g.seatFloor,
+        x, z,
+      });
     }
   }
 
@@ -2653,6 +2666,13 @@ export class GuestSpawner {
     // Post per-floor-parenting fix the mesh might live in a storey
     // group rather than scene root; remove from its actual parent.
     entry.mesh.parent?.remove(entry.mesh);
+    // Phase H.B — Drain ONE matching cloud row so the mirror doesn't
+    // accumulate. By-seat lookup because the cloud's auto_inc id
+    // isn't threaded through the local pickup machinery; see server
+    // reducer doc on pickup_dirty_pile_by_seat for the race notes.
+    if (entry.seatId) {
+      this.cloud?.pickupDirtyPileBySeat(entry.seatId, entry.kind);
+    }
     return entry.kind;
   }
 
