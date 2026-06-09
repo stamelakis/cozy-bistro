@@ -4707,8 +4707,14 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
             } else {
                 (t.pickup_x, t.pickup_z, t.pickup_floor)
             };
+            // Phase H Phase 4e — bar-seat split. Bar tickets bypass
+            // the "ready" state (no waiter trip) and go straight to
+            // "delivering" so the barman's own delivery dwell can
+            // hold them at the counter. Matches local tickBarman's
+            // working-state bar branch.
+            let next_state = if t.seat_at_bar { "delivering" } else { "ready" };
             ctx.db.active_ticket().id().update(ActiveTicket {
-                state: "ready".to_string(),
+                state: next_state.to_string(),
                 state_clock_ms: 0,
                 pickup_x: px,
                 pickup_z: pz,
@@ -4716,11 +4722,41 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
                 ..t
             });
             // Phase H.7 — release the assigned chef when cooking
-            // finishes. Auto-claim (H.6) hooked the chef to this
-            // ticket; without a release, the chef stays in "working"
-            // at the stove forever and never claims the next ticket.
-            // Sends them home_x/z so H.3's auto-flip transitions
-            // them back to "idle" on arrival.
+            // finishes (non-bar only). Auto-claim (H.6) hooked the
+            // chef to this ticket; without a release, the chef
+            // stays in "working" at the stove forever. Bar tickets
+            // KEEP the barman assigned because they're the delivery
+            // agent too — release happens after the delivering
+            // dwell below.
+            if !chef_id.is_empty() && !t.seat_at_bar {
+                release_chef_from_ticket(ctx, &chef_id);
+            }
+            return;
+        }
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            state_clock_ms: advanced,
+            ..t
+        });
+        return;
+    }
+
+    // Phase H Phase 4e — bar-seat "delivering" dwell. Bar tickets
+    // skipped "ready" above; here we hold them at "delivering" for
+    // a short visual beat (barman holds the drink/plate behind the
+    // bar) before flipping to "delivered" + releasing the barman.
+    // Non-bar tickets in "delivering" are waiter trips driven by
+    // tick_staff_actor / advance_waiter_leg; tick_ticket_state
+    // leaves those alone.
+    const BAR_DELIVER_DWELL_MS: i64 = 800;
+    if t.state == "delivering" && t.seat_at_bar {
+        let advanced = t.state_clock_ms.saturating_add(dt_ms);
+        if advanced >= BAR_DELIVER_DWELL_MS {
+            let chef_id = t.assigned_chef_id.clone();
+            ctx.db.active_ticket().id().update(ActiveTicket {
+                state: "delivered".to_string(),
+                state_clock_ms: 0,
+                ..t
+            });
             if !chef_id.is_empty() {
                 release_chef_from_ticket(ctx, &chef_id);
             }
@@ -4733,9 +4769,9 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
         return;
     }
 
-    // Other states (queued / ready / delivering) are client-driven —
-    // the local StaffRouter calls reducers to transition them.
-    // Nothing to do here per-tick.
+    // Other states (queued / ready / delivering for non-bar) are
+    // client/waiter-driven — tick_staff_actor and the StaffRouter
+    // reducers transition them. Nothing to do here per-tick.
 }
 
 // =============================================================
