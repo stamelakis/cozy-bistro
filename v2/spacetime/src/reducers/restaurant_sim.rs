@@ -410,6 +410,16 @@ pub fn restaurant_tick(
     // guard pattern as H.33/H.34.
     try_dispatch_wash_trip(ctx, rid);
 
+    // Phase H Phase 5.2 — errand-helper auto-shop dispatch. Owner-
+    // offline gated initially (Phase 5.4 drops the gate). Detects
+    // shortage in pantry_stock, picks list, charges
+    // cloud_money_cents, dispatches an idle helper through the 9-
+    // phase tick_errand_actor walkthrough. The 5.1+ local mirror
+    // would normally fight us if the foreground client were running,
+    // but the offline gate ensures we only fire when the client is
+    // away.
+    try_dispatch_errand_trip(ctx, rid);
+
     // Phase H.30 — advance the visual day clock. The foreground client
     // periodically yokes the cloud's day_elapsed_ms to its local value
     // via sync_day_clock; backgrounded play lets pending_days_advanced
@@ -3002,6 +3012,324 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     });
 }
 
+// ====================================================================
+//             Phase H Phase 5.2 + 5.3 — errand-helper trip
+// ====================================================================
+//
+// Server port of the client's ErrandRouter. Detects pantry shortages
+// offline, picks a list capped at carry capacity, charges
+// cloud_money_cents, dispatches an idle errand helper through the
+// 9-phase visual trip (matches the local ErrandState enum names so
+// the bridge's mapping is trivial).
+//
+// Coverage in this commit:
+//   - try_dispatch_errand_trip: detector + dispatch (5.2). Gated on
+//     owner-offline initially; Phase 5.4 drops the gate and makes the
+//     server the sole detector.
+//   - tick_errand_actor: 9-phase state machine (5.3). Position math +
+//     dwell timers + delivery side-effect (parse CSV, add to
+//     pantry_stock, clear pending_restock_cost if the bill is
+//     covered).
+//   - tick_staff_actor branches out to tick_errand_actor when
+//     errand_phase is set, same shape as the wash-trip branch.
+//
+// Phase 5.4 will gate the local Game.dispatchAutoShop + drop the
+// owner-offline gate so the server is the sole dispatcher in both
+// modes.
+
+/// Canonical Floor 0 door coords. The Restaurant table doesn't track
+/// per-restaurant door positions, but the v1 layout uses a single
+/// southern-wall door — every plot reads the same. Matches the
+/// active_guest.door_x/z default.
+const ERRAND_DOOR_INTERIOR_X: f32 = 0.0;
+const ERRAND_DOOR_INTERIOR_Z: f32 = 5.45;
+const ERRAND_DOOR_EXTERIOR_X: f32 = 0.0;
+const ERRAND_DOOR_EXTERIOR_Z: f32 = 6.45;
+/// Pavement edge where the helper disappears offscreen. Mirrors the
+/// local ErrandRouter's ROAD_EDGE_FORWARD constant (~13 units past
+/// the door exterior).
+const ERRAND_ROAD_EDGE_X: f32 = 0.0;
+const ERRAND_ROAD_EDGE_Z: f32 = 18.0;
+/// How long the helper stays "at the shop" before walking back.
+/// Matches the local OFFSCREEN_SHOP_SECONDS = 3.0.
+const ERRAND_OFFSCREEN_SHOP_MS: i64 = 3_000;
+/// Brief pause at the supply counter signifying "signed for the
+/// delivery". Matches the local COUNTER_DWELL_SECONDS = 0.8.
+const ERRAND_COUNTER_DWELL_MS: i64 = 800;
+/// Threshold below which an ingredient triggers an auto-shop trip.
+/// Mirrors `Game.stockTarget` minus a hysteresis margin so we don't
+/// re-dispatch every tick while the helper is mid-trip.
+const ERRAND_RESTOCK_THRESHOLD: u32 = 3;
+/// Units to fetch per ingredient on a single trip. Mirrors the local
+/// "deficit-fill" logic but simplified — we just buy a fixed N per
+/// shortage line. Server picks at most CARRY_CAP ingredients per
+/// trip.
+const ERRAND_UNITS_PER_INGREDIENT: u32 = 5;
+/// Max distinct ingredients a single trip carries. Trip cost scales
+/// linearly with this cap.
+const ERRAND_CARRY_CAP: usize = 5;
+/// How often the dispatcher will consider a new trip. Without this
+/// cooldown the dispatcher would fire every tick while pantry stays
+/// below threshold, queueing trips faster than the helper can
+/// complete them.
+const ERRAND_DISPATCH_COOLDOWN_MICROS: i64 = 60_000_000;
+
+/// Phase H Phase 5.2 — Detect a pantry shortage and dispatch an idle
+/// errand helper. Gated on owner-offline so we don't race the local
+/// `Game.dispatchAutoShop`; Phase 5.4 drops the gate.
+///
+/// Algorithm:
+///   1. Bail if no errand helper exists OR all are mid-trip.
+///   2. Scan pantry_stock for ingredients below ERRAND_RESTOCK_THRESHOLD,
+///      skipping any already on the way (= present in another
+///      helper's errand_trip_list_csv).
+///   3. Pick up to ERRAND_CARRY_CAP entries.
+///   4. Compute total cost via ingredient_cost lookup.
+///   5. Saturating-subtract from cloud_money_cents (allow negative
+///      balance — matches local forceSpendMoney semantics for
+///      offline-accumulated debt).
+///   6. Stamp the chosen helper: state=movingToWork, target=door
+///      interior, errand_phase="walkingToDoor", trip list CSV frozen.
+fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    if owner_online { return; }
+
+    // Find an idle errand helper (state=idle AND no errand_phase set).
+    // Also build a set of ingredient_ids ALREADY on the way so we
+    // don't double-buy them on a second concurrent trip.
+    let mut idle_helper: Option<StaffActor> = None;
+    let mut on_the_way: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for a in ctx.db.staff_actor().restaurant_id().filter(rid) {
+        if a.role != "errand" { continue; }
+        if a.errand_phase.is_some() {
+            // Parse trip list and mark each ingredient as on-the-way.
+            if let Some(csv) = a.errand_trip_list_csv.as_deref() {
+                for entry in csv.split(',').filter(|s| !s.is_empty()) {
+                    if let Some((id, _)) = entry.split_once(':') {
+                        on_the_way.insert(id.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        if a.state != "idle" { continue; }
+        if idle_helper.is_none() { idle_helper = Some(a); }
+    }
+    let Some(helper) = idle_helper else { return; };
+
+    // Build shortage list. Skip ingredients already on the way.
+    let mut needs: Vec<(String, u32)> = Vec::new();
+    for p in ctx.db.pantry_stock().restaurant_id().filter(rid) {
+        if p.quantity >= ERRAND_RESTOCK_THRESHOLD { continue; }
+        if on_the_way.contains(&p.ingredient_id) { continue; }
+        needs.push((p.ingredient_id.clone(), ERRAND_UNITS_PER_INGREDIENT));
+        if needs.len() >= ERRAND_CARRY_CAP { break; }
+    }
+    if needs.is_empty() { return; }
+
+    // Compute cost via ingredient_cost lookup. Missing rows are
+    // restocked free (graceful degradation matches try_restock_pantry).
+    let mut total_cost_cents: i64 = 0;
+    for (ing, units) in &needs {
+        let unit_cost = ctx.db.ingredient_cost().ingredient_id().find(ing.clone())
+            .map(|c| c.cost_cents).unwrap_or(0);
+        total_cost_cents = total_cost_cents
+            .saturating_add(unit_cost.saturating_mul(*units as i64));
+    }
+
+    // Charge cloud_money_cents. Saturating sub allows negative balance
+    // for forced offline restocks — player sees the debt on reconnect
+    // and works it off. Matches Game.forceSpendMoney semantics used
+    // for rent / salary.
+    if total_cost_cents > 0 {
+        ctx.db.restaurant().id().update(Restaurant {
+            cloud_money_cents: r.cloud_money_cents.saturating_sub(total_cost_cents),
+            ..r
+        });
+    }
+
+    // Freeze the trip list into CSV: "id:units,id:units,...".
+    let trip_list_csv = needs.iter()
+        .map(|(id, units)| format!("{}:{}", id, units))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Dispatch the helper: state to movingToWork, target to door
+    // interior, errand_phase to walkingToDoor.
+    let helper_id = helper.member_id.clone();
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        state: "movingToWork".to_string(),
+        state_clock_ms: 0,
+        target_x: ERRAND_DOOR_INTERIOR_X,
+        target_z: ERRAND_DOOR_INTERIOR_Z,
+        target_floor: 0,
+        errand_phase: Some("walkingToDoor".to_string()),
+        errand_trip_list_csv: Some(trip_list_csv.clone()),
+        errand_offscreen_until_micros: 0,
+        ..helper
+    });
+    log::info!(
+        "try_dispatch_errand_trip: rid {} helper {} dispatched for {} cents → {}",
+        rid, helper_id, total_cost_cents, trip_list_csv,
+    );
+
+    // Avoid re-dispatching too aggressively. Stamp the timestamp on
+    // last_guest_spawn_micros... actually we don't have an
+    // errand-specific cooldown column. The on-the-way set above
+    // suffices: once a helper is mid-trip, the dispatcher sees no
+    // idle helpers and bails.
+    let _ = ERRAND_DISPATCH_COOLDOWN_MICROS;
+}
+
+/// Phase H Phase 5.3 — Advance an errand-helper actor through the
+/// 9-phase shopping trip. Called from tick_staff_actor when
+/// errand_phase is set; replaces the standard chef/waiter
+/// compute_waiter_transition path for these actors.
+fn tick_errand_actor(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
+    let phase = a.errand_phase.as_deref().unwrap_or("");
+
+    // Movement helper: step toward target at the errand walk speed.
+    // Mirrors the local ErrandRouter's WALK_SPEED = 2.88.
+    let (new_x, new_z) = step_toward_target(a.x, a.z, a.target_x, a.target_z, 2.88, dt_ms);
+    let arrived = (a.target_x - new_x).abs() < 0.05 && (a.target_z - new_z).abs() < 0.05;
+    let new_clock = a.state_clock_ms.saturating_add(dt_ms);
+
+    // Each phase decides: do we advance, dwell, or stay?
+    let next: Option<(&str, f32, f32, i64)> = match phase {
+        // walkingToDoor → exitingDoor when we hit the interior door.
+        "walkingToDoor" if arrived =>
+            Some(("exitingDoor", ERRAND_DOOR_EXTERIOR_X, ERRAND_DOOR_EXTERIOR_Z, 0)),
+        // exitingDoor → walkingToRoadEdge.
+        "exitingDoor" if arrived =>
+            Some(("walkingToRoadEdge", ERRAND_ROAD_EDGE_X, ERRAND_ROAD_EDGE_Z, 0)),
+        // walkingToRoadEdge → offscreen. Stamp the wall-clock end of
+        // the offscreen dwell so we don't drift if the tick rate
+        // changes.
+        "walkingToRoadEdge" if arrived => {
+            let until = ctx.timestamp.to_micros_since_unix_epoch()
+                .saturating_add(ERRAND_OFFSCREEN_SHOP_MS * 1_000);
+            // Persist offscreen-until + flip phase. Return None — we
+            // handle this case separately below to also stamp the
+            // offscreen timestamp.
+            ctx.db.staff_actor().member_id().update(StaffActor {
+                x: new_x,
+                z: new_z,
+                state: "working".to_string(),
+                state_clock_ms: 0,
+                errand_phase: Some("offscreen".to_string()),
+                errand_offscreen_until_micros: until,
+                ..a
+            });
+            return;
+        },
+        // offscreen → walkingFromRoadEdge when the wall-clock dwell
+        // elapses. Position doesn't update during offscreen — helper
+        // is invisible.
+        "offscreen" => {
+            let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+            if now_micros >= a.errand_offscreen_until_micros {
+                Some(("walkingFromRoadEdge", ERRAND_DOOR_EXTERIOR_X, ERRAND_DOOR_EXTERIOR_Z, 0))
+            } else {
+                // Hold position; just advance state clock for
+                // bookkeeping. Skip position write.
+                ctx.db.staff_actor().member_id().update(StaffActor {
+                    state_clock_ms: new_clock,
+                    ..a
+                });
+                return;
+            }
+        },
+        // walkingFromRoadEdge → enteringDoor when we hit the
+        // exterior door anchor.
+        "walkingFromRoadEdge" if arrived =>
+            Some(("enteringDoor", ERRAND_DOOR_INTERIOR_X, ERRAND_DOOR_INTERIOR_Z, 0)),
+        // enteringDoor → walkingToCounter (helper's home doubles as
+        // the loiter spot near the supply counter).
+        "enteringDoor" if arrived =>
+            Some(("walkingToCounter", a.home_x, a.home_z, 0)),
+        // walkingToCounter → atCounter (dwell at the counter while
+        // signing for the delivery).
+        "walkingToCounter" if arrived =>
+            Some(("atCounter", a.home_x, a.home_z, 0)),
+        // atCounter → returningHome after the dwell. ALSO drains the
+        // shopping list into pantry_stock (the delivery side-effect
+        // that local Game.completeErrandDelivery does).
+        "atCounter" if new_clock >= ERRAND_COUNTER_DWELL_MS => {
+            // Parse the frozen CSV and add units to pantry.
+            if let Some(csv) = a.errand_trip_list_csv.as_deref() {
+                for entry in csv.split(',').filter(|s| !s.is_empty()) {
+                    let Some((ing, units_str)) = entry.split_once(':') else { continue };
+                    let units: u32 = units_str.parse().unwrap_or(0);
+                    if units == 0 { continue; }
+                    let key = format!("{}:{}", a.restaurant_id, ing);
+                    if let Some(p) = ctx.db.pantry_stock().key().find(key.clone()) {
+                        let new_qty = p.quantity.saturating_add(units);
+                        ctx.db.pantry_stock().key().update(PantryStock {
+                            quantity: new_qty,
+                            ..p
+                        });
+                    } else {
+                        ctx.db.pantry_stock().insert(PantryStock {
+                            key,
+                            restaurant_id: a.restaurant_id,
+                            ingredient_id: ing.to_string(),
+                            quantity: units,
+                        });
+                    }
+                }
+                log::info!(
+                    "tick_errand_actor: rid {} helper {} delivered {}",
+                    a.restaurant_id, a.member_id, csv,
+                );
+            }
+            Some(("returningHome", a.home_x, a.home_z, 0))
+        },
+        // returningHome → idle when we hit home. Clear errand state.
+        "returningHome" if arrived => {
+            ctx.db.staff_actor().member_id().update(StaffActor {
+                x: new_x,
+                z: new_z,
+                state: "idle".to_string(),
+                state_clock_ms: 0,
+                errand_phase: None,
+                errand_trip_list_csv: None,
+                errand_offscreen_until_micros: 0,
+                ..a
+            });
+            return;
+        },
+        // Default: still mid-walk or mid-dwell — step + advance clock.
+        _ => None,
+    };
+
+    if let Some((next_phase, tx, tz, next_clock)) = next {
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            x: new_x,
+            z: new_z,
+            state: "movingToWork".to_string(),
+            state_clock_ms: next_clock,
+            target_x: tx,
+            target_z: tz,
+            target_floor: 0,
+            errand_phase: Some(next_phase.to_string()),
+            ..a
+        });
+    } else {
+        // Mid-walk: step + advance clock; phase unchanged.
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            x: new_x,
+            z: new_z,
+            state_clock_ms: new_clock,
+            ..a
+        });
+    }
+}
+
 fn try_server_wash_load(ctx: &ReducerContext, rid: u64) {
     /// Capacity per kind inside one dishwasher. Matches the client's
     /// DISHWASHER_CAPACITY in DishwareSystem.ts.
@@ -3237,6 +3565,14 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     // to the dedicated handler and return.
     if !a.wash_target_uid.is_empty() && !a.wash_phase.is_empty() {
         tick_wash_trip(ctx, a, dt_ms);
+        return;
+    }
+    // Phase H Phase 5.3 — same shape as the wash-trip branch: errand
+    // helpers in flight run through the 9-phase tick_errand_actor.
+    // Avoids running the chef/waiter transitions on actors whose
+    // state strings would otherwise be reinterpreted incorrectly.
+    if a.errand_phase.is_some() {
+        tick_errand_actor(ctx, a, dt_ms);
         return;
     }
     // H.52 — waiter walk speed includes training multiplier.
