@@ -1755,12 +1755,27 @@ export class StaffRouter {
         // the inventory motion that the local working-state branch
         // would have done, then release the trip + return home.
         const trip = actor.washTrip;
+        // If we're still in the "pickup" phase (mid-walk to dirty)
+        // the dirty mesh is still in the world — remove it now so
+        // the inventory matches what the player sees. Without this
+        // pickupDirty call the dirty plate would persist visually
+        // after the count moved (1 plate on table but pool says
+        // washed = 0 dirty).
+        if (trip.phase === "pickup") {
+          this.washCallbacks?.pickupDirty(trip.dirtyId);
+          for (const id of trip.extraDirtyIds) {
+            this.washCallbacks?.pickupDirty(id);
+          }
+        }
         const isDishwasher = trip.stationDefId.startsWith("dishwasher");
-        if (isDishwasher) {
-          const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
-          if (!ok) this.washCallbacks?.washOne(trip.kind);
-        } else {
-          this.washCallbacks?.washOne(trip.kind);
+        const totalPieces = 1 + trip.extraDirtyIds.length;
+        for (let i = 0; i < totalPieces; i++) {
+          if (isDishwasher) {
+            const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+            if (!ok) this.washCallbacks?.washOne(trip.kind);
+          } else {
+            this.washCallbacks?.washOne(trip.kind);
+          }
         }
         this.busyWashUids.delete(trip.stationUid);
         if (actor.heldPlate) actor.heldPlate.visible = false;
@@ -1771,7 +1786,7 @@ export class StaffRouter {
         actor.clock = 0;
         actor.character.action = "walk";
         this.planPath(actor);
-        console.log(`[Router/Bridge] cloud-wash early-complete: waiter ${actor.memberId} (${trip.kind})`);
+        console.log(`[Router/Bridge] cloud-wash early-complete: waiter ${actor.memberId} (${trip.kind}, ${totalPieces} pieces)`);
       }
     }
   }
