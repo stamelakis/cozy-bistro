@@ -2,6 +2,7 @@ import * as THREE from "three";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, PathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
+import { isServerSim } from "./featureFlags";
 
 /**
  * Drives the errand-helper characters so the auto-shop has a visible
@@ -324,10 +325,71 @@ export class ErrandRouter {
   }
 
   update(dt: number): void {
-    for (const h of this.helpers) this.tickHelper(h, dt);
-    // Phase I (H.65) — periodic publish of helper pose to the cloud
-    // so a refresh / cross-device session resumes from the same spot.
-    this.streamActorsToCloud(dt);
+    // Phase H Phase 5.4 — when server owns dispatch, the bridge
+    // subscription is the SOLE driver of local helper state. The
+    // local tickHelper would otherwise advance phases on its own
+    // clock and write back to cloud, fighting the server's tick.
+    // Skip the local tick entirely; the bridge syncs position +
+    // state on each cloud update.
+    if (!this.serverOwnsErrand()) {
+      for (const h of this.helpers) this.tickHelper(h, dt);
+      // Phase I (H.65) — periodic publish of helper pose to the cloud
+      // so a refresh / cross-device session resumes from the same spot.
+      this.streamActorsToCloud(dt);
+    }
+  }
+
+  /** Phase H Phase 5.4 — server-authoritative gate. Mirrors the
+   * StaffRouter pattern; true when isServerSim("tickets") + cloud
+   * connected. When on, the local tickHelper + mirrorErrandFields
+   * are skipped and the bridge subscription becomes the sole driver
+   * of local helper state. */
+  private serverOwnsErrand(): boolean {
+    return isServerSim("tickets") && this.cloud != null;
+  }
+
+  private errandBridgeAttached = false;
+
+  /** Phase H Phase 5.4 — subscribe to staff_actor changes for our
+   * errand helpers. When server's tick_errand_actor advances the
+   * phase or position, mirror it onto the local helper so the
+   * character animation + visibility match. */
+  attachServerBridge(): void {
+    if (!this.cloud || this.errandBridgeAttached) return;
+    this.errandBridgeAttached = true;
+    this.cloud.subscribeStaffActorChanges({
+      onUpdate: (row) => this.reconcileCloudErrand(row),
+    });
+    console.log("[Errand/Bridge] errand cloud bridge attached");
+  }
+
+  /** Apply a cloud staff_actor row to the matching local helper. */
+  private reconcileCloudErrand(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
+    if (row.role !== "errand") return;
+    const h = this.helpers.find((helper) => helper.memberId === row.memberId);
+    if (!h) return;
+    // Position lerps would fight smooth interpolation; just snap to
+    // the server's value. Server tick is 2 Hz so visible at modest
+    // distances; bumping the tick rate is the right fix if it
+    // feels jumpy.
+    h.character.groundPos.set(row.x, row.z);
+    h.target.set(row.targetX, row.targetZ);
+    // State sync: the server writes errand phase names directly into
+    // the `state` column (matches the local enum). Visibility flips
+    // for "offscreen".
+    if (isErrandState(row.state)) {
+      const wasOffscreen = h.state === "offscreen";
+      h.state = row.state;
+      h.character.root.visible = row.state !== "offscreen";
+      h.character.action = errandPoseFor(row.state);
+      // Reset clocks on phase transition; without this a stale
+      // value from a previous trip would carry forward.
+      if (h.state !== row.state || wasOffscreen) {
+        h.clock = 0;
+        h.replanAccum = 0;
+        h.path = [];
+      }
+    }
   }
 
   /** Phase I (H.65) — 1 Hz position publish.  Matches StaffRouter's
@@ -404,6 +466,11 @@ export class ErrandRouter {
    * streamActorsToCloud tick. */
   private mirrorErrandFields(h: ErrandActor): void {
     if (!this.cloud) return;
+    // Phase H Phase 5.4 — when server owns dispatch, the server is
+    // the writer for errand_phase / trip_list_csv. Mirroring here
+    // would race the server tick and stomp the freshly-written
+    // server values with stale local ones.
+    if (this.serverOwnsErrand()) return;
     const phase = h.state === "idle" ? null : h.state;
     const tripListCsv = this.serializeTripList(h.payload);
     // Offscreen-until: clock counts up from 0 within the offscreen

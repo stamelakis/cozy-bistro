@@ -3091,13 +3091,12 @@ const ERRAND_DISPATCH_COOLDOWN_MICROS: i64 = 60_000_000;
 ///   6. Stamp the chosen helper: state=movingToWork, target=door
 ///      interior, errand_phase="walkingToDoor", trip list CSV frozen.
 fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
-    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    // Phase H Phase 5.4 — was offline-only. Now always-on: the
+    // client's Game.dispatchAutoShopTrip is gated behind
+    // serverOwnsTicketDispatch() (same condition used for the chef /
+    // waiter / take-order dispatchers), so the server is the sole
+    // detector in both modes.
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    let owner_online = ctx.db.player().identity().find(r.owner)
-        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
-        .unwrap_or(false);
-    if owner_online { return; }
 
     // Find an idle errand helper (state=idle AND no errand_phase set).
     // Also build a set of ingredient_ids ALREADY on the way so we

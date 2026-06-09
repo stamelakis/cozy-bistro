@@ -12,6 +12,7 @@ import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
 import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import { isServerSim } from "./featureFlags";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
 import type { HiredStaffMember, IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 
@@ -459,7 +460,14 @@ export class Game {
     this.autoShopClock += dt;
     if (this.autoShopEnabled && this.autoShopClock >= AUTOSHOP_INTERVAL) {
       this.autoShopClock = 0;
-      this.dispatchAutoShopTrip();
+      // Phase H Phase 5.4 — when server owns dispatch, the server's
+      // try_dispatch_errand_trip runs every restaurant tick and
+      // walks the helper through the full 9-phase visual. Skip the
+      // local detection + dispatch entirely so we don't race the
+      // server's pick.
+      if (!isServerSim("tickets")) {
+        this.dispatchAutoShopTrip();
+      }
     }
     // Boost timer counts down with real sim time. When it expires,
     // start the cooldown — without this the player could re-buy a

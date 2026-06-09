@@ -1375,6 +1375,12 @@ export class Engine {
         // the user reported.  setCloud also re-registers the base
         // helper that was added in the ctor before we had the handle.
         this.errand.setCloud(this.cloud);
+        // Phase H Phase 5.4 — subscribe to staff_actor changes so
+        // server-dispatched errand trips drive the local helper's
+        // visual (position + phase + visibility). Local Game's
+        // dispatchAutoShopTrip is gated when serverOwnsErrand() is
+        // on; the bridge is the sole driver in that mode.
+        this.errand.attachServerBridge();
       }
       // Hire / fire callbacks. We wire these even when staff is missing
       // so future hires can attempt to load (handleStaffHired falls back
