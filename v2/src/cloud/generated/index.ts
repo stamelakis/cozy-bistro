@@ -98,6 +98,7 @@ import SetCloudPayrollRateReducer from "./set_cloud_payroll_rate_reducer";
 import SetCloudRatingHistoryReducer from "./set_cloud_rating_history_reducer";
 import SetCloudTransactionLogReducer from "./set_cloud_transaction_log_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
+import SetErrandStateReducer from "./set_errand_state_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
@@ -703,6 +704,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_cloud_rating_history", SetCloudRatingHistoryReducer),
   __reducerSchema("set_cloud_transaction_log", SetCloudTransactionLogReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
+  __reducerSchema("set_errand_state", SetErrandStateReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),

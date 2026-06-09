@@ -379,6 +379,48 @@ export class ErrandRouter {
       washPhase: "",
       takeOrderGuestId: null,
     });
+    // Phase H Phase 5.1+ — also stamp the dedicated errand fields so
+    // visit-mode + co-owner views can render the trip phase + the
+    // shopping list. updateStaffActor's `state` column already
+    // carries the phase as a string, but the dedicated columns let
+    // the server's future Phase 5.2 detector and the Phase 5.4
+    // bridge handler discriminate errand state cleanly without
+    // sniffing the generic `state` enum.
+    this.mirrorErrandFields(h);
+  }
+
+  /** Serialize the trip's frozen list to "id:units,id:units" CSV, or
+   * null when the helper isn't on a trip. */
+  private serializeTripList(payload: ShoppingList | null): string | null {
+    if (!payload || payload.size === 0) return null;
+    const parts: string[] = [];
+    for (const [id, units] of payload) parts.push(`${id}:${units}`);
+    return parts.join(",");
+  }
+
+  /** Stamp the errand-only fields. Called both by the periodic
+   * stream AND ad-hoc on each phase transition so visit-mode picks
+   * up phase flips within ~50 ms instead of waiting for the 1 Hz
+   * streamActorsToCloud tick. */
+  private mirrorErrandFields(h: ErrandActor): void {
+    if (!this.cloud) return;
+    const phase = h.state === "idle" ? null : h.state;
+    const tripListCsv = this.serializeTripList(h.payload);
+    // Offscreen-until: clock counts up from 0 within the offscreen
+    // phase; OFFSCREEN_SHOP_SECONDS is the dwell. Compute
+    // wall-clock-end = now + remaining seconds when in that phase,
+    // else 0.
+    let offscreenUntilMicros = 0n;
+    if (h.state === "offscreen") {
+      const remainingSec = Math.max(0, OFFSCREEN_SHOP_SECONDS - h.clock);
+      offscreenUntilMicros = BigInt(Math.round(Date.now() * 1000 + remainingSec * 1_000_000));
+    }
+    this.cloud.setErrandState({
+      memberId: h.memberId,
+      phase,
+      tripListCsv,
+      offscreenUntilMicros,
+    });
   }
 
   /** Phase I (H.65) — Apply cloud staff_actor rows (role="errand") to

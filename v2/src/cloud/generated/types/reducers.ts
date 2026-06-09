@@ -70,6 +70,7 @@ import SetCloudPayrollRateReducer from "../set_cloud_payroll_rate_reducer";
 import SetCloudRatingHistoryReducer from "../set_cloud_rating_history_reducer";
 import SetCloudTransactionLogReducer from "../set_cloud_transaction_log_reducer";
 import SetCustomerArchetypeReducer from "../set_customer_archetype_reducer";
+import SetErrandStateReducer from "../set_errand_state_reducer";
 import SetGuestOrderReducer from "../set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "../set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "../set_guest_waiting_chair_reducer";
@@ -162,6 +163,7 @@ export type SetCloudPayrollRateParams = __Infer<typeof SetCloudPayrollRateReduce
 export type SetCloudRatingHistoryParams = __Infer<typeof SetCloudRatingHistoryReducer>;
 export type SetCloudTransactionLogParams = __Infer<typeof SetCloudTransactionLogReducer>;
 export type SetCustomerArchetypeParams = __Infer<typeof SetCustomerArchetypeReducer>;
+export type SetErrandStateParams = __Infer<typeof SetErrandStateReducer>;
 export type SetGuestOrderParams = __Infer<typeof SetGuestOrderReducer>;
 export type SetGuestReservedTiersParams = __Infer<typeof SetGuestReservedTiersReducer>;
 export type SetGuestWaitingChairParams = __Infer<typeof SetGuestWaitingChairReducer>;

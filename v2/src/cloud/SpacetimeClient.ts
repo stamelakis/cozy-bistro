@@ -1573,6 +1573,36 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase H Phase 5.1+ — Errand-helper trip state mirror. Local
+   * ErrandRouter calls on every phase transition + on trip start to
+   * stamp the new errand_phase / errand_trip_list_csv /
+   * errand_offscreen_until_micros columns on the helper's
+   * staff_actor row. Lets visit mode + co-owner views render the
+   * errand walk with the right phase context BEFORE the Phase 5.2
+   * server detector lands.
+   *
+   * phase / tripListCsv are nullable to signal "trip done / idle".
+   * offscreenUntilMicros is 0 except during the "offscreen"
+   * shopping leg. */
+  setErrandState(args: {
+    memberId: string;
+    phase: string | null;
+    tripListCsv: string | null;
+    offscreenUntilMicros: bigint;
+  }): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.setErrandState({
+        memberId: args.memberId,
+        phase: args.phase ?? undefined,
+        tripListCsv: args.tripListCsv ?? undefined,
+        offscreenUntilMicros: args.offscreenUntilMicros,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setErrandState failed:", e);
+    }
+  }
+
   unregisterStaffActor(memberId: string): void {
     if (!this.conn) return;
     try { this.conn.reducers.unregisterStaffActor({ memberId }); }

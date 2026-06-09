@@ -5853,6 +5853,42 @@ pub fn update_staff_actor(
 /// Drop a staff actor's row (fired / restaurant deleted /
 /// player-explicit despawn). Idempotent: missing actor is a no-op.
 ///
+/// Phase H Phase 5.1+ — Dedicated mirror reducer for errand-helper
+/// trip state. Separate from update_staff_actor so we don't have to
+/// update every existing caller's call shape (chef / waiter / barman
+/// mirrors are noisy and shouldn't carry errand-specific fields).
+/// Owner-only; idempotent for identical payloads.
+#[reducer]
+pub fn set_errand_state(
+    ctx: &ReducerContext,
+    member_id: String,
+    phase: Option<String>,
+    trip_list_csv: Option<String>,
+    offscreen_until_micros: i64,
+) -> Result<(), String> {
+    let a = ctx.db.staff_actor().member_id().find(member_id.clone())
+        .ok_or_else(|| format!("Staff actor {member_id} not found"))?;
+    let r = ctx.db.restaurant().id().find(a.restaurant_id)
+        .ok_or_else(|| "Restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can update this actor".into());
+    }
+    if a.role != "errand" {
+        // Not catastrophic — just ignore. The local code only fires
+        // this for errand role, so a non-errand call means a wiring
+        // bug worth surfacing as a soft error rather than corrupting
+        // the row.
+        return Err(format!("Actor {member_id} is role {}, not errand", a.role));
+    }
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        errand_phase: phase,
+        errand_trip_list_csv: trip_list_csv,
+        errand_offscreen_until_micros: offscreen_until_micros,
+        ..a
+    });
+    Ok(())
+}
+
 /// H.8 audit fix: if the actor was mid-delivery (delivery_phase set
 /// on a waiter) OR mid-cook (assigned a ticket on a chef), reset
 /// that ticket back to a state another actor can pick up before
