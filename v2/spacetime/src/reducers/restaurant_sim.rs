@@ -5164,6 +5164,46 @@ pub fn set_guest_order(
 /// conditions above. Caller uses this to know whether the place
 /// succeeded for logging.
 fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> {
+    // Phase H Phase 4c — if the order CSVs are empty (a foreground
+    // client-spawned guest where Phase 4b gated the local
+    // buildOrder + mirrorGuestOrder), build the order server-side
+    // and persist back to the active_guest row so subsequent ticks
+    // read the same recipes. Mirrors what try_server_spawn_guest
+    // does at spawn for offline-spawned guests. Hash is the guest's
+    // id so the order is deterministic on resume.
+    let g_owned: ActiveGuest;
+    let g: &ActiveGuest = if g.order_recipes.split(',').all(|s| s.trim().is_empty()) {
+        let (recipes_csv, appliances_csv, cooks_csv, prices_csv, sats_csv)
+            = build_server_order(ctx, g.restaurant_id, g.id);
+        if recipes_csv.is_empty() {
+            // Catalog not seeded or empty menu — bail. Guest will sit
+            // in waitingForFood until patience runs out and leaves,
+            // same as the foreground "kitchen can't fulfill" case.
+            return None;
+        }
+        log::info!(
+            "auto_place_next_course: built server-side order for guest {} → {} courses",
+            g.id, recipes_csv.split(',').count(),
+        );
+        // Read a fresh owned row so we can do the structural update
+        // (..fresh). Update the row, then re-fetch so the rest of the
+        // function reads through the persisted values.
+        let Some(fresh) = ctx.db.active_guest().id().find(g.id) else { return None; };
+        ctx.db.active_guest().id().update(ActiveGuest {
+            order_recipes: recipes_csv,
+            order_appliances: Some(appliances_csv),
+            order_cook_seconds_csv: Some(cooks_csv),
+            order_prices_csv: Some(prices_csv),
+            order_satisfactions_csv: Some(sats_csv),
+            ..fresh
+        });
+        let Some(refetched) = ctx.db.active_guest().id().find(g.id) else { return None; };
+        g_owned = refetched;
+        &g_owned
+    } else {
+        g
+    };
+
     let recipes: Vec<&str> = g.order_recipes
         .split(',')
         .map(|s| s.trim())
