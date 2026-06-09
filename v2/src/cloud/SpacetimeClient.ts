@@ -745,7 +745,7 @@ export class SpacetimeClient {
    * with consumePendingVisitRollup() once the values are applied to
    * Game state, atomically clearing the cloud counters. */
   getPendingVisitRollup():
-    | { served: number; tipsCents: number; ratingSumX100: number; ratingCount: number }
+    | { served: number; tipsCents: number; revenueCents: number; ratingSumX100: number; ratingCount: number }
     | null
   {
     if (!this.conn || this.restaurantId == null) return null;
@@ -753,10 +753,11 @@ export class SpacetimeClient {
     if (!r) return null;
     const served = Number(r.pendingServed);
     const tipsCents = Number(r.pendingTipsCents);
+    const revenueCents = Number(r.pendingRevenueCents ?? 0);
     const ratingSumX100 = Number(r.pendingRatingSumX100);
     const ratingCount = Number(r.pendingRatingCount);
-    if (served === 0 && tipsCents === 0 && ratingCount === 0) return null;
-    return { served, tipsCents, ratingSumX100, ratingCount };
+    if (served === 0 && tipsCents === 0 && revenueCents === 0 && ratingCount === 0) return null;
+    return { served, tipsCents, revenueCents, ratingSumX100, ratingCount };
   }
 
   /** H.22 — Clear the pending_* counters on this player's Restaurant
@@ -1093,6 +1094,13 @@ export class SpacetimeClient {
     // grouping stays consistent).
     if (rollup.tipsCents > 0) {
       this.game.economy.earnMoney(rollup.tipsCents / 100, "payment");
+    }
+    // Phase H Phase 2b — offline meal revenue. Server accumulates
+    // g.total_paid_cents on guest despawn when the owner was
+    // offline; foreground despawns leave this at zero because the
+    // local creditCourse already credited per-course.
+    if (rollup.revenueCents > 0) {
+      this.game.economy.earnMoney(rollup.revenueCents / 100, "offline");
     }
     // Served counter — bumps the HUD's "served today" + drives
     // achievements that watch the total. Cloud carries one count for

@@ -418,6 +418,17 @@ pub struct Restaurant {
     // nothing happened, I log in to a dead restaurant" gap.
     #[default(0i64)]
     pub last_guest_spawn_micros: i64,
+
+    /// Phase H Phase 2b — Sum of meal revenue (g.total_paid_cents)
+    /// across guests despawned while the owner was OFFLINE. The
+    /// foreground client's local creditCourse already credits meal
+    /// revenue when the owner is connected — server only accumulates
+    /// here for visits the client missed. applyPendingVisitRollup
+    /// adds this to economy.money on reconnect and clears the field.
+    /// Placed at end-of-struct so the publish is additive (column
+    /// reordering would require a manual migration / data wipe).
+    #[default(0i64)]
+    pub pending_revenue_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

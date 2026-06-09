@@ -1391,25 +1391,39 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     // Read-modify-write the Restaurant row. If the row disappeared
     // (sell-mid-flight), skip silently.
     let Some(r) = ctx.db.restaurant().id().find(g.restaurant_id) else { return; };
+
+    // Phase H Phase 2b — accumulate meal revenue (g.total_paid_cents)
+    // for offline owners. Foreground clients already credit meal
+    // price per course via local creditCourse → economy.earnMoney,
+    // so accumulating here when the owner is ONLINE would
+    // double-credit on reconnect. Gate on owner_online.
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    let added_revenue = if owner_online { 0 } else { g.total_paid_cents };
+
     ctx.db.restaurant().id().update(Restaurant {
         pending_served: r.pending_served.saturating_add(1),
         pending_tips_cents: r.pending_tips_cents.saturating_add(tip_cents),
+        pending_revenue_cents: r.pending_revenue_cents.saturating_add(added_revenue),
         pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(rating as i64 * 100),
         pending_rating_count: r.pending_rating_count.saturating_add(1),
-        // H.32 — also credit the tip to cloud_money_cents so other
-        // clients see the running balance climb live during a
-        // backgrounded session. The reconnecting owner's applyPending
-        // path still credits Game.economy.earnMoney(pending) — the
-        // foreground client's NEXT set_cloud_money tick after that
-        // earn lands the local + tips total back on this column, so
+        // H.32 — credit the tip (and Phase 2b meal revenue when
+        // offline) to cloud_money_cents so other clients see the
+        // running balance climb live during a backgrounded session.
+        // The reconnecting owner's applyPending path credits both —
+        // the foreground client's NEXT set_cloud_money tick after
+        // that earn lands the local total back on this column, so
         // the cloud value gets a one-frame "down + back up" blip
         // rather than double-counting.
-        cloud_money_cents: r.cloud_money_cents.saturating_add(tip_cents),
+        cloud_money_cents: r.cloud_money_cents.saturating_add(tip_cents + added_revenue),
         ..r
     });
     log::info!(
-        "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents)",
-        g.id, g.restaurant_id, rating, tip_cents,
+        "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents, revenue={} cents, owner_online={})",
+        g.id, g.restaurant_id, rating, tip_cents, added_revenue, owner_online,
     );
 }
 
@@ -2661,16 +2675,18 @@ pub fn consume_pending_visit_rollup(
     }
     if r.pending_served == 0
         && r.pending_tips_cents == 0
+        && r.pending_revenue_cents == 0
         && r.pending_rating_count == 0 {
         return Ok(()); // already cleared
     }
     log::info!(
-        "consume_pending_visit_rollup: clearing {} served / {} tip cents / {} ratings on restaurant {}",
-        r.pending_served, r.pending_tips_cents, r.pending_rating_count, restaurant_id,
+        "consume_pending_visit_rollup: clearing {} served / {} tip cents / {} revenue cents / {} ratings on restaurant {}",
+        r.pending_served, r.pending_tips_cents, r.pending_revenue_cents, r.pending_rating_count, restaurant_id,
     );
     ctx.db.restaurant().id().update(Restaurant {
         pending_served: 0,
         pending_tips_cents: 0,
+        pending_revenue_cents: 0,
         pending_rating_sum_x100: 0,
         pending_rating_count: 0,
         ..r

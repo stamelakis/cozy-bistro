@@ -39,6 +39,10 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         pending_tips_cents: 0,
         pending_rating_sum_x100: 0,
         pending_rating_count: 0,
+        // Phase H Phase 2b — offline-accumulated meal revenue. Starts
+        // at zero on a fresh restaurant; accumulate_pending_visit_rollup
+        // adds to it only when the owner is offline at despawn.
+        pending_revenue_cents: 0,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,
