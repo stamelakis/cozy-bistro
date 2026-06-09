@@ -3009,6 +3009,15 @@ export class StaffRouter {
         // seated guest's table, then fire the spawner's callback so it
         // builds the recipe list + enqueues the cooking ticket.
         if (w.takeOrderRequest) {
+          // Phase H Phase 4b — when server owns dispatch, the
+          // bridge's release case handles the trip completion (sets
+          // waiter to returningHome when staff_actor.take_order_guest_id
+          // is cleared server-side). Skipping the local dwell-complete
+          // callback prevents a double-enqueue: server's
+          // auto_place_next_course fires when guest hits
+          // waitingForFood, and a local takeOrderCallback would
+          // ALSO call enqueueOrder via the spawner.
+          if (this.serverOwnsTicketDispatch()) break;
           if (w.clock >= TAKE_ORDER_DWELL_SECONDS) {
             const req = w.takeOrderRequest;
             this.takeOrderCallback?.(req.guestId);

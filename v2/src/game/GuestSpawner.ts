@@ -2976,10 +2976,22 @@ export class GuestSpawner {
         // slow" angry-exit path naturally).
         if (g.stateClock >= TIME_TO_ORDER && !g.orderRequested && !g.orderTaken) {
           g.orderRequested = true;
-          // Bar-seated guests flag their order as atBar so the
-          // barman pool picks it up (the waiter pool filters atBar
-          // requests out — see StaffRouter.tickWaiter idle).
-          this.router.enqueueOrderRequest(g.id, g.seatPos, g.seatFloor, g.seatAtBar ?? false);
+          // Phase H Phase 4b — when server owns guest states, the
+          // server's tick_guest_state advances seated → ordering at
+          // SEATED_DWELL_MS, and try_dispatch_take_order picks a
+          // waiter via Phase 4 always-on dispatch. The bridge
+          // synthesizes a local OrderRequest from the cloud row when
+          // the server picks a waiter (StaffRouter
+          // reconcileCloudStaffActor take-order claim case). Skipping
+          // the local enqueueOrderRequest avoids racing the server's
+          // pick + having two OrderRequest entries for the same
+          // guest. Bar-seat requests still need local enqueueing —
+          // server doesn't simulate the barman take-order path yet.
+          if (this.serverOwnsGuestStates() && !(g.seatAtBar ?? false)) {
+            // Local request skipped; server flow handles it.
+          } else {
+            this.router.enqueueOrderRequest(g.id, g.seatPos, g.seatFloor, g.seatAtBar ?? false);
+          }
         }
         if (g.orderTaken && g.order.length === 0) {
           // Callback was supposed to populate g.order. Defensive: if
