@@ -7,6 +7,7 @@ import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from 
 import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 import { TextureService } from "./TextureService";
+import { buildPerimeterWallSegments } from "./wallBuilder";
 
 /** Plaque visual catalogs — each id is a small string the modal exposes
  * as a radio button. Picked to read as warm cosy bistro defaults but
@@ -2267,14 +2268,11 @@ export class WorldScene {
 
   /** Outdoor-axis end coordinates for each wall (along the wall's main
    * axis). Together these give the building a 10×10 interior. */
-  private static readonly WALL_AXIS_MIN = -4.5;
-  private static readonly WALL_AXIS_MAX = 5.5;
-  /** Half-tile gap each opening punches in the wall. */
-  private static readonly OPENING_HALF = 0.5;
-  /** Sill / lintel heights for a window opening. Sill = 0 → 0.9 m,
-   * window itself runs 0.9 → 2.2 m, lintel = 2.2 → 3.0 m. */
-  private static readonly WINDOW_SILL_TOP = 0.9;
-  private static readonly WINDOW_LINTEL_BOTTOM = 2.2;
+  // Wall axis bounds + opening + sill/lintel constants moved to
+  // src/scene/wallBuilder.ts so visit mode can render the same
+  // perimeter geometry without WorldScene-private duplicates. The
+  // host's rebuildPerimeterWall now calls into buildPerimeterWallSegments
+  // for the segment math.
 
   /** Rebuild one perimeter wall from scratch around the supplied
    * openings. Door positions are along the wall's main axis (X for
@@ -2301,82 +2299,20 @@ export class WorldScene {
       m.geometry.dispose();
     }
     state.meshes.length = 0;
-
-    const axisMin = WorldScene.WALL_AXIS_MIN;
-    const axisMax = WorldScene.WALL_AXIS_MAX;
-    const halfGap = WorldScene.OPENING_HALF;
-    const sillTop = WorldScene.WINDOW_SILL_TOP;
-    const lintelBottom = WorldScene.WINDOW_LINTEL_BOTTOM;
-
-    // Build a sorted list of openings (mixed door + window) so the
-    // segment loop walks them left-to-right exactly once.
-    const openings: { center: number; type: "door" | "window" }[] = [
-      ...doorEdges.filter((c) => c > axisMin && c < axisMax).map((c) => ({ center: c, type: "door" as const })),
-      ...windowEdges.filter((c) => c > axisMin && c < axisMax).map((c) => ({ center: c, type: "window" as const })),
-    ].sort((a, b) => a.center - b.center);
-
+    // Delegate the geometry + opening-loop math to the shared
+    // wallBuilder so visit mode renders structurally identical walls
+    // when it picks the same openings out of the save snapshot.
+    // The host keeps ownership of the per-face material array
+    // (interior cream + exterior beige + ghost transparency) and the
+    // mesh-tracking on `state.meshes` for teardown / ghost-swap.
     const mats = this.materialsFor(dir, state.currentMat, wallMat);
-    const addBox = (
-      axisFrom: number, axisTo: number,
-      yCenter: number, yHeight: number,
-    ): void => {
-      const span = axisTo - axisFrom;
-      if (span < 0.04 || yHeight < 0.04) return;
-      const center = (axisFrom + axisTo) / 2;
-      const geom = this.wallBoxFor(dir, span, yHeight);
-      const mesh = new THREE.Mesh(geom, mats);
-      // yOffset lifts every segment up to its storey's slab so the same
-      // 1.5 / 2.5 / sillTop centres still produce a wall that hugs the
-      // floor and ceiling on storey > 0.
-      const pos = this.wallSegmentPosition(dir, center, yCenter + yOffset);
-      mesh.position.copy(pos);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      parent.add(mesh);
-      state.meshes.push(mesh);
-    };
-
-    let segStart = axisMin;
-    for (const op of openings) {
-      const gapStart = op.center - halfGap;
-      const gapEnd = op.center + halfGap;
-      // Continuous wall segment up to this opening.
-      addBox(segStart, gapStart, 1.5, 3.0);
-      if (op.type === "door") {
-        // Full-height gap with a 1 m lintel sitting at the top.
-        addBox(gapStart, gapEnd, 2.5, 1.0);
-      } else {
-        // Window: 0..sillTop is the sill, lintelBottom..3 is the lintel,
-        // the middle band stays open so the placed window mesh shows.
-        addBox(gapStart, gapEnd, sillTop / 2, sillTop);
-        const lintelH = 3 - lintelBottom;
-        addBox(gapStart, gapEnd, lintelBottom + lintelH / 2, lintelH);
-      }
-      segStart = gapEnd;
-    }
-    addBox(segStart, axisMax, 1.5, 3.0);
-  }
-
-  /** Geometry for a single wall box. Direction picks which axis the
-   * width sits along — front/back stretch along X, left/right along
-   * Z — keeping the 0.2 m thickness on the perpendicular axis. */
-  private wallBoxFor(dir: WallDir, span: number, yHeight: number): THREE.BoxGeometry {
-    if (dir === "front" || dir === "back") {
-      return new THREE.BoxGeometry(span, yHeight, 0.2);
-    }
-    return new THREE.BoxGeometry(0.2, yHeight, span);
-  }
-
-  /** World position of a wall segment given its centre along the wall
-   * axis and its centre Y. Building interior is shifted by (0.5, 0.5)
-   * to match the tile grid, but the perimeter coords are absolute. */
-  private wallSegmentPosition(dir: WallDir, axisCentre: number, yCentre: number): THREE.Vector3 {
-    switch (dir) {
-      case "front": return new THREE.Vector3(axisCentre, yCentre,  5.5);
-      case "back":  return new THREE.Vector3(axisCentre, yCentre, -4.5);
-      case "left":  return new THREE.Vector3(-4.5, yCentre, axisCentre);
-      case "right": return new THREE.Vector3( 5.5, yCentre, axisCentre);
-    }
+    const meshes = buildPerimeterWallSegments(parent, dir, doorEdges, windowEdges, {
+      yOffset,
+      resolveMaterial: () => mats,
+      castShadow: true,
+      receiveShadow: true,
+    });
+    state.meshes.push(...meshes);
   }
 
   /** Per-face material array for a wall box. Inside face uses

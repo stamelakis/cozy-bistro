@@ -9,6 +9,10 @@ import { SeatPlateVisualizer } from "../scene/SeatPlateVisualizer";
 import { CookingPotVisualizer } from "../scene/CookingPotVisualizer";
 import { WashCycleRingVisualizer } from "../scene/WashCycleRingVisualizer";
 import { DirtyPileVisualizer } from "../scene/DirtyPileVisualizer";
+import {
+  buildPerimeterWallSegments, extractWallOpenings, emptyFloorOpenings,
+  type OpeningSourcePlacement,
+} from "../scene/wallBuilder";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -875,19 +879,23 @@ export class VisitMode {
     this.visitorRoot = root;
 
     // Phase visit-shell — render the same interior structural pieces
-    // the host sees: white floor plane, 4 perimeter walls, upper
-    // storey slabs + walls if the save unlocked them, staircases,
-    // roof. Before this pass the visitor saw furniture floating in
-    // empty space — the audit gap the user flagged as "I want
-    // EVERYTHING the same in their restaurant."
-    //
-    // First-pass scope: ground floor + upper storeys based on the
-    // save snapshot's expansion / luxury tier. Doors and windows are
-    // not cut into the walls yet (they're tagged on placed_furniture
-    // but the cut geometry lives in the host's rebuildPerimeterWall
-    // pipeline — a follow-up extracts that into a shared helper).
+    // the host sees: white floor plane, 4 perimeter walls with the
+    // host's door/window cuts, upper storey slabs + walls if the save
+    // unlocked them, roof. Wall geometry is shared with the host via
+    // src/scene/wallBuilder so visit + host walls are guaranteed to
+    // match. Door/window edges come from the save snapshot's
+    // furniture list — same source the host reads from its registry.
     const expansionLevel = readExpansionLevelFromSave(save);
-    this.buildInteriorShell(root, expansionLevel);
+    const wallSourcePlacements: OpeningSourcePlacement[] = (save.furniture ?? []).map((p) => ({
+      defId: p.furnitureId,
+      x: p.position.x,
+      // Save snapshot's "y" is world Z (legacy 2D-grid naming;
+      // matches the same alias used downstream in the furniture
+      // load above — see line ~927).
+      z: p.position.y,
+      floor: Math.max(0, p.floor ?? 0),
+    }));
+    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements);
 
     // H.A — Wire visualizers that need a scene-mount and/or
     // furniture-position resolver. SeatPlate plates need a per-floor
@@ -1253,21 +1261,30 @@ export class VisitMode {
 
   /** Construct the visited restaurant's interior shell (floor + walls
    * + multi-storey slabs + stairs + roof) into the visitor root.
-   * Mirrors what WorldScene.addBuilding does for the host, simplified
-   * to omit dynamic door/window cuts (those land in a follow-up that
-   * extracts the host's wall-cut pipeline into a shared helper).
+   * Mirrors what WorldScene.addBuilding does for the host, including
+   * the door/window opening cuts driven by the visited save's
+   * furniture list.
    *
    * Coords match the host exactly: floor is 10×10 centered at (0.5,
    * 0, 0.5), walls span X∈[−4.5, 5.5] and Z∈[−4.5, 5.5]. Each storey
-   * sits at floorIdx × STOREY_HEIGHT, same as the rest of visit mode
-   * already uses for furniture placement (line 506, 666, 926). */
-  private buildInteriorShell(root: THREE.Group, expansionLevel: number): void {
+   * sits at floorIdx × STOREY_HEIGHT.
+   *
+   * Perimeter wall geometry comes from the shared wallBuilder module
+   * — the same buildPerimeterWallSegments call WorldScene uses on the
+   * host's own scene. Visit mode passes a single shared wallMat
+   * (no ghost-wall transparency needed — visitors only view from the
+   * default iso angle) and extracts openings from the placement list
+   * via the shared extractWallOpenings helper. */
+  private buildInteriorShell(
+    root: THREE.Group,
+    expansionLevel: number,
+    placements: readonly OpeningSourcePlacement[],
+  ): void {
     const W = 10;
-    const T = 0.1; // wall thickness
-    const wallHeight = STOREY_HEIGHT;
-    // Floor + slab material — bare white to match the host's default.
-    // DecorModal-set themes would land here in the follow-up that wires
-    // wallpaper/floor texture data into the cloud schema.
+    // Floor + slab + wall + roof materials — bare white to match the
+    // host's default. DecorModal-set themes would land here in the
+    // follow-up that wires wallpaper / floor texture data into the
+    // cloud schema.
     const floorMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.95, metalness: 0 });
     const slabMat = new THREE.MeshStandardMaterial({
       color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
@@ -1276,6 +1293,12 @@ export class VisitMode {
     const roofMat = new THREE.MeshStandardMaterial({
       color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
     });
+
+    // Extract openings keyed by floor + direction from the save's
+    // furniture. Same algorithm the host's Engine.allPerimeterOpenings
+    // runs against its placed-furniture registry — just sourced from
+    // the save snapshot here.
+    const openingsByFloor = extractWallOpenings(placements, getFurnitureDef);
 
     /** Construct one storey's perimeter walls + slab. floorIdx 0 has
      * no slab (the ground floor uses a PlaneGeometry directly). */
@@ -1289,28 +1312,25 @@ export class VisitMode {
         slab.receiveShadow = true;
         root.add(slab);
       }
-      // 4 perimeter walls. Each is a thin BoxGeometry positioned along
-      // one edge of the 10×10 footprint.
-      const wallY = baseY + wallHeight / 2;
-      const walls: Array<{ w: number; h: number; d: number; x: number; z: number }> = [
-        // Back wall (north, -Z side at z=-4.5)
-        { w: W, h: wallHeight, d: T, x: 0.5, z: -4.5 },
-        // Front wall (south, +Z side at z=5.5)
-        { w: W, h: wallHeight, d: T, x: 0.5, z: 5.5 },
-        // Left wall (west, -X side at x=-4.5)
-        { w: T, h: wallHeight, d: W, x: -4.5, z: 0.5 },
-        // Right wall (east, +X side at x=5.5)
-        { w: T, h: wallHeight, d: W, x: 5.5, z: 0.5 },
-      ];
-      for (const w of walls) {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, w.d), wallMat);
-        mesh.position.set(w.x, wallY, w.z);
-        mesh.receiveShadow = true;
-        root.add(mesh);
+      // 4 perimeter walls. Build via the shared wallBuilder so doors +
+      // windows in the save snapshot cut the same gap shapes the host
+      // sees (full-height + 1 m lintel for doors; sill + lintel +
+      // open middle band for windows).
+      const floorOpenings = openingsByFloor.get(floorIdx) ?? emptyFloorOpenings();
+      for (const dir of ["front", "back", "left", "right"] as const) {
+        buildPerimeterWallSegments(root, dir,
+          floorOpenings[dir].doors,
+          floorOpenings[dir].windows, {
+            yOffset: baseY,
+            resolveMaterial: () => wallMat,
+            castShadow: false,
+            receiveShadow: true,
+          },
+        );
       }
     };
 
-    // Ground floor: PlaneGeometry like the host (line 1814).
+    // Ground floor: PlaneGeometry like the host.
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(0.5, 0.0, 0.5);
