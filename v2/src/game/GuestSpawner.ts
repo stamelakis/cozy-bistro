@@ -1364,6 +1364,26 @@ export class GuestSpawner {
     const g = this.findLocalGuestByServerId(row.id);
     if (!g) return;
 
+    // Phase H Phase 4d — populate local g.order from cloud's
+    // order_recipes CSV when empty. With Phase 4b gating the local
+    // buildOrder, foreground guests get their orders built
+    // server-side (Phase 4c). The bridge mirrors the resulting CSV
+    // back into local Recipe objects so creditCourse + the eating
+    // visual cues (plate food color) work correctly.
+    if (g.order.length === 0 && row.orderRecipes.length > 0) {
+      const recipeIds = row.orderRecipes.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+      const builtOrder: import("../data/types").RecipeDefinition[] = [];
+      for (const id of recipeIds) {
+        const r = recipes.find((x) => x.id === id);
+        if (r) builtOrder.push(r);
+      }
+      if (builtOrder.length > 0) {
+        g.order = builtOrder;
+        g.orderTaken = true;
+        console.log(`[Spawner/Bridge] hydrated g.order for guest ${g.id} from cloud (${builtOrder.length} courses)`);
+      }
+    }
+
     // waitingForFood → eating: server saw a delivered ticket bound to
     // this guest. Fire the local "plate landed" effects. Without this
     // bridge step the local case "waitingForFood" handler runs the

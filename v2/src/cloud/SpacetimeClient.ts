@@ -138,6 +138,13 @@ export interface ActiveGuestRow {
    * seated bumps it) and fires the matching local side effects
    * (credit course, remove plate). */
   orderIndex: number;
+  /** Phase H Phase 4d — comma-separated recipe ids for the visit's
+   * full order. Populated by either the foreground client's
+   * mirrorGuestOrder OR (after Phase 4c) by the server's
+   * auto_place_next_course build_server_order fallback. Bridge
+   * parses this into local g.order so creditCourse can read the
+   * matching recipe + compute price/satisfaction. */
+  orderRecipes: string;
 }
 
 /** Phase I.1 (H.47) — Full row shape returned by listActiveGuests.
@@ -1406,6 +1413,7 @@ export class SpacetimeClient {
       seatX: number; seatZ: number; seatFloor: number;
       plateX: number; plateZ: number;
       orderIndex: number;
+      orderRecipes: string;
     };
     const toClientRow = (r: ServerRow): ActiveGuestRow => ({
       id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
@@ -1415,6 +1423,7 @@ export class SpacetimeClient {
       seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor,
       plateX: r.plateX, plateZ: r.plateZ,
       orderIndex: r.orderIndex,
+      orderRecipes: r.orderRecipes,
     });
     try {
       if (handlers.onInsert) {
@@ -3460,6 +3469,7 @@ export class SpacetimeClient {
             seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
             plateX: g.plateX, plateZ: g.plateZ,
             orderIndex: g.orderIndex,
+            orderRecipes: g.orderRecipes,
           },
         });
       }
