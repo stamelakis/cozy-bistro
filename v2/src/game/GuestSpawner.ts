@@ -1478,11 +1478,22 @@ export class GuestSpawner {
 
     // wcSitting → wcWashing: server's "done with toilet, walk to sink"
     // transition. The cloud row's target_x/z just swapped from toilet
-    // → sink. Local guest is at the toilet (atToilet) — flush, restore
+    // → sink. Local guest is at (or near) the toilet — flush, restore
     // chair-height, then walk to the server-picked sink. wash-only
-    // guests don't go through wcSitting; this only fires for
+    // guests don't go through wcSitting; this only fires for the
     // willUseToilet flow.
-    if (g.state === "atToilet" && row.state === "wcWashing") {
+    //
+    // Local-state check includes BOTH atToilet and walkingToToilet:
+    // server's wcSitting dwell can elapse before the local 60 Hz sim
+    // physically arrives at the toilet (server's position is 2 Hz
+    // interpolated). When that race hits, the bridge needs to skip
+    // ahead to walkingToSink rather than leaving the guest stuck
+    // mid-walk to a toilet they'd never use. The transition's
+    // condition naturally rate-limits itself: after firing, g.state
+    // becomes walkingToSink and the OR clause is false on subsequent
+    // ticks.
+    const onToiletSide = g.state === "atToilet" || g.state === "walkingToToilet";
+    if (onToiletSide && row.state === "wcWashing") {
       this.sfx?.toiletFlush();
       if (g.originalSeatHeight !== undefined) {
         g.character.seatHeight = g.originalSeatHeight;
@@ -1498,10 +1509,12 @@ export class GuestSpawner {
     }
 
     // wcWashing → seated: server's "done washing, return to seat".
-    // Local guest is at the sink (atSink). Flag washedHands, restore
-    // walking pose, head back to the dining seat (returnSeatPos was
-    // captured at trip start).
-    if (g.state === "atSink" && row.state === "seated") {
+    // Local guest is at (or near) the sink. Flag washedHands, restore
+    // walking pose, head back to the dining seat. Same mid-walk
+    // robustness as above — include walkingToSink in the local-side
+    // check so a race doesn't strand the guest.
+    const onSinkSide = g.state === "atSink" || g.state === "walkingToSink";
+    if (onSinkSide && row.state === "seated") {
       g.washedHands = true;
       g.washAttemptComplete = true;
       g.target = (g.returnSeatPos ?? g.seatPos).clone();
