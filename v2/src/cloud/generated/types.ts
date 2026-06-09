@@ -386,6 +386,7 @@ export const Restaurant = __t.object("Restaurant", {
   waiterRestFloor: __t.u32(),
   lastGuestSpawnMicros: __t.i64(),
   pendingRevenueCents: __t.i64(),
+  themeOverridesCsv: __t.option(__t.string()),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

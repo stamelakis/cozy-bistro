@@ -429,6 +429,23 @@ pub struct Restaurant {
     /// reordering would require a manual migration / data wipe).
     #[default(0i64)]
     pub pending_revenue_cents: i64,
+
+    /// Per-floor theme overrides applied via DecorModal. Empty / None
+    /// = all floors use the catalog default theme.
+    ///
+    /// Format: pipe-separated "storey:theme_id" pairs. Example:
+    ///   "0:cozy-default|2:fine-dining"
+    /// Floors that use the default theme are omitted. On read, split
+    /// by '|', parse each "storey:id" entry, and look up the
+    /// RestaurantTheme catalog entry (data/themes.ts) for the
+    /// wallColor + floorColor hex values.
+    ///
+    /// Visit mode reads this on entry to render the same wall + slab
+    /// colors the host picked, so a side-by-side view of two screens
+    /// shows the same restaurant look. End-of-struct so the publish
+    /// is additive (Option<String> + default None — H.93-safe).
+    #[default(None::<String>)]
+    pub theme_overrides_csv: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

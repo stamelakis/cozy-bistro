@@ -591,7 +591,13 @@ export class Engine {
     // So opening Decor on Floor 2 lands on Floor 2's tab by default.
     this.decorModal.getFocusedStorey = () => this.scene.getFocusedStorey();
     // Wire theme changes to the live scene + restore the saved theme.
-    this.game.onThemeChanged = (floor, theme) => this.scene.setStoreyTheme(floor, theme);
+    // Also push the per-floor override CSV to the cloud restaurant
+    // row so visit-mode + co-owner views render the same colors.
+    // Format matches what set_restaurant_theme_overrides expects.
+    this.game.onThemeChanged = (floor, theme) => {
+      this.scene.setStoreyTheme(floor, theme);
+      this.cloud.setRestaurantThemeOverrides(this.game.snapshotThemesByFloor());
+    };
     // Replay every storey's saved theme on startup so the world
     // reflects per-floor decor choices the moment the scene mounts.
     for (let f = 0; f < WorldScene.getNumStoreys(); f += 1) {

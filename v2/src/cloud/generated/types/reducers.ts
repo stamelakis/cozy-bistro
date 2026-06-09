@@ -82,6 +82,7 @@ import SetRecipeIngredientsReducer from "../set_recipe_ingredients_reducer";
 import SetRecipeLevelReducer from "../set_recipe_level_reducer";
 import SetRecipeMetaReducer from "../set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "../set_restaurant_public_reducer";
+import SetRestaurantThemeOverridesReducer from "../set_restaurant_theme_overrides_reducer";
 import SetWaiterRestSpotReducer from "../set_waiter_rest_spot_reducer";
 import SignUpReducer from "../sign_up_reducer";
 import SpawnGuestReducer from "../spawn_guest_reducer";
@@ -175,6 +176,7 @@ export type SetRecipeIngredientsParams = __Infer<typeof SetRecipeIngredientsRedu
 export type SetRecipeLevelParams = __Infer<typeof SetRecipeLevelReducer>;
 export type SetRecipeMetaParams = __Infer<typeof SetRecipeMetaReducer>;
 export type SetRestaurantPublicParams = __Infer<typeof SetRestaurantPublicReducer>;
+export type SetRestaurantThemeOverridesParams = __Infer<typeof SetRestaurantThemeOverridesReducer>;
 export type SetWaiterRestSpotParams = __Infer<typeof SetWaiterRestSpotReducer>;
 export type SignUpParams = __Infer<typeof SignUpReducer>;
 export type SpawnGuestParams = __Infer<typeof SpawnGuestReducer>;

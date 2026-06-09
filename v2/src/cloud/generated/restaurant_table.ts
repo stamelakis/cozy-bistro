@@ -45,4 +45,5 @@ export default __t.row({
   waiterRestFloor: __t.u32().name("waiter_rest_floor"),
   lastGuestSpawnMicros: __t.i64().name("last_guest_spawn_micros"),
   pendingRevenueCents: __t.i64().name("pending_revenue_cents"),
+  themeOverridesCsv: __t.option(__t.string()).name("theme_overrides_csv"),
 });

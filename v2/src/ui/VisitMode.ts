@@ -13,6 +13,7 @@ import {
   buildPerimeterWallSegments, extractWallOpenings, emptyFloorOpenings,
   type OpeningSourcePlacement,
 } from "../scene/wallBuilder";
+import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -895,7 +896,15 @@ export class VisitMode {
       z: p.position.y,
       floor: Math.max(0, p.floor ?? 0),
     }));
-    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements);
+    // Visit-mode theme parity — read the visited restaurant's
+    // per-floor theme overrides from the cloud Restaurant row
+    // (DecorModal pushes via set_restaurant_theme_overrides on every
+    // applyTheme). Falls back to the catalog default when the host
+    // hasn't customised. Map storey index → catalog theme so the
+    // shell builder reads wallColor + floorColor directly.
+    const themeCsv = this.cloud?.getRestaurantThemeOverridesByOwnerHex(plot.ownerHex) ?? "";
+    const themesByFloor = parseThemeOverridesCsv(themeCsv);
+    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements, themesByFloor);
 
     // H.A — Wire visualizers that need a scene-mount and/or
     // furniture-position resolver. SeatPlate plates need a per-floor
@@ -1279,17 +1288,28 @@ export class VisitMode {
     root: THREE.Group,
     expansionLevel: number,
     placements: readonly OpeningSourcePlacement[],
+    themesByFloor: Map<number, RestaurantTheme>,
   ): void {
     const W = 10;
-    // Floor + slab + wall + roof materials — bare white to match the
-    // host's default. DecorModal-set themes would land here in the
-    // follow-up that wires wallpaper / floor texture data into the
-    // cloud schema.
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.95, metalness: 0 });
-    const slabMat = new THREE.MeshStandardMaterial({
-      color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
-    });
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85, side: THREE.DoubleSide });
+    // Per-storey materials cloned from the picked theme. Themes carry
+    // wallColor + floorColor as numeric hex (data/themes.ts); host's
+    // setStoreyTheme writes them onto cloned-per-floor materials so
+    // each floor can have its own DecorModal choice. Visit mode does
+    // the same, falling back to the catalog default (RESTAURANT_THEMES[0]
+    // = "plain-white") when no override was set for that floor.
+    const defaultTheme = RESTAURANT_THEMES[0];
+    const materialForFloor = (floorIdx: number): { wallMat: THREE.Material; floorMat: THREE.Material } => {
+      const theme = themesByFloor.get(floorIdx) ?? defaultTheme;
+      return {
+        wallMat: new THREE.MeshStandardMaterial({
+          color: theme.wallColor, roughness: 0.85, side: THREE.DoubleSide,
+        }),
+        floorMat: new THREE.MeshStandardMaterial({
+          color: theme.floorColor, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+        }),
+      };
+    };
+    // Roof keeps the catalog beige — host's mansard isn't theme-driven.
     const roofMat = new THREE.MeshStandardMaterial({
       color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
     });
@@ -1304,13 +1324,21 @@ export class VisitMode {
      * no slab (the ground floor uses a PlaneGeometry directly). */
     const buildStorey = (floorIdx: number): void => {
       const baseY = floorIdx * STOREY_HEIGHT;
+      const { wallMat, floorMat } = materialForFloor(floorIdx);
       // Slab (upper storeys only — ground floor has its own floor mesh).
       if (floorIdx > 0) {
-        const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), slabMat);
+        const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
         slab.rotation.x = -Math.PI / 2;
         slab.position.set(0.5, baseY, 0.5);
         slab.receiveShadow = true;
         root.add(slab);
+      } else {
+        // Ground floor: PlaneGeometry with the theme-driven floor mat.
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(0.5, 0.0, 0.5);
+        floor.receiveShadow = true;
+        root.add(floor);
       }
       // 4 perimeter walls. Build via the shared wallBuilder so doors +
       // windows in the save snapshot cut the same gap shapes the host
@@ -1330,12 +1358,6 @@ export class VisitMode {
       }
     };
 
-    // Ground floor: PlaneGeometry like the host.
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0.5, 0.0, 0.5);
-    floor.receiveShadow = true;
-    root.add(floor);
     buildStorey(0);
 
     // Upper storeys per expansion level. Expansion level 1 = ground
@@ -1362,6 +1384,28 @@ export class VisitMode {
  * keep in sync if those change. */
 function readExpansionLevelFromSave(save: { expansionLevel?: number; luxuryTier?: number }): number {
   return save.expansionLevel ?? save.luxuryTier ?? 1;
+}
+
+/** Parse the cloud Restaurant.theme_overrides_csv into a per-floor
+ * theme map. Format is "storey:theme_id|storey:theme_id" — see the
+ * server-side comment on the column for the canonical shape. Returns
+ * an empty map for empty / null CSV. Unknown theme ids are skipped
+ * (graceful degradation if the catalog dropped an entry). */
+function parseThemeOverridesCsv(csv: string): Map<number, RestaurantTheme> {
+  const out = new Map<number, RestaurantTheme>();
+  if (!csv) return out;
+  for (const entry of csv.split("|")) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(":");
+    if (sep <= 0) continue;
+    const floor = Number(trimmed.slice(0, sep));
+    if (!Number.isFinite(floor) || floor < 0) continue;
+    const themeId = trimmed.slice(sep + 1).trim();
+    const theme = RESTAURANT_THEMES.find((t) => t.id === themeId);
+    if (theme) out.set(floor, theme);
+  }
+  return out;
 }
 
 function escapeHtml(s: string): string {

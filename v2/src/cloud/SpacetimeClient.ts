@@ -1603,6 +1603,34 @@ export class SpacetimeClient {
     }
   }
 
+  /** Visit-mode theme parity — push the per-floor theme overrides
+   * (DecorModal picks) to the cloud's Restaurant.theme_overrides_csv
+   * column. Empty floors fall through to the catalog default; visit
+   * mode reads this on entry to render the same wall + slab colors
+   * the host picked. Fires from Engine's onThemeChanged hook on every
+   * applyTheme. Idempotent: server skips the write when CSV matches. */
+  setRestaurantThemeOverrides(themesByFloor: Record<number, string>): void {
+    if (!this.conn || this.restaurantId == null) return;
+    // Serialize as "storey:theme_id|storey:theme_id". Skip floors that
+    // happen to carry the default catalog id — keeps the CSV small.
+    const parts: string[] = [];
+    for (const [k, id] of Object.entries(themesByFloor)) {
+      const floor = Number(k);
+      if (!Number.isFinite(floor) || floor < 0) continue;
+      if (!id) continue;
+      parts.push(`${floor}:${id}`);
+    }
+    const csv = parts.join("|");
+    try {
+      this.conn.reducers.setRestaurantThemeOverrides({
+        restaurantId: this.restaurantId,
+        csv,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRestaurantThemeOverrides failed:", e);
+    }
+  }
+
   unregisterStaffActor(memberId: string): void {
     if (!this.conn) return;
     try { this.conn.reducers.unregisterStaffActor({ memberId }); }
@@ -3580,6 +3608,23 @@ export class SpacetimeClient {
     try {
       for (const r of this.conn.db.restaurant.iter()) {
         if (r.owner.toHexString().toLowerCase() === target) return r.id;
+      }
+    } catch { /* table not wired yet */ }
+    return null;
+  }
+
+  /** Visit-mode theme parity — read the visited restaurant's
+   * per-floor theme override CSV from the subscribed Restaurant row.
+   * Empty / null when the host hasn't customised any floor (visit
+   * mode falls back to the catalog default in that case). Format:
+   * "storey:theme_id|storey:theme_id". */
+  getRestaurantThemeOverridesByOwnerHex(ownerHex: string): string | null {
+    if (!this.conn) return null;
+    const target = ownerHex.toLowerCase();
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() !== target) continue;
+        return r.themeOverridesCsv ?? null;
       }
     } catch { /* table not wired yet */ }
     return null;

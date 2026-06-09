@@ -2714,6 +2714,33 @@ pub fn consume_pending_visit_rollup(
     Ok(())
 }
 
+/// Visit-mode theme parity — owner-only setter for the per-floor theme
+/// override CSV. Fired by the foreground client whenever the player
+/// picks a theme in DecorModal so visit mode + co-owner views render
+/// the same wall + slab colors. Empty string clears (= all floors use
+/// the catalog default).
+#[reducer]
+pub fn set_restaurant_theme_overrides(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    csv: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set theme overrides".into());
+    }
+    let next: Option<String> = if csv.trim().is_empty() { None } else { Some(csv) };
+    // Idempotent — skip the write if the value didn't change. Keeps the
+    // DecorModal's "apply on every modal open" pattern cheap.
+    if r.theme_overrides_csv == next { return Ok(()); }
+    ctx.db.restaurant().id().update(Restaurant {
+        theme_overrides_csv: next,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.21 — server-side dishwasher loader. Best-effort survival
 /// path: per tick, push at most one dirty piece into a free
 /// dishwasher's batch so the existing H.4 cycle countdown can wash

@@ -43,6 +43,10 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         // at zero on a fresh restaurant; accumulate_pending_visit_rollup
         // adds to it only when the owner is offline at despawn.
         pending_revenue_cents: 0,
+        // Visit-mode theme parity — fresh restaurants use the catalog
+        // default. Foreground client fires set_restaurant_theme_overrides
+        // whenever the player picks a non-default theme in DecorModal.
+        theme_overrides_csv: None,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,
