@@ -154,10 +154,65 @@ Rollback for any of these: `?serverSim=off` reverts to the local-decides-everyth
 - Errand-boy shopping trips.
 - Toilet/sink reservation logic on the seated WC trip.
 
-**Next phase candidates:**
-- Phase 4b: replace local enqueueOrderRequest with server-driven dispatch.
-- Phase 2b: payment crediting flip.
-- Wash trip dispatcher always-on (drop the offline gate on `try_dispatch_wash_trip`, same shape as Phase 4.1).
+---
+
+## Phase 4b progress (2026-06-09) — order request + take-order callback server-driven
+
+**Done (client-only — no server change):**
+- Local `GuestSpawner` seated handler skips `router.enqueueOrderRequest` when `serverOwnsGuestStates()` AND the seat isn't a bar counter. Bar-seat OrderRequests still enqueue locally because the barman take-order path isn't server-side. Bridge synthesizes the non-bar OrderRequest from `staff_actor.takeOrderGuestId` when the server picks a waiter.
+- Local `StaffRouter` waiter "working" branch skips the local `takeOrderCallback` fire when `serverOwnsTicketDispatch()`. Bridge's release case (take_order_guest_id → null) handles the trip completion via `returningHome`. Prevents double-enqueue: previously the local working dwell would fire `enqueueOrder` AND server's `auto_place_next_course` would also fire when the guest's state hit `waitingForFood`.
+
+---
+
+## Attempted Phase 4w (wash trip dispatch) — reverted
+
+Tried dropping the `if owner_online { return }` gate on `try_dispatch_wash_trip`. Reverted: the bridge has no handler for `wash_target_uid` / `wash_phase` transitions, so dropping the gate would leave the server writing wash-trip state onto staff_actor rows while the local sim concurrently dispatched its own wash trips. Last-write-wins on the shared row would corrupt the waiter's state.
+
+To do this safely needs:
+- Bridge handler for `wash_target_uid` / `wash_phase` (similar shape to the chef-claim and take-order handlers).
+- The local working-state completion (`washCallbacks.washOne` / `loadDishwasher`) still needs to fire because tick_wash_trip doesn't touch dishware_pool. Bridge would need to know `kind` + `stationDefId` to synthesize a local `WashTrip` object.
+- Confirm `try_server_wash_load` and the bridge-driven trip don't double-process the same pieces.
+
+Deferred — needs its own session.
+
+---
+
+## Cumulative session progress (2026-06-09) — final
+
+This session shipped six migration phases:
+
+| Phase | What's now server-authoritative |
+|---|---|
+| 1 | Chef-claim + waiter-pickup for non-bar tickets |
+| 2 | Pantry consumption on `place_order` |
+| 3a | Guest `waitingForFood → eating` |
+| 3b | Guest `eating → leaving` (final course) |
+| 3c | Guest `eating → seated` (next course) + server-only ticket materialization |
+| 4  | Waiter take-order dispatch (`try_dispatch_take_order` always-on + bridge handler + gates) |
+| 4b | Local `enqueueOrderRequest` + take-order callback gated (server fully owns ordering flow for non-bar) |
+
+Rollback for any of these: `?serverSim=off`.
+
+**Critical path coverage:** customer arrives → seated → server picks waiter for take-order → server enqueues ticket → server picks chef → server times cooking → server picks waiter for delivery → server flips guest to eating → server advances courses → server ends visit. ALL of that pipeline is now driven by the server's 2 Hz tick, with the client observing via subscription bridges and applying local visual side effects.
+
+**What's still client-side (out of scope this session):**
+
+| Subsystem | Why deferred |
+|---|---|
+| Bar-seat tickets | Server's `tick_ticket_state` flips cooking → ready unconditionally + `auto_assign_ready_tickets` picks a waiter. Bar tickets need cooking → delivering directly (barman serves at the counter). Needs server schema/logic split. |
+| Wash trip dispatch (foreground) | Bridge needs wash_target_uid handler + kind/stationDefId synthesis; tick_wash_trip is cosmetic-only (inventory in `try_server_wash_load`). See "Attempted Phase 4w" above. |
+| Errand-boy shopping | Server has no errand simulation; would need to port `ErrandRouter` to Rust. |
+| WC trip state transitions | Server collapses `atToilet → walkingToSink → atSink` to one state; local sim has movement states the server doesn't model. Honoring server's `wcWashing` while local mid-walk to sink would teleport guests. |
+| `buildOrder` | Server has `build_server_order` for offline; foreground client's `auto_place_next_course` calls it server-side too. But local `creditCourse` still reads `g.order[g.orderIndex]` for the recipe price, so local g.order needs population. Parse `order_recipes` CSV from cloud → local g.order array. |
+| Payment crediting | Today client absolute-writes cloud_money_cents via syncCloudMoney. Inverting to server-credits-via-delta + client-subscribes is a real refactor. |
+| Pathfinder | Server uses straight-line + stair penalty; client uses A* through walls. Acceptable for v1; ~3-5 days to port. |
+
+**Recommended order for next sessions:**
+1. **Live verification** of what we shipped. Place orders, watch the kitchen pipeline. Confirm ~500 ms latency feels acceptable. If sluggish, bump `SIM_TICK_INTERVAL_MICROS` to 100_000 (10 Hz).
+2. **Payment crediting flip** — most user-facing remaining piece. Needs careful syncCloudMoney + subscription work.
+3. **`buildOrder` server-side** — currently the local takeOrderCallback path still wants to fire buildOrder. With Phase 4b gated, neither fires the order build, so order_recipes comes from server's `build_server_order`. Need local g.order populated from cloud's order_recipes CSV so local's `creditCourse` reads the right recipes.
+4. **Wash trip dispatch** with full bridge.
+5. **Bar-seat ticket split** server-side.
 
 ---
 
