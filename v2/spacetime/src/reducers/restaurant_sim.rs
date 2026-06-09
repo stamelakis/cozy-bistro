@@ -1406,34 +1406,44 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     // for offline owners. Foreground clients already credit meal
     // price per course via local creditCourse → economy.earnMoney,
     // so accumulating here when the owner is ONLINE would
-    // double-credit on reconnect. Gate on owner_online.
+    // double-credit on reconnect.
+    //
+    // Phase H Phase 2c — same exact double-credit shape applies to
+    // tips. Local finalizeVisit fires economy.earnMoney(tip) on
+    // visit completion when the owner is online; adding the same
+    // tip to pending_tips_cents here would re-credit it via
+    // applyPendingVisitRollup on the next reconnect (pending
+    // counters don't drain inside a single session — consume only
+    // fires from onSubscriptionReady). Gate both tip + revenue
+    // accumulation on owner_online.
     const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let owner_online = ctx.db.player().identity().find(r.owner)
         .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
         .unwrap_or(false);
+    let added_tip = if owner_online { 0 } else { tip_cents };
     let added_revenue = if owner_online { 0 } else { g.total_paid_cents };
 
     ctx.db.restaurant().id().update(Restaurant {
         pending_served: r.pending_served.saturating_add(1),
-        pending_tips_cents: r.pending_tips_cents.saturating_add(tip_cents),
+        pending_tips_cents: r.pending_tips_cents.saturating_add(added_tip),
         pending_revenue_cents: r.pending_revenue_cents.saturating_add(added_revenue),
         pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(rating as i64 * 100),
         pending_rating_count: r.pending_rating_count.saturating_add(1),
-        // H.32 — credit the tip (and Phase 2b meal revenue when
-        // offline) to cloud_money_cents so other clients see the
-        // running balance climb live during a backgrounded session.
-        // The reconnecting owner's applyPending path credits both —
-        // the foreground client's NEXT set_cloud_money tick after
-        // that earn lands the local total back on this column, so
-        // the cloud value gets a one-frame "down + back up" blip
-        // rather than double-counting.
-        cloud_money_cents: r.cloud_money_cents.saturating_add(tip_cents + added_revenue),
+        // H.32 — credit the offline pending totals to
+        // cloud_money_cents so other clients see the running balance
+        // climb live during a backgrounded session. When ONLINE both
+        // added_tip and added_revenue are 0 (the foreground client
+        // already credited locally + will push the updated total via
+        // syncCloudMoney), so cloud_money_cents is left untouched —
+        // no need for the previous "one-frame down/up blip" workaround
+        // now that we gate on owner_online.
+        cloud_money_cents: r.cloud_money_cents.saturating_add(added_tip + added_revenue),
         ..r
     });
     log::info!(
         "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents, revenue={} cents, owner_online={})",
-        g.id, g.restaurant_id, rating, tip_cents, added_revenue, owner_online,
+        g.id, g.restaurant_id, rating, added_tip, added_revenue, owner_online,
     );
 }
 
