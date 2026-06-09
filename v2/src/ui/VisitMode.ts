@@ -853,6 +853,8 @@ export class VisitMode {
       furniture?: SavedFurniture[];
       staffMembers?: Array<{ role?: string }>;
       staff?: { chefs?: number; waiters?: number; errandBoys?: number };
+      expansionLevel?: number;
+      luxuryTier?: number;
     };
     try {
       save = JSON.parse(blob);
@@ -871,6 +873,21 @@ export class VisitMode {
     root.position.set(plot.plotX, 0, plot.plotZ);
     this.scene.worldRoot.add(root);
     this.visitorRoot = root;
+
+    // Phase visit-shell — render the same interior structural pieces
+    // the host sees: white floor plane, 4 perimeter walls, upper
+    // storey slabs + walls if the save unlocked them, staircases,
+    // roof. Before this pass the visitor saw furniture floating in
+    // empty space — the audit gap the user flagged as "I want
+    // EVERYTHING the same in their restaurant."
+    //
+    // First-pass scope: ground floor + upper storeys based on the
+    // save snapshot's expansion / luxury tier. Doors and windows are
+    // not cut into the walls yet (they're tagged on placed_furniture
+    // but the cut geometry lives in the host's rebuildPerimeterWall
+    // pipeline — a follow-up extracts that into a shared helper).
+    const expansionLevel = readExpansionLevelFromSave(save);
+    this.buildInteriorShell(root, expansionLevel);
 
     // H.A — Wire visualizers that need a scene-mount and/or
     // furniture-position resolver. SeatPlate plates need a per-floor
@@ -1233,6 +1250,98 @@ export class VisitMode {
       this.overlay = null;
     }
   }
+
+  /** Construct the visited restaurant's interior shell (floor + walls
+   * + multi-storey slabs + stairs + roof) into the visitor root.
+   * Mirrors what WorldScene.addBuilding does for the host, simplified
+   * to omit dynamic door/window cuts (those land in a follow-up that
+   * extracts the host's wall-cut pipeline into a shared helper).
+   *
+   * Coords match the host exactly: floor is 10×10 centered at (0.5,
+   * 0, 0.5), walls span X∈[−4.5, 5.5] and Z∈[−4.5, 5.5]. Each storey
+   * sits at floorIdx × STOREY_HEIGHT, same as the rest of visit mode
+   * already uses for furniture placement (line 506, 666, 926). */
+  private buildInteriorShell(root: THREE.Group, expansionLevel: number): void {
+    const W = 10;
+    const T = 0.1; // wall thickness
+    const wallHeight = STOREY_HEIGHT;
+    // Floor + slab material — bare white to match the host's default.
+    // DecorModal-set themes would land here in the follow-up that wires
+    // wallpaper/floor texture data into the cloud schema.
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f0, roughness: 0.95, metalness: 0 });
+    const slabMat = new THREE.MeshStandardMaterial({
+      color: 0xf6f4ef, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
+    });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.85, side: THREE.DoubleSide });
+    const roofMat = new THREE.MeshStandardMaterial({
+      color: 0xe8d8b8, roughness: 0.9, side: THREE.DoubleSide,
+    });
+
+    /** Construct one storey's perimeter walls + slab. floorIdx 0 has
+     * no slab (the ground floor uses a PlaneGeometry directly). */
+    const buildStorey = (floorIdx: number): void => {
+      const baseY = floorIdx * STOREY_HEIGHT;
+      // Slab (upper storeys only — ground floor has its own floor mesh).
+      if (floorIdx > 0) {
+        const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), slabMat);
+        slab.rotation.x = -Math.PI / 2;
+        slab.position.set(0.5, baseY, 0.5);
+        slab.receiveShadow = true;
+        root.add(slab);
+      }
+      // 4 perimeter walls. Each is a thin BoxGeometry positioned along
+      // one edge of the 10×10 footprint.
+      const wallY = baseY + wallHeight / 2;
+      const walls: Array<{ w: number; h: number; d: number; x: number; z: number }> = [
+        // Back wall (north, -Z side at z=-4.5)
+        { w: W, h: wallHeight, d: T, x: 0.5, z: -4.5 },
+        // Front wall (south, +Z side at z=5.5)
+        { w: W, h: wallHeight, d: T, x: 0.5, z: 5.5 },
+        // Left wall (west, -X side at x=-4.5)
+        { w: T, h: wallHeight, d: W, x: -4.5, z: 0.5 },
+        // Right wall (east, +X side at x=5.5)
+        { w: T, h: wallHeight, d: W, x: 5.5, z: 0.5 },
+      ];
+      for (const w of walls) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w.w, w.h, w.d), wallMat);
+        mesh.position.set(w.x, wallY, w.z);
+        mesh.receiveShadow = true;
+        root.add(mesh);
+      }
+    };
+
+    // Ground floor: PlaneGeometry like the host (line 1814).
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0.5, 0.0, 0.5);
+    floor.receiveShadow = true;
+    root.add(floor);
+    buildStorey(0);
+
+    // Upper storeys per expansion level. Expansion level 1 = ground
+    // only; 2 = +floor 1; up to MAX_STOREYS. Defensive clamp keeps a
+    // bogus save value from rendering an arbitrary number of floors.
+    const maxStoreys = Math.max(1, Math.min(expansionLevel, 4));
+    for (let idx = 1; idx < maxStoreys; idx += 1) {
+      buildStorey(idx);
+    }
+
+    // Roof on top of the topmost unlocked storey. Same flat plane the
+    // host uses as a legacy fallback before the mansard kicks in.
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(W, W), roofMat);
+    roof.rotation.x = -Math.PI / 2;
+    roof.position.set(0.5, maxStoreys * STOREY_HEIGHT, 0.5);
+    roof.receiveShadow = true;
+    root.add(roof);
+  }
+}
+
+/** Read the player's expansion / luxury tier out of the save snapshot.
+ * Falls back to 1 (ground floor only) if the field is missing or
+ * unrecognized. Matches the field names the host's SaveSystem writes —
+ * keep in sync if those change. */
+function readExpansionLevelFromSave(save: { expansionLevel?: number; luxuryTier?: number }): number {
+  return save.expansionLevel ?? save.luxuryTier ?? 1;
 }
 
 function escapeHtml(s: string): string {
