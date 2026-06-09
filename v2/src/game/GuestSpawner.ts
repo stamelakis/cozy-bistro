@@ -1450,6 +1450,67 @@ export class GuestSpawner {
       g.state = "seated";
       g.stateClock = 0;
     }
+
+    // Phase H Phase 5w — WC trip transitions. Server's tick_guest_state
+    // owns the seated → wcWalking → wcSitting → wcWashing → seated
+    // sequence + the toilet/sink picking; bridge maps each transition
+    // onto the local 6-state walk machine (seated → walkingToToilet →
+    // atToilet → walkingToSink → atSink → returningFromToilet →
+    // seated). The cloud row's target_x/z gives us the picked-fixture
+    // position; the local sim still owns the actual walk via
+    // moveToward + planPath, and the dwell-state arrival flips
+    // (walkingToToilet → atToilet etc.) still fire on the local
+    // arrival check. With this bridge plus the seated-handler /
+    // atToilet-handler / atSink-handler gates below, every WC trip
+    // decision lives server-side.
+
+    // seated → wcWalking: server picked a fixture. Local walks toward
+    // its position. willWashOnly guests skip the toilet leg and walk
+    // straight to a sink.
+    if (g.state === "seated" && row.state === "wcWalking") {
+      g.returnSeatPos = g.seatPos.clone();
+      g.target = new THREE.Vector2(row.targetX, row.targetZ);
+      g.state = g.willWashOnly ? "walkingToSink" : "walkingToToilet";
+      g.stateClock = 0;
+      g.character.action = "walk";
+      this.planPath(g);
+    }
+
+    // wcSitting → wcWashing: server's "done with toilet, walk to sink"
+    // transition. The cloud row's target_x/z just swapped from toilet
+    // → sink. Local guest is at the toilet (atToilet) — flush, restore
+    // chair-height, then walk to the server-picked sink. wash-only
+    // guests don't go through wcSitting; this only fires for
+    // willUseToilet flow.
+    if (g.state === "atToilet" && row.state === "wcWashing") {
+      this.sfx?.toiletFlush();
+      if (g.originalSeatHeight !== undefined) {
+        g.character.seatHeight = g.originalSeatHeight;
+        g.originalSeatHeight = undefined;
+      }
+      g.usedToilet = true;
+      g.toiletAttemptComplete = true;
+      g.target = new THREE.Vector2(row.targetX, row.targetZ);
+      g.state = "walkingToSink";
+      g.stateClock = 0;
+      g.character.action = "walk";
+      this.planPath(g);
+    }
+
+    // wcWashing → seated: server's "done washing, return to seat".
+    // Local guest is at the sink (atSink). Flag washedHands, restore
+    // walking pose, head back to the dining seat (returnSeatPos was
+    // captured at trip start).
+    if (g.state === "atSink" && row.state === "seated") {
+      g.washedHands = true;
+      g.washAttemptComplete = true;
+      g.target = (g.returnSeatPos ?? g.seatPos).clone();
+      g.returnSeatPos = undefined;
+      g.state = "returningFromToilet";
+      g.stateClock = 0;
+      g.character.action = "walk";
+      this.planPath(g);
+    }
   }
 
   // ======================================================================
@@ -2898,12 +2959,22 @@ export class GuestSpawner {
         break;
       }
       case "seated": {
+        // Phase H Phase 5w — when server owns guest states, WC trip
+        // initiation lives server-side. tick_guest_state checks
+        // will_use_toilet / will_wash_only + picks a fixture +
+        // transitions the guest to wcWalking. The cloud bridge maps
+        // the resulting state changes onto the local walk machine.
+        // Skip the local WC dispatch checks so we don't race the
+        // server with a different fixture pick. The order-request
+        // branch further down still runs as before (until Phase 4b
+        // gates kick in there).
+        const localOwnsWc = !this.serverOwnsGuestStates();
         // First-thing-after-sitting: WC users excuse themselves to
         // the bathroom before ordering. Only triggers ONCE per visit.
         // toiletAttemptComplete latches once we've either gone OR
         // given up waiting — we DON'T clear willUseToilet on give-up
         // because finalizeVisit needs to know they wanted to go.
-        if (g.willUseToilet && !g.usedToilet && !g.toiletAttemptComplete) {
+        if (localOwnsWc && g.willUseToilet && !g.usedToilet && !g.toiletAttemptComplete) {
           const toilet = this.findFreeToilet(g);
           // Log once per attempt — the first time we enter this block.
           // toiletWaitRemaining is only set on busy retries, so its
@@ -2953,7 +3024,7 @@ export class GuestSpawner {
         // ordering. Same patience-and-give-up shape as the toilet
         // branch above; finalizeVisit's penalty fires if they wanted
         // to wash and there was no sink (or every one stayed busy).
-        if (g.willWashOnly && !g.washedHands && !g.washAttemptComplete) {
+        if (localOwnsWc && g.willWashOnly && !g.washedHands && !g.washAttemptComplete) {
           const sink = this.findFreeSink(g);
           if (DEBUG_GUEST_LOGS && g.washWaitRemaining === undefined) {
             const sinkCountTotal = this.registry?.getBathroomSinks().length ?? 0;
@@ -3062,6 +3133,13 @@ export class GuestSpawner {
         break;
       }
       case "atToilet": {
+        // Phase H Phase 5w — when server owns guest states, the
+        // bridge handles the wcSitting → wcWashing transition
+        // (server picks the sink + targets the row to it; bridge
+        // transitions local atToilet → walkingToSink with that
+        // target). Local timer-based exit is gated off so we don't
+        // race the bridge with our own sink pick.
+        if (this.serverOwnsGuestStates()) break;
         if (g.stateClock >= TIME_AT_TOILET) {
           // Done with the toilet — release the reservation, then try
           // to chain a handwash at a free sink. If no sink is free,
@@ -3137,6 +3215,13 @@ export class GuestSpawner {
         break;
       }
       case "atSink": {
+        // Phase H Phase 5w — when server owns guest states, the
+        // bridge handles the wcWashing → seated transition (server
+        // targets the row back to the seat; bridge transitions
+        // local atSink → returningFromToilet with that target).
+        // Local timer-based exit is gated off so we don't race the
+        // bridge with a different return path.
+        if (this.serverOwnsGuestStates()) break;
         if (g.stateClock >= TIME_AT_SINK) {
           // Wash done — release the sink, flag washedHands so the
           // final rating folds in the cleanliness step, and head
