@@ -131,10 +131,33 @@ Rollback for any of these: `?serverSim=off` reverts to the local-decides-everyth
 1. **Publish + bake** what we have. The server-side change is reducer logic only (no schema changes), so this is a normal publish — no "BREAKING schema changes" warning expected.
 2. **Smoke test live**: open a fresh restaurant, place an order, watch chef walk to station + cook + waiter deliver. Expect ~500 ms latency at each handoff (server tick interval). Multi-course meals should advance via server, ending with the leaving cascade.
 3. **If sluggish:** consider bumping `SIM_TICK_INTERVAL_MICROS` from 500_000 → 100_000 (10 Hz). Server cost is small per tick.
-4. **Next session topics** (pick one):
-   - Payment crediting flip (Phase 2b).
-   - Waiter take-order dispatch (Phase 4 starter).
-   - Movement smoothing audit if visible jitter shows up live.
+
+---
+
+## Phase 4 starter (2026-06-09) — waiter take-order server-authoritative
+
+**Done:**
+- Server: dropped the `if owner_online { return }` gate on `try_dispatch_take_order`. Server now dispatches take-order trips always-on (the bridge gating below ensures the client doesn't race).
+- Client: added `takeOrderGuestId: bigint | null` to `StaffActorRow` + subscription mapping + `listStaffActors` + `listAllStaffActors`.
+- Client: `StaffRouter.reconcileCloudStaffActor` extended with two new cases for waiters:
+  - takeOrderGuestId null → set: find/fabricate matching local OrderRequest, attach to actor, transition idle → movingToWork toward seat.
+  - takeOrderGuestId set → null: drop OrderRequest, transition working/movingToWork → returningHome.
+- Client: local `tickWaiter.idle` (home + cross-floor order pickup) AND `tickWaiter.returningHome` (interrupt order pickup) gated behind `serverOwnsTicketDispatch()`.
+- Published to dunnin: empty migration plan (reducer-only diff).
+
+**Still client-side** (in the seated handler): when guest reaches "seated" the local sim calls `router.enqueueOrderRequest`. This creates the OrderRequest locally. With Phase 4 the server's `try_dispatch_take_order` picks it up via active_guest.state === "ordering" (server-side state). The local OrderRequest is now redundant for dispatch but still needed for the waiter's working-state dwell visual + the takeOrderCallback. Phase 4b can remove the local enqueueOrderRequest call entirely and have the bridge synthesize the OrderRequest from the cloud row.
+
+**Still entirely client-side:**
+- `buildOrder` (server has `build_server_order` for offline arrivals; foreground client's takeOrderCallback still uses local archetype/taste data).
+- Bar-seat tickets.
+- Wash trip dispatch (server has H.35 for offline only).
+- Errand-boy shopping trips.
+- Toilet/sink reservation logic on the seated WC trip.
+
+**Next phase candidates:**
+- Phase 4b: replace local enqueueOrderRequest with server-driven dispatch.
+- Phase 2b: payment crediting flip.
+- Wash trip dispatcher always-on (drop the offline gate on `try_dispatch_wash_trip`, same shape as Phase 4.1).
 
 ---
 

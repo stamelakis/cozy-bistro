@@ -1632,6 +1632,68 @@ export class StaffRouter {
       this.planPath(actor);
       console.log(`[Router/Bridge] cloud-release: ${actor.role} ${actor.memberId} → home (${row.targetX.toFixed(1)},${row.targetZ.toFixed(1)} F${row.targetFloor})`);
     }
+
+    // Phase H Phase 4 — server-driven take-order dispatch. Same shape
+    // as the chef-claim case but keyed off take_order_guest_id instead
+    // of ticket_id. Server's try_dispatch_take_order picks a waiter,
+    // sets staff_actor.take_order_guest_id + target=seat. Bridge sees
+    // it here, attaches a local OrderRequest, transitions waiter to
+    // movingToWork. On dwell completion server clears the field +
+    // flips guest state to waitingForFood; that's the "release" case
+    // below.
+    if (actor.role === "waiter") {
+      if (row.takeOrderGuestId != null && actor.takeOrderRequest == null
+          && actor.state === "idle") {
+        const localGuestId = this.lookupLocalGuestId?.(row.takeOrderGuestId);
+        if (localGuestId) {
+          // The OrderRequest may already exist locally (the seated
+          // guest enqueued one), or we may need to fabricate one if
+          // the server raced our enqueueOrderRequest call. Either way
+          // attach actor.takeOrderRequest so the working-state dwell
+          // visual fires correctly.
+          let req = this.orderRequests.find((o) => o.guestId === localGuestId);
+          if (!req) {
+            req = {
+              guestId: localGuestId,
+              seatPos: new THREE.Vector2(row.targetX, row.targetZ),
+              seatFloor: row.targetFloor,
+              claimedBy: actor.memberId,
+              atBar: false,
+            };
+            this.orderRequests.push(req);
+          } else {
+            req.claimedBy = actor.memberId;
+          }
+          actor.takeOrderRequest = req;
+          actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+          actor.targetFloor = row.targetFloor;
+          actor.state = "movingToWork";
+          actor.clock = 0;
+          actor.character.action = "walk";
+          actor.homeWorkWaitClock = 0;
+          this.planPath(actor);
+          console.log(`[Router/Bridge] cloud-takeorder: waiter ${actor.memberId} → guest ${localGuestId} (target ${row.targetX.toFixed(1)},${row.targetZ.toFixed(1)} F${row.targetFloor})`);
+        }
+      } else if (row.takeOrderGuestId == null && actor.takeOrderRequest != null
+                 && (actor.state === "working" || actor.state === "movingToWork")) {
+        // Server completed the take-order dwell + cleared the field.
+        // Local waiter winds down; the corresponding guest's state
+        // has been (or will be) flipped to waitingForFood server-side,
+        // and auto_place_next_course enqueues the ticket. Drop the
+        // local OrderRequest entry so a second waiter doesn't pick it.
+        const guestId = actor.takeOrderRequest.guestId;
+        const reqIdx = this.orderRequests.findIndex((o) => o.guestId === guestId);
+        if (reqIdx >= 0) this.orderRequests.splice(reqIdx, 1);
+        actor.takeOrderRequest = null;
+        actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+        actor.targetFloor = row.targetFloor;
+        actor.state = "returningHome";
+        actor.clock = 0;
+        actor.character.action = "walk";
+        this.planPath(actor);
+        console.log(`[Router/Bridge] cloud-takeorder done: waiter ${actor.memberId} (guest ${guestId})`);
+      }
+    }
   }
 
   /** Number of queued+cooking tickets currently in a chef's backlog.
@@ -2789,7 +2851,11 @@ export class StaffRouter {
           this.startWaiterDelivery(w, homeTicket);
           break;
         }
-        const homeOrderReq = this.sortByUrgency(this.orderRequests.filter((o) =>
+        // Phase H Phase 4 — when server owns dispatch, take-order
+        // selection runs via try_dispatch_take_order; the bridge
+        // transitions the waiter when the server picks one. Skip the
+        // local picker so we don't race.
+        const homeOrderReq = serverPickup ? undefined : this.sortByUrgency(this.orderRequests.filter((o) =>
           o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar))[0];
         if (homeOrderReq) {
           this.startWaiterTakeOrder(w, homeOrderReq);
@@ -2833,7 +2899,7 @@ export class StaffRouter {
           this.startWaiterDelivery(w, anyTicket);
           break;
         }
-        const anyOrderReq = this.sortByUrgency(this.orderRequests.filter((o) =>
+        const anyOrderReq = serverPickup ? undefined : this.sortByUrgency(this.orderRequests.filter((o) =>
           o.claimedBy === null && !o.atBar && !this.hasIdleHomeWaiter(o.seatFloor, w)))[0];
         if (anyOrderReq) {
           this.startWaiterTakeOrder(w, anyOrderReq);
@@ -3062,8 +3128,10 @@ export class StaffRouter {
           this.startWaiterDelivery(w, interruptTicket);
           break;
         }
-        const interruptOrder = this.sortByUrgency(this.orderRequests.filter((o) =>
-          o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar))[0];
+        const interruptOrder = this.serverOwnsTicketDispatch()
+          ? undefined
+          : this.sortByUrgency(this.orderRequests.filter((o) =>
+            o.claimedBy === null && o.seatFloor === w.homeFloor && !o.atBar))[0];
         if (interruptOrder) {
           this.startWaiterTakeOrder(w, interruptOrder);
           break;

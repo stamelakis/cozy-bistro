@@ -2721,17 +2721,14 @@ pub fn consume_pending_visit_rollup(
 /// takes their order at the bar counter without a walk; they auto-
 /// advance via ORDERING_FALLBACK_MS (H.14) which is still fine.
 fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
-    /// Same offline window H.33 uses.
-    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
-    let r = match ctx.db.restaurant().id().find(rid) {
-        Some(x) => x,
-        None => return,
-    };
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    let owner_online = ctx.db.player().identity().find(r.owner)
-        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
-        .unwrap_or(false);
-    if owner_online { return; }
+    // Phase H Phase 4 — the original H.34 gated this on owner-offline
+    // because the local StaffRouter raced it when foregrounded. With
+    // the Phase 1+3 bridges in place, the client no longer dispatches
+    // take-order trips on its own when serverOwnsTicketDispatch() is
+    // on; this path is now always-on. Coverage check below
+    // (take_order_guest_id) keeps the dispatcher idempotent across
+    // ticks so the same guest never gets two waiters.
+    let _ = ctx.db.restaurant().id().find(rid); // existence check; ignore rest
 
     // Set of guest_ids that already have a waiter en route. Used to
     // avoid double-assigning. We treat ANY waiter with take_order_guest_id

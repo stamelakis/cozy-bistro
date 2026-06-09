@@ -99,6 +99,12 @@ export interface StaffActorRow {
   assignedStoveUid: string;
   washTargetUid: string;
   washPhase: string;
+  /** Phase H Phase 4 — when the server's try_dispatch_take_order
+   * picks a waiter to walk to a seated guest, this holds the target
+   * guest's server-side id (null otherwise). The owner's bridge
+   * watches the transition null→set to drive the local waiter to
+   * movingToWork with the matching OrderRequest. */
+  takeOrderGuestId: bigint | null;
 }
 
 /** Public shape of one active_guest row — one per live customer in a
@@ -1314,6 +1320,7 @@ export class SpacetimeClient {
           assignedStoveUid: a.assignedStoveUid,
           washTargetUid: a.washTargetUid,
           washPhase: a.washPhase,
+          takeOrderGuestId: a.takeOrderGuestId ?? null,
         });
       }
     } catch { /* table not wired yet */ }
@@ -1343,6 +1350,7 @@ export class SpacetimeClient {
       targetX: number; targetZ: number; targetFloor: number;
       ticketId: bigint | undefined;
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
+      takeOrderGuestId: bigint | undefined;
     };
     const toClientRow = (r: ServerRow): StaffActorRow => ({
       memberId: r.memberId, role: r.role, state: r.state,
@@ -1352,6 +1360,7 @@ export class SpacetimeClient {
       assignedStoveUid: r.assignedStoveUid,
       washTargetUid: r.washTargetUid,
       washPhase: r.washPhase,
+      takeOrderGuestId: r.takeOrderGuestId ?? null,
     });
     try {
       if (handlers.onInsert) {
@@ -3501,6 +3510,7 @@ export class SpacetimeClient {
             assignedStoveUid: a.assignedStoveUid,
             washTargetUid: a.washTargetUid,
             washPhase: a.washPhase,
+            takeOrderGuestId: a.takeOrderGuestId ?? null,
           },
         });
       }
