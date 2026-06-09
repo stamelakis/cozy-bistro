@@ -1,5 +1,6 @@
 import type { ApplianceId, IngredientStock, LuxuryTier, RecipeDefinition, SaveGameState } from "../data/types";
 import { recipes } from "../data/recipes";
+import { isServerSim } from "../game/featureFlags";
 
 import { clamp } from "../data/util";
 export const maxRecipeUpgradeLevel = 10;
@@ -331,7 +332,14 @@ export class CookingSystem {
         // table. Visit mode + co-owner views see live ingredient
         // counts instead of waiting for autosave. Bails silently
         // when cloud isn't wired (tests / pre-auth boot).
-        if (!this.suppressPantryMirror && this.cloud) {
+        //
+        // Phase H Phase 2 — when the server owns ticket dispatch,
+        // place_order ALSO consumes pantry (see place_order in
+        // restaurant_sim.rs). Firing this mirror too would
+        // double-decrement server pantry. Local pantry array still
+        // decrements above for instant UI; server's decrement
+        // happens when the cloud.placeOrder reducer call lands.
+        if (!this.suppressPantryMirror && this.cloud && !isServerSim("tickets")) {
           this.cloud.bumpPantryStock(ingredient, -1);
         }
       }

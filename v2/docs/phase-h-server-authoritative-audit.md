@@ -1,7 +1,142 @@
 # Phase H — Server-Authoritative Gap Audit
 
-**Date:** 2026-06-08
+**Date:** 2026-06-08 (audit) · **Last updated:** 2026-06-09
 **Goal:** Make the restaurant simulation run entirely on the server so it continues 24/7 even when no player is online. Client becomes a renderer + input forwarder.
+
+---
+
+## Phase 1 progress (2026-06-09) — non-bar tickets server-authoritative
+
+**Done:**
+- Server: `tick_ticket_state` cooking→ready now stamps pickup_x/z/floor from the assigned chef's position (no longer depends on the client's `finish_cooking` reducer call).
+- Client: `StaffRouter.attachServerBridge()` — subscribes to `active_ticket` and `staff_actor` cloud changes. Reconciles local state. Two main cases:
+  - **Chef-claim:** server writes `staff_actor.ticket_id` + target; bridge transitions local chef from idle → movingToWork.
+  - **Chef-release:** server clears `staff_actor.ticket_id` (post-cooking) + sets target=home; bridge transitions local chef from working → returningHome.
+- Wired from `Engine.bootGameAfterAuth`.
+- Local deciders gated behind `serverOwnsTicketDispatch()` (true when `isServerSim("tickets")` + cloud connected):
+  - `tickChef.idle` whole branch skipped — server's `auto_claim_queued_tickets` picks chef + station.
+  - `tickChef.working` cook-completion skipped — server's `tick_ticket_state` flips cooking→ready.
+  - `tickChef.returningHome` interrupt-claim skipped.
+  - `tickWaiter.idle` ready-ticket pickup branches skipped (home + cross-floor) — server's `auto_assign_ready_tickets` picks waiter.
+  - `tickWaiter.returningHome` interrupt-deliver skipped.
+- Rollback path: `?serverSim=off` re-enables all local deciders.
+
+**Still client-side (out of Phase 1 scope):**
+- Bar-seat tickets (barman cook + serve dwell) — server has no equivalent. Gated `t.appliance !== "bar"` lets local barman handle the whole loop.
+- Take-order trips (waiter walks to seated guest to take their order).
+- Wash trips (waiter walks dirty plate to wash station).
+- Guest in-meal state machine (seated → ordering → waiting → eating → leaving).
+- Pantry/economy hot path, guest spawn, payment crediting.
+
+**Pending verification:**
+- Smoke test foreground play with the gating active. The server tick is 2 Hz (500 ms), so chef-claim now has up to ~500 ms latency between "ticket queued" and "chef walks to station." If it feels sluggish, bump `SIM_TICK_INTERVAL_MICROS` to 100_000 (10 Hz) — server cost is small per tick.
+
+---
+
+## Phase 2 progress (2026-06-09) — pantry server-authoritative
+
+**Done (pantry):**
+- Server: `place_order` reducer now calls `pantry_consume(rid, ingredients)` (same path the offline `auto_place_next_course` uses). Self-restocks via `try_restock_pantry` when stock is short — matches foreground client's `EconomySystem.shopForMissing` safety net.
+- Client: `CookingSystem.consumeIngredients` skips its `bumpPantryStock(-1)` mirror when `isServerSim("tickets")` is on. Local pantry array still decrements (instant UI), but the server delta now comes from `place_order` itself instead of the parallel mirror, avoiding double-decrement.
+- Compile clean (tsc + cargo wasm32); dev server boots clean.
+
+**Skipped this session (payment):**
+- Today's flow: client `creditCourse` → `economy.earnMoney(price)` → `syncCloudMoney` pushes an ABSOLUTE money value to `restaurant.cloud_money_cents` every few seconds.
+- Server-authoritative payment requires flipping that loop: server credits `cloud_money_cents` per course delivered (delta), client subscribes to `cloud_money_cents` updates and reflects them in `economy.money`.
+- That refactor needs: a new `credit_course_revenue` reducer, subscription handler on restaurant.cloud_money_cents, conversion of `syncCloudMoney` from absolute-write to no-op, reconciliation of the local economy state on subscribe. ~1-2 sessions on its own.
+
+---
+
+## Phase 3a progress (2026-06-09) — first guest transition server-authoritative
+
+**Surprise:** the server's `tick_guest_state` already covers most of the in-meal transitions: `seated→ordering`, `ordering→waitingForFood`, `waitingForFood→eating`, `eating→next/leaving`, `wcWalking→wcSitting→wcWashing→seated`, plus `auto_place_next_course` on waitingForFood entry. Phase 3 is mostly client-side — strip parallel transitions and let the server drive.
+
+**Done (this commit):**
+- Client: `GuestSpawner.attachGuestServerBridge()` subscribes to `active_guest` cloud changes. On `waitingForFood→eating` transition the bridge fires `showPlateForGuest` + `sfx.chime` and drops the matching Ticket from the local queue (via `popDeliveredFor`).
+- Client: `serverOwnsGuestStates()` helper (true when `isServerSim("guests")` + cloud connected).
+- Client: local `case "waitingForFood"` handler gated behind the helper. The cloud bridge is now the only path to "eating" for this transition.
+- Wired from Engine right after `hydrateFromCloud`.
+- tsc + cargo clean; dev server boots without new errors.
+
+**Still client-only (Phase 3b queue):**
+- `eating → next course / leaving`: side effects `creditCourse`, `removePlateForGuest`, `orderIndex++`, `beginNextCourse` (intricate — reserves dish, mirrors tiers, consumes ingredients, enqueues new ticket). Bigger.
+- `seated → ordering`: dwell + waiter take-order trip side effects.
+- `ordering → waitingForFood`: ticket creation already covered server-side; local enqueueOrder still mirrors.
+- WC trip transitions: `wcSitting → wcWashing → seated` (server already handles, client side effects need wiring).
+- `walkingIn → seated`, `walkingToDoor`, `exitingDoor`, `walkingOut`: movement-driven, stays local.
+
+---
+
+## Phase 3b progress (2026-06-09) — final-course leaving server-authoritative
+
+**Done:**
+- Added `orderIndex` to `ActiveGuestRow` + the subscription row mapping + `listAllActiveGuests`.
+- Bridge handles `eating → leaving` (server's final-course branch): fires `creditCourse`, `removePlateForGuest`, syncs `orderIndex` from cloud, runs `finalizeVisit`, sets `walkingToDoor` with path to the door.
+- Local `case "eating"` handler gates the LEAVING branch only when `serverOwnsGuestStates()` + `finalCourse`. Multi-course meals (intermediate course advances) still run locally because the bridge doesn't cover `eating → next-course` yet.
+- tsc clean; dev server boots.
+
+---
+
+## Phase 3c progress (2026-06-09) — multi-course eating advance server-authoritative
+
+**Done:**
+- Client: `StaffRouter.reconcileCloudTicket` now MATERIALIZES a local Ticket when the cloud row has a `srv-...` clientTempId (server-spawned) and `lookupLocalGuestId` resolves the guest. Without this, server-only tickets (from `auto_place_next_course`) had no local counterpart so `popDeliveredFor` couldn't find them.
+- Client: `StaffRouter.lookupLocalGuestId` callback added; Engine wires it to `GuestSpawner.findLocalGuestIdByServerId`.
+- Client: Bridge handles `eating → seated` (server's intermediate course advance): fires `creditCourse`, `removePlateForGuest`, syncs `orderIndex` from cloud, resets patience, reserves a clean dish locally (server doesn't simulate dishware pool yet) + mirrors reserved tiers. Skips local `enqueueOrder` since server's `auto_place_next_course` will fire when state hits `waitingForFood` again.
+- Client: Local `case "eating"` handler now fully gated when server owns guest states (both branches).
+- tsc clean; dev server boots.
+
+---
+
+## Phase 3d — explored, deferred (2026-06-09)
+
+Both candidate transitions turned out to need work that crosses into Phase 4 (staff dispatch):
+
+**WC trip transitions** (`wcWalking → wcSitting → wcWashing → seated`)
+- Server state names differ from local (`wcSitting` ≠ `atToilet`, `wcWashing` ≠ `atSink`). There's already a `cloudStateToLocal` mapper, but the deeper problem is the SERVER collapses `atToilet → walkingToSink → atSink` into a single direct `wcSitting → wcWashing` transition (the comment at restaurant_sim.rs:3873 acknowledges this explicitly: "Walking back is a separate state in the client; here we collapse it").
+- Honoring server's wcWashing while local is mid-walk to the sink requires either teleporting the guest (visual regression) or a different state-machine shape. Defer until the dishware / sink reservation logic also moves server-side.
+
+**`seated → ordering` migration**
+- Server's `try_dispatch_take_order` is gated `if owner_online { return }` (restaurant_sim.rs:2734) — only fires offline.
+- Even if we drop the gate, the local `case "seated"` handler still needs to STOP doing local toilet finds + sink reservations + `enqueueOrderRequest` + `buildOrder` + `beginNextCourse`. Each piece has its own dependency on local-only state (`reservedToilets`, `reservedSinks`, local archetype/taste).
+- Defer to Phase 4 alongside the waiter dispatch migration.
+
+---
+
+## Cumulative session progress (2026-06-09)
+
+This session shipped:
+
+| Phase | Subsystem | Status |
+|---|---|---|
+| 1 | Chef-claim + waiter-pickup (non-bar tickets) | ✓ server-authoritative |
+| 2 | Pantry consumption | ✓ server-authoritative |
+| 3a | `waitingForFood → eating` | ✓ server-authoritative |
+| 3b | `eating → leaving` (final course) | ✓ server-authoritative |
+| 3c | `eating → seated` (next course) + server-only ticket import | ✓ server-authoritative |
+
+Rollback for any of these: `?serverSim=off` reverts to the local-decides-everything path.
+
+**Remaining gaps (≈70% of the original audit):**
+- Payment crediting (Phase 2b — needs `syncCloudMoney` absolute-write flipped to delta + subscription).
+- WC trip transitions (state-machine shape mismatch).
+- `seated → ordering` + waiter take-order dispatch (Phase 4).
+- Bar-seat tickets (server has no barman cook+serve simulation).
+- Wash trip dispatch (server has H.35 for offline, foreground still local).
+- Errand-boy shopping trips.
+- Pathfinding (or accept straight-line server-side — visit mode already does).
+- Full client-side refactor to derive everything from subscriptions.
+
+**Recommended next actions:**
+1. **Publish + bake** what we have. The server-side change is reducer logic only (no schema changes), so this is a normal publish — no "BREAKING schema changes" warning expected.
+2. **Smoke test live**: open a fresh restaurant, place an order, watch chef walk to station + cook + waiter deliver. Expect ~500 ms latency at each handoff (server tick interval). Multi-course meals should advance via server, ending with the leaving cascade.
+3. **If sluggish:** consider bumping `SIM_TICK_INTERVAL_MICROS` from 500_000 → 100_000 (10 Hz). Server cost is small per tick.
+4. **Next session topics** (pick one):
+   - Payment crediting flip (Phase 2b).
+   - Waiter take-order dispatch (Phase 4 starter).
+   - Movement smoothing audit if visible jitter shows up live.
+
+---
 
 This doc maps what the server already does vs. what the local TS sim does. Each gap is sized so we know the real scope of the migration.
 

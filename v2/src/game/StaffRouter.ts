@@ -426,6 +426,12 @@ export class StaffRouter {
    * isn't (yet) mirrored — the calling mirror helper bails. */
   lookupGuestServerId?: (localGuestId: string) => bigint | undefined;
 
+  /** Phase H Phase 3c — reverse of lookupGuestServerId.  Engine wires
+   * this to GuestSpawner.findLocalGuestIdByServerId so the cloud
+   * bridge can materialize a server-spawned Ticket (clientTempId
+   * starts with "srv-") and attach it to the right local Guest. */
+  lookupLocalGuestId?: (serverGuestId: bigint) => string | undefined;
+
   private readonly chefs: StaffActor[] = [];
   private readonly waiters: StaffActor[] = [];
   /** Barmen pool. Behave like chefs but only cook drink-category
@@ -1397,6 +1403,237 @@ export class StaffRouter {
     this.cloud.cancelTicket(ticket.serverMirrorId);
   }
 
+  // ======================================================================
+  //          Phase H Phase 1 — server-authoritative bridge
+  // ======================================================================
+  // Reconciles local Ticket + StaffActor state to the server's
+  // authoritative decisions (auto_claim_queued_tickets,
+  // auto_assign_ready_tickets, tick_ticket_state). The bridge is the
+  // ONLY path that transitions a chef from idle → cooking, a waiter
+  // from idle → delivering, and a chef from cooking → returningHome.
+  // Local idle handlers used to make those decisions too; they're now
+  // gated off via serverOwnsTicketDispatch().
+  //
+  // The local sim STILL drives:
+  //   - Take-order trips (waiter walks to a seated guest)
+  //   - Wash trips (waiter walks to dirty plate → station)
+  //   - Movement smoothing (lerp toward target every frame)
+  //   - Bar-seated tickets in their entirety (barman cook + serve dwell)
+  //     — server-side bar handling is a later-phase gap.
+  //
+  // Rollback path: ?serverSim=off disables the feature flag, which
+  // both stops cloud mirror calls AND re-enables local deciders below.
+
+  /** True when the server is the sole decider of ticket dispatch (chef-
+   * claim, waiter-pickup) for THIS restaurant. Local handlers consult
+   * this and skip their decision branches when on. Requires both the
+   * "tickets" feature flag (?serverSim=tickets,...) AND a live cloud
+   * connection — disconnected mode falls back to local sim so the
+   * kitchen still works offline. */
+  private serverOwnsTicketDispatch(): boolean {
+    return isServerSim("tickets") && this.cloud != null;
+  }
+
+  /** Find a local ticket by its server-side auto-inc id. Returns
+   * undefined if no local ticket has been stamped with that
+   * serverMirrorId yet (race during the ~250 ms post-place_order
+   * resolve window). */
+  private findLocalTicketByServerId(id: bigint): Ticket | undefined {
+    for (const t of this.tickets) {
+      if (t.serverMirrorId === id) return t;
+    }
+    return undefined;
+  }
+
+  /** Find any local actor (chef / waiter / barman) by their hired
+   * member id. Returns undefined if the actor isn't registered locally
+   * (e.g. a coworker's chef in a co-op restaurant). */
+  private findLocalActor(memberId: string): StaffActor | undefined {
+    for (const c of this.chefs) if (c.memberId === memberId) return c;
+    for (const w of this.waiters) if (w.memberId === memberId) return w;
+    for (const b of this.barmen) if (b.memberId === memberId) return b;
+    return undefined;
+  }
+
+  /** Attach the cloud subscription bridge. Called once after the
+   * router's cloud handle is wired. No-op if already attached or no
+   * cloud handle present. */
+  attachServerBridge(): void {
+    if (!this.cloud || this.serverBridgeAttached) return;
+    this.serverBridgeAttached = true;
+    this.cloud.subscribeActiveTicketChanges({
+      onInsert: (row) => this.reconcileCloudTicket(row),
+      onUpdate: (row) => this.reconcileCloudTicket(row),
+      onDelete: (id) => this.reconcileCloudTicketDelete(id),
+    });
+    this.cloud.subscribeStaffActorChanges({
+      onUpdate: (row) => this.reconcileCloudStaffActor(row),
+    });
+    console.log("[Router/Bridge] server-authoritative bridge attached");
+  }
+
+  private serverBridgeAttached = false;
+
+  /** Apply a cloud active_ticket row's state to our local Ticket. */
+  private reconcileCloudTicket(row: import("../cloud/SpacetimeClient").ActiveTicketRow): void {
+    // Resolve local. On insert (echo of our place_order) the local
+    // ticket exists with id == clientTempId; subsequent updates address
+    // by serverMirrorId once it's stamped.
+    let local = this.findLocalTicketByServerId(row.id);
+    if (!local) {
+      // Try by clientTempId — this is the typical insert path before
+      // mirrorTicketPlace's setTimeout finishes the auto-inc resolve.
+      for (const t of this.tickets) {
+        if (t.id === row.clientTempId) { local = t; break; }
+      }
+    }
+    if (!local) {
+      // Phase H Phase 3c — server-spawned tickets (auto_place_next_course
+      // creates them with a "srv-{guest_id}-{idx}" clientTempId) have
+      // no local origin. Materialize one so popDeliveredFor + waiter
+      // pickup work normally. Tickets we DIDN'T create locally only get
+      // imported when:
+      //   - the clientTempId looks server-generated (excludes echoes of
+      //     local place_order races on un-resolved serverMirrorId), AND
+      //   - we can map row.guestId back to a local Guest (the cloud row
+      //     belongs to a guest we know about — H.47 hydrate may not have
+      //     finished, or the row is for a different player's restaurant
+      //     entirely if subscription leaked).
+      if (!row.clientTempId.startsWith("srv-")) return;
+      const localGuestId = this.lookupLocalGuestId?.(row.guestId);
+      if (!localGuestId) return;
+      const cookSec = Number(row.cookSeconds) / 1000;
+      const newTicket: Ticket = {
+        id: row.clientTempId,
+        guestId: localGuestId,
+        recipeId: row.recipeId,
+        state: row.state as TicketState,
+        seatPos: new THREE.Vector2(row.seatX, row.seatZ),
+        seatFloor: row.seatFloor,
+        seatAtBar: row.seatAtBar,
+        clock: Number(row.stateClockMs) / 1000,
+        baseCookSeconds: cookSec > 0 ? cookSec : 5,
+        cookSeconds: cookSec > 0 ? cookSec : 5,
+        appliance: row.appliance,
+        assignedChefId: row.assignedChefId || null,
+        serverMirrorId: row.id,
+      };
+      if ((row.state === "ready" || row.state === "delivering")
+          && (row.pickupX !== 0 || row.pickupZ !== 0)) {
+        newTicket.pickupPos = new THREE.Vector2(row.pickupX, row.pickupZ);
+        newTicket.pickupFloor = row.pickupFloor;
+      }
+      this.tickets.push(newTicket);
+      console.log(`[Router/Bridge] materialized server-only ticket ${row.clientTempId} (guest ${localGuestId}, ${row.recipeId})`);
+      return;
+    }
+    if (local.serverMirrorId !== row.id) local.serverMirrorId = row.id;
+
+    // State reconciliation — cloud is authority. Reset clock on
+    // transition; lerp it on no-transition only if it drifted hard.
+    if (local.state !== row.state) {
+      console.log(`[Router/Bridge] ticket ${local.id} state ${local.state} → ${row.state}`);
+      local.state = row.state as TicketState;
+      local.clock = Number(row.stateClockMs) / 1000;
+    }
+
+    // Cook time may differ (chef multiplier applied server-side).
+    if (row.cookSeconds > 0n) {
+      const seconds = Number(row.cookSeconds) / 1000;
+      if (Math.abs(local.cookSeconds - seconds) > 0.05) {
+        local.cookSeconds = seconds;
+      }
+    }
+
+    // Chef assignment — server decides on claim.
+    if (row.assignedChefId && row.assignedChefId !== (local.assignedChefId ?? "")) {
+      local.assignedChefId = row.assignedChefId;
+    }
+
+    // Pickup position — server stamps when cooking finishes (Phase 1
+    // server fix sets these from chef.x/z/floor). Sync to local so the
+    // waiter walks to the right spot.
+    if ((row.state === "ready" || row.state === "delivering")
+        && (row.pickupX !== 0 || row.pickupZ !== 0)) {
+      const px = row.pickupX;
+      const pz = row.pickupZ;
+      const drift = !local.pickupPos
+        || Math.abs(local.pickupPos.x - px) > 0.1
+        || Math.abs(local.pickupPos.y - pz) > 0.1;
+      if (drift) {
+        local.pickupPos = new THREE.Vector2(px, pz);
+        local.pickupFloor = row.pickupFloor;
+      }
+    }
+  }
+
+  /** Remove the local ticket whose serverMirrorId matches the deleted
+   * cloud row. */
+  private reconcileCloudTicketDelete(id: bigint): void {
+    const idx = this.tickets.findIndex((t) => t.serverMirrorId === id);
+    if (idx < 0) return;
+    const ticket = this.tickets[idx];
+    console.log(`[Router/Bridge] ticket ${ticket.id} removed (cloud delete)`);
+    // Free any actor still pinned to this ticket so they go home.
+    for (const a of [...this.chefs, ...this.waiters, ...this.barmen]) {
+      if (a.ticketId === ticket.id) a.ticketId = null;
+    }
+    this.tickets.splice(idx, 1);
+  }
+
+  /** Apply a cloud staff_actor row to the local actor. The big case is
+   * "server just claimed a ticket for this actor while local sim was
+   * still in idle" — we transition the local actor to movingToWork
+   * with the target the server picked. Other cases (position lerp,
+   * floor change) we leave to the local sim because they'd fight
+   * smooth interpolation. */
+  private reconcileCloudStaffActor(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
+    const actor = this.findLocalActor(row.memberId);
+    if (!actor) return;
+
+    // Case: server made a chef-claim / waiter-pickup decision for an
+    // actor that is locally idle. With Phase 1's gating, the local idle
+    // handler no longer makes this decision itself — the bridge is the
+    // ONLY way an actor transitions out of idle for ticket work.
+    if (row.ticketId != null && actor.ticketId == null && actor.state === "idle") {
+      const ticket = this.findLocalTicketByServerId(row.ticketId);
+      if (ticket) {
+        actor.ticketId = ticket.id;
+        actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+        actor.targetFloor = row.targetFloor;
+        if (row.assignedStoveUid) actor.assignedStoveUid = row.assignedStoveUid;
+        actor.state = "movingToWork";
+        actor.clock = 0;
+        actor.character.action = "walk";
+        actor.homeWorkWaitClock = 0;
+        this.planPath(actor);
+        console.log(`[Router/Bridge] cloud-claim: ${actor.role} ${actor.memberId} → ticket ${ticket.id} (target ${row.targetX.toFixed(1)},${row.targetZ.toFixed(1)} F${row.targetFloor})`);
+      }
+    }
+
+    // Case: server released the actor from their ticket. Happens when
+    // tick_ticket_state flips cooking→ready (release_chef_from_ticket),
+    // or when a guest leaves mid-delivery (release_waiter_from_ticket).
+    // Local actor is still in working / movingToWork; bridge transitions
+    // to returningHome with the home target the server picked. Without
+    // this branch the local chef would stay at the station forever after
+    // server-side cook completion.
+    if (row.ticketId == null && actor.ticketId != null
+        && (actor.state === "working" || actor.state === "movingToWork")) {
+      if (actor.role === "chef" || actor.role === "barman") {
+        this.releaseStove(actor);
+      }
+      actor.ticketId = null;
+      actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+      actor.targetFloor = row.targetFloor;
+      actor.state = "returningHome";
+      actor.clock = 0;
+      actor.character.action = "walk";
+      this.planPath(actor);
+      console.log(`[Router/Bridge] cloud-release: ${actor.role} ${actor.memberId} → home (${row.targetX.toFixed(1)},${row.targetZ.toFixed(1)} F${row.targetFloor})`);
+    }
+  }
+
   /** Number of queued+cooking tickets currently in a chef's backlog.
    * Engine + StaffPanel read this for the per-row indicator that
    * lets the player see who's drowning. O(N) over the ticket list,
@@ -1816,6 +2053,18 @@ export class StaffRouter {
 
     switch (c.state) {
       case "idle": {
+        // Phase H Phase 1 — when the server owns ticket dispatch, the
+        // chef stays idle until the auto_claim_queued_tickets server
+        // tick assigns them a ticket. The reconcileCloudStaffActor
+        // bridge then transitions us to movingToWork. Skipping the
+        // local picker means a 0–500ms wait (server tick interval)
+        // before the first chef-claim each cycle. Worth it: the local
+        // picker would race the server, win most of the time, and the
+        // resulting state-write would be reconciled back to whatever
+        // the server picked anyway. Now the decision lives in one
+        // place.
+        if (this.serverOwnsTicketDispatch()) break;
+
         // Chef ignores bar tickets — those belong to the barman pool.
         // Without the appliance filter a chef would call
         // claimFreeStation("bar") and happily cook a drink at a bar
@@ -1894,7 +2143,12 @@ export class StaffRouter {
           c.ticketId = null;
           break;
         }
-        if (c.clock >= ticket.cookSeconds) {
+        // Phase H Phase 1 — when server owns dispatch, only the server
+        // flips cooking → ready (via tick_ticket_state's cook_seconds_ms
+        // check). Local sim just advances c.clock visually; the bridge's
+        // chef-release case handles the transition to returningHome
+        // when the server's release_chef_from_ticket fires.
+        if (c.clock >= ticket.cookSeconds && !this.serverOwnsTicketDispatch()) {
           ticket.state = "ready";
           ticket.clock = 0;
           // Record where the plate is sitting so the waiter walks to
@@ -1921,10 +2175,19 @@ export class StaffRouter {
         // walk and start cooking from where we are. Bar tickets are
         // excluded — chef never touches them. Per-chef backlog rule
         // applies here too — no poaching from another chef's queue.
-        const interruptTickets = this.sortByUrgency(this.tickets.filter((t) =>
-          t.state === "queued" && t.appliance !== "bar" && t.assignedChefId === c.memberId));
-        if (interruptTickets.length > 0 && this.tryClaimCookForChef(c, interruptTickets)) {
-          break;
+        //
+        // Phase H Phase 1 — server picks chefs at server-tick rate.
+        // Skipping the local interrupt-claim means a chef finishing one
+        // cook walks all the way home before being eligible for the
+        // next ticket. The auto_claim picker then assigns them on the
+        // next tick. Worst case +500ms vs. the legacy interrupt; the
+        // wait stays bounded because home is small.
+        if (!this.serverOwnsTicketDispatch()) {
+          const interruptTickets = this.sortByUrgency(this.tickets.filter((t) =>
+            t.state === "queued" && t.appliance !== "bar" && t.assignedChefId === c.memberId));
+          if (interruptTickets.length > 0 && this.tryClaimCookForChef(c, interruptTickets)) {
+            break;
+          }
         }
         this.moveActor(c, dt);
         if (this.distance(c.character.groundPos, c.target) < ARRIVAL_THRESHOLD) {
@@ -2512,7 +2775,15 @@ export class StaffRouter {
         // round trip for customers sitting at the bar counter.
         // Pick the MOST-IMPATIENT eligible ticket / order request
         // (X3 — lowest remaining patience wins, not oldest enqueued).
-        const homeTicket = this.sortByUrgency(this.tickets.filter((t) =>
+        //
+        // Phase H Phase 1 — when server owns ticket dispatch, the
+        // ready→delivering decision is server-side
+        // (auto_assign_ready_tickets). Skip the local pickup branch;
+        // the bridge transitions the waiter to movingToWork when the
+        // server picks them. Take-order trips + wash trips stay local
+        // because those subsystems aren't in Phase 1.
+        const serverPickup = this.serverOwnsTicketDispatch();
+        const homeTicket = serverPickup ? undefined : this.sortByUrgency(this.tickets.filter((t) =>
           t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar))[0];
         if (homeTicket) {
           this.startWaiterDelivery(w, homeTicket);
@@ -2556,7 +2827,7 @@ export class StaffRouter {
         // order, so whoever was hired first wins races — the poach
         // happens any time the cross-floor waiter ticks BEFORE the
         // home-floor one in the array.
-        const anyTicket = this.sortByUrgency(this.tickets.filter((t) =>
+        const anyTicket = serverPickup ? undefined : this.sortByUrgency(this.tickets.filter((t) =>
           t.state === "ready" && !t.seatAtBar && !this.hasIdleHomeWaiter(t.seatFloor, w)))[0];
         if (anyTicket) {
           this.startWaiterDelivery(w, anyTicket);
@@ -2778,8 +3049,15 @@ export class StaffRouter {
         // delivery NOW. Same idea for a freshly-seated guest waiting
         // to order: starting the take-order now instead of after the
         // home loop saves several seconds of customer wait time.
-        const interruptTicket = this.sortByUrgency(this.tickets.filter((t) =>
-          t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar))[0];
+        //
+        // Phase H Phase 1 — when server owns ticket dispatch, the
+        // server's auto_assign_ready_tickets handles waiter-pickup
+        // selection. Skipping the local interrupt-deliver means the
+        // waiter walks home before being eligible for the next ticket.
+        const interruptTicket = this.serverOwnsTicketDispatch()
+          ? undefined
+          : this.sortByUrgency(this.tickets.filter((t) =>
+            t.state === "ready" && t.seatFloor === w.homeFloor && !t.seatAtBar))[0];
         if (interruptTicket) {
           this.startWaiterDelivery(w, interruptTicket);
           break;

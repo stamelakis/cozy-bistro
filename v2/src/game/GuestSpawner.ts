@@ -1316,6 +1316,123 @@ export class GuestSpawner {
   }
 
   // ======================================================================
+  //          Phase H Phase 3 — server-authoritative guest bridge
+  // ======================================================================
+  // Subscribes to active_guest cloud changes and applies server-driven
+  // state transitions onto local guests, firing the matching visual
+  // side effects (showPlateForGuest, chime, etc.). Mirrors the pattern
+  // StaffRouter.attachServerBridge uses for tickets + staff.
+  //
+  // Coverage in Phase 3a (this commit):
+  //   - waitingForFood → eating: show plate + chime.
+  //
+  // Out of scope until Phase 3b: course-advance side effects
+  // (creditCourse, removePlate, beginNextCourse), leaving cascade,
+  // WC trip transitions.
+
+  /** True when the server is the sole owner of guest state transitions
+   * (mirrors the chef/waiter gating pattern from Phase 1). */
+  private serverOwnsGuestStates(): boolean {
+    return isServerSim("guests") && this.cloud != null;
+  }
+
+  private guestServerBridgeAttached = false;
+
+  /** Find a local guest by its server-side auto-inc id. */
+  private findLocalGuestByServerId(id: bigint): ActiveGuest | undefined {
+    for (const g of this.guests) {
+      if (g.serverMirrorId === id) return g;
+    }
+    return undefined;
+  }
+
+  /** Attach the cloud subscription bridge. Called once after the
+   * spawner's cloud handle is wired. No-op if already attached. */
+  attachGuestServerBridge(): void {
+    if (!this.cloud || this.guestServerBridgeAttached) return;
+    this.guestServerBridgeAttached = true;
+    this.cloud.subscribeActiveGuestChanges({
+      onUpdate: (row) => this.reconcileCloudGuest(row),
+    });
+    console.log("[Spawner/Bridge] guest cloud bridge attached");
+  }
+
+  /** Apply a cloud active_guest row's state transitions to the local
+   * guest. State writes are guarded on "differs from local" so the
+   * bridge is idempotent — re-applying the same row is a no-op. */
+  private reconcileCloudGuest(row: import("../cloud/SpacetimeClient").ActiveGuestRow): void {
+    const g = this.findLocalGuestByServerId(row.id);
+    if (!g) return;
+
+    // waitingForFood → eating: server saw a delivered ticket bound to
+    // this guest. Fire the local "plate landed" effects. Without this
+    // bridge step the local case "waitingForFood" handler runs the
+    // same logic via popDeliveredFor; with serverOwnsGuestStates on,
+    // the local handler is gated off and the bridge is the only path.
+    if (g.state === "waitingForFood" && row.state === "eating") {
+      g.state = "eating";
+      g.stateClock = 0;
+      this.showPlateForGuest(g);
+      this.sfx?.chime();
+      // Also drop the local Ticket entry for this guest so the
+      // popDeliveredFor / cancelTicket bookkeeping stays clean.
+      // StaffRouter's bridge will eventually do this when the cloud
+      // ticket delete arrives, but doing it now keeps the local sim's
+      // ticket array in sync with what the player sees.
+      this.router.popDeliveredFor(g.id);
+    }
+
+    // eating → leaving: server saw EATING_DURATION_MS elapse on the
+    // FINAL course (server's tick_guest_state checks order_index + 1
+    // == total_courses). Fire the visit-completion cascade locally:
+    // credit the final course, clear the plate, run finalize (rating,
+    // tip, leftover meshes), and start the walk to the door.
+    if (g.state === "eating" && row.state === "leaving") {
+      this.creditCourse(g);
+      this.removePlateForGuest(g.id);
+      g.orderIndex = Math.min(g.order.length, row.orderIndex);
+      this.finalizeVisit(g);
+      g.character.action = "walk";
+      g.target = DOOR_POSITION.clone();
+      this.planPath(g);
+      g.state = "walkingToDoor";
+      g.stateClock = 0;
+    }
+
+    // eating → seated (Phase 3c): server's intermediate course advance.
+    // Local handler would have called beginNextCourse; with server in
+    // charge that path is gated off, so the bridge fires the matching
+    // local effects:
+    //   - credit the just-finished course
+    //   - remove the plate
+    //   - sync orderIndex from cloud (server bumped it)
+    //   - patience reset
+    //   - reserve a clean dish for the next course (server doesn't sim
+    //     the dishware pool yet — local pool is still the source)
+    //   - mirror reserved tiers so settle_guest_dishes sees it on despawn
+    // Skips enqueueOrder — server's auto_place_next_course already
+    // creates the next ticket when state transitions to waitingForFood.
+    if (g.state === "eating" && row.state === "seated") {
+      this.creditCourse(g);
+      this.removePlateForGuest(g.id);
+      g.orderIndex = Math.min(g.order.length, row.orderIndex);
+      g.patience = SERVE_PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
+      const recipe = g.order[g.orderIndex];
+      if (recipe) {
+        const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
+        const reservedTier = this.game.dishware.reserveOne(kind);
+        if (reservedTier !== null) {
+          g.reservedDishTiers.push(reservedTier);
+          g.lastMirroredReservedTiers = undefined;
+          this.mirrorGuestReservedTiers(g);
+        }
+      }
+      g.state = "seated";
+      g.stateClock = 0;
+    }
+  }
+
+  // ======================================================================
   //              Phase I.1 — H.47 cloud hydrate on reconnect
   // ======================================================================
   //
@@ -3021,6 +3138,14 @@ export class GuestSpawner {
         break;
       }
       case "waitingForFood": {
+        // Phase H Phase 3a — when server owns guest states, the cloud
+        // active_guest subscription's waitingForFood→eating transition
+        // (reconcileCloudGuest) is the only path that flips the local
+        // guest to eating. Side effects (showPlateForGuest, chime)
+        // fire from the bridge there. Without this gate the local
+        // handler would race the bridge and either double-fire the
+        // sound or skip it depending on the order.
+        if (this.serverOwnsGuestStates()) break;
         // Wait until the waiter delivers the current course's plate.
         if (this.router.popDeliveredFor(g.id)) {
           g.state = "eating";
@@ -3032,6 +3157,20 @@ export class GuestSpawner {
       }
       case "eating": {
         if (g.stateClock >= TIME_TO_EAT) {
+          // Phase H Phase 3b/3c — when server owns guest states, the
+          // cloud bridge handles BOTH branches of this advance:
+          //   eating → leaving (final course) → creditCourse +
+          //     finalizeVisit + walk-to-door cascade.
+          //   eating → seated (next course) → creditCourse +
+          //     removePlate + orderIndex sync + dish reservation +
+          //     patience reset. Server's auto_place_next_course then
+          //     enqueues the next ticket when state hits
+          //     waitingForFood again.
+          // Local sim sits in "eating" with stateClock past TIME_TO_EAT
+          // until the server tick (≤ 500ms) flips the cloud row and
+          // the bridge mirrors locally.
+          if (this.serverOwnsGuestStates()) break;
+
           // Finished THIS course. Record payment + satisfaction, clear plate.
           this.creditCourse(g);
           this.removePlateForGuest(g.id);

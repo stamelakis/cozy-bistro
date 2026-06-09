@@ -4688,13 +4688,34 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     // auto-transition to "ready" when the clock reaches the chef-
     // adjusted cook_seconds_ms. The client picks up the "ready"
     // event via subscription and walks a waiter to pickup_x/z.
+    //
+    // Phase H Phase 1 — also stamp pickup_x/z/floor from the assigned
+    // chef's current position at the moment cooking finishes. Before
+    // Phase 1 the local sim called finish_cooking with these coords
+    // and the server tick just preserved whatever was set. With the
+    // client no longer the source of truth, the server has to derive
+    // pickup from the chef row (which carries the working position
+    // because auto_claim_queued_tickets set target_x/z = station and
+    // tick_staff_actor moved x/z to match). Without this, the waiter
+    // dispatch would route to (0,0) for any ticket the local sim
+    // didn't claim.
     if t.state == "cooking" {
         let advanced = t.state_clock_ms.saturating_add(dt_ms);
         if advanced >= t.cook_seconds_ms && t.cook_seconds_ms > 0 {
             let chef_id = t.assigned_chef_id.clone();
+            let (px, pz, pf) = if !chef_id.is_empty() {
+                ctx.db.staff_actor().member_id().find(chef_id.clone())
+                    .map(|c| (c.x, c.z, c.floor))
+                    .unwrap_or((t.pickup_x, t.pickup_z, t.pickup_floor))
+            } else {
+                (t.pickup_x, t.pickup_z, t.pickup_floor)
+            };
             ctx.db.active_ticket().id().update(ActiveTicket {
                 state: "ready".to_string(),
                 state_clock_ms: 0,
+                pickup_x: px,
+                pickup_z: pz,
+                pickup_floor: pf,
                 ..t
             });
             // Phase H.7 — release the assigned chef when cooking
@@ -5340,6 +5361,27 @@ pub fn place_order(
     if r.owner != ctx.sender {
         return Err("Only the owner can place orders".into());
     }
+
+    // Phase H Phase 2 — server-authoritative pantry consumption on
+    // the foreground hot path. Matches what auto_place_next_course
+    // (the offline path) already does. Looks up the recipe's
+    // ingredient list and decrements pantry_stock by 1 per
+    // ingredient. If the kitchen is short on stock, attempt the
+    // same just-in-time auto-shop the offline path uses; if that
+    // still fails (catalog gap), allow the order anyway — the local
+    // foreground client's EconomySystem.shopForMissing already
+    // bought the gap before calling place_order, so the pantry will
+    // refill via bump_pantry_stock right after.
+    //
+    // Unseeded recipes (empty ingredients vec) silently no-op,
+    // matching auto_place_next_course's "graceful degradation"
+    // semantics.
+    let needed = lookup_recipe_ingredients(ctx, &recipe_id);
+    if !needed.is_empty() && !pantry_has_all(ctx, g.restaurant_id, &needed) {
+        try_restock_pantry(ctx, g.restaurant_id, &needed);
+    }
+    pantry_consume(ctx, g.restaurant_id, &needed);
+
     ctx.db.active_ticket().insert(ActiveTicket {
         id: 0, // auto_inc
         restaurant_id: g.restaurant_id,

@@ -971,12 +971,25 @@ export class Engine {
       // sim can resume immediately, imported guests pop in as their
       // characters load — same UX as a normal spawn).
       void this.spawner.hydrateFromCloud();
+      // Phase H Phase 3a — subscribe to active_guest changes so
+      // server-driven guest state transitions get applied locally
+      // with the right visual side effects (plate, chime, etc.).
+      // Idempotent on repeated calls.
+      this.spawner.attachGuestServerBridge();
       // Phase C.3b — same for StaffRouter's ticket lifecycle. Plus
       // wire the cross-system lookup so placeOrder knows the server-
       // side guest id for the FK.
       if (this.router) {
         this.router.cloud = this.cloud;
         this.router.lookupGuestServerId = (id) => this.spawner?.lookupGuestServerId(id);
+        this.router.lookupLocalGuestId = (serverId) => this.spawner?.findLocalGuestIdByServerId(serverId);
+        // Phase H Phase 1 — subscribe to server's authoritative ticket
+        // + staff_actor decisions and reconcile local state.  Idempotent:
+        // when the local sim wins the race the bridge is a no-op; when
+        // the server wins (backgrounded tab, server tick lands first),
+        // the bridge transitions the local actor instead of waiting for
+        // the local sim to make the same decision a frame later.
+        this.router.attachServerBridge();
       }
       // P5.7 — let SpacetimeClient.cloudSaveNow read the live restaurant
       // open / free-seats state so server-side attraction can skip

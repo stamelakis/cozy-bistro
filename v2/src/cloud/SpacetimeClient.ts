@@ -127,6 +127,11 @@ export interface ActiveGuestRow {
   seatFloor: number;
   plateX: number;
   plateZ: number;
+  /** Phase H Phase 3b — current course index. The owner's bridge
+   * watches this to detect server-driven course-advance (eating →
+   * seated bumps it) and fires the matching local side effects
+   * (credit course, remove plate). */
+  orderIndex: number;
 }
 
 /** Phase I.1 (H.47) — Full row shape returned by listActiveGuests.
@@ -1391,6 +1396,7 @@ export class SpacetimeClient {
       seatUid: string;
       seatX: number; seatZ: number; seatFloor: number;
       plateX: number; plateZ: number;
+      orderIndex: number;
     };
     const toClientRow = (r: ServerRow): ActiveGuestRow => ({
       id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
@@ -1399,6 +1405,7 @@ export class SpacetimeClient {
       seatUid: r.seatUid,
       seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor,
       plateX: r.plateX, plateZ: r.plateZ,
+      orderIndex: r.orderIndex,
     });
     try {
       if (handlers.onInsert) {
@@ -3443,6 +3450,7 @@ export class SpacetimeClient {
             seatUid: g.seatUid,
             seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
             plateX: g.plateX, plateZ: g.plateZ,
+            orderIndex: g.orderIndex,
           },
         });
       }
