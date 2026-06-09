@@ -1693,6 +1693,86 @@ export class StaffRouter {
         this.planPath(actor);
         console.log(`[Router/Bridge] cloud-takeorder done: waiter ${actor.memberId} (guest ${guestId})`);
       }
+
+      // Phase H Phase 4w — server-driven wash trip dispatch. Server
+      // picks waiter + station; bridge picks the closest unclaimed
+      // local dirty piece compatible with that station, synthesizes
+      // a WashTrip object, transitions waiter to movingToWork toward
+      // the dirty piece. Local working-state completion fires
+      // washOne / loadDishwasher (inventory motion stays local —
+      // server's tick_wash_trip is cosmetic). If server clears
+      // wash_target_uid before local trip completes (rare; would
+      // require a pathfind hang), bridge fires the inventory motion
+      // itself to keep dish counts balanced.
+      if (row.washTargetUid.length > 0 && actor.washTrip == null
+          && actor.state === "idle" && this.washCallbacks) {
+        const stationUid = row.washTargetUid;
+        const station = this.washCallbacks.getWashStations().find((s) => s.uid === stationUid);
+        if (station) {
+          const isDishwasher = station.defId.startsWith("dishwasher");
+          // Find the closest unclaimed dirty piece that this station
+          // can accept. For dishwashers, kind-specific capacity. For
+          // sinks, any unclaimed piece works.
+          const dirties = this.washCallbacks.getDirtyPickups();
+          const here = actor.character.groundPos;
+          let bestDirty: import("./StaffRouter").DirtyPickupInfo | undefined;
+          let bestDist = Infinity;
+          for (const d of dirties) {
+            if (isDishwasher && !this.washCallbacks.canDishwasherLoad(station.uid, d.kind)) continue;
+            const dist = Math.hypot(d.pos.x - here.x, d.pos.y - here.y)
+              + (d.floor !== station.floor ? 15 : 0); // stair penalty
+            if (dist < bestDist) { bestDist = dist; bestDirty = d; }
+          }
+          if (bestDirty && this.washCallbacks.claimDirtyPickup(bestDirty.id, actor.memberId)) {
+            if (!isDishwasher) this.busyWashUids.add(station.uid);
+            const trip: WashTrip = {
+              dirtyId: bestDirty.id,
+              dirtyPos: bestDirty.pos.clone(),
+              dirtyFloor: bestDirty.floor,
+              kind: bestDirty.kind,
+              extraDirtyIds: [],
+              stationUid: station.uid,
+              stationDefId: station.defId,
+              stationPos: station.standPos.clone(),
+              stationFloor: station.floor,
+              dwell: station.dwell,
+              phase: "pickup",
+            };
+            actor.washTrip = trip;
+            actor.target = bestDirty.pos.clone();
+            actor.targetFloor = bestDirty.floor;
+            actor.state = "movingToWork";
+            actor.clock = 0;
+            actor.character.action = "walk";
+            actor.homeWorkWaitClock = 0;
+            this.planPath(actor);
+            console.log(`[Router/Bridge] cloud-wash: waiter ${actor.memberId} → dirty ${bestDirty.id} (${bestDirty.kind}) → station ${station.uid} (${station.defId})`);
+          }
+        }
+      } else if (row.washTargetUid.length === 0 && actor.washTrip != null
+                 && (actor.state === "movingToWork" || actor.state === "working")) {
+        // Server completed the trip before local did (rare). Fire
+        // the inventory motion that the local working-state branch
+        // would have done, then release the trip + return home.
+        const trip = actor.washTrip;
+        const isDishwasher = trip.stationDefId.startsWith("dishwasher");
+        if (isDishwasher) {
+          const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+          if (!ok) this.washCallbacks?.washOne(trip.kind);
+        } else {
+          this.washCallbacks?.washOne(trip.kind);
+        }
+        this.busyWashUids.delete(trip.stationUid);
+        if (actor.heldPlate) actor.heldPlate.visible = false;
+        actor.washTrip = null;
+        actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+        actor.targetFloor = row.targetFloor;
+        actor.state = "returningHome";
+        actor.clock = 0;
+        actor.character.action = "walk";
+        this.planPath(actor);
+        console.log(`[Router/Bridge] cloud-wash early-complete: waiter ${actor.memberId} (${trip.kind})`);
+      }
     }
   }
 
@@ -2861,7 +2941,12 @@ export class StaffRouter {
           this.startWaiterTakeOrder(w, homeOrderReq);
           break;
         }
-        const homeTrip = this.tryStartWashTrip(w, w.homeFloor);
+        // Phase H Phase 4w — when server owns dispatch, the
+        // try_dispatch_wash_trip server tick picks the waiter +
+        // station; the bridge synthesizes the local WashTrip when
+        // the staff_actor row's wash_target_uid lands. Skip the
+        // local picker so we don't race.
+        const homeTrip = serverPickup ? null : this.tryStartWashTrip(w, w.homeFloor);
         if (homeTrip) {
           this.startWaiterWashTrip(w, homeTrip);
           break;
@@ -2905,7 +2990,7 @@ export class StaffRouter {
           this.startWaiterTakeOrder(w, anyOrderReq);
           break;
         }
-        const anyTrip = this.tryStartWashTrip(w);
+        const anyTrip = serverPickup ? null : this.tryStartWashTrip(w);
         if (anyTrip) {
           this.startWaiterWashTrip(w, anyTrip);
         }
@@ -3151,7 +3236,9 @@ export class StaffRouter {
         // idle. Same urgency rank (we use best-pair selection),
         // just no patience-sort since wash trips aren't guest-
         // attached.
-        const interruptWash = this.tryStartWashTrip(w, w.homeFloor);
+        const interruptWash = this.serverOwnsTicketDispatch()
+          ? null
+          : this.tryStartWashTrip(w, w.homeFloor);
         if (interruptWash) {
           this.startWaiterWashTrip(w, interruptWash);
           break;

@@ -2811,16 +2811,17 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
 /// restaurant must have at least one waiter, one dirty piece, one
 /// wash station, and one seat to use as a pseudo-pickup.
 fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
-    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
-    let r = match ctx.db.restaurant().id().find(rid) {
-        Some(x) => x,
-        None => return,
-    };
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    let owner_online = ctx.db.player().identity().find(r.owner)
-        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
-        .unwrap_or(false);
-    if owner_online { return; }
+    // Phase H Phase 4w — was offline-only. Now always-on; the client's
+    // tryStartWashTrip is gated behind serverOwnsTicketDispatch() so
+    // they don't both pick a waiter for the same dirty piece. The
+    // bridge synthesizes the local WashTrip object (picks dirtyId +
+    // kind from the local dirty pile, reads station defId from the
+    // registry) when the server claims a waiter. tick_wash_trip
+    // animates the trip; the local sim's working-state completion
+    // still fires washOne / loadDishwasher (inventory motion stays
+    // client-side — try_server_wash_load is the offline analog and
+    // is itself gated, so no double-decrement).
+    let _ = ctx.db.restaurant().id().find(rid); // existence check
 
     // Need at least one dirty piece somewhere in the pool.
     let any_dirty = ctx.db.dishware_pool()
