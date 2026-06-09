@@ -1197,6 +1197,46 @@ pub struct StaffActor {
     /// for existing populated rows.
     #[default(None::<String>)]
     pub delivery_phase: Option<String>,
+
+    // ===== Phase H Phase 5 — errand-helper shopping trip state =====
+    //
+    // The client's ErrandRouter (v2/src/game/ErrandRouter.ts) runs a
+    // 9-phase visual trip: home → door → road-edge → offscreen → road
+    // → door → counter → home. These three fields let the server
+    // mirror that state machine so visit-mode + co-owner views see
+    // the same walking helper, AND so offline shortages can dispatch
+    // the visible trip (today try_restock_pantry adjusts inventory
+    // silently — no visual cue).
+    //
+    // All three additive: Option<T> with #[default(None)] for the
+    // CSV (works for any T per the H.93 safe pattern); i64 with
+    // const-evaluable #[default(0i64)] for the offscreen-until
+    // timestamp. End-of-struct so the publish stays non-destructive.
+    //
+    // Phase 5.1 (this commit) adds the columns ONLY. Detector +
+    // tick logic + bridge follow in 5.2 / 5.3 / 5.4.
+
+    /// One of: None (idle) | "walkingToDoor" | "exitingDoor" |
+    /// "walkingToRoadEdge" | "offscreen" | "walkingFromRoadEdge" |
+    /// "enteringDoor" | "walkingToCounter" | "atCounter" |
+    /// "returningHome". Matches the local ErrandRouter's ErrandState
+    /// enum verbatim — keeps the bridge's state mapping trivial.
+    #[default(None::<String>)]
+    pub errand_phase: Option<String>,
+
+    /// Frozen shopping list. CSV of "id:units" pairs, e.g.
+    /// "tomato:6,onion:4,flour:8". None when no trip is in flight.
+    /// Persisted across phases so the helper delivers EXACTLY what
+    /// they left with, even if pantry drops further mid-trip.
+    #[default(None::<String>)]
+    pub errand_trip_list_csv: Option<String>,
+
+    /// Wall-clock micros-since-unix-epoch when the offscreen leg ends.
+    /// Only meaningful while errand_phase == Some("offscreen") — the
+    /// tick advances past this timestamp to flip into
+    /// walkingFromRoadEdge. Zero otherwise.
+    #[default(0i64)]
+    pub errand_offscreen_until_micros: i64,
 }
 
 /// Phase F — server-authoritative placed furniture. One row per item

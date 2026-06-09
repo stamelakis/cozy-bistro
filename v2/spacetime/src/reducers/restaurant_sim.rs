@@ -5745,6 +5745,12 @@ pub fn register_staff_actor(
             wash_dirty_id: -1,
             wash_phase: String::new(),
             take_order_guest_id: None,
+            // Phase H Phase 5.1 — clear any in-flight errand state on
+            // re-register. Re-register fires on save reload + client
+            // re-bind, both of which should reset trip state.
+            errand_phase: None,
+            errand_trip_list_csv: None,
+            errand_offscreen_until_micros: 0,
             ..prev
         });
         return Ok(());
@@ -5767,6 +5773,10 @@ pub fn register_staff_actor(
         wash_phase: String::new(),
         take_order_guest_id: None,
         delivery_phase: None,
+        // Phase H Phase 5.1 — errand-trip fields default to idle.
+        errand_phase: None,
+        errand_trip_list_csv: None,
+        errand_offscreen_until_micros: 0,
         spawned_at: ctx.timestamp,
     });
     Ok(())

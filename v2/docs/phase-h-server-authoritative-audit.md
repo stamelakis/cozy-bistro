@@ -216,6 +216,53 @@ Rollback for any of these: `?serverSim=off`.
 
 ---
 
+## Phase 5 — Errand-boy shopping trips (multi-session plan)
+
+The full server port of `ErrandRouter` (666 lines, 9-phase state machine, queue management, pathfinding integration, visual offscreen simulation) is too big for a single contained slice. Splitting across ~4 sessions:
+
+### Phase 5.1 — Schema additions (shipped this session)
+
+Three additive columns on `staff_actor`, end-of-struct, non-destructive publish:
+
+| Column | Type | Default | Purpose |
+|---|---|---|---|
+| `errand_phase` | `Option<String>` | `None` | One of `walkingToDoor` / `exitingDoor` / `walkingToRoadEdge` / `offscreen` / `walkingFromRoadEdge` / `enteringDoor` / `walkingToCounter` / `atCounter` / `returningHome`. Matches the local `ErrandState` enum verbatim. |
+| `errand_trip_list_csv` | `Option<String>` | `None` | Frozen shopping list (`id:units` pairs) the helper is fetching. |
+| `errand_offscreen_until_micros` | `i64` | `0` | Wall-clock timestamp when offscreen leg ends; advances flip to `walkingFromRoadEdge`. |
+
+Constructor + re-register paths updated to initialize at idle defaults. Per H.93 safety rules.
+
+### Phase 5.2 — Server shortage detector + dispatch reducer (next session)
+
+- `try_dispatch_errand_trip(rid)`: scan errand helpers for an idle one. Scan `pantry_stock` for ingredients below threshold (mirrors `Game.dispatchAutoShop`). Pick list. Compute cost via `ingredient_cost` lookup. Charge `cloud_money_cents` saturating_sub (decide policy when balance insufficient — match foreground behavior).
+- Set helper's `errand_phase = "walkingToDoor"`, `target = door interior pos`, freeze CSV on `errand_trip_list_csv`.
+- Owner-online check: gate server detector on owner_offline initially; 5.4 drops the local detector and makes server the sole owner.
+
+### Phase 5.3 — Per-phase tick state machine
+
+- Extend `tick_staff_actor` to recognize `errand_phase` and advance through the 9 phases.
+- Position interpolation toward target (door / road edge / counter / home).
+- Offscreen phase: skip position; advance when `ctx.timestamp >= errand_offscreen_until_micros`.
+- `atCounter` phase: parse CSV, add to `pantry_stock` via `bump_pantry_stock` deltas (matches `Game.completeErrandDelivery`).
+- `returningHome` arrival: clear errand fields.
+
+### Phase 5.4 — Bridge + gate local
+
+- `StaffActorRow` surfaces `errandPhase` + `errandTripListCsv` + `errandOffscreenUntilMicros`.
+- `ErrandRouter.attachServerBridge` subscribes; when `errand_phase` is set on a known helper, synthesize the local trip from the CSV + drive the visual via the existing `triggerRun` (or a new mirror entry point).
+- Gate `Game.dispatchAutoShop` when `serverOwnsTicketDispatch()`. Server is the sole detector.
+- Verify end-to-end: shortage triggers server dispatch, helper walks visibly, pantry refills, money debits.
+
+### Estimated effort
+
+- 5.2: 1 session.
+- 5.3: 1-2 sessions.
+- 5.4: 1 session.
+
+Total: 3-4 sessions from here.
+
+---
+
 This doc maps what the server already does vs. what the local TS sim does. Each gap is sized so we know the real scope of the migration.
 
 ---

@@ -438,6 +438,9 @@ export const StaffActor = __t.object("StaffActor", {
   takeOrderGuestId: __t.option(__t.u64()),
   spawnedAt: __t.timestamp(),
   deliveryPhase: __t.option(__t.string()),
+  errandPhase: __t.option(__t.string()),
+  errandTripListCsv: __t.option(__t.string()),
+  errandOffscreenUntilMicros: __t.i64(),
 });
 export type StaffActor = __Infer<typeof StaffActor>;
 
