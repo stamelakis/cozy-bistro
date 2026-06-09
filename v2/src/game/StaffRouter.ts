@@ -2110,6 +2110,22 @@ export class StaffRouter {
       const t = this.tickets.find((t) => t.id === a.ticketId);
       serverTicketId = t?.serverMirrorId ?? null;
     }
+    // Phase H bug fix — map the local takeOrderRequest's guestId
+    // (a local string like "guest-7") to the server's u64 via the
+    // existing lookupGuestServerId callback. Previously this was
+    // hardcoded to null, which meant the periodic 1 Hz mirror
+    // CLOBBERED the server's freshly-set take_order_guest_id back
+    // to null seconds after try_dispatch_take_order set it. The
+    // server's waiter_finished_taking_order then couldn't match
+    // the waiter to the guest (filter is
+    // `take_order_guest_id == Some(guest_id)`), so the guest sat
+    // in "ordering" state until ORDERING_FALLBACK_MS (10s) elapsed.
+    // User-visible symptom: idle-looking waiter not walking to a
+    // patiently-waiting guest with declining patience timer.
+    let serverTakeOrderGuestId: bigint | null = null;
+    if (a.takeOrderRequest && this.lookupGuestServerId) {
+      serverTakeOrderGuestId = this.lookupGuestServerId(a.takeOrderRequest.guestId) ?? null;
+    }
     const trip = a.washTrip ?? null;
     this.cloud.updateStaffActor({
       memberId: a.memberId,
@@ -2126,10 +2142,7 @@ export class StaffRouter {
       washTargetUid: trip?.stationUid ?? "",
       washDirtyId: BigInt(trip?.dirtyId ?? -1),
       washPhase: trip?.phase ?? "",
-      takeOrderGuestId: null, // take-order guest_id maps via the lookup
-                              // callback when D.4 server-side state
-                              // machine lands; mirror mode just leaves
-                              // it unset.
+      takeOrderGuestId: serverTakeOrderGuestId,
     });
   }
 
