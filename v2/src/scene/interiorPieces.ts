@@ -153,6 +153,113 @@ export function isLampDefId(defId: string): boolean {
   return LAMP_DEF_IDS.has(defId);
 }
 
+/** Paris-style exterior decoration — cornice bands on every storey,
+ * iron balconies on upper storeys, slate-grey mansard cap with
+ * brick chimney at the top of the topmost unlocked storey. Mirrors
+ * the host's addParisExteriorDecor structure, simplified for visit
+ * mode (no tracking arrays since visit mode is one-shot — host's
+ * parisBalconies / parisMansardChimney tracking exists to move the
+ * mansard up when setLuxuryTier flips). visit mode is read-only:
+ * once built it stays at the position the visited save dictated.
+ *
+ * `numStoreys` is how many floors the visited restaurant has
+ * unlocked (1 = ground only, 4 = max). Cornice bands lay on top of
+ * each of those storeys; balconies on storeys 1..N-1; mansard +
+ * chimney on top of the topmost. */
+export function buildParisExteriorDecor(parent: THREE.Object3D, numStoreys: number): void {
+  const W = 10;
+  const H = STOREY_HEIGHT;
+  const cornerOffsetCx = 0.5;
+  const cornerOffsetCz = 0.5;
+  const corniceMat = new THREE.MeshStandardMaterial({
+    color: 0xc8b888, roughness: 0.8,
+  });
+  const balconyMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a1a, roughness: 0.4, metalness: 0.7,
+  });
+
+  // Cornice bands — one band at top of each unlocked storey.
+  const cBandH = 0.14;
+  const cBandThick = 0.3;
+  const cExtra = 0.3;
+  const cLong = W + cExtra * 2;
+  for (let idx = 0; idx < numStoreys; idx += 1) {
+    const y = (idx + 1) * H - cBandH / 2;
+    const halfW = W / 2;
+    const southZ = cornerOffsetCz + halfW + cBandThick / 2;
+    const northZ = cornerOffsetCz - halfW - cBandThick / 2;
+    const eastX = cornerOffsetCx + halfW + cBandThick / 2;
+    const westX = cornerOffsetCx - halfW - cBandThick / 2;
+    const sideGeo = new THREE.BoxGeometry(cLong, cBandH, cBandThick);
+    const endGeo = new THREE.BoxGeometry(cBandThick, cBandH, cLong);
+    const mkSide = (g: THREE.BufferGeometry, x: number, z: number): THREE.Mesh => {
+      const m = new THREE.Mesh(g, corniceMat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      return m;
+    };
+    parent.add(mkSide(sideGeo, cornerOffsetCx, southZ));
+    parent.add(mkSide(sideGeo, cornerOffsetCx, northZ));
+    parent.add(mkSide(endGeo, eastX, cornerOffsetCz));
+    parent.add(mkSide(endGeo, westX, cornerOffsetCz));
+  }
+
+  // Iron balconies on upper storeys (1..N-1). Two horizontal rails
+  // on the front (+Z) face, just below window-mid height.
+  for (let idx = 1; idx < numStoreys; idx += 1) {
+    const winY = idx * H + 1.5;
+    const railY = winY - 0.85;
+    const southZ = cornerOffsetCz + W / 2 + 0.12;
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(W - 0.3, 0.06, 0.10),
+      balconyMat,
+    );
+    rail.position.set(cornerOffsetCx, railY, southZ);
+    parent.add(rail);
+    const lowerRail = new THREE.Mesh(
+      new THREE.BoxGeometry(W - 0.3, 0.04, 0.08),
+      balconyMat,
+    );
+    lowerRail.position.set(cornerOffsetCx, railY - 0.35, southZ);
+    parent.add(lowerRail);
+  }
+
+  // Mansard roof + cap + chimney at the top of the topmost unlocked
+  // storey. Position.y = numStoreys × STOREY_HEIGHT (one full storey
+  // above the topmost floor's bottom). Host's version repositions
+  // these on luxury-tier changes; visit mode is one-shot, so we just
+  // place them at the visited save's expansion level.
+  const topY = numStoreys * H;
+  const mansardH = 1.2;
+  const mansard = new THREE.Mesh(
+    new THREE.BoxGeometry(W + 0.2, mansardH, W + 0.2),
+    new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.5, metalness: 0.05 }),
+  );
+  mansard.position.set(cornerOffsetCx, topY + mansardH / 2, cornerOffsetCz);
+  mansard.castShadow = true;
+  parent.add(mansard);
+
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(W - 0.6, 0.1, W - 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
+  );
+  cap.position.set(cornerOffsetCx, topY + mansardH + 0.05, cornerOffsetCz);
+  parent.add(cap);
+
+  const chimney = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 1.1, 0.4),
+    new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 }),
+  );
+  chimney.position.set(
+    cornerOffsetCx + W / 2 - 0.8,
+    topY + mansardH + 0.55,
+    cornerOffsetCz - W / 2 + 0.8,
+  );
+  chimney.castShadow = true;
+  parent.add(chimney);
+}
+
 /** Attach a warm point light to a placed lamp's model.  Adds the
  * light as a child of the model so it inherits the lamp's world
  * position automatically.  Light is a simple stand-in (no host-side

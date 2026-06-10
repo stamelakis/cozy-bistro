@@ -15,6 +15,7 @@ import {
 } from "../scene/wallBuilder";
 import {
   buildStaircaseFlight, buildSupplyCounterMesh, attachLampLight,
+  buildParisExteriorDecor,
 } from "../scene/interiorPieces";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 
@@ -1388,13 +1389,19 @@ export class VisitMode {
     // line reads complete from above. Always on the ground floor.
     buildSupplyCounterMesh(root);
 
-    // Roof on top of the topmost unlocked storey. Same flat plane the
-    // host uses as a legacy fallback before the mansard kicks in.
-    const roof = new THREE.Mesh(new THREE.PlaneGeometry(W, W), roofMat);
-    roof.rotation.x = -Math.PI / 2;
-    roof.position.set(0.5, maxStoreys * STOREY_HEIGHT, 0.5);
-    roof.receiveShadow = true;
-    root.add(roof);
+    // Paris-style exterior decoration: cornice bands per floor +
+    // iron balconies on upper floors + slate-grey mansard + chimney
+    // at the top of the topmost unlocked storey. Same cornice /
+    // balcony / mansard recipe the host uses on its own scene —
+    // matches the city's other Paris-style facades so the visited
+    // restaurant reads as part of the same neighbourhood.
+    buildParisExteriorDecor(root, maxStoreys);
+
+    // Flat roof skipped — the Paris mansard added by
+    // buildParisExteriorDecor sits at the same Y and covers the same
+    // footprint. Host's WorldScene also keeps the flat plane hidden
+    // (line 2008) once the mansard is built.
+    void roofMat;
   }
 }
 
