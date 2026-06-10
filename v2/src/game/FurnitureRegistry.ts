@@ -265,6 +265,10 @@ export class FurnitureRegistry {
       stats.comfort * 100,
       stats.ratingBonus * 100,
       bath.quality * 100,
+      // Phase 6.6 — attractionBonus feeds the server-side offline
+      // spawn rate adjustment in try_server_spawn_guest. Pre-multiplied
+      // by 100 to match the rest of the reducer's integer units.
+      stats.attractionBonus * 100,
     );
   }
 

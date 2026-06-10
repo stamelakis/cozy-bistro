@@ -1018,9 +1018,22 @@ export class GuestSpawner {
     }
 
     // Tick each guest's state machine.
+    //
+    // Phase 6.1 — When the server owns guest state, its tick_guest_state
+    // ticks patience_ms (all patience-active states: walkingIn, seated,
+    // ordering, waitingForFood, eating) and flips the guest to "leaving"
+    // when it hits zero. The bridge below (reconcileCloudGuest) catches
+    // that transition and applies the local angry-leave side-effects
+    // (record lost + rating ding + cancelTicket + settleGuestDishes +
+    // optional leftover plate). Without this gate the LOCAL tickPatience
+    // would race the server: both would countdown independently, double-
+    // firing recordLost / recordRating, and the server's broader patience
+    // coverage (ordering, eating) would never reach the local side
+    // effects because tickPatience only handles seated + waitingForFood.
+    const localOwnsPatience = !this.serverOwnsGuestStates();
     for (let i = this.guests.length - 1; i >= 0; i -= 1) {
       const g = this.guests[i];
-      this.tickPatience(g, dt);
+      if (localOwnsPatience) this.tickPatience(g, dt);
       this.tickGuest(g, dt);
       // Remove guest if they finished walking out — OR if they've been
       // trying to leave for an absurd amount of time (got stuck in a
@@ -1110,17 +1123,46 @@ export class GuestSpawner {
     if (g.state !== "seated" && g.state !== "waitingForFood") return;
     g.patience -= dt;
     if (g.patience > 0) return;
-    // Patience exhausted — angry exit. Route via the door.
+    // Patience exhausted — angry exit. Route via the door. With
+    // serverOwnsGuestStates() gating the caller, this path is dormant
+    // in the new world; the bridge below fires applyServerAngryLeave
+    // instead and tracks the broader set of patience-active states.
+    this.applyAngryLeave(g);
+  }
+
+  /** Shared angry-exit side-effect pipeline used by both the legacy
+   * local tickPatience and the Phase 6.1 server-bridge angry-leave
+   * path. Extracted so the two callsites never drift.
+   *
+   * Side effects fired in order:
+   *   - record one lost customer + 1★ rating ding
+   *   - "-1★ (gave up)" pop + thud sfx so the player sees + hears it
+   *   - cancel any pending order request / in-flight ticket so a
+   *     waiter walking toward the now-empty seat gets pulled off
+   *     immediately instead of completing a wasted trip
+   *   - route every dishware reservation through settleGuestDishes
+   *     (eaten courses → dirty, in-flight courses → clean pool)
+   *   - if the guest ate at least one course, leave a dirty plate +
+   *     leftover mesh on the table so the player can see what they
+   *     missed
+   *   - walk to the door + planPath + state = walkingToDoor so the
+   *     position step animates the exit (server's leaving-variant
+   *     dwell timer then deletes the cloud row)
+   */
+  private applyAngryLeave(g: ActiveGuest): void {
     this.game.customers.recordLost(1);
-    this.game.reputation.recordRating(1);
-    // Cancel any pending order request / in-flight cooking ticket up
-    // front so a waiter walking toward the now-empty seat gets pulled
-    // off immediately instead of completing a wasted trip and
-    // dwelling at the empty chair for 1.5s. (despawnGuest also calls
-    // cancelTicket as a safety net.)
+    // Phase 7.8 — Server's accumulate appends the 1★ angry rating to
+    // cloud_rating_history_csv at despawn time; the cloud_rating
+    // subscription handler flows it back into local ratingHistory.
+    // Skipping the local recordRating here avoids double-recording.
+    // We KEEP recordLost (it's just a daily counter that doesn't
+    // round-trip through cloud_money_cents).
+    if (!this.serverOwnsGuestStates()) {
+      this.game.reputation.recordRating(1);
+    }
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a");
+    this.sfx?.thud();
     this.router.cancelTicket(g.id);
-    // Route every reservation through the single chokepoint — eaten
-    // courses become dirty, in-flight ones go back to clean.
     this.settleGuestDishes(g);
     if (g.orderIndex > 0) {
       this.removePlateForGuest(g.id);
@@ -1131,6 +1173,20 @@ export class GuestSpawner {
     this.planPath(g);
     g.state = "walkingToDoor";
     g.stateClock = 0;
+  }
+
+  /** Phase 6.1 — server-bridge entry point for an angry leave. Skips
+   * if the local guest is already on the walk-out path (idempotent
+   * against reconnect re-deliveries of the same "leaving" row). The
+   * server's "leaving" / "done" strings never reach a local guest's
+   * state field — the bridge sets walkingToDoor on this path and the
+   * client's leave handlers carry it through exitingDoor → walkingOut. */
+  private applyServerAngryLeave(g: ActiveGuest): void {
+    if (g.state === "walkingToDoor" || g.state === "exitingDoor"
+        || g.state === "walkingOut") {
+      return;
+    }
+    this.applyAngryLeave(g);
   }
 
   /** Reconcile every reservation the guest still holds against the
@@ -1402,11 +1458,74 @@ export class GuestSpawner {
       this.router.popDeliveredFor(g.id);
     }
 
-    // eating → leaving: server saw EATING_DURATION_MS elapse on the
-    // FINAL course (server's tick_guest_state checks order_index + 1
-    // == total_courses). Fire the visit-completion cascade locally:
-    // credit the final course, clear the plate, run finalize (rating,
-    // tip, leftover meshes), and start the walk to the door.
+    // Phase 6.1 — angry-leave bridge. Server's tick_guest_state flips
+    // a guest to "leaving" via patience_ms hitting zero from any
+    // patience-active state (walkingIn / seated / ordering /
+    // waitingForFood / eating). The transitions below catch each
+    // source-state → leaving combination that's UNAMBIGUOUSLY a
+    // patience timeout (no other server path produces it) and fire the
+    // same side effects the old local tickPatience used to:
+    //   - record lost customer
+    //   - record a 1★ rating
+    //   - cancel any pending order request / in-flight ticket so a
+    //     waiter doesn't keep walking toward the now-empty seat
+    //   - settle reserved dishes (return in-flight clean to the pool,
+    //     mark eaten ones dirty)
+    //   - if any courses were already eaten, leave a dirty plate +
+    //     leftover mesh on the table so the player sees what they
+    //     missed
+    //   - route the local walk to the door + flip local state to
+    //     walkingToDoor so the position step animates the exit
+    //
+    // The `eating → leaving` case is AMBIGUOUS — either patience timed
+    // out mid-meal (rare; "took too long between courses") OR the
+    // final course finished naturally. patience_ms == 0n is the
+    // discriminator: natural finish leaves patience > 0 (it decrements
+    // during eating but doesn't get pinned to zero); patience-timeout
+    // explicitly pins it to zero in the transition update. Falls
+    // through to the existing finalize-visit happy path on patience > 0.
+    if (row.state === "leaving") {
+      // Local GuestState doesn't model "ordering" — local sim collapses
+      // it into seated → waitingForFood — so the angry-from-ordering
+      // case is naturally caught by `seated`.
+      //
+      // Phase 6.1b — Yellow-chair waiting timeout. Server's
+      // is_waiting_state branch in tick_guest_state decrements
+      // waiting_timeout_ms and flips waitingForSeat/walkingToWait →
+      // leaving when it hits zero. Distinct from the patience timer
+      // (waiting_timeout_ms is its own clock — patience doesn't tick
+      // during waiting), so patience_ms isn't a signal here; we
+      // dispatch on source state alone. Cleanup also has to release
+      // the yellow chair claim + clear g.waiting before
+      // applyServerAngryLeave runs the rest of the pipeline.
+      const angryFromWaiting =
+        g.state === "waitingForSeat" || g.state === "walkingToWait";
+      const angryFromNonEating =
+        g.state === "seated" || g.state === "waitingForFood"
+          || g.state === "walkingIn";
+      const angryFromEating = g.state === "eating" && row.patienceMs === 0n;
+      if (angryFromWaiting) {
+        if (g.waiting) {
+          this.claimedWaitingChairs.delete(g.waiting.chairUid);
+          g.waiting = undefined;
+        }
+        this.applyServerAngryLeave(g);
+        return;
+      }
+      if (angryFromNonEating || angryFromEating) {
+        this.applyServerAngryLeave(g);
+        return;
+      }
+    }
+
+    // eating → leaving (HAPPY finish): server saw EATING_DURATION_MS
+    // elapse on the FINAL course (server's tick_guest_state checks
+    // order_index + 1 == total_courses). Fire the visit-completion
+    // cascade locally: credit the final course, clear the plate, run
+    // finalize (rating, tip, leftover meshes), and start the walk to
+    // the door. The patience-timeout branch above already short-
+    // circuited the patience case via `return`, so this is the
+    // natural-finish path only.
     if (g.state === "eating" && row.state === "leaving") {
       this.creditCourse(g);
       this.removePlateForGuest(g.id);
@@ -2183,22 +2302,28 @@ export class GuestSpawner {
   }
 
   /** Each tick, look for waiting guests whose real seat just became free
-   * and route them over. Also expire waiting guests whose timer ran out. */
+   * and route them over. Also expire waiting guests whose timer ran out.
+   *
+   * Phase 6.1b — The timeout-driven angry exit is gated when the server
+   * owns guest state. Server's tick_guest_state runs the same
+   * waiting_timeout_ms decrement (restaurant_sim.rs: is_waiting_state
+   * branch) and flips the guest to "leaving" when it hits zero; the
+   * cloud-guest bridge below catches that and applies the local
+   * side effects (yellow-chair release + recordLost + rating ding).
+   * Promotion to a real seat still runs locally — that decision depends
+   * on the client's occupiedSeats + furniture registry, which the
+   * server doesn't model yet. */
   private promoteWaitingGuests(): void {
+    const localOwnsWaitingTimeout = !this.serverOwnsGuestStates();
     for (const g of this.guests) {
       if (!g.waiting) continue;
-      // Time-out → angry exit.
-      if (g.waiting.timeLeft <= 0 && g.state === "waitingForSeat") {
+      // Time-out → angry exit (local-only branch — server-bridge owns
+      // this when serverOwnsGuestStates() is on).
+      if (localOwnsWaitingTimeout
+          && g.waiting.timeLeft <= 0 && g.state === "waitingForSeat") {
         this.claimedWaitingChairs.delete(g.waiting.chairUid);
         g.waiting = undefined;
-        this.game.customers.recordLost(1);
-        this.game.reputation.recordRating(1);
-        this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a");
-        g.character.action = "walk";
-        g.target = DOOR_POSITION.clone();
-        this.planPath(g);
-        g.state = "walkingToDoor";
-        g.stateClock = 0;
+        this.applyAngryLeave(g);
         continue;
       }
       // Only promote once the guest is actually parked at the chair.
@@ -3630,24 +3755,11 @@ export class GuestSpawner {
 
 
   /** Guest gives up (ran out of patience OR couldn't be served) — record
-   * the loss + dock the rating, then walk them out. Reconciles any
-   * reservations they were holding so the dishware inventory stays
-   * balanced even when the give-up happens mid-course (e.g. pantry
-   * runs out at orderIndex>0 followed by a fresh failure). */
+   * the loss + dock the rating, then walk them out. Delegates to
+   * applyAngryLeave so the various give-up paths (legacy patience,
+   * server-bridge angry-leave, pantry-empty bail) stay in lockstep. */
   private markLostAndExit(g: ActiveGuest): void {
-    this.game.customers.recordLost(1);
-    this.game.reputation.recordRating(1);
-    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★", "#ff9a9a");
-    this.sfx?.thud();
-    // Drop any pending order request / in-flight ticket so a waiter
-    // doesn't keep walking toward this guest's seat after they bail.
-    this.router.cancelTicket(g.id);
-    this.settleGuestDishes(g);
-    g.character.action = "walk";
-    g.target = DOOR_POSITION.clone();
-    this.planPath(g);
-    g.state = "walkingToDoor";
-    g.stateClock = 0;
+    this.applyAngryLeave(g);
   }
 
   /** Bank money + satisfaction for a single completed course. */
@@ -3665,7 +3777,20 @@ export class GuestSpawner {
       satisfaction += 2;
       this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y + 0.2, "♥ taste", "#ffd47a");
     }
-    this.game.economy.earnMoney(price, "payment");
+    // Phase 7.8 — Server is the sole writer for visit money. When
+    // serverOwnsGuestStates is on, the server's
+    // accumulate_pending_visit_rollup credits tip + revenue to
+    // cloud_money_cents at despawn time, and the Phase 7.7
+    // delta-sync subscription handler flows it into local economy
+    // money within ~50ms. Calling earnMoney here would double-credit
+    // (local += price now, then cloud sub adds again). We KEEP the
+    // local g.totalPaid / g.totalSatisfaction tracking + the visual
+    // fx (floating text + sfx) because they're not money mutations —
+    // totalPaid feeds the server's tip calc via the cloud row
+    // (already mirrored), and the pop is just a "ka-ching" cue.
+    if (!this.serverOwnsGuestStates()) {
+      this.game.economy.earnMoney(price, "payment");
+    }
     g.totalPaid += price;
     g.totalSatisfaction += satisfaction;
     // Floating "+$N" above the guest.
@@ -3791,22 +3916,36 @@ export class GuestSpawner {
     // spawn the leftovers so we don't draw both on top of each other.
     this.removePlateForGuest(g.id);
     this.spawnLeftoversForGuest(g);
-    // Food critics swing the rating average harder. Record their rating
-    // three times — same direction, triple weight on overall reputation.
-    const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;
-    for (let i = 0; i < ratingsToRecord; i += 1) {
-      this.game.reputation.recordRating(rating);
-    }
-
-    // Tip: 0% at 1-2 stars, 5% at 3, 15% at 4, 30% at 5. Round to whole dollars.
-    // Modifiers: archetype (generous +50% / grumpy -60%) and weather
-    // (festival + cold snap make people tip a bit more).
+    // Phase 7.8 — Server is the sole writer for visit rating + tip.
+    // accumulate_pending_visit_rollup appends the freshly-computed
+    // rating to cloud_rating_history_csv and adds tip + revenue to
+    // cloud_money_cents at despawn time; the foreground client's
+    // cloud_rating_history_csv subscription handler hydrates the
+    // local ratingHistory, and Phase 7.7's delta-sync subscription
+    // flows the cash add into local economy.
+    //
+    // The food-critic "record N times" semantic is preserved
+    // server-side: the server's accumulate uses the same rating
+    // computation + a single CSV append per despawn. The critic's
+    // extra weight isn't currently mirrored server-side (would need
+    // archetype data on the cloud row). Accepted drift for now.
+    //
+    // Tip computation remains local-only as a UX display value (we
+    // pop the "+$N tip" floating text below), but is NOT credited
+    // to economy. Server's accumulate independently computes the
+    // canonical tip + writes cloud_money_cents.
     const tipMultByRating: Record<number, number> = { 1: 0, 2: 0, 3: 0.05, 4: 0.15, 5: 0.30 };
     const baseTipRate = tipMultByRating[rating] ?? 0;
     const weatherMult = this.game.weather.getCurrent().tipMultiplier;
     const tip = Math.round(g.totalPaid * baseTipRate * g.archetype.tipMultiplier * weatherMult);
-    if (tip > 0) {
-      this.game.economy.earnMoney(tip, "payment");
+    if (!this.serverOwnsGuestStates()) {
+      const ratingsToRecord = g.archetype.id === "critic" ? 3 : 1;
+      for (let i = 0; i < ratingsToRecord; i += 1) {
+        this.game.reputation.recordRating(rating);
+      }
+      if (tip > 0) {
+        this.game.economy.earnMoney(tip, "payment");
+      }
     }
 
     // Visible feedback: a star rating floats up above their seat as they leave.

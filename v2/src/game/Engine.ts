@@ -343,7 +343,24 @@ export class Engine {
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
       isOpen: () => this.spawner?.restaurantOpen ?? true,
-      setOpen: (open: boolean) => { if (this.spawner) this.spawner.restaurantOpen = open; },
+      setOpen: (open: boolean) => {
+        if (!this.spawner) return;
+        if (this.spawner.restaurantOpen === open) return;
+        this.spawner.restaurantOpen = open;
+        // Phase 6.3 — push the new open/closed flag to the cloud
+        // immediately. Otherwise player_save.restaurant_open stays at
+        // the previous value until the next autosave (day rollover /
+        // beforeunload), so:
+        //   - server's offline spawn gate (try_server_spawn_guest's
+        //     `if !restaurant_open` check) keeps spawning into a
+        //     closed restaurant — or stops spawning into a freshly
+        //     opened one — for potentially several minutes
+        //   - visitors reading the cloud see a stale "open" badge
+        // cloudSaveNow re-publishes the whole player_save row + the
+        // save blob, which carries free_seats too, keeping the
+        // attraction layer's two gates in lockstep with the toggle.
+        this.cloud.cloudSaveNow();
+      },
     }, {
       isPaused: () => this.isPaused(),
       setPaused: (p) => this.setPaused(p),
@@ -586,6 +603,14 @@ export class Engine {
       // BuildMenu tabs gain / lose the lock badge — refresh so the
       // freshly-unlocked tier becomes clickable immediately.
       this.buildMenu?.refreshTierTabs();
+      // Phase 6.9 — eager push so visit-mode's buildInteriorShell
+      // picks up the new floor count immediately. Without this, the
+      // visitor's view of the building stayed at the old storey count
+      // until the next autosave (day rollover / beforeunload).
+      // cloudSaveNow is the right hammer here: tier purchases are
+      // rare (5 lifetime) so the full save-blob upload is fine.
+      void tier;
+      this.cloud.cloudSaveNow();
     };
     this.decorModal = new DecorModal(container, this.game);
     // So opening Decor on Floor 2 lands on Floor 2's tab by default.
@@ -632,15 +657,25 @@ export class Engine {
     this.signModal = new RestaurantSignModal(container, this.game);
     this.game.onRestaurantSignChanged = (name, style) => {
       this.scene.setRestaurantSign(name, style);
-      // Push the style to cloud so visit mode renders the same plaque
-      // styling (font / textColor / plaqueStyle). The restaurant name
-      // itself piggybacks on the existing Restaurant.name column;
-      // RestaurantSignModal already keeps that in sync via
-      // Game.setRestaurantSign → cloud save path. This call covers
-      // the per-player style picks that weren't on the schema before.
+      // Push BOTH name + style eagerly so visitors see the rename and
+      // the new plaque styling within a tick of the host's save. The
+      // legacy autosave path also writes Restaurant.name, but only at
+      // day rollover / beforeunload — too slow for the "open the
+      // RestaurantSignModal, type a name, click save, then ALT-TAB to
+      // the visitor browser" demo flow. Phase 6.8 added
+      // set_restaurant_name; Phase H added set_restaurant_sign_style.
+      this.cloud.setRestaurantName(name);
       this.cloud.setRestaurantSignStyle(style);
     };
     this.scene.setRestaurantSign(this.game.getRestaurantName(), this.game.getRestaurantSignStyle());
+
+    // Phase 6.7 — boost activation eagerly pushes the expiry to the
+    // cloud so try_server_spawn_guest can halve the offline spawn
+    // interval for the same window the foreground sees. Fire-and-
+    // forget; the reducer is idempotent.
+    this.game.onBoostStarted = (expiresAtMs) => {
+      this.cloud.setBoostExpiresAt(expiresAtMs);
+    };
     // Click listener — raycast against the plaque mesh; pop the modal
     // when hit. Doesn't interfere with build / sell / move modes since
     // those have their own pointer handling and we only trigger when
@@ -1247,22 +1282,16 @@ export class Engine {
         console.warn("[Engine] H.68 waiter-rest-spot hydrate failed:", e);
       }
 
-      // H.41 — drain any auto-shop debt the server accrued while
-      // this client was offline.  Server has been billing
-      // Restaurant.pending_restock_cost_cents on every backgrounded
-      // restock; debit the player's local money once, then clear the
-      // counter.  Order matters: forceSpendMoney first (so the
-      // economy reflects reality), THEN consume the cloud counter so
-      // a mid-flight failure doesn't double-bill on retry.  Cents →
-      // dollars; floor to avoid sub-cent FP slippage.
+      // H.41 + Phase 7.5 — drain offline auto-shop debt.
+      // Server now deducts cloud_money_cents directly during the
+      // backgrounded restock (try_restock_pantry), and Phase 7.2's
+      // setMoney(cloudMoneyCents) on rollup drain already adopted the
+      // restock-deducted cash value. Skip the local forceSpendMoney
+      // here — debiting again would double-charge. Still consume the
+      // counter to clear it.
       const pendingRestockCents = this.cloud.getPendingRestockCostCents();
       if (pendingRestockCents > 0) {
-        const dollars = pendingRestockCents / 100;
-        try {
-          this.game.economy.forceSpendMoney(dollars, "restock");
-        } catch (e) {
-          console.warn("[Engine] H.41 forceSpendMoney(restock) failed:", e);
-        }
+        console.log(`[Cloud] consumed ${pendingRestockCents} cents pending restock (already deducted from cloud_money_cents server-side)`);
         this.cloud.consumePendingRestockCost();
       }
 
@@ -1309,18 +1338,19 @@ export class Engine {
         this.cloud.consumePendingTrainingCompletions();
       }
 
-      // H.45 — drain offline salary accrual.  Same order discipline
-      // as H.41: forceSpendMoney first, then consume.  Finally,
-      // resetSalaryTickClock tells the server "I'm online; pause
-      // accrual" so the next offline period starts fresh.
+      // H.45 + Phase 7.5 — drain offline salary accrual.
+      // Server now also deducts cloud_money_cents directly during the
+      // offline tick (alongside bumping pending_salary_cost_cents).
+      // Phase 7.2's setMoney(cloudMoneyCents) on rollup drain already
+      // adopted the salary-deducted cash value, so calling
+      // forceSpendMoney here would double-deduct — visibly drop cash
+      // a second time after the cloud adoption, which IS the reload
+      // jolt the user reported. Skip the local debit; just consume
+      // the counter to clear it and reset the tick clock so the next
+      // offline period starts fresh.
       const pendingSalaryCents = this.cloud.getPendingSalaryCents();
       if (pendingSalaryCents > 0) {
-        const dollars = pendingSalaryCents / 100;
-        try {
-          this.game.economy.forceSpendMoney(dollars, "salary");
-        } catch (e) {
-          console.warn("[Engine] H.45 forceSpendMoney(salary) failed:", e);
-        }
+        console.log(`[Cloud] consumed ${pendingSalaryCents} cents pending salary (already deducted from cloud_money_cents server-side)`);
         this.cloud.consumePendingSalary();
       }
       this.cloud.resetSalaryTickClock();
@@ -1333,6 +1363,21 @@ export class Engine {
       this.cloud.setCloudPayrollRate(
         Math.round(this.game.admin.payrollPerStaffPerMinute * 100),
       );
+      // Phase 6.10 — Reconcile boost timers against the cloud's
+      // boost_expires_at_micros. Local boostCooldownRemaining ticks
+      // only while the tab is open; without this step the save-blob
+      // would restore a stale countdown that doesn't reflect the
+      // wall-clock elapsed during offline. Game.restoreBoostStateFromCloud
+      // derives the correct boostRemaining / boostCooldownRemaining
+      // from the single cloud timestamp + Date.now().
+      try {
+        const boostExpiresAtMicros = this.cloud.getCloudBoostExpiresAtMicros();
+        if (boostExpiresAtMicros != null) {
+          this.game.restoreBoostStateFromCloud(boostExpiresAtMicros / 1000);
+        }
+      } catch (e) {
+        console.warn("[Engine] Phase 6.10 boost reconcile failed:", e);
+      }
       // Wire SaveSystem → GuestSpawner so a refresh / cloud-load
       // doesn't permanently lose plates a mid-meal guest was holding.
       this.game.gatherInFlightDishes = () => this.spawner?.getInFlightByKindTier() ?? [];
@@ -1776,6 +1821,19 @@ export class Engine {
             : (s.label.startsWith("🍴") ? "rgba(50, 110, 60, 0.85)" : undefined),
         });
       });
+    }
+    // Phase 8.1 — When a visit is active, also include the visited
+    // restaurant's status bubbles so the visitor sees the same chef
+    // cook-recipe labels, waiter delivery badges, errand boy trip
+    // phases, and guest patience countdowns the host sees on their
+    // own restaurant. The host's own characters are typically
+    // off-camera during a visit (worldRoot offset shifts to the
+    // visited plot), so the local entries collected above render
+    // far from the active view and don't visually clutter the visit.
+    if (this.visitMode.isVisiting()) {
+      for (const entry of this.visitMode.snapshotBubbles()) {
+        entries.push(entry);
+      }
     }
     this.statusBubbles.update(entries);
   }
@@ -2924,17 +2982,33 @@ export class Engine {
       const elapsedSec = DAY_LENGTH_SEC - this.game.day.getTimeRemainingSeconds();
       const elapsedMs = Math.max(0, Math.round(elapsedSec * 1000));
       this.cloud.syncDayClock(elapsedMs);
-      // H.32 — also push the live money balance. Same cadence so we
-      // don't multiply network calls. Idempotent server-side; no
-      // write when the value hasn't changed.
-      this.cloud.syncCloudMoney(this.game.economy.getMoney());
+      // Phase 7.7 — Delta-based money sync. Compute (local - lastSynced)
+      // and push the delta instead of the absolute value. Lets the
+      // server's accumulate adds (tips, revenue, etc.) coexist with
+      // client-side spends like hire/fire/upgrade without either side
+      // clobbering the other. The Restaurant subscription handler
+      // also advances lastSyncedCents on cloud-driven updates so this
+      // push doesn't double-count server adds.
+      const localCents = Math.round(this.game.economy.getMoney() * 100);
+      const lastSynced = this.game.economy.getLastSyncedCents();
+      const deltaCents = localCents - lastSynced;
+      if (deltaCents !== 0) {
+        this.cloud.bumpCloudMoneyCents(deltaCents);
+        this.game.economy.noteSyncedCents(localCents);
+      }
       // H.46 — push today's revenue + expense totals so visitors,
       // the leaderboard, and any second-device session see live
       // values instead of save-snapshot stale ones.  Same cadence,
       // same idempotency rationale.
+      //
+      // Phase 6.11 — Daily customer-served + customer-lost counts
+      // mirror at the same cadence so the visit-mode overlay + the
+      // leaderboard surface accurate "today" totals between autosaves.
       this.cloud.syncCloudDailyTotals(
         this.game.economy.getDailyRevenue(),
         this.game.economy.getDailyExpenses(),
+        this.game.customers.getDailyServed(),
+        this.game.customers.getDailyLost(),
       );
       // H.61 — push the transaction log snapshot if dirty.  No-op
       // when no transactions have been recorded since the last
@@ -3095,6 +3169,11 @@ export class Engine {
     // on which side the camera is currently on. Cheap enough to run
     // every frame, and we want it to track right through a camera drag.
     this.scene.updateWallVisibility(this.camera.threeCamera.position);
+    // Visit-mode mirror: when looking at someone else's restaurant the
+    // visited plot's walls do the same ghost swap on the camera-side
+    // walls so visitors see into the dining room exactly the way the
+    // host sees into their own. No-op when no visit is active.
+    this.visitMode.updateWallVisibility(this.camera.threeCamera.position);
     // Refresh status bubbles above staff (after scene.update so character
     // positions reflect this frame's animator output).
     this.updateStatusBubbles();

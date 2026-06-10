@@ -11,13 +11,16 @@ import { WashCycleRingVisualizer } from "../scene/WashCycleRingVisualizer";
 import { DirtyPileVisualizer } from "../scene/DirtyPileVisualizer";
 import {
   buildPerimeterWallSegments, extractWallOpenings, emptyFloorOpenings,
-  type OpeningSourcePlacement,
+  wallKindForCamera, type OpeningSourcePlacement, type WallDir,
 } from "../scene/wallBuilder";
 import {
   buildStaircaseFlight, buildSupplyCounterMesh, attachLampLight,
   buildParisExteriorDecor, buildRatingSign,
 } from "../scene/interiorPieces";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
+import { customerArchetypes } from "../data/customerArchetypes";
+import { recipes } from "../data/recipes";
+import type { StatusEntry } from "./StatusBubbles";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -147,10 +150,6 @@ export class VisitMode {
    * cached so spawn callbacks can re-render it without rebuilding
    * the whole overlay. */
   private livenessEl: HTMLSpanElement | null = null;
-  /** Shell mesh at the visited plot — hidden during visit so the
-   * loaded interior is unobstructed by the placeholder facade.
-   * Re-shown on exit. */
-  private hiddenShell: THREE.Object3D | null = null;
   /** Optional hook so Engine can pause its own systems while a visit
    * is active (e.g. suppress build-menu placement, hide bubbles). */
   onEnter?: (plot: VisitablePlot) => void;
@@ -192,6 +191,31 @@ export class VisitMode {
    * having to spawn plate meshes. Keyed by ticket id (server u64 as
    * string) so we can re-key on update without double-counting. */
   private liveTicketStates: Map<string, string> = new Map();
+
+  /** Bubble-label metadata, indexed for snapshotBubbles(). Engine's
+   * updateStatusBubbles polls this every frame when a visit is active
+   * so the visitor sees the SAME chef cook-recipe labels + guest
+   * patience countdowns + errand badges the host sees on their own
+   * restaurant. Updated by the subscription handlers in lockstep
+   * with the character spawn/snap/dispose path. */
+  private staffMetaByMember: Map<string, {
+    role: string;
+    state: string;
+    ticketId: bigint | null;
+    errandPhase?: string | null;
+  }> = new Map();
+  private guestMetaById: Map<string, {
+    state: string;
+    patienceMs: bigint;
+    archetype: string;
+    orderIndex: number;
+  }> = new Map();
+  private ticketMetaById: Map<string, {
+    state: string;
+    recipeId: string;
+    appliance: string;
+    assignedChefId: string;
+  }> = new Map();
   /** Live customer characters from active_guest subscription, keyed by
    * the server's guest id (as string). Spawn-on-insert, snap-on-
    * update, dispose-on-delete — same pattern as liveStaffCharacters. */
@@ -222,6 +246,21 @@ export class VisitMode {
    * Populated alongside the interior render; used by the wash-cycle
    * ring visualizer to resolve a dishwasher's uid → coords. */
   private furniturePosByUid: Map<string, { x: number; z: number; floor: number }> = new Map();
+  /** Wall ghost-swap tracker — mirrors the host's
+   * WorldScene.updateWallVisibility. Each floor owns a solid wallMat
+   * (theme-driven), a transparent ghostMat (cloned with opacity 0.15
+   * + depthWrite off, matches host's `wallGhostMat`), and four
+   * direction-keyed mesh arrays. updateWallVisibility flips each
+   * direction's meshes between the two materials based on whether
+   * the camera is on the outdoor side of that wall, so the visitor
+   * sees through the front + side walls of the visited restaurant
+   * the same way the host sees through their own. */
+  private wallTracker: Map<number, {
+    wallMat: THREE.Material;
+    ghostMat: THREE.Material;
+    perDir: Record<WallDir, THREE.Mesh[]>;
+    currentKind: Record<WallDir, "solid" | "ghost">;
+  }> = new Map();
 
   constructor(container: HTMLElement, canvas: HTMLCanvasElement, camera: IsoCamera, scene: WorldScene) {
     this.container = container;
@@ -448,6 +487,15 @@ export class VisitMode {
         if (this.activePlot?.id !== targetPlotId) return;
         firedCount += 1;
         console.log(`[Visit] live staff onInsert #${firedCount}: member=${row.memberId} role=${row.role} state=${row.state} pos=(${row.x.toFixed(1)}, ${row.z.toFixed(1)})`);
+        // Phase 8.1 — Stamp the bubble-label meta so getStatusBubbles
+        // has ticket + role + errand_phase ready before the
+        // GLB load resolves.
+        this.staffMetaByMember.set(row.memberId, {
+          role: row.role,
+          state: row.state,
+          ticketId: row.ticketId,
+          errandPhase: row.errandPhase,
+        });
         // H.A — Update the held-item visualizer's cache BEFORE the
         // character GLB has loaded; reconcile() will no-op until
         // setHost arrives in spawnLiveStaffActor's success branch.
@@ -457,12 +505,19 @@ export class VisitMode {
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.staffMetaByMember.set(row.memberId, {
+          role: row.role,
+          state: row.state,
+          ticketId: row.ticketId,
+          errandPhase: row.errandPhase,
+        });
         this.heldItems.onStaffActor(row.memberId, row.ticketId);
         this.cookingPots.onStaffActor(row.memberId, row.ticketId);
         this.applyLiveStaffUpdate(row);
       },
       onDelete: (memberId) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.staffMetaByMember.delete(memberId);
         console.log(`[Visit] live staff onDelete: member=${memberId}`);
         this.heldItems.onStaffActorDelete(memberId);
         this.cookingPots.onStaffActorDelete(memberId);
@@ -605,6 +660,10 @@ export class VisitMode {
     this.liveCustomerCharacters.clear();
     this.liveCustomerPendingLoads.clear();
     this.liveTicketStates.clear();
+    // Phase 8.1 — Bubble meta lives + dies with the visit.
+    this.staffMetaByMember.clear();
+    this.guestMetaById.clear();
+    this.ticketMetaById.clear();
     // H.A — Drop all cloud-derived visualizer caches + any attached
     // meshes. Next visit re-subscribes and rebuilds from scratch.
     this.heldItems.dispose();
@@ -631,17 +690,31 @@ export class VisitMode {
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         firedCount += 1;
+        // Phase 8.1 — Bubble meta (patience countdown, state icon).
+        this.guestMetaById.set(String(row.id), {
+          state: row.state,
+          patienceMs: row.patienceMs,
+          archetype: row.archetype,
+          orderIndex: row.orderIndex,
+        });
         // H.A — Plate-on-table reconcile alongside the character spawn.
         this.seatPlates.onGuest(row);
         void this.spawnLiveCustomerActor(row, targetPlotId);
       },
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.guestMetaById.set(String(row.id), {
+          state: row.state,
+          patienceMs: row.patienceMs,
+          archetype: row.archetype,
+          orderIndex: row.orderIndex,
+        });
         this.seatPlates.onGuest(row);
         this.applyLiveCustomerUpdate(row);
       },
       onDelete: (id) => {
         if (this.activePlot?.id !== targetPlotId) return;
+        this.guestMetaById.delete(String(id));
         this.seatPlates.onGuestDelete(id);
         this.removeLiveCustomerActor(String(id));
       },
@@ -734,6 +807,12 @@ export class VisitMode {
       onInsert: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
+        // Phase 8.1 — Bubble meta so chef labels can read
+        // "🥘 [recipe name]" when cooking.
+        this.ticketMetaById.set(String(row.id), {
+          state: row.state, recipeId: row.recipeId,
+          appliance: row.appliance, assignedChefId: row.assignedChefId,
+        });
         // H.A — Cloud-derived visualizers need ticket state +
         // appliance + assigned chef to pick plate vs glass meshes
         // and to anchor the cooking pot on the right chef.
@@ -744,6 +823,10 @@ export class VisitMode {
       onUpdate: (row) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.set(String(row.id), row.state);
+        this.ticketMetaById.set(String(row.id), {
+          state: row.state, recipeId: row.recipeId,
+          appliance: row.appliance, assignedChefId: row.assignedChefId,
+        });
         this.heldItems.onTicket(row.id, row.state, row.appliance);
         this.cookingPots.onTicket(row.id, row.state, row.appliance, row.assignedChefId);
         this.refreshLivenessLabel();
@@ -751,6 +834,7 @@ export class VisitMode {
       onDelete: (id) => {
         if (this.activePlot?.id !== targetPlotId) return;
         this.liveTicketStates.delete(String(id));
+        this.ticketMetaById.delete(String(id));
         this.heldItems.onTicketDelete(id);
         this.cookingPots.onTicketDelete(id);
         this.refreshLivenessLabel();
@@ -813,25 +897,170 @@ export class VisitMode {
 
   // ─── Interior render (P4.3) ──────────────────────────────────────
 
-  /** Walk the cityBuildings group to find the shell whose visitPlot
-   * userData matches the given plot, and hide it so the loaded
-   * interior renders unobstructed. */
-  private hideVisitedShell(plot: VisitablePlot): void {
+  /** Hide every city-shell + fence in the cityBuildings group while
+   * the visit is active. The visited plot's shell is replaced by the
+   * loaded interior (loadVisitedInterior), and the OTHER plots'
+   * placeholder shells just clutter the view — the user reported the
+   * neighbouring dark roofs distracted from the visited restaurant.
+   *
+   * Records which children we touched so restoreVisitedShells can put
+   * them back in the same state on exit (in case the city was
+   * re-populated mid-visit, we don't blindly unhide things that were
+   * already hidden for unrelated reasons). */
+  private hiddenShells: THREE.Object3D[] = [];
+  private hideVisitedShell(_plot: VisitablePlot): void {
     if (!this.scene.cityBuildings) return;
     for (const child of this.scene.cityBuildings.children) {
-      const p = child.userData?.visitPlot as VisitablePlot | undefined;
-      if (p && p.id === plot.id) {
+      if (child.visible) {
         child.visible = false;
-        this.hiddenShell = child;
-        return;
+        this.hiddenShells.push(child);
       }
     }
   }
 
   private restoreVisitedShell(): void {
-    if (this.hiddenShell) {
-      this.hiddenShell.visible = true;
-      this.hiddenShell = null;
+    for (const child of this.hiddenShells) {
+      child.visible = true;
+    }
+    this.hiddenShells = [];
+  }
+
+  // ─── Phase 8.1 — Status-bubble parity ──────────────────────────────
+
+  /** Build the same status-bubble payload the host's StaffRouter +
+   * ErrandRouter + GuestSpawner produce — from the cloud row meta
+   * captured by the subscription handlers. Engine.updateStatusBubbles
+   * polls this every frame when a visit is active so the visitor sees
+   * the host's chef cooking labels, waiter delivering badges, errand
+   * boy trip phase, and guest patience countdowns over the SAME
+   * characters the host sees.
+   *
+   * Empty / dim labels are filtered (the StatusBubbles renderer hides
+   * empty-text entries anyway, but it saves a pool slot). */
+  snapshotBubbles(): StatusEntry[] {
+    if (!this.activePlot) return [];
+    const out: StatusEntry[] = [];
+
+    // ── Staff bubbles ──
+    for (const [memberId, char] of this.liveStaffCharacters) {
+      const meta = this.staffMetaByMember.get(memberId);
+      if (!meta) continue;
+      const label = this.buildStaffLabel(meta);
+      if (!label) continue;
+      out.push({
+        key: `visit-staff-${memberId}`,
+        character: char,
+        label,
+        // Errand bubble gets the same purple tint the host's
+        // updateStatusBubbles uses for errand entries.
+        bg: meta.role === "errand" ? "rgba(80, 50, 90, 0.85)" : undefined,
+      });
+    }
+
+    // ── Guest bubbles ──
+    for (const [guestId, char] of this.liveCustomerCharacters) {
+      const meta = this.guestMetaById.get(guestId);
+      if (!meta) continue;
+      const { label, panic, eating } = this.buildGuestLabel(meta);
+      if (!label) continue;
+      out.push({
+        key: `visit-guest-${guestId}`,
+        character: char,
+        label,
+        // Mirror Engine.updateStatusBubbles' colour rules: panic
+        // (low patience) → red, eating → green, default → amber.
+        bg: panic
+          ? "rgba(160, 40, 40, 0.9)"
+          : eating
+            ? "rgba(50, 110, 60, 0.85)"
+            : undefined,
+      });
+    }
+
+    return out;
+  }
+
+  /** Construct the chef/waiter/barman/errand label string. Mirrors
+   * StaffRouter.snapshotStatus + ErrandRouter.snapshotStatus shape
+   * but reads cloud meta instead of local sim state. */
+  private buildStaffLabel(meta: {
+    role: string; state: string;
+    ticketId: bigint | null;
+    errandPhase?: string | null;
+  }): string {
+    // Errand helper — phase emoji
+    if (meta.role === "errand") {
+      switch (meta.errandPhase ?? "") {
+        case "walkingToDoor":
+        case "exitingDoor":
+        case "walkingToRoadEdge":
+          return "🛒 →";
+        case "offscreen":
+          return "🛒 shopping";
+        case "walkingFromRoadEdge":
+        case "enteringDoor":
+        case "walkingToCounter":
+          return "🛒 ←";
+        case "atCounter":
+          return "📦 unloading";
+        case "returningHome":
+          return "🛒 done";
+        default:
+          return ""; // idle helper at home — no bubble
+      }
+    }
+    // Chef / barman / waiter with a ticket — look up recipe name.
+    if (meta.ticketId != null) {
+      const ticketMeta = this.ticketMetaById.get(String(meta.ticketId));
+      const recipeName = ticketMeta
+        ? (recipes.find((r) => r.id === ticketMeta.recipeId)?.name ?? ticketMeta.recipeId)
+        : "";
+      if (meta.role === "chef" || meta.role === "barman") {
+        const icon = meta.role === "barman" ? "🍷" : "🥘";
+        return recipeName ? `${icon} ${recipeName}` : icon;
+      }
+      if (meta.role === "waiter") {
+        // No table number from cloud yet; just the recipe.
+        return recipeName ? `🍽 ${recipeName}` : "🍽";
+      }
+    }
+    // Idle staff — no bubble (matches host's empty-label semantic).
+    return "";
+  }
+
+  /** Construct the guest label string + decide the colour-coding flags. */
+  private buildGuestLabel(meta: {
+    state: string; patienceMs: bigint;
+    archetype: string; orderIndex: number;
+  }): { label: string; panic: boolean; eating: boolean } {
+    const arch = customerArchetypes.find((a) => a.id === meta.archetype);
+    const prefix = arch?.shortLabel ?? "👤";
+    const patienceSecs = Math.max(0, Math.ceil(Number(meta.patienceMs) / 1000));
+    const panic = patienceSecs > 0 && patienceSecs <= 10;
+    switch (meta.state) {
+      case "walkingIn":
+      case "walkingToWait":
+        return { label: `${prefix} ⏳`, panic, eating: false };
+      case "waitingForSeat":
+        return { label: `${prefix} 🪑 ${patienceSecs}s`, panic, eating: false };
+      case "seated":
+      case "ordering": {
+        const secs = patienceSecs > 0 ? ` ${patienceSecs}s` : "";
+        return { label: `${prefix} 📋${secs}`, panic, eating: false };
+      }
+      case "waitingForFood": {
+        const secs = patienceSecs > 0 ? ` ${patienceSecs}s` : "";
+        return { label: `${prefix} ⏳${secs}`, panic, eating: false };
+      }
+      case "eating":
+        return { label: `${prefix} 🍴`, panic: false, eating: true };
+      case "wcWalking":
+      case "wcSitting":
+        return { label: `${prefix} 🚻`, panic: false, eating: false };
+      case "wcWashing":
+        return { label: `${prefix} 🧼`, panic: false, eating: false };
+      default:
+        return { label: "", panic: false, eating: false };
     }
   }
 
@@ -847,12 +1076,74 @@ export class VisitMode {
     this.liveCustomerCount = 0;
     this.liveStaffCount = 0;
     this.livenessEl = null;
+    // Dispose wall materials we own — unlike furniture geometries
+    // (shared via the loader cache), the wallMat / ghostMat / floorMat
+    // are freshly built per visit, so we free them here to keep GPU
+    // memory from growing on repeat visits. Floor materials don't
+    // round-trip through the tracker, but they're parented to
+    // visitorRoot meshes and will be released alongside the root's
+    // tree when worldRoot.remove happens below.
+    for (const entry of this.wallTracker.values()) {
+      entry.wallMat.dispose();
+      entry.ghostMat.dispose();
+    }
+    this.wallTracker.clear();
     if (!this.visitorRoot) return;
     this.scene.worldRoot.remove(this.visitorRoot);
     // Geometries + materials come from the shared ModelLoader cache —
     // do NOT dispose them here or the player's own restaurant loses
     // every furniture mesh on the next visit.
     this.visitorRoot = null;
+  }
+
+  // ─── Camera-relative wall ghost swap ──────────────────────────────
+
+  /** Per-frame: swap the two perimeter walls the camera is on the
+   * OUTDOOR side of to the transparent ghost material so the visitor
+   * can see into the dining room. Mirrors host's
+   * WorldScene.updateWallVisibility (line 2308) but uses
+   * coordinates LOCAL to the visited plot (camera world pos minus the
+   * plot's world position) — the host's walls live at world origin
+   * so it can use the camera world pos directly, while the visit
+   * plot can be anywhere in the city grid.
+   *
+   * Engine wires this into the render loop alongside the host's own
+   * updateWallVisibility call so visit + host stay in lockstep on
+   * wall visibility from frame to frame. No-op when no visit is
+   * active or the interior shell hasn't built yet. */
+  updateWallVisibility(cameraWorldPos: THREE.Vector3): void {
+    const plot = this.activePlot;
+    if (!plot || !this.visitorRoot || this.wallTracker.size === 0) return;
+    // Visitor root sits at (plot.plotX, 0, plot.plotZ) LOCAL to
+    // worldRoot, which itself is offset by worldRoot.position. So
+    // the plot's absolute world position is the sum, and the
+    // camera-in-plot-local-space is cameraWorldPos minus that sum.
+    // Wall axis math in wallBuilder is in plot-local coords (walls at
+    // x ∈ {-4.5, 5.5}, z ∈ {-4.5, 5.5}), so this puts the dot product
+    // on the same scale the host's check uses.
+    const offsetX = this.scene.worldRoot.position.x + plot.plotX;
+    const offsetZ = this.scene.worldRoot.position.z + plot.plotZ;
+    const camLocal = { x: cameraWorldPos.x - offsetX, z: cameraWorldPos.z - offsetZ };
+    for (const entry of this.wallTracker.values()) {
+      for (const dir of ["front", "back", "left", "right"] as const) {
+        const kind = wallKindForCamera(dir, camLocal);
+        if (kind === entry.currentKind[dir]) continue;
+        // Visit mode hides the camera-side walls ENTIRELY instead of
+        // ghosting them to 15% opacity (the host's behaviour). The
+        // visitor is just observing — no need to keep the wall outline
+        // visible as an orientation hint, and full-hide reads as the
+        // "see straight in" experience users expect from a doll-house
+        // view. Solid keeps the original wallMat; ghost flips
+        // mesh.visible = false on every segment for the swept direction.
+        const visible = kind === "solid";
+        const mat = entry.wallMat;
+        for (const mesh of entry.perDir[dir]) {
+          mesh.material = mat;
+          mesh.visible = visible;
+        }
+        entry.currentKind[dir] = kind;
+      }
+    }
   }
 
   private async loadVisitedInterior(plot: VisitablePlot): Promise<void> {
@@ -1317,11 +1608,21 @@ export class VisitMode {
     // the same, falling back to the catalog default (RESTAURANT_THEMES[0]
     // = "plain-white") when no override was set for that floor.
     const defaultTheme = RESTAURANT_THEMES[0];
-    const materialForFloor = (floorIdx: number): { wallMat: THREE.Material; floorMat: THREE.Material } => {
+    /** Per-floor material trio. wallMat = solid theme-tinted wall;
+     * ghostMat = same colour but transparent (opacity 0.15) with
+     * depthWrite off so it doesn't write into the depth buffer and
+     * occlude things behind it — same recipe as WorldScene.wallGhostMat
+     * (line 1838) so the ghosted wall reads identically in visit mode.
+     * floorMat = theme-driven slab/floor. */
+    const materialForFloor = (floorIdx: number): { wallMat: THREE.Material; ghostMat: THREE.Material; floorMat: THREE.Material } => {
       const theme = themesByFloor.get(floorIdx) ?? defaultTheme;
       return {
         wallMat: new THREE.MeshStandardMaterial({
           color: theme.wallColor, roughness: 0.85, side: THREE.DoubleSide,
+        }),
+        ghostMat: new THREE.MeshStandardMaterial({
+          color: theme.wallColor, roughness: 0.6, side: THREE.DoubleSide,
+          transparent: true, opacity: 0.15, depthWrite: false,
         }),
         floorMat: new THREE.MeshStandardMaterial({
           color: theme.floorColor, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
@@ -1340,10 +1641,15 @@ export class VisitMode {
     const openingsByFloor = extractWallOpenings(placements, getFurnitureDef);
 
     /** Construct one storey's perimeter walls + slab. floorIdx 0 has
-     * no slab (the ground floor uses a PlaneGeometry directly). */
+     * no slab (the ground floor uses a PlaneGeometry directly).
+     * Walls are tracked per-direction in this.wallTracker so the
+     * per-frame updateWallVisibility() can swap to ghostMat on the
+     * two walls the camera is currently looking at — same behaviour
+     * the host's WorldScene.updateWallVisibility provides on the
+     * player's own restaurant. */
     const buildStorey = (floorIdx: number): void => {
       const baseY = floorIdx * STOREY_HEIGHT;
-      const { wallMat, floorMat } = materialForFloor(floorIdx);
+      const { wallMat, ghostMat, floorMat } = materialForFloor(floorIdx);
       // Slab (upper storeys only — ground floor has its own floor mesh).
       if (floorIdx > 0) {
         const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
@@ -1362,10 +1668,14 @@ export class VisitMode {
       // 4 perimeter walls. Build via the shared wallBuilder so doors +
       // windows in the save snapshot cut the same gap shapes the host
       // sees (full-height + 1 m lintel for doors; sill + lintel +
-      // open middle band for windows).
+      // open middle band for windows). Capture the returned mesh array
+      // per-direction so the wall tracker can material-swap them later.
       const floorOpenings = openingsByFloor.get(floorIdx) ?? emptyFloorOpenings();
+      const perDir: Record<WallDir, THREE.Mesh[]> = {
+        front: [], back: [], left: [], right: [],
+      };
       for (const dir of ["front", "back", "left", "right"] as const) {
-        buildPerimeterWallSegments(root, dir,
+        perDir[dir] = buildPerimeterWallSegments(root, dir,
           floorOpenings[dir].doors,
           floorOpenings[dir].windows, {
             yOffset: baseY,
@@ -1375,6 +1685,13 @@ export class VisitMode {
           },
         );
       }
+      this.wallTracker.set(floorIdx, {
+        wallMat, ghostMat, perDir,
+        // Seed with "solid" so the first updateWallVisibility tick
+        // can detect the kind change and apply ghost where needed —
+        // walls were built with wallMat above, so this matches reality.
+        currentKind: { front: "solid", back: "solid", left: "solid", right: "solid" },
+      });
     };
 
     buildStorey(0);

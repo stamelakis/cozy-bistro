@@ -130,6 +130,19 @@ export class CustomerSystem {
     this.dailyLost += count;
   }
 
+  /** Phase 7.8 — Adopt the cloud_daily_served value as local truth.
+   * Server bumps cloud_daily_served on every despawn (Phase 7.6); the
+   * subscription handler calls this so the HUD reads the server's
+   * "today" count instead of a syncCloudDailyTotals-stale local one. */
+  setDailyServed(count: number): void {
+    this.dailyServed = Math.max(0, count);
+  }
+
+  /** Phase 7.8 — Same for daily lost. */
+  setDailyLost(count: number): void {
+    this.dailyLost = Math.max(0, count);
+  }
+
   resetDailyTotals(): void {
     this.dailyServed = 0;
     this.dailyLost = 0;

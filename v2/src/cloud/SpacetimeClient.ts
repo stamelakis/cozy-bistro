@@ -105,6 +105,12 @@ export interface StaffActorRow {
    * watches the transition null→set to drive the local waiter to
    * movingToWork with the matching OrderRequest. */
   takeOrderGuestId: bigint | null;
+  /** Phase H Phase 5.1+ — Errand trip phase for role="errand" actors
+   * (walkingToDoor / exitingDoor / walkingToRoadEdge / offscreen /
+   * walkingFromRoadEdge / enteringDoor / walkingToCounter / atCounter
+   * / returningHome). Null when not on a trip. Phase 8.1 surfaces it
+   * so visit-mode status bubbles can show "🛒 shopping" / "✨ home". */
+  errandPhase: string | null;
 }
 
 /** Public shape of one active_guest row — one per live customer in a
@@ -133,6 +139,12 @@ export interface ActiveGuestRow {
   seatFloor: number;
   plateX: number;
   plateZ: number;
+  /** Phase H Phase 6.1 — remaining patience pool in ms. Bridge reads
+   * this to distinguish an angry mid-meal leave (patience pinned to 0
+   * by the server when it transitions the guest out of "eating") from
+   * a natural finish (patience still positive when EATING_DURATION_MS
+   * elapsed on the final course). 0 = patience timed out THIS tick. */
+  patienceMs: bigint;
   /** Phase H Phase 3b — current course index. The owner's bridge
    * watches this to detect server-driven course-advance (eating →
    * seated bumps it) and fires the matching local side effects
@@ -745,7 +757,7 @@ export class SpacetimeClient {
    * with consumePendingVisitRollup() once the values are applied to
    * Game state, atomically clearing the cloud counters. */
   getPendingVisitRollup():
-    | { served: number; tipsCents: number; revenueCents: number; ratingSumX100: number; ratingCount: number }
+    | { served: number; tipsCents: number; revenueCents: number; ratingSumX100: number; ratingCount: number; lost: number }
     | null
   {
     if (!this.conn || this.restaurantId == null) return null;
@@ -756,8 +768,12 @@ export class SpacetimeClient {
     const revenueCents = Number(r.pendingRevenueCents ?? 0);
     const ratingSumX100 = Number(r.pendingRatingSumX100);
     const ratingCount = Number(r.pendingRatingCount);
-    if (served === 0 && tipsCents === 0 && revenueCents === 0 && ratingCount === 0) return null;
-    return { served, tipsCents, revenueCents, ratingSumX100, ratingCount };
+    // Phase 6.4 — angry-leave count accumulated during offline. Default
+    // 0 covers existing cloud rows from before the column was added
+    // (matches the server-side #[default(0u32)]).
+    const lost = Number(r.pendingLost ?? 0);
+    if (served === 0 && tipsCents === 0 && revenueCents === 0 && ratingCount === 0 && lost === 0) return null;
+    return { served, tipsCents, revenueCents, ratingSumX100, ratingCount, lost };
   }
 
   /** H.22 — Clear the pending_* counters on this player's Restaurant
@@ -790,6 +806,26 @@ export class SpacetimeClient {
       });
     } catch (e) {
       console.warn("[Cloud] syncCloudMoney failed:", e);
+    }
+  }
+
+  /** Phase 7.7 — Delta-based money sync. Adds `deltaCents` to the
+   * Restaurant row's cloud_money_cents column. Coexists with
+   * server-side accumulate adds (tips/revenue/etc.) without
+   * overwriting them — the absolute setCloudMoney would clobber a
+   * tip the server added between syncs, but a delta just adds on
+   * top. Caller is responsible for computing the delta against a
+   * stable baseline (EconomySystem.lastSyncedCents). No-op for 0. */
+  bumpCloudMoneyCents(deltaCents: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (deltaCents === 0) return;
+    try {
+      this.conn.reducers.bumpCloudMoney({
+        restaurantId: this.restaurantId,
+        deltaCents: BigInt(deltaCents),
+      });
+    } catch (e) {
+      console.warn("[Cloud] bumpCloudMoneyCents failed:", e);
     }
   }
 
@@ -972,7 +1008,7 @@ export class SpacetimeClient {
    * visitors / leaderboard / cross-device.  Fires on the same
    * cadence as syncCloudMoney from Engine.update.  Idempotent
    * server-side; no-op when both values match the existing row. */
-  syncCloudDailyTotals(revenueDollars: number, expensesDollars: number): void {
+  syncCloudDailyTotals(revenueDollars: number, expensesDollars: number, served: number, lost: number): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
       // Clamp to non-negative — server rejects negatives.
@@ -982,6 +1018,11 @@ export class SpacetimeClient {
         restaurantId: this.restaurantId,
         revenueCents: BigInt(rev),
         expensesCents: BigInt(exp),
+        // Phase 6.11 — Clamp to non-negative + integer; the reducer
+        // takes u32. Visitors + leaderboard read these directly off
+        // the Restaurant row instead of via the autosave save_blob.
+        served: Math.max(0, Math.round(served)),
+        lost: Math.max(0, Math.round(lost)),
       });
     } catch (e) {
       console.warn("[Cloud] syncCloudDailyTotals failed:", e);
@@ -1046,8 +1087,31 @@ export class SpacetimeClient {
       console.warn(`[Cloud] capping pending day rollover ${pending} → ${MAX_ROLLOVER}`);
     }
     console.log(`[Cloud] applying ${days} pending day rollover(s)`);
+    // Phase 8.2 — Suppress the per-day onDayEnded callback during the
+    // drain. Without this, applying 30 pending days fires 30 modal
+    // shows + 30 gongs in rapid succession — visually awful. The
+    // final day's stats are still captured in history because the
+    // resetDailyTotals + history.push inside rolloverDay run before
+    // the callback. After the loop, we fire ONE onDayEnded with the
+    // most recent day's summary so the player sees the latest result.
+    const savedHook = this.game.onDayEnded;
+    let lastSummary: Parameters<NonNullable<typeof savedHook>>[0] | null = null;
+    this.game.onDayEnded = (s) => { lastSummary = s; };
     for (let i = 0; i < days; i += 1) {
-      this.game.rolloverDay();
+      // Phase 7.4 — Skip the local rent debit: server's tick_day_clock
+      // already charged rent against cloud_money_cents for each
+      // offline day past the grace window, and applyPendingVisitRollup
+      // (which already ran above) adopted that cash value via Phase 7.2's
+      // setMoney. Charging rent again here would visibly drop cash N
+      // times after the cloud adoption — the very jolt we're trying
+      // to kill. Other rollover side effects (daily resets, history
+      // push, weather roll) still run; only the rent forceSpend is
+      // skipped.
+      this.game.rolloverDay(false);
+    }
+    this.game.onDayEnded = savedHook;
+    if (lastSummary && savedHook) {
+      savedHook(lastSummary);
     }
     this.consumePendingDayAdvancement();
   }
@@ -1067,6 +1131,7 @@ export class SpacetimeClient {
     comfortX100: number,
     ratingBonusX100: number,
     bathroomQualityX100: number,
+    attractionBonusX100: number,
   ): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
@@ -1076,9 +1141,48 @@ export class SpacetimeClient {
         comfortX100: Math.round(comfortX100),
         ratingBonusX100: Math.round(ratingBonusX100),
         bathroomQualityX100: Math.round(bathroomQualityX100),
+        // Phase 6.6 — feeds try_server_spawn_guest's attraction
+        // multiplier so a well-decorated restaurant spawns at the
+        // same accelerated rate offline as it does online.
+        attractionBonusX100: Math.round(attractionBonusX100),
       });
     } catch (e) {
       console.warn("[Cloud] updateRestaurantAggregates failed:", e);
+    }
+  }
+
+  /** Phase 6.10 — Read the Restaurant row's boost_expires_at_micros.
+   * Returns null when no row is subscribed yet OR the column was
+   * never set (default 0 from the schema means "never boosted"). The
+   * caller treats 0 / null identically — Game.restoreBoostStateFromCloud
+   * clears both timers. */
+  getCloudBoostExpiresAtMicros(): number | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return null;
+    const micros = Number(r.boostExpiresAtMicros ?? 0n);
+    return micros;
+  }
+
+  /** Phase 6.7 — push the foreground boost expiry to the cloud so
+   * try_server_spawn_guest can apply the same 0.5× spawn interval
+   * halving while the owner's tab is backgrounded. Without this push,
+   * a paid boost only accelerates spawns for the duration the tab
+   * stays foreground; the rest of the boost window reverts to the
+   * unboosted 5.5s cadence on the server.
+   *
+   * `expiresAtMs` is wall-clock ms (Date.now() + boostDurationMs);
+   * caller converts to micros for the i64 cloud column. Passing 0
+   * clears the boost early (e.g. an admin reset). */
+  setBoostExpiresAt(expiresAtMs: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setBoostExpiresAt({
+        restaurantId: this.restaurantId,
+        expiresAtMicros: BigInt(Math.round(expiresAtMs * 1000)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setBoostExpiresAt failed:", e);
     }
   }
 
@@ -1089,18 +1193,36 @@ export class SpacetimeClient {
   applyPendingVisitRollup(): void {
     const rollup = this.getPendingVisitRollup();
     if (!rollup) return;
-    // Tips — credit as a payment (matches the foreground client's
-    // creditCourse + finalizeVisit category so the ledger / animation
-    // grouping stays consistent).
-    if (rollup.tipsCents > 0) {
-      this.game.economy.earnMoney(rollup.tipsCents / 100, "payment");
-    }
-    // Phase H Phase 2b — offline meal revenue. Server accumulates
-    // g.total_paid_cents on guest despawn when the owner was
-    // offline; foreground despawns leave this at zero because the
-    // local creditCourse already credited per-course.
-    if (rollup.revenueCents > 0) {
-      this.game.economy.earnMoney(rollup.revenueCents / 100, "offline");
+    // Phase 7.2 — Money cloud-canonical on reconnect. The server has
+    // ALREADY updated cloud_money_cents during offline accumulate
+    // (line 1554 of accumulate_pending_visit_rollup adds tip + revenue
+    // to the cloud column). Previously we ALSO called earnMoney here
+    // — which bumped the local balance + fired transaction-log entries
+    // + animated the running balance climb. That created the "cash
+    // jumps up on reload" jolt the user reported.
+    //
+    // The fix: adopt cloud_money_cents as the local truth on reconnect
+    // — single setMoney call, no per-transaction animation, no
+    // ledger pollution from N "offline" entries. The values are
+    // intentionally still in rollup.tipsCents + rollup.revenueCents so
+    // we can log the total breakdown for the player; we just don't
+    // re-apply them to the balance.
+    if (this.restaurantId != null) {
+      const restRow = this.conn?.db.restaurant.id.find(this.restaurantId);
+      if (restRow != null) {
+        const cloudCents = Number(restRow.cloudMoneyCents);
+        const cloudDollars = cloudCents / 100;
+        // Only adopt when meaningfully different — same-value setMoney
+        // is harmless but a stale-cache compare avoids an unnecessary
+        // re-render and ledger spam in some downstream listeners.
+        if (Math.abs(this.game.economy.getMoney() - cloudDollars) >= 0.01) {
+          this.game.economy.setMoney(cloudDollars);
+        }
+        // Phase 7.7 — Align the delta-sync baseline with the cloud
+        // value we just adopted, so the next 5s sync push doesn't
+        // try to re-bump for the gap that's already reconciled.
+        this.game.economy.noteSyncedCents(cloudCents);
+      }
     }
     // Served counter — bumps the HUD's "served today" + drives
     // achievements that watch the total. Cloud carries one count for
@@ -1108,19 +1230,36 @@ export class SpacetimeClient {
     if (rollup.served > 0) {
       this.game.customers.recordServed(rollup.served);
     }
-    // Ratings — server only carried sum + count, so we apply the
-    // average back N times. Losing the per-guest distribution is OK
-    // for backgrounded play (those guests already missed the foreground
-    // grading anyway); the player still gets a representative
-    // rating-history update.
-    if (rollup.ratingCount > 0) {
-      const avg = rollup.ratingSumX100 / rollup.ratingCount / 100;
-      for (let i = 0; i < rollup.ratingCount; i += 1) {
-        this.game.reputation.recordRating(avg);
-      }
+    // Phase 6.4 — angry-leave counter (server bumps pending_lost when
+    // a guest is despawned with order_index == 0, matching client's
+    // recordLost semantics where eat-mid-course angry-leavers still
+    // count as served via finalizeVisit). Without this, the HUD's
+    // "lost customers" total under-reports after any offline period
+    // that had patience / waiting-chair timeouts.
+    if (rollup.lost > 0) {
+      this.game.customers.recordLost(rollup.lost);
+    }
+    // Phase 7.1 — Rating cloud-canonical. We USED to call
+    // recordRating(avg) N times here, which slammed the local
+    // ratingHistory with N copies of the average — turning a 23-guest
+    // offline angry-leave window into a brutal "rating crashed" jolt
+    // on reload. The server now appends each freshly-computed rating
+    // directly to cloud_rating_history_csv inside the same
+    // accumulate_pending_visit_rollup call, so cloud carries the
+    // per-guest history. After this consume drains the legacy pending
+    // counters, hydrate the local ReputationSystem from the cloud CSV
+    // — that adopts the server's actual record without re-recording
+    // anything locally. pending_rating_sum/count still cleared by the
+    // server-side consume; the client just stops using them.
+    void rollup.ratingCount;
+    void rollup.ratingSumX100;
+    const cloudHistory = this.getCloudRatingHistory();
+    if (cloudHistory) {
+      this.game.reputation.applyCloudRatingHistory(cloudHistory);
     }
     console.log(
-      `[Cloud] applied pending visit rollup — ${rollup.served} guests, $${(rollup.tipsCents / 100).toFixed(2)} tips, ` +
+      `[Cloud] applied pending visit rollup — ${rollup.served} guests, ${rollup.lost} lost, ` +
+      `$${(rollup.tipsCents / 100).toFixed(2)} tips, ` +
       `${rollup.ratingCount} ratings (avg ${(rollup.ratingSumX100 / Math.max(1, rollup.ratingCount) / 100).toFixed(1)})`
     );
     this.consumePendingVisitRollup();
@@ -1336,6 +1475,7 @@ export class SpacetimeClient {
           washTargetUid: a.washTargetUid,
           washPhase: a.washPhase,
           takeOrderGuestId: a.takeOrderGuestId ?? null,
+          errandPhase: a.errandPhase ?? null,
         });
       }
     } catch { /* table not wired yet */ }
@@ -1366,6 +1506,7 @@ export class SpacetimeClient {
       ticketId: bigint | undefined;
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
       takeOrderGuestId: bigint | undefined;
+      errandPhase: string | undefined;
     };
     const toClientRow = (r: ServerRow): StaffActorRow => ({
       memberId: r.memberId, role: r.role, state: r.state,
@@ -1376,6 +1517,7 @@ export class SpacetimeClient {
       washTargetUid: r.washTargetUid,
       washPhase: r.washPhase,
       takeOrderGuestId: r.takeOrderGuestId ?? null,
+      errandPhase: r.errandPhase ?? null,
     });
     try {
       if (handlers.onInsert) {
@@ -1415,6 +1557,7 @@ export class SpacetimeClient {
     if (rid == null) return;
     type ServerRow = {
       id: bigint; restaurantId: bigint; state: string; variant: string; archetype: string;
+      patienceMs: bigint;
       x: number; z: number; floor: number;
       targetX: number; targetZ: number; targetFloor: number;
       seatUid: string;
@@ -1425,6 +1568,7 @@ export class SpacetimeClient {
     };
     const toClientRow = (r: ServerRow): ActiveGuestRow => ({
       id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
+      patienceMs: r.patienceMs,
       x: r.x, z: r.z, floor: r.floor,
       targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
       seatUid: r.seatUid,
@@ -1635,6 +1779,23 @@ export class SpacetimeClient {
    * style picks (font / textColor / plaqueStyle) to the cloud
    * Restaurant row. Fires from Engine's onRestaurantSignChanged hook
    * on every setRestaurantSign call. Idempotent server-side. */
+  /** Phase 6.8 — eager-push the restaurant display name. The legacy
+   * autosave path also writes Restaurant.name, but only every few
+   * minutes; this reducer covers the gap so visitors see a rename in
+   * the door plaque within sub-second. Trimmed + capped to 28 chars
+   * server-side; empty falls back to "Cozy Bistro". */
+  setRestaurantName(name: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setRestaurantName({
+        restaurantId: this.restaurantId,
+        name,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRestaurantName failed:", e);
+    }
+  }
+
   setRestaurantSignStyle(style: { font: string; textColor: string; plaqueStyle: string }): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
@@ -3195,6 +3356,15 @@ export class SpacetimeClient {
       // state synchronously (apply is now correct) OR triggers a
       // page reload (we never get here, fresh boot picks it up).
       this.applyPendingVisitRollup();
+      // Phase 7.7 — Seed the delta-sync baseline from the cloud row
+      // so the first 5s syncCloudMoney push doesn't fire a spurious
+      // "I just earned $1M" delta. Phase 7.2's setMoney path also
+      // calls noteSyncedCents, but only when pending counters were
+      // non-zero. This is the no-pending fast path.
+      const restRow = this.conn?.db.restaurant.id.find(this.restaurantId);
+      if (restRow != null) {
+        this.game.economy.noteSyncedCents(Number(restRow.cloudMoneyCents));
+      }
       // H.30 — same shape for day rollovers. Each pending day fires
       // Game.rolloverDay() which charges rent (past grace days),
       // resets daily totals, pushes a history row, and increments
@@ -3234,6 +3404,91 @@ export class SpacetimeClient {
       ctx.db.restaurant.onInsert(ping);
       ctx.db.restaurant.onUpdate(ping);
       ctx.db.restaurant.onDelete(ping);
+      // Phase 7.7 — Adopt server-driven cloud_money_cents changes into
+      // the local economy. Server's accumulate_pending_visit_rollup,
+      // tick_offline_salary, tick_day_clock (rent), try_restock_pantry,
+      // and try_dispatch_errand_trip all bump cloud_money_cents
+      // directly. Without this listener, those server adds would be
+      // invisible to the host's HUD until the next syncCloudMoney
+      // round-trip. Track the delta vs lastSyncedCents to skip the
+      // bump-we-just-fired-ourselves case (no double-count).
+      ctx.db.restaurant.onUpdate((_, oldRow, newRow) => {
+        if (this.restaurantId == null) return;
+        if (newRow.id !== this.restaurantId) return;
+        // Phase 7.7/7.8 — Wrap the whole handler in a try-catch so a
+        // mid-handler throw can't take down the subscription cascade.
+        // Without this, ANY exception here (a stale local cache, a
+        // future schema gap, an Engine system briefly null mid-init,
+        // etc.) would unhandled-promise-reject inside the SDK's row-
+        // application loop and silently block subsequent table updates
+        // from being applied — including the auth_record row that
+        // gates login. Logging is enough; the subscription will catch
+        // up on the NEXT update event.
+        try {
+        // ── Phase 7.7 — Adopt server-driven cloud_money_cents changes ──
+        const cloudCents = Number(newRow.cloudMoneyCents);
+        const lastSynced = this.game.economy.getLastSyncedCents();
+        const deltaCents = cloudCents - lastSynced;
+        if (deltaCents !== 0) {
+          // Convert to dollars and apply to local money. earn handles
+          // positive delta (server credited a tip / revenue), charge
+          // handles negative (server debited salary / rent / restock /
+          // errand cost). Either way, log nothing in the transaction
+          // log — these are server-originated changes that the player
+          // didn't authorize via the local UI. Their reasons live in
+          // the server-side log (log::info lines) and not the local
+          // ledger UI.
+          const deltaDollars = deltaCents / 100;
+          if (deltaDollars > 0) {
+            this.game.economy.earn(deltaDollars);
+          } else {
+            this.game.economy.charge(-deltaDollars);
+          }
+          this.game.economy.noteSyncedCents(cloudCents);
+        }
+        // ── Phase 7.8 — Adopt server-appended cloud_rating_history_csv ──
+        // Server's accumulate_pending_visit_rollup appends each
+        // freshly-computed visit rating directly to the CSV. The
+        // foreground finalizeVisit + applyAngryLeave skip the local
+        // recordRating call (Phase 7.8) so this is the only path
+        // that drives ratingHistory updates while online. Diff against
+        // the old row's CSV to avoid hydrating on unrelated updates.
+        const oldCsv = oldRow.cloudRatingHistoryCsv ?? "";
+        const newCsv = newRow.cloudRatingHistoryCsv ?? "";
+        if (oldCsv !== newCsv && newCsv !== "") {
+          const history = newCsv.split(",")
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
+          this.game.reputation.applyCloudRatingHistory(history);
+        }
+        // ── Phase 7.8 — Adopt cloud daily totals as local truth ──
+        // Server bumps cloud_daily_revenue/expenses/served/lost on
+        // each despawn (Phase 7.6) + rent/salary/restock events. The
+        // foreground client no longer touches local daily totals
+        // for visit payouts, so this is how the HUD + leaderboard get
+        // their numbers. syncCloudDailyTotals still fires absolute
+        // pushes from Engine.update (idempotent server-side when the
+        // value matches), but the cloud is canonical here.
+        const cloudDailyRevenue = Number(newRow.cloudDailyRevenueCents) / 100;
+        if (cloudDailyRevenue !== this.game.economy.getDailyRevenue()) {
+          this.game.economy.setDailyRevenue(cloudDailyRevenue);
+        }
+        const cloudDailyExpenses = Number(newRow.cloudDailyExpensesCents) / 100;
+        if (cloudDailyExpenses !== this.game.economy.getDailyExpenses()) {
+          this.game.economy.setDailyExpenses(cloudDailyExpenses);
+        }
+        const cloudDailyServed = Number(newRow.cloudDailyServed);
+        if (cloudDailyServed !== this.game.customers.getDailyServed()) {
+          this.game.customers.setDailyServed(cloudDailyServed);
+        }
+        const cloudDailyLost = Number(newRow.cloudDailyLost);
+        if (cloudDailyLost !== this.game.customers.getDailyLost()) {
+          this.game.customers.setDailyLost(cloudDailyLost);
+        }
+        } catch (e) {
+          console.warn("[SpacetimeClient] restaurant.onUpdate handler threw — subscription continues", e);
+        }
+      });
       ctx.db.co_owner.onInsert(ping);
       ctx.db.co_owner.onDelete(ping);
       // P1+ — auth_record drives sign_up / login completion; without
@@ -3589,6 +3844,7 @@ export class SpacetimeClient {
           restaurantId: g.restaurantId,
           row: {
             id: g.id, state: g.state, variant: g.variant, archetype: g.archetype,
+            patienceMs: g.patienceMs,
             x: g.x, z: g.z, floor: g.floor,
             targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
             seatUid: g.seatUid,
@@ -3647,6 +3903,7 @@ export class SpacetimeClient {
             washTargetUid: a.washTargetUid,
             washPhase: a.washPhase,
             takeOrderGuestId: a.takeOrderGuestId ?? null,
+            errandPhase: a.errandPhase ?? null,
           },
         });
       }

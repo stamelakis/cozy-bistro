@@ -592,7 +592,14 @@ export class Game {
   /** Public for H.30 — SpacetimeClient.applyPendingDayAdvancement
    * calls this N times to replay rollovers that accrued while the
    * tab was backgrounded. */
-  rolloverDay(): void {
+  /** Phase 7.4 — `chargeRent` defaults to true for foreground rollovers
+   * (the normal "play through a day" path). Set to false when called
+   * from applyPendingDayAdvancement on reconnect: the server's
+   * tick_day_clock already debited rent from cloud_money_cents for
+   * each offline day past the grace window, and Phase 7.2's
+   * setMoney(cloudMoneyCents) on rollup drain already adopts that
+   * value. Charging again here would double-debit. */
+  rolloverDay(chargeRent: boolean = true): void {
     // Capture the day's totals BEFORE resetting them — used by both the
     // day-end modal callback AND the persistent history.
     const dayNumber = this.day.getDayNumber();
@@ -600,7 +607,7 @@ export class Game {
     // dayNumber here is the day that JUST ENDED, so the first rent
     // payment lands on the rollover from day RENT_GRACE_DAYS to day
     // RENT_GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free).
-    if (dayNumber > RENT_GRACE_DAYS) {
+    if (chargeRent && dayNumber > RENT_GRACE_DAYS) {
       this.economy.forceSpendMoney(this.getDailyRent(), "rent");
     }
     const revenue = this.economy.getDailyRevenue();
@@ -1189,12 +1196,60 @@ export class Game {
    *   - the player can't afford it
    * The UI also disables the button in these cases as a UX hint, but
    * this guard is the canonical gate. */
+  /** Phase 6.7 — Engine wires this to SpacetimeClient.setBoostExpiresAt
+   * so buyBoost can mirror the active-boost expiry to the cloud.
+   * Without this, the server's offline spawn gate doesn't know a
+   * boost is active and a paid boost only accelerates spawns while
+   * the player keeps the tab foregrounded. Optional — single-player /
+   * pre-cloud sessions just don't fire it. */
+  onBoostStarted?: (expiresAtMs: number) => void;
+
+  /** Phase 6.10 — Reconcile boostRemaining + boostCooldownRemaining
+   * against wall-clock truth from the cloud's boost_expires_at_micros.
+   * Engine calls this on subscription-ready (and any time the
+   * Restaurant row reports a fresh boost_expires_at) so the player
+   * doesn't get re-locked into a stale cooldown after a long offline
+   * period.
+   *
+   * Three possible states:
+   *   - now < expiresAtMs              → boost still active; restore
+   *                                       boostRemaining + zero cooldown
+   *   - now < expiresAtMs + cooldownMs → cooldown still ticking
+   *   - now ≥ expiresAtMs + cooldownMs → fully ready to buy again
+   *
+   * Zero/negative `boostExpiresAtMs` means "never boosted on this
+   * restaurant" — clear both timers. */
+  restoreBoostStateFromCloud(boostExpiresAtMs: number): void {
+    if (boostExpiresAtMs <= 0) {
+      this.boostRemaining = 0;
+      this.boostCooldownRemaining = 0;
+      return;
+    }
+    const now = Date.now();
+    const cooldownMs = BOOST_COOLDOWN_SECONDS * 1000;
+    if (now < boostExpiresAtMs) {
+      this.boostRemaining = (boostExpiresAtMs - now) / 1000;
+      this.boostCooldownRemaining = 0;
+    } else if (now < boostExpiresAtMs + cooldownMs) {
+      this.boostRemaining = 0;
+      this.boostCooldownRemaining = (boostExpiresAtMs + cooldownMs - now) / 1000;
+    } else {
+      this.boostRemaining = 0;
+      this.boostCooldownRemaining = 0;
+    }
+  }
+
   buyBoost(): boolean {
     if (this.boostRemaining > 0) return false;
     if (this.boostCooldownRemaining > 0) return false;
     if (!this.economy.spendMoney(this.getBoostCost(), "decor")) return false;
-    this.boostRemaining = this.getBoostDurationSeconds();
+    const durationSeconds = this.getBoostDurationSeconds();
+    this.boostRemaining = durationSeconds;
     this.bumpPlayerCounter("boostsUsed");
+    // Phase 6.7 — Date.now() is OK here. buyBoost is a discrete UI
+    // event, not a render path; the Engine.update loop is what
+    // disallows wall-clock for resume determinism.
+    this.onBoostStarted?.(Date.now() + durationSeconds * 1000);
     return true;
   }
 

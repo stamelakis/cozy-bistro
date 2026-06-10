@@ -46,6 +46,7 @@ import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
+import BumpCloudMoneyReducer from "./bump_cloud_money_reducer";
 import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
 import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
@@ -92,6 +93,7 @@ import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetActiveMenuReducer from "./set_active_menu_reducer";
+import SetBoostExpiresAtReducer from "./set_boost_expires_at_reducer";
 import SetCloudDayHistoryReducer from "./set_cloud_day_history_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
 import SetCloudPayrollRateReducer from "./set_cloud_payroll_rate_reducer";
@@ -109,6 +111,7 @@ import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRecipeLevelReducer from "./set_recipe_level_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
+import SetRestaurantNameReducer from "./set_restaurant_name_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SetRestaurantSignStyleReducer from "./set_restaurant_sign_style_reducer";
 import SetRestaurantThemeOverridesReducer from "./set_restaurant_theme_overrides_reducer";
@@ -654,6 +657,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
+  __reducerSchema("bump_cloud_money", BumpCloudMoneyReducer),
   __reducerSchema("bump_dishware_pool", BumpDishwarePoolReducer),
   __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
   __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
@@ -700,6 +704,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_active_menu", SetActiveMenuReducer),
+  __reducerSchema("set_boost_expires_at", SetBoostExpiresAtReducer),
   __reducerSchema("set_cloud_day_history", SetCloudDayHistoryReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
   __reducerSchema("set_cloud_payroll_rate", SetCloudPayrollRateReducer),
@@ -717,6 +722,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
   __reducerSchema("set_recipe_level", SetRecipeLevelReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
+  __reducerSchema("set_restaurant_name", SetRestaurantNameReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
   __reducerSchema("set_restaurant_sign_style", SetRestaurantSignStyleReducer),
   __reducerSchema("set_restaurant_theme_overrides", SetRestaurantThemeOverridesReducer),

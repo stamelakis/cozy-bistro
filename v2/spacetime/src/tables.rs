@@ -460,6 +460,55 @@ pub struct Restaurant {
     pub sign_text_color: Option<String>,
     #[default(None::<String>)]
     pub sign_plaque_style: Option<String>,
+
+    /// Phase 6.4 — Count of guests who left angry (no course served)
+    /// while the owner was OFFLINE. Foreground client increments
+    /// CustomerSystem.totalLost on its own when a local guest hits
+    /// applyAngryLeave; this counter covers visits the foreground
+    /// missed. accumulate_pending_visit_rollup bumps this when the
+    /// guest's order_index == 0 (matches client-side recordLost
+    /// semantics — guests who ate at least one course still count as
+    /// served even if they angry-left mid-meal). Drained on reconnect
+    /// alongside pending_served, pending_tips_cents, etc. End-of-
+    /// struct + const-default u32 keeps the publish additive.
+    #[default(0u32)]
+    pub pending_lost: u32,
+
+    /// Phase 6.5 / 6.6 — cached furniture attractionBonus, x100.
+    /// FurnitureRegistry.getAggregateStats() sums attractionBonus across
+    /// placed pieces; the client multiplies its spawn INTERVAL by
+    /// `max(0.35, 1 - min(0.65, attraction × 0.015))` to speed up
+    /// spawns when the restaurant has more attractive decor.
+    /// try_server_spawn_guest reads this and applies the same formula
+    /// so a well-decorated restaurant still fills faster while the
+    /// owner is offline. Default 0 = no furniture attraction = same
+    /// 5.5s baseline behaviour for rows that predate this column.
+    #[default(0i32)]
+    pub cached_attraction_bonus_x100: i32,
+
+    /// Phase 6.7 — Unix-microseconds timestamp when the paid spawn-
+    /// rate boost expires. While `now < boost_expires_at_micros` the
+    /// foreground client halves its spawn interval (`boostMult = 0.5`);
+    /// try_server_spawn_guest applies the same halving so a boost the
+    /// player paid for STILL accelerates spawns while their tab is
+    /// backgrounded. Set by the foreground client via
+    /// set_boost_expires_at on buyBoost; default 0 = never boosted =
+    /// the spawn gate sees `now >= 0` and skips the halve. End-of-
+    /// struct + const-default i64 keeps the publish additive.
+    #[default(0i64)]
+    pub boost_expires_at_micros: i64,
+
+    /// Phase 6.11 — Today's customer-served + customer-lost counts,
+    /// mirrored at the same 5s cadence as the revenue/expense pair via
+    /// sync_cloud_daily_totals. Lets the visit-mode overlay + the
+    /// leaderboard surface accurate "today" totals between the host's
+    /// autosave windows (which only fire on day rollover / beforeunload).
+    /// Reset alongside cloud_daily_revenue_cents on day rollover. End-
+    /// of-struct + const-default u32 keeps the publish additive.
+    #[default(0u32)]
+    pub cloud_daily_served: u32,
+    #[default(0u32)]
+    pub cloud_daily_lost: u32,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

@@ -17,7 +17,7 @@ use crate::tables::{
     dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
     placed_furniture, player, player_save, recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, staff_actor,
+    restaurant_tick_state, staff_actor, weather_state,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
     RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
@@ -151,6 +151,51 @@ fn is_leaving_state(s: &str) -> bool {
 /// mirror state the client produces. See H.19.
 fn is_waiting_state(s: &str) -> bool {
     matches!(s, "waiting" | "waitingForSeat")
+}
+
+/// Phase 6.2 — server-side weather tip multiplier, in x100 units.
+/// Mirrors the WEATHER_KINDS catalog in src/game/WeatherSystem.ts
+/// (sunny / cloudy = 1.0×, festival = 1.25×, etc.). Used by
+/// accumulate_pending_visit_rollup so backgrounded-tab tips track the
+/// same +25% festival or +20% cold-snap bump the foreground client
+/// applies via this.game.weather.getCurrent().tipMultiplier. Unknown
+/// kinds default to 1.0× — same fallback as the client's lookup.
+///
+/// Keep these constants in lockstep with WeatherSystem.ts. The
+/// numbers are intentionally small (1.0 → 1.25) so a drift between
+/// the two only shows up as a few percent in tip totals.
+fn weather_tip_mult_x100(kind: &str) -> i64 {
+    match kind {
+        "sunny" | "cloudy" | "rainy" => 100,
+        "heavy-rain" => 110,
+        "festival" => 125,
+        "cold" => 120,
+        "snowy" => 115,
+        _ => 100,
+    }
+}
+
+/// Phase 6.5 — server-side weather spawn-rate multiplier, in x100
+/// units. Mirrors WEATHER_KINDS[*].spawnRateMultiplier exactly. The
+/// FOREGROUND client multiplies its spawn INTERVAL by this value —
+/// higher = longer cooldown = SLOWER spawns. Rainy / snowy weather
+/// pulls the rate down (people stay home); festival speeds it up.
+/// Used by try_server_spawn_guest so offline simulation tracks the
+/// same weather effect — without this, a player who closes their tab
+/// during a festival window misses the spawn bump.
+///
+/// Mapping straight from src/game/WeatherSystem.ts WEATHER_KINDS.
+/// Unknown kinds default to 1.0× (no weather effect).
+fn weather_spawn_mult_x100(kind: &str) -> i64 {
+    match kind {
+        "sunny" | "cloudy" => 100,
+        "rainy" => 180,
+        "heavy-rain" => 260,
+        "festival" => 65,
+        "cold" => 140,
+        "snowy" => 190,
+        _ => 100,
+    }
 }
 
 /// Interval the simulation ticks at, in microseconds. 100 ms = 10 Hz —
@@ -456,22 +501,99 @@ pub fn restaurant_tick(
 /// Pops as many full days as have elapsed into pending_days_advanced
 /// so a multi-hour backgrounded session correctly accrues a stack of
 /// rollovers when the client reconnects.
+///
+/// Phase 7.4 — Also debits rent from cloud_money_cents for each day
+/// that rolls over while the owner is OFFLINE. Mirrors
+/// Game.rolloverDay's `if (dayNumber > RENT_GRACE_DAYS) forceSpend`
+/// branch so cloud cash matches what the foreground would have paid.
+/// On reconnect the client's applyPendingDayAdvancement skips the
+/// rent debit (chargeRent=false) since the server already paid it,
+/// avoiding the cash-jolt-down on reload.
 fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
+    /// Daily rent in cents per luxury tier. Mirrors RENT_BY_TIER in
+    /// src/game/Game.ts (×100 to keep integer math here).
+    const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
+    /// Mirrors RENT_GRACE_DAYS in Game.ts — days 1..GRACE are free.
+    const RENT_GRACE_DAYS: u32 = 30;
+    /// Owner-offline window. Mirrors the 30s pingPresence threshold.
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
+
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
     let mut elapsed = r.day_elapsed_ms.saturating_add(dt_ms);
     let mut pending = r.pending_days_advanced;
+    let mut rent_to_charge_cents: i64 = 0;
+    // We need the player's current day + tier to know whether rent
+    // applies and how much. Owner-online check gates the rent debit;
+    // foreground client handles its own rolloverDay rent path online.
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    let save = ctx.db.player_save().identity().find(r.owner);
+    let base_day_number = save.as_ref().map(|s| s.day_number).unwrap_or(1);
+    let luxury_tier = save.as_ref().map(|s| s.luxury_tier as usize).unwrap_or(1).min(5).max(1);
+    let rent_per_day_cents = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
+
+    let mut day_rolled = false;
     while elapsed >= DAY_LENGTH_MS {
         elapsed -= DAY_LENGTH_MS;
         pending = pending.saturating_add(1);
+        day_rolled = true;
+        // The day that JUST ENDED is base_day_number + (pending - 1).
+        // base_day_number is the day the client last persisted; each
+        // pending bump represents another day completed since then.
+        // Charge rent IFF offline AND day > GRACE.
+        if !owner_online {
+            let ended_day = base_day_number.saturating_add(pending).saturating_sub(1);
+            if ended_day > RENT_GRACE_DAYS {
+                rent_to_charge_cents = rent_to_charge_cents.saturating_add(rent_per_day_cents);
+            }
+        }
     }
-    if elapsed == r.day_elapsed_ms && pending == r.pending_days_advanced {
+    if elapsed == r.day_elapsed_ms
+        && pending == r.pending_days_advanced
+        && rent_to_charge_cents == 0
+    {
         return; // no change worth a write
     }
+    // Phase 7.6 — Reset the daily-totals mirrors when the server
+    // detects a day rollover so today's numbers don't accumulate
+    // forever (and so visitors / leaderboard see "today" reset at
+    // midnight). Foreground client zeros them locally + pushes via
+    // syncCloudDailyTotals, but only when ONLINE — offline rollovers
+    // would otherwise keep adding to yesterday's totals indefinitely.
+    // Reset daily counters when a day rolls over. Rent that fires for
+    // THIS rollover gets attributed to the next day's expenses (we're
+    // resetting at the moment of rollover, so the rent debit goes to
+    // the freshly-started day rather than being lost) — close enough
+    // for visit-mode parity. The cleaner attribution would need per-
+    // rollover tracking inside the loop above.
+    let (new_daily_rev, new_daily_exp, new_daily_served, new_daily_lost) = if day_rolled {
+        (0i64, rent_to_charge_cents, 0u32, 0u32)
+    } else {
+        (
+            r.cloud_daily_revenue_cents,
+            r.cloud_daily_expenses_cents,
+            r.cloud_daily_served,
+            r.cloud_daily_lost,
+        )
+    };
     ctx.db.restaurant().id().update(Restaurant {
         day_elapsed_ms: elapsed,
         pending_days_advanced: pending,
+        cloud_money_cents: r.cloud_money_cents.saturating_sub(rent_to_charge_cents),
+        cloud_daily_revenue_cents: new_daily_rev,
+        cloud_daily_expenses_cents: new_daily_exp,
+        cloud_daily_served: new_daily_served,
+        cloud_daily_lost: new_daily_lost,
         ..r
     });
+    if rent_to_charge_cents > 0 {
+        log::info!(
+            "tick_day_clock: rid {} debited {} cents offline rent ({} pending days)",
+            rid, rent_to_charge_cents, pending,
+        );
+    }
 }
 
 /// Phase H.32 — Client pushes its absolute current money in cents.
@@ -502,6 +624,38 @@ pub fn set_cloud_money(
     Ok(())
 }
 
+/// Phase 7.7 — Delta-based money sync. Add `delta_cents` to
+/// cloud_money_cents (negative deltas spend, positive earn). Lets
+/// server-side accumulate adds and client-side local spends coexist
+/// without overwriting each other: the client's 5s sync pushes the
+/// change-since-last-sync rather than the absolute value, so a tip
+/// the server added in the meantime survives.
+///
+/// Owner-only. Saturating arithmetic — large negative balances are
+/// allowed (player sees the debt) instead of wrapping or rejecting.
+/// No-op for delta == 0 to keep the sync loop quiet when no
+/// transactions happened.
+#[reducer]
+pub fn bump_cloud_money(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    delta_cents: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can bump cloud money".into());
+    }
+    if delta_cents == 0 {
+        return Ok(());
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.46 — Live mirror of the foreground client's per-day
 /// revenue + expense totals (cents).  Observational only — visitors,
 /// leaderboard, and cross-device load read these for "today's stats."
@@ -520,6 +674,11 @@ pub fn sync_cloud_daily_totals(
     restaurant_id: u64,
     revenue_cents: i64,
     expenses_cents: i64,
+    // Phase 6.11 — Today's customer-served + customer-lost counts.
+    // Same 5s cadence as revenue/expense; visitors + second devices
+    // see live values instead of save-snapshot stale ones.
+    served: u32,
+    lost: u32,
 ) -> Result<(), String> {
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
@@ -531,12 +690,16 @@ pub fn sync_cloud_daily_totals(
     }
     if r.cloud_daily_revenue_cents == revenue_cents
         && r.cloud_daily_expenses_cents == expenses_cents
+        && r.cloud_daily_served == served
+        && r.cloud_daily_lost == lost
     {
         return Ok(()); // idempotent
     }
     ctx.db.restaurant().id().update(Restaurant {
         cloud_daily_revenue_cents: revenue_cents,
         cloud_daily_expenses_cents: expenses_cents,
+        cloud_daily_served: served,
+        cloud_daily_lost: lost,
         ..r
     });
     Ok(())
@@ -1216,10 +1379,13 @@ fn append_tier_csv(existing: Option<&str>, tier: u32) -> String {
 /// (no approximation) because settleGuestDishes gates the server's
 /// settle. This rough rating is only used for backgrounded survival.
 ///
-/// Tip approximation: tipMultByRating[rating] × archetype.tipMultiplier
-/// × weatherMult — but archetype mult + weather mult require state
-/// the server doesn't carry yet, so we use 1.0× / 1.0× and only the
-/// rating-derived rate. Better than dropping all tips.
+/// Tip computation: tipMultByRating[rating] × archetype.tipMultiplier
+/// × weatherMult. Phase 6.2 wires both — archetype tip_mult_x100 from
+/// the customer_archetype catalog (seeded at boot via H.38), weather
+/// from weather_state mapped through weather_tip_mult_x100. Foreground
+/// online play still computes its own tip via finalizeVisit (this
+/// rollup is gated on owner_offline below), so the two paths stay in
+/// lockstep without double-crediting.
 fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     // Course count = entries in order_recipes CSV. Used as the avgSat
     // denominator. Skip if there are no courses recorded — a guest who
@@ -1396,7 +1562,31 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         5 => 300,
         _ => 0,
     };
-    let tip_cents = (g.total_paid_cents.saturating_mul(tip_rate_per_mille)) / 1_000;
+    // Phase 6.2 — archetype × weather tip multipliers.  Mirrors the
+    // client's `g.totalPaid * baseTipRate * g.archetype.tipMultiplier
+    // * weatherMult` formula at GuestSpawner.finalizeVisit. Both
+    // multipliers exist on the cloud already — archetype tip_mult_x100
+    // is seeded by H.38's set_customer_archetype reducer at boot;
+    // weather kind sits on weather_state and changes every ~8 minutes
+    // via the weather_roll scheduled tick. Defaults to 1.0× if the
+    // archetype row hasn't been seeded or the weather row hasn't
+    // landed yet — keeps the tip math monotonic during the brief
+    // window after a fresh restart.
+    let archetype_tip_mult_x100: i64 = ctx.db.customer_archetype()
+        .archetype_id().find(g.archetype.clone())
+        .map(|a| a.tip_mult_x100 as i64)
+        .unwrap_or(100);
+    let weather_tip_mult_x100: i64 = ctx.db.weather_state().id().find(1u32)
+        .map(|w| weather_tip_mult_x100(&w.kind))
+        .unwrap_or(100);
+    // Integer math:
+    //   tip = totalPaid × tipRatePerMille × archetypeMult × weatherMult
+    //         ÷ 1000 (rate scaling) ÷ 100 (archetype x100) ÷ 100 (weather x100)
+    // Compose in two divides to avoid an i64 overflow when totalPaid is
+    // large and both mults are at their max (≈3.0 × 1.25 = 3.75×).
+    let tip_pre_mults = g.total_paid_cents.saturating_mul(tip_rate_per_mille) / 1_000;
+    let tip_after_archetype = tip_pre_mults.saturating_mul(archetype_tip_mult_x100) / 100;
+    let tip_cents = tip_after_archetype.saturating_mul(weather_tip_mult_x100) / 100;
 
     // Read-modify-write the Restaurant row. If the row disappeared
     // (sell-mid-flight), skip silently.
@@ -1421,29 +1611,105 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     let owner_online = ctx.db.player().identity().find(r.owner)
         .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
         .unwrap_or(false);
-    let added_tip = if owner_online { 0 } else { tip_cents };
-    let added_revenue = if owner_online { 0 } else { g.total_paid_cents };
+    // Phase 7.8 — Cloud writes ALWAYS fire. The foreground client no
+    // longer credits tip/revenue/rating locally (creditCourse,
+    // finalizeVisit, applyAngryLeave all skip those calls when
+    // serverOwnsGuestStates is on); the server's accumulate is the
+    // ONLY writer for cloud_money_cents from visit completion. The
+    // delta-based cloud_money sync (Phase 7.7) carries the change to
+    // the foreground client via subscription.
+    let added_tip = tip_cents;
+    let added_revenue = g.total_paid_cents;
+    // angry-leave signal: guest left with no course credited. See
+    // Phase 6.4 + 6.4-fix discussion for the total_paid_cents == 0
+    // discriminator. Stays gated on `pending_active` below so the
+    // PENDING_LOST counter only bumps for despawns the foreground
+    // client didn't account for.
+    let is_angry_leave: bool = g.total_paid_cents == 0;
+    // Phase 7.8 — Pending counter writes are gated on `!dishes_settled`
+    // (which the foreground client sets via markGuestDishesSettled
+    // before despawn). For online play, dishes_settled=true on every
+    // despawn → pending_* stays at 0 → reconnect drain is a no-op
+    // for these guests. For offline play (or any path where the
+    // foreground didn't run), dishes_settled=false → pending_*
+    // accrues as before for reconnect drain.
+    let pending_active = !g.dishes_settled;
+    let pending_tip = if pending_active { added_tip } else { 0 };
+    let pending_revenue = if pending_active { added_revenue } else { 0 };
+    let pending_lost_inc: u32 = if pending_active && is_angry_leave { 1 } else { 0 };
+    let pending_served_inc: u32 = if pending_active { 1 } else { 0 };
+    let pending_rating_sum_inc = if pending_active { rating as i64 * 100 } else { 0 };
+    let pending_rating_count_inc: u32 = if pending_active { 1 } else { 0 };
+    // cloud_daily_lost still mirrors the same "no course credited"
+    // signal so visitors see angry-leave counts climb in real time
+    // regardless of whether dishes_settled is true.
+    let added_daily_lost: u32 = if is_angry_leave { 1 } else { 0 };
+    // Kept for the log line + legacy parity with the surrounding
+    // variable name. `owner_online` was the pre-7.8 gate.
+    let _ = owner_online;
+
+    // Phase 7.1 — Rating cloud-canonical. When the owner is OFFLINE,
+    // we append the just-computed rating directly to
+    // cloud_rating_history_csv so the foreground client can hydrate
+    // its ReputationSystem straight from the CSV on reconnect —
+    // without the legacy "drain pending_rating × N → recordRating(avg)
+    // N times" loop that slammed the local rating after every long
+    // offline period. Foreground (owner_online=true) skips this path
+    // because Game.reputation.recordRating already pushes the freshly
+    // computed rating via setCloudRatingHistory, and the cloud CSV is
+    // already authoritative there.
+    //
+    // Capped at MAX_RATING_HISTORY_ENTRIES (matches the client's
+    // maxRatingHistory in ReputationSystem.ts) so the column stays
+    // under the 1KB target. The cap acts as a sliding window: we drop
+    // the oldest entry when the list exceeds the cap, mirroring the
+    // client's `.slice(-maxRatingHistory)` behaviour.
+    const MAX_RATING_HISTORY_ENTRIES: usize = 500;
+    // Phase 7.8 — Always append. The foreground client no longer
+    // calls recordRating locally for visits (Phase 7.8 step 3); the
+    // cloud_rating_history_csv subscription handler picks up our
+    // append and hydrates the local ratingHistory within ~50ms.
+    let next_rating_csv: Option<String> = {
+        let prev = r.cloud_rating_history_csv.as_deref().unwrap_or("");
+        let mut entries: Vec<&str> = if prev.is_empty() {
+            Vec::new()
+        } else {
+            prev.split(',').collect()
+        };
+        let rating_str = rating.to_string();
+        entries.push(&rating_str);
+        if entries.len() > MAX_RATING_HISTORY_ENTRIES {
+            let excess = entries.len() - MAX_RATING_HISTORY_ENTRIES;
+            entries.drain(0..excess);
+        }
+        Some(entries.join(","))
+    };
+
+    // Phase 7.8 — Cloud writes ALWAYS fire (no owner_online gate).
+    // Pending writes are gated on `pending_active` (= !dishes_settled).
+    let added_daily_revenue = added_tip.saturating_add(added_revenue);
+    let added_daily_served: u32 = 1;
 
     ctx.db.restaurant().id().update(Restaurant {
-        pending_served: r.pending_served.saturating_add(1),
-        pending_tips_cents: r.pending_tips_cents.saturating_add(added_tip),
-        pending_revenue_cents: r.pending_revenue_cents.saturating_add(added_revenue),
-        pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(rating as i64 * 100),
-        pending_rating_count: r.pending_rating_count.saturating_add(1),
-        // H.32 — credit the offline pending totals to
-        // cloud_money_cents so other clients see the running balance
-        // climb live during a backgrounded session. When ONLINE both
-        // added_tip and added_revenue are 0 (the foreground client
-        // already credited locally + will push the updated total via
-        // syncCloudMoney), so cloud_money_cents is left untouched —
-        // no need for the previous "one-frame down/up blip" workaround
-        // now that we gate on owner_online.
+        // ── Pending counters (foreground client drains on reconnect) ──
+        pending_served: r.pending_served.saturating_add(pending_served_inc),
+        pending_tips_cents: r.pending_tips_cents.saturating_add(pending_tip),
+        pending_revenue_cents: r.pending_revenue_cents.saturating_add(pending_revenue),
+        pending_rating_sum_x100: r.pending_rating_sum_x100.saturating_add(pending_rating_sum_inc),
+        pending_rating_count: r.pending_rating_count.saturating_add(pending_rating_count_inc),
+        pending_lost: r.pending_lost.saturating_add(pending_lost_inc),
+        // ── Cloud-canonical writes (always-on; foreground client adopts
+        //    via Phase 7.7's delta sync + cloud_rating_history sub) ──
         cloud_money_cents: r.cloud_money_cents.saturating_add(added_tip + added_revenue),
+        cloud_rating_history_csv: next_rating_csv,
+        cloud_daily_revenue_cents: r.cloud_daily_revenue_cents.saturating_add(added_daily_revenue),
+        cloud_daily_served: r.cloud_daily_served.saturating_add(added_daily_served),
+        cloud_daily_lost: r.cloud_daily_lost.saturating_add(added_daily_lost),
         ..r
     });
     log::info!(
-        "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents, revenue={} cents, owner_online={})",
-        g.id, g.restaurant_id, rating, added_tip, added_revenue, owner_online,
+        "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents, revenue={} cents, angry={}, pending_active={})",
+        g.id, g.restaurant_id, rating, added_tip, added_revenue, is_angry_leave, pending_active,
     );
 }
 
@@ -1500,12 +1766,19 @@ pub fn bump_pantry_stock(
     } else {
         cur.saturating_sub((-delta) as u32)
     };
-    if new_qty == 0 {
-        if existing.is_some() {
-            ctx.db.pantry_stock().key().delete(key);
-        }
-        return Ok(());
-    }
+    // Phase 7.3 — Keep the row even at quantity=0. Previously this
+    // path deleted the row outright, which made OUT ingredients
+    // invisible to try_dispatch_errand_trip (the dispatcher iterates
+    // pantry_stock and never saw deleted rows → never restocked
+    // depleted ingredients → kitchen stayed empty → guests left angry
+    // offline → rating crash). The local CookingSystem.pantry keeps
+    // qty=0 entries, so matching that here also closes the
+    // server-vs-client semantics drift on stock state.
+    //
+    // The table-bloat concern (Spacetime row count) is a non-issue
+    // here: pantry_stock is bounded by the ingredient catalog size
+    // (~50 entries) per restaurant, regardless of how many
+    // restock+empty cycles run.
     let row = PantryStock {
         key,
         restaurant_id,
@@ -1949,16 +2222,16 @@ fn pantry_consume(
 ) {
     for ing in ingredients {
         let key = format!("{}:{}", restaurant_id, ing);
-        if let Some(p) = ctx.db.pantry_stock().key().find(key.clone()) {
+        if let Some(p) = ctx.db.pantry_stock().key().find(key) {
             let new_qty = p.quantity.saturating_sub(1);
-            if new_qty == 0 {
-                ctx.db.pantry_stock().key().delete(key);
-            } else {
-                ctx.db.pantry_stock().key().update(PantryStock {
-                    quantity: new_qty,
-                    ..p
-                });
-            }
+            // Phase 7.3 — Keep the row at quantity=0 (don't delete) so
+            // try_dispatch_errand_trip can see OUT ingredients and
+            // restock them. Was previously deleting at zero, which
+            // hid empties from the dispatcher.
+            ctx.db.pantry_stock().key().update(PantryStock {
+                quantity: new_qty,
+                ..p
+            });
         }
     }
 }
@@ -2097,13 +2370,23 @@ fn try_restock_pantry(
         }
     }
     if restocked_count == 0 { return; }
-    // Roll up the cost onto the restaurant row so the next foreground
-    // reconnect can debit the player.
+    // Roll up the cost onto the restaurant row.
+    //
+    // Phase 7.5 — Also deduct from cloud_money_cents directly so the
+    // live cloud balance reflects the cost paid. Client's reconnect
+    // drain (Engine.ts H.41) still consumes pending_restock_cost_cents
+    // to clear it, but the forceSpendMoney debit is gated to avoid
+    // double-charging now that the cloud value is already accurate.
     if accrued_cents > 0 {
         if let Some(r) = ctx.db.restaurant().id().find(restaurant_id) {
             let new_total = r.pending_restock_cost_cents.saturating_add(accrued_cents);
+            let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(accrued_cents);
+            // Phase 7.6 — track restock expense in today's daily total.
+            let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(accrued_cents);
             ctx.db.restaurant().id().update(Restaurant {
                 pending_restock_cost_cents: new_total,
+                cloud_money_cents: new_cloud_money_cents,
+                cloud_daily_expenses_cents: new_cloud_daily_expenses,
                 ..r
             });
         }
@@ -2540,10 +2823,23 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let whole_cents = total / MICROS_PER_MINUTE;
     let new_remainder = total % MICROS_PER_MINUTE;
     let new_pending = r.pending_salary_cost_cents.saturating_add(whole_cents);
+    // Phase 7.5 — Also deduct from cloud_money_cents so the live cloud
+    // balance reflects the salary paid during this offline window.
+    // The foreground client's applyPendingSalary drain (in Engine.ts)
+    // checks for this Phase 7.5 marker and skips the local forceSpend
+    // — Phase 7.2's setMoney(cloud) on rollup drain already adopted
+    // the salary-deducted value, and forceSpending again would visibly
+    // drop cash twice on reload (the very jolt we're trying to kill).
+    let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(whole_cents);
+    // Phase 7.6 — Track salary in cloud_daily_expenses_cents so today's
+    // expense total stays accurate while the owner is offline.
+    let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(whole_cents);
     ctx.db.restaurant().id().update(Restaurant {
         pending_salary_cost_cents: new_pending,
         pending_salary_remainder_x: new_remainder,
         last_salary_tick_micros: now_micros,
+        cloud_money_cents: new_cloud_money_cents,
+        cloud_daily_expenses_cents: new_cloud_daily_expenses,
         ..r
     });
 }
@@ -2652,6 +2948,7 @@ pub fn update_restaurant_aggregates(
     comfort_x100: i32,
     rating_bonus_x100: i32,
     bathroom_quality_x100: i32,
+    attraction_bonus_x100: i32,
 ) -> Result<(), String> {
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
@@ -2661,7 +2958,8 @@ pub fn update_restaurant_aggregates(
     if r.cached_style_x100 == style_x100
         && r.cached_comfort_x100 == comfort_x100
         && r.cached_rating_bonus_x100 == rating_bonus_x100
-        && r.cached_bathroom_quality_x100 == bathroom_quality_x100 {
+        && r.cached_bathroom_quality_x100 == bathroom_quality_x100
+        && r.cached_attraction_bonus_x100 == attraction_bonus_x100 {
         return Ok(()); // idempotent
     }
     ctx.db.restaurant().id().update(Restaurant {
@@ -2669,6 +2967,37 @@ pub fn update_restaurant_aggregates(
         cached_comfort_x100: comfort_x100,
         cached_rating_bonus_x100: rating_bonus_x100,
         cached_bathroom_quality_x100: bathroom_quality_x100,
+        cached_attraction_bonus_x100: attraction_bonus_x100,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase 6.7 — Mirror the foreground client's active boost expiry to
+/// the cloud so try_server_spawn_guest can apply the same 0.5×
+/// interval halving while the owner's tab is backgrounded. Called
+/// from Game.buyBoost as a one-shot: client passes
+/// `now_micros + boost_duration_seconds × 1_000_000`.
+///
+/// Owner-only. Idempotent — pushing the same timestamp twice is a
+/// no-op. Passing 0 clears the boost early (e.g. an admin reset);
+/// the server stays in unboosted state until the next buyBoost.
+#[reducer]
+pub fn set_boost_expires_at(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    expires_at_micros: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set boost expiry".into());
+    }
+    if r.boost_expires_at_micros == expires_at_micros {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        boost_expires_at_micros: expires_at_micros,
         ..r
     });
     Ok(())
@@ -2696,12 +3025,13 @@ pub fn consume_pending_visit_rollup(
     if r.pending_served == 0
         && r.pending_tips_cents == 0
         && r.pending_revenue_cents == 0
-        && r.pending_rating_count == 0 {
+        && r.pending_rating_count == 0
+        && r.pending_lost == 0 {
         return Ok(()); // already cleared
     }
     log::info!(
-        "consume_pending_visit_rollup: clearing {} served / {} tip cents / {} revenue cents / {} ratings on restaurant {}",
-        r.pending_served, r.pending_tips_cents, r.pending_revenue_cents, r.pending_rating_count, restaurant_id,
+        "consume_pending_visit_rollup: clearing {} served / {} lost / {} tip cents / {} revenue cents / {} ratings on restaurant {}",
+        r.pending_served, r.pending_lost, r.pending_tips_cents, r.pending_revenue_cents, r.pending_rating_count, restaurant_id,
     );
     ctx.db.restaurant().id().update(Restaurant {
         pending_served: 0,
@@ -2709,6 +3039,7 @@ pub fn consume_pending_visit_rollup(
         pending_revenue_cents: 0,
         pending_rating_sum_x100: 0,
         pending_rating_count: 0,
+        pending_lost: 0,
         ..r
     });
     Ok(())
@@ -2774,6 +3105,44 @@ pub fn set_restaurant_sign_style(
         sign_font: next_font,
         sign_text_color: next_text_color,
         sign_plaque_style: next_plaque_style,
+        ..r
+    });
+    Ok(())
+}
+
+/// Phase 6.8 — Owner-only setter for the restaurant's display name.
+/// The legacy autosave path (publishCloud → save_restaurant_snapshot)
+/// also writes `Restaurant.name`, but only on day rollover /
+/// beforeunload. Players rename frequently while playing; without
+/// this reducer, the door plaque on every visitor's view of the
+/// restaurant stayed at the old name until the next autosave fired.
+///
+/// The foreground client calls this from onRestaurantSignChanged
+/// alongside set_restaurant_sign_style so the plaque text + plaque
+/// style update together in the same UI action. Owner-only.
+/// Idempotent — setting the same name twice is a no-op. Names are
+/// trimmed + capped to 28 chars (same as Game.setRestaurantSign).
+#[reducer]
+pub fn set_restaurant_name(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    name: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can rename the restaurant".into());
+    }
+    // Match Game.setRestaurantSign: trim, default empty to "Cozy
+    // Bistro", cap at 28 chars. Keeps the server-side value bounded
+    // even when the client bypasses the modal.
+    let trimmed: String = name.trim().chars().take(28).collect();
+    let next_name = if trimmed.is_empty() { "Cozy Bistro".to_string() } else { trimmed };
+    if r.name == next_name {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        name: next_name,
         ..r
     });
     Ok(())
@@ -3197,11 +3566,28 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     let Some(helper) = idle_helper else { return; };
 
     // Build shortage list. Skip ingredients already on the way.
+    //
+    // Phase 7.3 — Walk the ingredient_cost CATALOG instead of
+    // pantry_stock alone. Pre-fix, bump_pantry_stock deleted rows at
+    // quantity=0, which made completely-OUT ingredients invisible to
+    // the dispatcher (the previous loop only saw existing pantry rows
+    // → OUT ingredients had no row → never restocked → kitchen
+    // permanently empty for those ingredients). bump_pantry_stock is
+    // now fixed to keep qty=0 rows, but existing restaurants still
+    // have deleted rows from before the fix. Walking ingredient_cost
+    // (which is the seeded master catalog the client publishes at
+    // boot) closes that gap retroactively — any ingredient with no
+    // pantry row OR qty < threshold gets added to needs.
     let mut needs: Vec<(String, u32)> = Vec::new();
-    for p in ctx.db.pantry_stock().restaurant_id().filter(rid) {
-        if p.quantity >= ERRAND_RESTOCK_THRESHOLD { continue; }
-        if on_the_way.contains(&p.ingredient_id) { continue; }
-        needs.push((p.ingredient_id.clone(), ERRAND_UNITS_PER_INGREDIENT));
+    for cost in ctx.db.ingredient_cost().iter() {
+        let ing = cost.ingredient_id.clone();
+        if on_the_way.contains(&ing) { continue; }
+        let key = format!("{}:{}", rid, ing);
+        let qty = ctx.db.pantry_stock().key().find(key)
+            .map(|p| p.quantity)
+            .unwrap_or(0);
+        if qty >= ERRAND_RESTOCK_THRESHOLD { continue; }
+        needs.push((ing, ERRAND_UNITS_PER_INGREDIENT));
         if needs.len() >= ERRAND_CARRY_CAP { break; }
     }
     if needs.is_empty() { return; }
@@ -3951,16 +4337,16 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             // idempotent (and a no-op when the client already settled
             // and pushed `dishes_settled = true`).
             settle_guest_dishes(ctx, &g);
-            // H.22 — also accumulate approximate tip + star rating on
-            // the Restaurant's pending_* counters if this guest never
-            // got credited locally. Same dishes_settled gate keeps
-            // foreground guests (which run their own finalizeVisit
-            // with the full grading formula) from getting counted
-            // twice. The foreground client drains these via
-            // consume_pending_visit_rollup on connect.
-            if !g.dishes_settled {
-                accumulate_pending_visit_rollup(ctx, &g);
-            }
+            // Phase 7.8 — accumulate runs for EVERY despawn. The
+            // function's internal `pending_active = !dishes_settled`
+            // gate keeps the pending_* counters off when the
+            // foreground client already accounted for the visit
+            // locally, while the cloud-canonical writes
+            // (cloud_money_cents, cloud_rating_history_csv, daily
+            // mirrors) always fire so visitors see live updates and
+            // the host's local economy adopts via the Phase 7.7
+            // delta subscription handler.
+            accumulate_pending_visit_rollup(ctx, &g);
             ctx.db.active_guest().id().delete(g.id);
             return;
         }
@@ -4701,8 +5087,41 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
         return;
     }
 
+    // Phase 6.5 — weather-adjusted interval. Foreground client
+    // multiplies SPAWN_INTERVAL_SECONDS by spawnRateMultiplier so the
+    // SAME windows here should: rainy 1.8× slower, festival 0.65×
+    // faster. Without this, a tab closed during a festival window
+    // misses the rate bump until the player reconnects. Multiplier
+    // is x100, applied as `interval × mult / 100`.
+    let weather_mult_x100 = ctx.db.weather_state().id().find(1u32)
+        .map(|w| weather_spawn_mult_x100(&w.kind))
+        .unwrap_or(100);
+    // Phase 6.6 — attraction-adjusted interval. Client formula:
+    //   attractionMult = max(0.35, 1 - min(0.65, attraction × 0.015))
+    // attraction is a raw count (typically 0..50); ×100 form has it
+    // pre-scaled, so the inner `attraction × 0.015` becomes
+    // `attraction_x100 × 15 / 100_000` = `attraction_x100 × 15 / 10000`.
+    // Result is also x100 (e.g. 0.5 → 50). Cap at 35 (= 0.35×).
+    let attraction_x100 = rest.cached_attraction_bonus_x100 as i64;
+    let attraction_inner_x100 = (attraction_x100.saturating_mul(15) / 10_000).min(65);
+    let attraction_mult_x100 = (100 - attraction_inner_x100).max(35);
     let now_micros = now.to_micros_since_unix_epoch();
-    if now_micros - rest.last_guest_spawn_micros < SERVER_SPAWN_INTERVAL_MICROS {
+    // Phase 6.7 — paid-boost halving. Foreground client multiplies
+    // its interval by 0.5 while a boost is active; mirror that here so
+    // the player gets the spawns they paid for even with their tab
+    // backgrounded. boost_expires_at_micros == 0 (default) means
+    // "never boosted", which naturally fails the now < expiry check.
+    let boost_mult_x100: i64 = if now_micros < rest.boost_expires_at_micros { 50 } else { 100 };
+    // Combined multiplier: interval × weather × attraction × boost.
+    // Each is x100 so we divide by 100 three times — saturating to keep
+    // any single big factor from underflowing the cap.
+    let weather_adjusted = SERVER_SPAWN_INTERVAL_MICROS
+        .saturating_mul(weather_mult_x100) / 100;
+    let attraction_adjusted = weather_adjusted
+        .saturating_mul(attraction_mult_x100) / 100;
+    let adjusted_interval = attraction_adjusted
+        .saturating_mul(boost_mult_x100) / 100;
+    if now_micros - rest.last_guest_spawn_micros < adjusted_interval {
         return;
     }
 

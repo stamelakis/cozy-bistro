@@ -12,9 +12,5 @@ import {
 
 export default {
   restaurantId: __t.u64(),
-  styleX100: __t.i32(),
-  comfortX100: __t.i32(),
-  ratingBonusX100: __t.i32(),
-  bathroomQualityX100: __t.i32(),
-  attractionBonusX100: __t.i32(),
+  name: __t.string(),
 };

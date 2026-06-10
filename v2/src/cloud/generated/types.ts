@@ -390,6 +390,11 @@ export const Restaurant = __t.object("Restaurant", {
   signFont: __t.option(__t.string()),
   signTextColor: __t.option(__t.string()),
   signPlaqueStyle: __t.option(__t.string()),
+  pendingLost: __t.u32(),
+  cachedAttractionBonusX100: __t.i32(),
+  boostExpiresAtMicros: __t.i64(),
+  cloudDailyServed: __t.u32(),
+  cloudDailyLost: __t.u32(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

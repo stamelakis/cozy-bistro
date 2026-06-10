@@ -22,6 +22,35 @@ export class EconomySystem {
   cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
   private transactionLogDirty = false;
 
+  /** Phase 7.7 — Baseline for delta-based cloud money sync. The
+   * Engine.update tick pushes (local - lastSyncedCents) to the server
+   * as a DELTA, then advances this to match. Lets server-side
+   * accumulate adds (tips/revenue/etc.) coexist with client-side
+   * spends without either side overwriting the other.
+   *
+   * Initialized to 0 on construction; load() restores it from the
+   * cloud row on hydrate so the first sync after reconnect doesn't
+   * fire a spurious "I just earned $1M" delta. Subscription handlers
+   * for cloud_money_cents updates also advance this in lockstep with
+   * the local money mutation so server-driven adds don't generate a
+   * second copy on the next push. */
+  private lastSyncedCents = 0;
+
+  /** Phase 7.7 — Caller informs the sync system that money has been
+   * synced (in either direction) and the local↔cloud delta is now 0.
+   * Engine.update's 5s sync calls this after firing bumpCloudMoney.
+   * The Restaurant subscription handler calls it after adopting a
+   * server-side cloud_money_cents update into local. */
+  noteSyncedCents(cents: number): void {
+    this.lastSyncedCents = cents;
+  }
+
+  /** Phase 7.7 — Read the last-synced baseline. Engine.update uses
+   * (local * 100) - lastSyncedCents to compute the delta to push. */
+  getLastSyncedCents(): number {
+    return this.lastSyncedCents;
+  }
+
   constructor(startingMoney = 0) {
     // Default is 0 because the Engine's enterGame flow grants the
     // size-specific starter cash on first claim (small=$1000,
@@ -98,6 +127,22 @@ export class EconomySystem {
 
   getDailyExpenses(): number {
     return this.dailyExpensesTotal;
+  }
+
+  /** Phase 7.8 — Adopt cloud_daily_revenue_cents as the local truth.
+   * Server's accumulate_pending_visit_rollup writes the canonical
+   * value on every despawn; the cloud subscription handler calls
+   * this so the HUD + leaderboard read the server's "today" number
+   * instead of a syncCloudDailyTotals-stale local one. Clamped >= 0. */
+  setDailyRevenue(amount: number): void {
+    this.dailyRevenueTotal = Math.max(0, amount);
+  }
+
+  /** Phase 7.8 — Same for expenses. Mirrors tick_offline_salary,
+   * tick_day_clock rent, and try_restock_pantry which all bump
+   * cloud_daily_expenses_cents directly server-side. */
+  setDailyExpenses(amount: number): void {
+    this.dailyExpensesTotal = Math.max(0, amount);
   }
 
   /** Undo part of a prior expense without crediting it as new revenue (e.g. cancelled order refund). */

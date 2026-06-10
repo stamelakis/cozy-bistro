@@ -14,4 +14,6 @@ export default {
   restaurantId: __t.u64(),
   revenueCents: __t.i64(),
   expensesCents: __t.i64(),
+  served: __t.u32(),
+  lost: __t.u32(),
 };

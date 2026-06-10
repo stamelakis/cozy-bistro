@@ -50,6 +50,15 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         sign_font: None,
         sign_text_color: None,
         sign_plaque_style: None,
+        // Phase 6.4 — offline angry-leave counter.
+        pending_lost: 0,
+        // Phase 6.6 — furniture attraction cached for server spawn rate.
+        cached_attraction_bonus_x100: 0,
+        // Phase 6.7 — boost expiry (0 = never boosted).
+        boost_expires_at_micros: 0,
+        // Phase 6.11 — daily customer counts mirror.
+        cloud_daily_served: 0,
+        cloud_daily_lost: 0,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,

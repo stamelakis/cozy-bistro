@@ -80,6 +80,30 @@ export interface BuildPerimeterWallOptions {
   receiveShadow?: boolean;
 }
 
+/** Camera-relative kind ("solid" or "ghost") for a single wall —
+ * returns "ghost" when the camera is on the wall's outdoor side
+ * (positive dot with the outward normal). Shared with the host's
+ * WorldScene.updateWallVisibility logic so visit mode + host pick the
+ * same two walls to ghost from any given camera angle.
+ *
+ * cameraPos is the camera's position EXPRESSED IN THE PLOT'S LOCAL
+ * COORDS — visit mode subtracts the plot offset before calling.
+ * (The host's plot is at world origin, so cameraPos works as-is.) */
+export function wallKindForCamera(
+  dir: WallDir,
+  cameraPos: { x: number; z: number },
+): "solid" | "ghost" {
+  // Outward normal for each wall. Building is centred on (0.5, 0.5)
+  // but the perimeter walls sit at ±4.5/5.5 with the +0.5 shift; the
+  // normal direction is the same regardless.
+  const normal = dir === "back" ? { x: 0, z: -1 }
+    : dir === "front" ? { x: 0, z: 1 }
+    : dir === "left" ? { x: -1, z: 0 }
+    : { x: 1, z: 0 };
+  const dot = normal.x * cameraPos.x + normal.z * cameraPos.z;
+  return dot > 0 ? "ghost" : "solid";
+}
+
 /** Build wall segments around the supplied openings into `parent`.
  * Returns the created meshes (host calls this to track for teardown;
  * visit mode tosses them when the visitor root is disposed).

@@ -49,4 +49,9 @@ export default __t.row({
   signFont: __t.option(__t.string()).name("sign_font"),
   signTextColor: __t.option(__t.string()).name("sign_text_color"),
   signPlaqueStyle: __t.option(__t.string()).name("sign_plaque_style"),
+  pendingLost: __t.u32().name("pending_lost"),
+  cachedAttractionBonusX100: __t.i32().name("cached_attraction_bonus_x100"),
+  boostExpiresAtMicros: __t.i64().name("boost_expires_at_micros"),
+  cloudDailyServed: __t.u32().name("cloud_daily_served"),
+  cloudDailyLost: __t.u32().name("cloud_daily_lost"),
 });
