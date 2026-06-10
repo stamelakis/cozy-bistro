@@ -632,6 +632,13 @@ export class Engine {
     this.signModal = new RestaurantSignModal(container, this.game);
     this.game.onRestaurantSignChanged = (name, style) => {
       this.scene.setRestaurantSign(name, style);
+      // Push the style to cloud so visit mode renders the same plaque
+      // styling (font / textColor / plaqueStyle). The restaurant name
+      // itself piggybacks on the existing Restaurant.name column;
+      // RestaurantSignModal already keeps that in sync via
+      // Game.setRestaurantSign → cloud save path. This call covers
+      // the per-player style picks that weren't on the schema before.
+      this.cloud.setRestaurantSignStyle(style);
     };
     this.scene.setRestaurantSign(this.game.getRestaurantName(), this.game.getRestaurantSignStyle());
     // Click listener — raycast against the plaque mesh; pop the modal

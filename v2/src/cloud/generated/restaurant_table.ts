@@ -46,4 +46,7 @@ export default __t.row({
   lastGuestSpawnMicros: __t.i64().name("last_guest_spawn_micros"),
   pendingRevenueCents: __t.i64().name("pending_revenue_cents"),
   themeOverridesCsv: __t.option(__t.string()).name("theme_overrides_csv"),
+  signFont: __t.option(__t.string()).name("sign_font"),
+  signTextColor: __t.option(__t.string()).name("sign_text_color"),
+  signPlaqueStyle: __t.option(__t.string()).name("sign_plaque_style"),
 });

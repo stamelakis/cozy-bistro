@@ -153,46 +153,96 @@ export function isLampDefId(defId: string): boolean {
   return LAMP_DEF_IDS.has(defId);
 }
 
-/** Build a front-door rating sign: dark plaque frame, canvas-painted
- * name face, 5 placeholder rating stars below. Mounted above the
- * front door at (0, 2.55, 5.625) — same coords the host uses in
+/** Catalog lookups for the sign style choices. Match the host's
+ * FONT_FAMILIES / TEXT_COLORS / PLAQUE_BG / PLAQUE_FRAME tables in
+ * WorldScene.ts. Visit mode looks them up here when applying the
+ * cloud-stored picks so the plaque renders the same way the host
+ * shows it. Unknown values fall through to the first entry. */
+const SIGN_FONT_CSS: Record<string, string> = {
+  serif:   'Georgia, "Times New Roman", serif',
+  sans:    '"Helvetica Neue", Arial, sans-serif',
+  display: '"Cormorant Garamond", Georgia, serif',
+  script:  '"Brush Script MT", "Snell Roundhand", cursive',
+  mono:    '"JetBrains Mono", "Courier New", monospace',
+};
+const SIGN_TEXT_HEX: Record<string, string> = {
+  cream:  "#f0d8a8",
+  gold:   "#f5c14a",
+  white:  "#fafafa",
+  black:  "#101010",
+  navy:   "#1a2a4a",
+};
+const SIGN_BG_HEX: Record<string, string> = {
+  dark:   "#3a2a20",
+  cream:  "#f6efde",
+  brass:  "#9a7a3a",
+  red:    "#5a1a1a",
+  blue:   "#1a2a5a",
+};
+const SIGN_FRAME_HEX: Record<string, number> = {
+  dark:   0x2a1f17,
+  cream:  0xa0937c,
+  brass:  0x6a5028,
+  red:    0x3a1010,
+  blue:   0x10204a,
+};
+
+/** Optional sign styling — font / text colour / plaque style ids
+ * the player picked in RestaurantSignModal. Unknown values fall back
+ * to the catalog default ("serif" / "cream" / "dark"). */
+export interface RatingSignStyle {
+  font: string;
+  textColor: string;
+  plaqueStyle: string;
+}
+
+/** Build a front-door rating sign: framed plaque + canvas-painted
+ * name face + 5 rating stars below. Mounted above the front door at
+ * (0, 2.55, 5.625) — same coords the host uses in
  * WorldScene.buildRatingSign.
  *
- * Simplified vs. the host: uses the catalog-default styling (serif
- * font on a dark plaque with cream text) since the host's per-player
- * sign-style (font / textColor / plaqueStyle) isn't on the cloud
- * Restaurant row yet. A schema migration for those three fields would
- * let visit mode mirror the chosen style exactly; for now the sign
- * shows the right NAME with default trim. Stars render unlit (slate
- * grey) since `cached_rating_bonus_x100` is decor-only and doesn't
- * carry the visit-rated average. */
-export function buildRatingSign(parent: THREE.Object3D, restaurantName: string): void {
-  // Frame: dark backplate.
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a1f17, roughness: 0.7 });
+ * Style + rating are mirrored from the cloud so visit mode renders
+ * the plaque exactly the way the host shows it. `rating` is the
+ * average star count (0..5, fractional ok — round-half-up to pick
+ * which stars are lit). Unknown style ids fall back to the catalog
+ * default. */
+export function buildRatingSign(
+  parent: THREE.Object3D,
+  restaurantName: string,
+  style: RatingSignStyle = { font: "serif", textColor: "cream", plaqueStyle: "dark" },
+  rating = 0,
+): void {
+  const frameHex = SIGN_FRAME_HEX[style.plaqueStyle] ?? SIGN_FRAME_HEX.dark;
+  const bgHex = SIGN_BG_HEX[style.plaqueStyle] ?? SIGN_BG_HEX.dark;
+  const textHex = SIGN_TEXT_HEX[style.textColor] ?? SIGN_TEXT_HEX.cream;
+  const fontCss = SIGN_FONT_CSS[style.font] ?? SIGN_FONT_CSS.serif;
+
+  // Frame: themed backplate behind the face.
+  const frameMat = new THREE.MeshStandardMaterial({ color: frameHex, roughness: 0.7 });
   const frame = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.70, 0.04), frameMat);
   frame.position.set(0, 2.55, 5.625);
   frame.castShadow = true;
   parent.add(frame);
 
-  // Face: canvas-painted name on a CanvasTexture.
+  // Face: canvas-painted name on a CanvasTexture, with the host's
+  // plaque-style background + textColor accent.
   const canvas = document.createElement("canvas");
   canvas.width = 768;
   canvas.height = 320;
   const ctx = canvas.getContext("2d");
   if (ctx) {
-    // Default plaque: dark background + cream accent.
-    ctx.fillStyle = "#3a2a20";
+    ctx.fillStyle = bgHex;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "#f0d8a8";
+    ctx.strokeStyle = textHex;
     ctx.lineWidth = 6;
     ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
-    ctx.fillStyle = "#f0d8a8";
+    ctx.fillStyle = textHex;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    // Auto-fit font size for long names.
+    const fontWeight = style.font === "display" ? "900" : "700";
     let size = 140;
     do {
-      ctx.font = `700 ${size}px Georgia, "Times New Roman", serif`;
+      ctx.font = `${fontWeight} ${size}px ${fontCss}`;
       if (ctx.measureText(restaurantName).width < canvas.width - 100) break;
       size -= 6;
     } while (size > 40);
@@ -206,15 +256,19 @@ export function buildRatingSign(parent: THREE.Object3D, restaurantName: string):
   face.position.set(0, 2.55, 5.65);
   parent.add(face);
 
-  // 5 small rating stars below the plaque. Unlit (slate) since visit
-  // mode doesn't have access to the host's live rating. Geometry +
-  // spacing match WorldScene.buildRatingSign so the sign reads the
-  // same shape as the host's.
+  // 5 rating stars below the plaque. Lit (gold + emissive) for each
+  // integer star ≤ round(rating); off (slate) otherwise. Matches the
+  // host's updateRatingSign which rounds half-up to whole stars.
+  const litCount = Math.max(0, Math.min(5, Math.round(rating)));
+  const litMat = new THREE.MeshStandardMaterial({
+    color: 0xf5c14a, roughness: 0.4, metalness: 0.4,
+    emissive: 0xf5c14a, emissiveIntensity: 0.5,
+  });
   const offMat = new THREE.MeshStandardMaterial({ color: 0x474039, roughness: 0.85 });
   for (let i = 0; i < 5; i += 1) {
-    const star = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), offMat);
+    const mat = i < litCount ? litMat : offMat;
+    const star = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), mat);
     star.position.set(-0.4 + i * 0.2, 2.10, 5.660);
-    star.rotation.y = 0;
     parent.add(star);
   }
 }

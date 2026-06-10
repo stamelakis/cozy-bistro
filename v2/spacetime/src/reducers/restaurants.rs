@@ -47,6 +47,9 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         // default. Foreground client fires set_restaurant_theme_overrides
         // whenever the player picks a non-default theme in DecorModal.
         theme_overrides_csv: None,
+        sign_font: None,
+        sign_text_color: None,
+        sign_plaque_style: None,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,

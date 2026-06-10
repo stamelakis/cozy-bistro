@@ -2741,6 +2741,44 @@ pub fn set_restaurant_theme_overrides(
     Ok(())
 }
 
+/// Visit-mode rating-sign style parity — owner-only setter for the
+/// three sign-style fields. Fired by the foreground client whenever
+/// the player saves a new name + style in the RestaurantSignModal so
+/// visit mode renders the plaque exactly the way the host sees it.
+/// Empty strings clear back to None (catalog default kicks in).
+#[reducer]
+pub fn set_restaurant_sign_style(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    font: String,
+    text_color: String,
+    plaque_style: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set sign style".into());
+    }
+    let opt = |s: String| -> Option<String> {
+        if s.trim().is_empty() { None } else { Some(s) }
+    };
+    let next_font = opt(font);
+    let next_text_color = opt(text_color);
+    let next_plaque_style = opt(plaque_style);
+    if r.sign_font == next_font
+        && r.sign_text_color == next_text_color
+        && r.sign_plaque_style == next_plaque_style {
+        return Ok(()); // idempotent
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        sign_font: next_font,
+        sign_text_color: next_text_color,
+        sign_plaque_style: next_plaque_style,
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.21 — server-side dishwasher loader. Best-effort survival
 /// path: per tick, push at most one dirty piece into a free
 /// dishwasher's batch so the existing H.4 cycle countdown can wash

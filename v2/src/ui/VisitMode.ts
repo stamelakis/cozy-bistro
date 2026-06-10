@@ -909,7 +909,13 @@ export class VisitMode {
     const themeCsv = this.cloud?.getRestaurantThemeOverridesByOwnerHex(plot.ownerHex) ?? "";
     const themesByFloor = parseThemeOverridesCsv(themeCsv);
     const restaurantName = this.cloud?.getRestaurantNameByOwnerHex(plot.ownerHex) ?? "Cozy Bistro";
-    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements, themesByFloor, restaurantName);
+    const signStyle = this.cloud?.getRestaurantSignStyleByOwnerHex(plot.ownerHex)
+      ?? { font: "serif", textColor: "cream", plaqueStyle: "dark" };
+    const rating = this.cloud?.getRestaurantRatingByOwnerHex(plot.ownerHex) ?? 0;
+    this.buildInteriorShell(
+      root, expansionLevel, wallSourcePlacements, themesByFloor,
+      restaurantName, signStyle, rating,
+    );
 
     // H.A — Wire visualizers that need a scene-mount and/or
     // furniture-position resolver. SeatPlate plates need a per-floor
@@ -1300,6 +1306,8 @@ export class VisitMode {
     placements: readonly OpeningSourcePlacement[],
     themesByFloor: Map<number, RestaurantTheme>,
     restaurantName: string,
+    signStyle: { font: string; textColor: string; plaqueStyle: string },
+    rating: number,
   ): void {
     const W = 10;
     // Per-storey materials cloned from the picked theme. Themes carry
@@ -1400,11 +1408,14 @@ export class VisitMode {
     buildParisExteriorDecor(root, maxStoreys);
 
     // Front-door rating sign with the visited restaurant's name +
-    // 5 placeholder stars. Style mirrors the host's catalog-default
-    // (serif font on dark plaque with cream text); a richer parity
-    // pass would mirror the host's chosen plaqueStyle / textColor /
-    // font, but those aren't on the cloud schema yet.
-    buildRatingSign(root, restaurantName);
+    // host's plaque style + live star rating average. All three
+    // arrive via cloud now: name from Restaurant.name, style from
+    // the three sign_* fields (foreground client pushes via
+    // setRestaurantSignStyle on every RestaurantSignModal save),
+    // rating from cloud_rating_history_csv (foreground client pushes
+    // via setCloudRatingHistory on every recordRating). Visit mode
+    // renders the same plaque the host sees on their own door.
+    buildRatingSign(root, restaurantName, signStyle, rating);
 
     // Flat roof skipped — the Paris mansard added by
     // buildParisExteriorDecor sits at the same Y and covers the same

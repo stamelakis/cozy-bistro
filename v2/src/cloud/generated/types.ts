@@ -387,6 +387,9 @@ export const Restaurant = __t.object("Restaurant", {
   lastGuestSpawnMicros: __t.i64(),
   pendingRevenueCents: __t.i64(),
   themeOverridesCsv: __t.option(__t.string()),
+  signFont: __t.option(__t.string()),
+  signTextColor: __t.option(__t.string()),
+  signPlaqueStyle: __t.option(__t.string()),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

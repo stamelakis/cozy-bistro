@@ -446,6 +446,20 @@ pub struct Restaurant {
     /// is additive (Option<String> + default None — H.93-safe).
     #[default(None::<String>)]
     pub theme_overrides_csv: Option<String>,
+
+    /// Visit-mode parity for the front-door rating sign. Host fires
+    /// set_restaurant_sign_style whenever the player saves a new
+    /// name + style; visit mode reads these so the plaque on a
+    /// visited restaurant matches the host's picked font / colour /
+    /// frame style. All three Option<String> with default None — the
+    /// catalog default ("serif" / "cream" / "dark") kicks in when
+    /// any field is missing.
+    #[default(None::<String>)]
+    pub sign_font: Option<String>,
+    #[default(None::<String>)]
+    pub sign_text_color: Option<String>,
+    #[default(None::<String>)]
+    pub sign_plaque_style: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

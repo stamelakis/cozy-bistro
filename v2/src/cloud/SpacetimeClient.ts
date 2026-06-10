@@ -1631,6 +1631,66 @@ export class SpacetimeClient {
     }
   }
 
+  /** Visit-mode rating-sign style parity — push the per-player sign
+   * style picks (font / textColor / plaqueStyle) to the cloud
+   * Restaurant row. Fires from Engine's onRestaurantSignChanged hook
+   * on every setRestaurantSign call. Idempotent server-side. */
+  setRestaurantSignStyle(style: { font: string; textColor: string; plaqueStyle: string }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setRestaurantSignStyle({
+        restaurantId: this.restaurantId,
+        font: style.font,
+        textColor: style.textColor,
+        plaqueStyle: style.plaqueStyle,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setRestaurantSignStyle failed:", e);
+    }
+  }
+
+  /** Visit-mode rating-sign style parity — read the visited
+   * restaurant's sign style from the subscribed Restaurant row.
+   * Falls back to the catalog default ("serif" / "cream" / "dark")
+   * for any unset field. */
+  getRestaurantSignStyleByOwnerHex(ownerHex: string): { font: string; textColor: string; plaqueStyle: string } {
+    const fallback = { font: "serif", textColor: "cream", plaqueStyle: "dark" };
+    if (!this.conn) return fallback;
+    const target = ownerHex.toLowerCase();
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() !== target) continue;
+        return {
+          font: r.signFont ?? fallback.font,
+          textColor: r.signTextColor ?? fallback.textColor,
+          plaqueStyle: r.signPlaqueStyle ?? fallback.plaqueStyle,
+        };
+      }
+    } catch { /* table not wired yet */ }
+    return fallback;
+  }
+
+  /** Visit-mode rating-sign rating parity — compute the visited
+   * restaurant's average star rating from the same cloud_rating_history
+   * CSV the host already pushes via setCloudRatingHistory. Returns 0
+   * when no history exists. Cap at 1..5 with round-half-up. */
+  getRestaurantRatingByOwnerHex(ownerHex: string): number {
+    if (!this.conn) return 0;
+    const target = ownerHex.toLowerCase();
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() !== target) continue;
+        const csv = r.cloudRatingHistoryCsv ?? "";
+        if (!csv) return 0;
+        const values = csv.split(",").map((s) => Number(s)).filter((n) => Number.isFinite(n));
+        if (values.length === 0) return 0;
+        const avg = values.reduce((a, b) => a + b, 0) / values.length;
+        return avg;
+      }
+    } catch { /* table not wired yet */ }
+    return 0;
+  }
+
   unregisterStaffActor(memberId: string): void {
     if (!this.conn) return;
     try { this.conn.reducers.unregisterStaffActor({ memberId }); }

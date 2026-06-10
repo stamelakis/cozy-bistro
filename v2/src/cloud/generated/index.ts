@@ -110,6 +110,7 @@ import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRecipeLevelReducer from "./set_recipe_level_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
 import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
+import SetRestaurantSignStyleReducer from "./set_restaurant_sign_style_reducer";
 import SetRestaurantThemeOverridesReducer from "./set_restaurant_theme_overrides_reducer";
 import SetWaiterRestSpotReducer from "./set_waiter_rest_spot_reducer";
 import SignUpReducer from "./sign_up_reducer";
@@ -717,6 +718,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_recipe_level", SetRecipeLevelReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),
   __reducerSchema("set_restaurant_public", SetRestaurantPublicReducer),
+  __reducerSchema("set_restaurant_sign_style", SetRestaurantSignStyleReducer),
   __reducerSchema("set_restaurant_theme_overrides", SetRestaurantThemeOverridesReducer),
   __reducerSchema("set_waiter_rest_spot", SetWaiterRestSpotReducer),
   __reducerSchema("sign_up", SignUpReducer),
