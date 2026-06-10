@@ -15,7 +15,7 @@ import {
 } from "../scene/wallBuilder";
 import {
   buildStaircaseFlight, buildSupplyCounterMesh, attachLampLight,
-  buildParisExteriorDecor,
+  buildParisExteriorDecor, buildRatingSign,
 } from "../scene/interiorPieces";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 
@@ -908,7 +908,8 @@ export class VisitMode {
     // shell builder reads wallColor + floorColor directly.
     const themeCsv = this.cloud?.getRestaurantThemeOverridesByOwnerHex(plot.ownerHex) ?? "";
     const themesByFloor = parseThemeOverridesCsv(themeCsv);
-    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements, themesByFloor);
+    const restaurantName = this.cloud?.getRestaurantNameByOwnerHex(plot.ownerHex) ?? "Cozy Bistro";
+    this.buildInteriorShell(root, expansionLevel, wallSourcePlacements, themesByFloor, restaurantName);
 
     // H.A — Wire visualizers that need a scene-mount and/or
     // furniture-position resolver. SeatPlate plates need a per-floor
@@ -1298,6 +1299,7 @@ export class VisitMode {
     expansionLevel: number,
     placements: readonly OpeningSourcePlacement[],
     themesByFloor: Map<number, RestaurantTheme>,
+    restaurantName: string,
   ): void {
     const W = 10;
     // Per-storey materials cloned from the picked theme. Themes carry
@@ -1396,6 +1398,13 @@ export class VisitMode {
     // matches the city's other Paris-style facades so the visited
     // restaurant reads as part of the same neighbourhood.
     buildParisExteriorDecor(root, maxStoreys);
+
+    // Front-door rating sign with the visited restaurant's name +
+    // 5 placeholder stars. Style mirrors the host's catalog-default
+    // (serif font on dark plaque with cream text); a richer parity
+    // pass would mirror the host's chosen plaqueStyle / textColor /
+    // font, but those aren't on the cloud schema yet.
+    buildRatingSign(root, restaurantName);
 
     // Flat roof skipped — the Paris mansard added by
     // buildParisExteriorDecor sits at the same Y and covers the same

@@ -153,6 +153,72 @@ export function isLampDefId(defId: string): boolean {
   return LAMP_DEF_IDS.has(defId);
 }
 
+/** Build a front-door rating sign: dark plaque frame, canvas-painted
+ * name face, 5 placeholder rating stars below. Mounted above the
+ * front door at (0, 2.55, 5.625) — same coords the host uses in
+ * WorldScene.buildRatingSign.
+ *
+ * Simplified vs. the host: uses the catalog-default styling (serif
+ * font on a dark plaque with cream text) since the host's per-player
+ * sign-style (font / textColor / plaqueStyle) isn't on the cloud
+ * Restaurant row yet. A schema migration for those three fields would
+ * let visit mode mirror the chosen style exactly; for now the sign
+ * shows the right NAME with default trim. Stars render unlit (slate
+ * grey) since `cached_rating_bonus_x100` is decor-only and doesn't
+ * carry the visit-rated average. */
+export function buildRatingSign(parent: THREE.Object3D, restaurantName: string): void {
+  // Frame: dark backplate.
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a1f17, roughness: 0.7 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.70, 0.04), frameMat);
+  frame.position.set(0, 2.55, 5.625);
+  frame.castShadow = true;
+  parent.add(frame);
+
+  // Face: canvas-painted name on a CanvasTexture.
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 320;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    // Default plaque: dark background + cream accent.
+    ctx.fillStyle = "#3a2a20";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#f0d8a8";
+    ctx.lineWidth = 6;
+    ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
+    ctx.fillStyle = "#f0d8a8";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    // Auto-fit font size for long names.
+    let size = 140;
+    do {
+      ctx.font = `700 ${size}px Georgia, "Times New Roman", serif`;
+      if (ctx.measureText(restaurantName).width < canvas.width - 100) break;
+      size -= 6;
+    } while (size > 40);
+    ctx.fillText(restaurantName, canvas.width / 2, canvas.height / 2 + 8);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  const faceMat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.65 });
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 0.60), faceMat);
+  face.position.set(0, 2.55, 5.65);
+  parent.add(face);
+
+  // 5 small rating stars below the plaque. Unlit (slate) since visit
+  // mode doesn't have access to the host's live rating. Geometry +
+  // spacing match WorldScene.buildRatingSign so the sign reads the
+  // same shape as the host's.
+  const offMat = new THREE.MeshStandardMaterial({ color: 0x474039, roughness: 0.85 });
+  for (let i = 0; i < 5; i += 1) {
+    const star = new THREE.Mesh(new THREE.CircleGeometry(0.05, 16), offMat);
+    star.position.set(-0.4 + i * 0.2, 2.10, 5.660);
+    star.rotation.y = 0;
+    parent.add(star);
+  }
+}
+
 /** Paris-style exterior decoration — cornice bands on every storey,
  * iron balconies on upper storeys, slate-grey mansard cap with
  * brick chimney at the top of the topmost unlocked storey. Mirrors

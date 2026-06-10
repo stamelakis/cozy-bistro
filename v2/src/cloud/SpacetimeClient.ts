@@ -3613,6 +3613,20 @@ export class SpacetimeClient {
     return null;
   }
 
+  /** Visit-mode rating-sign parity — read the visited restaurant's
+   * display name from the subscribed Restaurant row. Returns null
+   * when the row isn't yet subscribed. */
+  getRestaurantNameByOwnerHex(ownerHex: string): string | null {
+    if (!this.conn) return null;
+    const target = ownerHex.toLowerCase();
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() === target) return r.name ?? null;
+      }
+    } catch { /* table not wired yet */ }
+    return null;
+  }
+
   /** Visit-mode theme parity — read the visited restaurant's
    * per-floor theme override CSV from the subscribed Restaurant row.
    * Empty / null when the host hasn't customised any floor (visit
