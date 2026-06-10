@@ -13,6 +13,9 @@ import {
   buildPerimeterWallSegments, extractWallOpenings, emptyFloorOpenings,
   type OpeningSourcePlacement,
 } from "../scene/wallBuilder";
+import {
+  buildStaircaseFlight, buildSupplyCounterMesh, attachLampLight,
+} from "../scene/interiorPieces";
 import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 
 /** Meters between adjacent floor slabs — mirrors
@@ -961,6 +964,11 @@ export class VisitMode {
           p.position.y, // save's "y" is world Z (legacy 2D grid naming)
         );
         model.rotation.y = rotY;
+        // If the placed piece is a lamp, attach a warm point light
+        // matching what the host's registerLamp does. Without this
+        // visited interiors render lamp GLBs as dark static geometry
+        // — host shows them glowing.
+        attachLampLight(model, def.id);
         this.visitorRoot.add(model);
       } catch (err) {
         console.warn(`[Visit] failed to load ${def.id}:`, err);
@@ -1366,7 +1374,19 @@ export class VisitMode {
     const maxStoreys = Math.max(1, Math.min(expansionLevel, 4));
     for (let idx = 1; idx < maxStoreys; idx += 1) {
       buildStorey(idx);
+      // Visual staircase flight from floor (idx-1) up to floor idx.
+      // buildStaircaseFlight takes baseY = idx × STOREY_HEIGHT and
+      // builds the steps DOWN into the floor below; mirrors the host's
+      // addStaircaseSegment placement (the flight is parented to the
+      // storey it LEAVES from on the host side, but visit mode just
+      // parents everything under the visitorRoot — same visual).
+      buildStaircaseFlight(root, idx * STOREY_HEIGHT);
     }
+
+    // Back-wall supply counter. Procedural cabinet + crates the host
+    // builds on every restaurant — visit mode mirrors so the kitchen
+    // line reads complete from above. Always on the ground floor.
+    buildSupplyCounterMesh(root);
 
     // Roof on top of the topmost unlocked storey. Same flat plane the
     // host uses as a legacy fallback before the mansard kicks in.

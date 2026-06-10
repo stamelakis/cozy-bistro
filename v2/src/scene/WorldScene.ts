@@ -8,6 +8,7 @@ import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 import { TextureService } from "./TextureService";
 import { buildPerimeterWallSegments } from "./wallBuilder";
+import { buildStaircaseFlight, buildSupplyCounterMesh } from "./interiorPieces";
 
 /** Plaque visual catalogs — each id is a small string the modal exposes
  * as a radio button. Picked to read as warm cosy bistro defaults but
@@ -2178,83 +2179,10 @@ export class WorldScene {
    * footprint cells as a traversable transit corridor for the
    * pathfinder. */
   private addStaircaseSegment(parent: THREE.Group, baseY: number): void {
-    const STEP_COUNT = 10;
-    const STEP_WIDTH = 1.0;                                // X span
-    const STEP_DEPTH = 0.3;                                // Z span per step → 3 m total run, 45° slope
-    const STEP_RISE  = WorldScene.STOREY_HEIGHT / STEP_COUNT;  // 0.3 m (matches depth for a 1:1 ratio)
-    const X_CENTER   = -3.9;                               // flush against the left interior wall (X=-4.4)
-    // The TOP of the flight sits at the back-left corner so the player
-    // walks INTO the corner as they climb. With STEP_DEPTH=0.3 and 10
-    // steps, the top step's centre lands at Z=-4.3 — right against the
-    // back wall (interior face at Z=-4.4). The bottom of the flight
-    // extends 3 m south into the open floor (down to Z≈-1.5).
-    const Z_BOTTOM   = -1.45;                              // low end, ~3 m south of back wall
-    const runLen     = STEP_COUNT * STEP_DEPTH;            // 3 m total run
-    const lowerY     = baseY - WorldScene.STOREY_HEIGHT;
-    const stepMat = new THREE.MeshStandardMaterial({
-      color: 0xb0967a, roughness: 0.78, metalness: 0,
-    });
-    // Steps rise as Z decreases (south → north), so step 0 sits 3 m
-    // out from the back wall and step N-1 sits tucked into the back-
-    // left corner where the flight meets the upper slab.
-    for (let i = 0; i < STEP_COUNT; i += 1) {
-      const step = new THREE.Mesh(
-        new THREE.BoxGeometry(STEP_WIDTH, STEP_RISE, STEP_DEPTH),
-        stepMat,
-      );
-      step.position.set(
-        X_CENTER,
-        lowerY + STEP_RISE * (i + 0.5),
-        Z_BOTTOM - STEP_DEPTH * (i + 0.5),
-      );
-      step.castShadow = true;
-      step.receiveShadow = true;
-      parent.add(step);
-    }
-    // Slim banister along the interior-facing edge so the stairs read
-    // as a staircase from the iso angle, not just a stack of slabs.
-    // The staircase hugs the LEFT wall, so the open side faces EAST —
-    // banister sits just inside the staircase's east edge.
-    const banisterMat = new THREE.MeshStandardMaterial({
-      color: 0x8a6e54, roughness: 0.7,
-    });
-    const railX = X_CENTER + STEP_WIDTH / 2 - 0.04;        // just inside the right edge
-    const railLen = Math.sqrt(runLen * runLen + WorldScene.STOREY_HEIGHT * WorldScene.STOREY_HEIGHT);
-    const railThickness = 0.04;
-    // Rail: a thin box rotated to match the step slope. Center sits at
-    // the midpoint of the run (1 m north of Z_BOTTOM).
-    const rail = new THREE.Mesh(
-      new THREE.BoxGeometry(railThickness, railThickness, railLen),
-      banisterMat,
-    );
-    rail.position.set(
-      railX,
-      lowerY + WorldScene.STOREY_HEIGHT / 2 + 0.85,        // ~hand height above the steps
-      Z_BOTTOM - runLen / 2,
-    );
-    // Positive rotation so the rail's high end sits at the TOP of the
-    // flight (Z=-4.4, near the back wall) and the low end at the BOTTOM
-    // (Z=-2.4, out in the open). Without this sign the rail tilts
-    // backwards — high at the south end, low at the corner — which
-    // reads as a misaligned support bar against the steps.
-    rail.rotation.x = Math.atan2(WorldScene.STOREY_HEIGHT, runLen);
-    rail.castShadow = true;
-    parent.add(rail);
-    // Two short posts: one at the bottom (Z_BOTTOM, ground level) and
-    // one at the top (Z_BOTTOM − runLen, upper slab level / corner).
-    for (const t of [0, 1]) {
-      const post = new THREE.Mesh(
-        new THREE.BoxGeometry(railThickness, 0.95, railThickness),
-        banisterMat,
-      );
-      post.position.set(
-        railX,
-        lowerY + t * WorldScene.STOREY_HEIGHT + 0.45,
-        Z_BOTTOM - t * runLen,
-      );
-      post.castShadow = true;
-      parent.add(post);
-    }
+    // Delegates to the shared interiorPieces.buildStaircaseFlight so
+    // visit mode renders the identical flight when it climbs the same
+    // multi-storey shell.
+    buildStaircaseFlight(parent, baseY);
   }
 
   // === Dynamic perimeter walls ===============================================
@@ -3937,40 +3865,10 @@ export class WorldScene {
   /** Wood-and-metal "back of house" counter where the errand helper
    * drops off groceries. Static — not registered, not sellable. */
   private buildSupplyCounter(): void {
-    const counter = new THREE.Group();
-    // Position relative to the back wall (z = -4.5 after the (+0.5, +0.5)
-    // shift). Counter back face hugs the wall; the helper's drop-off
-    // standing spot (supplyCounterPos) sits one tile to the south.
-    counter.position.set(this.stoveFurniturePos.x - 3, 0, this.stoveFurniturePos.y - 0.05);
-    // Cabinet body — 1 unit wide, ~0.85 tall, 0.7 deep, hugging the back wall.
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(1.0, 0.85, 0.7),
-      new THREE.MeshStandardMaterial({ color: 0x9a7a55, roughness: 0.85 }),
-    );
-    body.position.set(0, 0.425, 0.15); // back face against wall (wall at z=-5)
-    body.castShadow = true;
-    body.receiveShadow = true;
-    counter.add(body);
-    // Lighter top — looks like a worn worktop where bags get dropped.
-    const top = new THREE.Mesh(
-      new THREE.BoxGeometry(1.05, 0.06, 0.75),
-      new THREE.MeshStandardMaterial({ color: 0xcfb48a, roughness: 0.6 }),
-    );
-    top.position.set(0, 0.88, 0.15);
-    top.castShadow = true;
-    counter.add(top);
-    // A couple of small crates on top so the player can tell at a
-    // glance "this is the supply counter".
-    const crateMat = new THREE.MeshStandardMaterial({ color: 0x8c6a40, roughness: 0.9 });
-    const crate1 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.22, 0.28), crateMat);
-    crate1.position.set(-0.25, 1.02, 0.10);
-    crate1.castShadow = true;
-    counter.add(crate1);
-    const crate2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 0.22), crateMat);
-    crate2.position.set(0.20, 1.00, 0.20);
-    crate2.castShadow = true;
-    counter.add(crate2);
-    this.threeScene.add(counter);
+    // Delegates to the shared interiorPieces.buildSupplyCounterMesh so
+    // visit mode adds the same back-wall counter. stoveFurniturePos is
+    // the canonical (0, -4) — the shared helper bakes that offset in.
+    buildSupplyCounterMesh(this.threeScene);
   }
 
   // === Door plaque (restaurant name + rating stars below) ===
