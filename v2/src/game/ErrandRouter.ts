@@ -66,6 +66,20 @@ interface ErrandActor {
    * ~0.8s of movement so a piece of furniture placed mid-trip doesn't
    * leave the helper following stale waypoints right through it. */
   replanAccum: number;
+  /** Phase 8.3 — server-snapshot interpolation state. The bridge
+   * records the last two cloud-reported positions; the per-frame
+   * smoother LERPs between them based on elapsed wall-clock time
+   * since the last snapshot. This is the standard "snapshot
+   * interpolation" pattern used in networked games — guarantees
+   * continuous on-screen motion that exactly traces what the server
+   * said, with a fixed ~500 ms lag (one server tick). Lag matters
+   * less than the previous teleport-every-tick visual; the helper
+   * still arrives at the door / counter at the same moment it would
+   * have, just smoothly. */
+  prevServerPos: THREE.Vector2 | null;
+  lastServerPos: THREE.Vector2 | null;
+  /** performance.now() at the time lastServerPos was set. */
+  lastServerStampMs: number;
 }
 
 const WALK_SPEED = 2.88; // +20% over the previous 2.4
@@ -174,6 +188,9 @@ export class ErrandRouter {
       roadEdge: null,
       path: [],
       replanAccum: 0,
+      prevServerPos: null,
+      lastServerPos: null,
+      lastServerStampMs: 0,
     };
     this.helpers.push(actor);
     // Phase I (H.65) — mirror to cloud so a refresh can hydrate the
@@ -346,31 +363,57 @@ export class ErrandRouter {
     }
   }
 
-  /** Phase 8.3 — Per-frame position + facing smoother for server-
-   * authoritative helpers. The bridge sets h.target to wherever the
-   * server says the helper is walking to; this method walks
-   * h.character.groundPos toward that target at WALK_SPEED, exactly
-   * like moveActor does for the local-sim path. facingY is
-   * recomputed each frame so the model orients along its motion
-   * vector instead of staring sideways. */
-  private smoothFollowServer(h: ErrandActor, dt: number): void {
-    // Offscreen / idle helpers — no walking + no facing update.
+  /** Phase 8.3 — Snapshot-interpolation smoother for server-
+   * authoritative helpers. Plays back the server's positional
+   * snapshots (one per 500 ms tick) by linearly interpolating
+   * between the previous and the latest received position based
+   * on wall-clock elapsed since the latest snapshot.
+   *
+   * Why this and not "walk toward target": the previous attempt
+   * raced the server — even matching speeds, drift accumulated and
+   * triggered backward snaps because the server's tick boundary
+   * and the client's rAF boundary aren't aligned. Snapshot
+   * interpolation guarantees the on-screen character traces EXACTLY
+   * the path the server walked (one tick late), no possibility of
+   * desync. The 500 ms lag is invisible at this scale; the previous
+   * 1.5 m teleport every 500 ms was very visible.
+   *
+   * facingY comes from the velocity vector (lastServerPos -
+   * prevServerPos) — the direction the server actually moved them,
+   * which is correct even when the path bends mid-trip. */
+  private smoothFollowServer(h: ErrandActor, _dt: number): void {
+    // Offscreen / idle / dwelling helpers — no movement. Facing
+    // preserved from when motion last stopped.
     if (h.state === "offscreen" || h.state === "idle"
         || h.state === "atCounter") {
       return;
     }
-    const pos = h.character.groundPos;
-    const dx = h.target.x - pos.x;
-    const dz = h.target.y - pos.y;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 0.001) return;
-    const step = Math.min(dist, WALK_SPEED * dt);
-    pos.x += (dx / dist) * step;
-    pos.y += (dz / dist) * step;
-    // GLB forward = -Z (three.js standard) → atan2(-dx, -dz).
-    // Same convention as moveActor + StaffRouter so all roles face
-    // consistently along their motion vector.
-    h.character.facingY = Math.atan2(-dx, -dz);
+    // No snapshots yet (haven't received first staff_actor update
+    // for this helper since attach). Skip; the very next bridge
+    // call seeds prev+last so smoothing starts on the second tick.
+    if (h.lastServerPos == null) return;
+    const lastPos = h.lastServerPos;
+    const prevPos = h.prevServerPos ?? lastPos;
+    // Interpolation parameter: fraction of the tick window elapsed
+    // since lastServerStampMs. Clamped to [0, 1] so a long pause
+    // (tab inactive) doesn't extrapolate past the latest snapshot.
+    const SERVER_TICK_MS = 500;
+    const elapsed = performance.now() - h.lastServerStampMs;
+    const t = Math.max(0, Math.min(1, elapsed / SERVER_TICK_MS));
+    const x = prevPos.x + (lastPos.x - prevPos.x) * t;
+    const z = prevPos.y + (lastPos.y - prevPos.y) * t;
+    h.character.groundPos.set(x, z);
+    // facingY from server velocity. If lastPos === prevPos (helper
+    // standing still mid-phase), keep the previous facing — atan2(0,0)
+    // returns 0 which would snap them to facing -Z and look like a
+    // sudden rotation. Threshold 0.001 m ignores floating-point noise.
+    const vx = lastPos.x - prevPos.x;
+    const vz = lastPos.y - prevPos.y;
+    if (Math.hypot(vx, vz) > 0.001) {
+      // GLB forward = -Z (three.js standard) → atan2(-vx, -vz).
+      // Same convention as moveActor + StaffRouter.
+      h.character.facingY = Math.atan2(-vx, -vz);
+    }
   }
 
   /** Phase H Phase 5.4 — server-authoritative gate. Mirrors the
@@ -399,40 +442,60 @@ export class ErrandRouter {
 
   /** Apply a cloud staff_actor row to the matching local helper.
    *
-   * Phase 8.3 — no longer snaps groundPos directly. The 2 Hz server
-   * tick produced a visible ~1.5 m teleport every 500 ms; instead we
-   * update h.target and let `smoothFollowServer` walk the position
-   * forward at WALK_SPEED each frame. Anti-drift: when local position
-   * has wandered > 2 m from the server's reported position (e.g.
-   * subscription resumed after a tab hide), snap to catch up
-   * instead of dragging the character across the room visibly.
-   * Phase transitions still snap to the server position so the
-   * "appear at the door" beat reads cleanly. */
+   * Phase 8.3 — feeds the snapshot-interpolation smoother
+   * (smoothFollowServer). Each cloud update records (prev = last,
+   * last = row.x/z, stamp = now). The smoother LERPs between the
+   * two snapshots over the next 500 ms (one server tick), so the
+   * on-screen motion exactly traces what the server walked, one
+   * tick late. No drift snap needed — there's no possibility of
+   * desync when the client is just replaying server snapshots. The
+   * only direct groundPos write is when the helper re-appears from
+   * offscreen (legitimate teleport from invisible to road edge);
+   * for all other transitions the smoother handles the new
+   * snapshot via the prev/last lerp. */
   private reconcileCloudErrand(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
     if (row.role !== "errand") return;
     const h = this.helpers.find((helper) => helper.memberId === row.memberId);
     if (!h) return;
-    const isPhaseChange = isErrandState(row.state) && h.state !== row.state;
-    const dx = row.x - h.character.groundPos.x;
-    const dz = row.z - h.character.groundPos.y;
-    const drift = Math.hypot(dx, dz);
-    // Always update the goal — smoothFollowServer reads it next frame.
-    h.target.set(row.targetX, row.targetZ);
-    // Snap on phase change OR large drift; otherwise keep the smooth
-    // local interpolation that smoothFollowServer is driving.
-    if (isPhaseChange || drift > 2.0) {
+    // Roll snapshots forward: previous becomes the one we last
+    // received, last becomes the one we just got. On the very
+    // first tick after attach, prev is null — seed both to the
+    // same position so velocity = 0 and facing stays put.
+    if (h.lastServerPos == null) {
+      h.lastServerPos = new THREE.Vector2(row.x, row.z);
+      h.prevServerPos = h.lastServerPos.clone();
+      // Seed groundPos so the very first render frame has SOMETHING
+      // sensible; subsequent ticks update via the smoother.
       h.character.groundPos.set(row.x, row.z);
+    } else {
+      h.prevServerPos = h.lastServerPos.clone();
+      h.lastServerPos.set(row.x, row.z);
     }
+    h.lastServerStampMs = performance.now();
+    // Keep target current — only used by the bubble UI + dispatch
+    // bookkeeping; the smoother no longer reads it for motion.
+    h.target.set(row.targetX, row.targetZ);
     // State sync: the server writes errand phase names directly into
     // the `state` column (matches the local enum). Visibility flips
     // for "offscreen".
     if (isErrandState(row.state)) {
       const wasOffscreen = h.state === "offscreen";
+      const isPhaseChange = h.state !== row.state;
       h.state = row.state;
       h.character.root.visible = row.state !== "offscreen";
       h.character.action = errandPoseFor(row.state);
-      // Reset clocks on phase transition; without this a stale
-      // value from a previous trip would carry forward.
+      // Coming back from offscreen is a legitimate teleport — the
+      // helper was invisible at the offscreen anchor and now needs
+      // to re-appear at row.x/z (road edge). Snap groundPos AND
+      // seed both snapshots to row.x/z so the smoother doesn't
+      // interpolate from the stale offscreen-pre-snapshot position
+      // back to road edge for 500 ms.
+      if (wasOffscreen) {
+        h.character.groundPos.set(row.x, row.z);
+        h.lastServerPos.set(row.x, row.z);
+        h.prevServerPos?.set(row.x, row.z);
+      }
+      // Reset trip-internal flags on every phase transition.
       if (isPhaseChange || wasOffscreen) {
         h.clock = 0;
         h.replanAccum = 0;

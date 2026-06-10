@@ -1717,18 +1717,15 @@ export class VisitMode {
     buildSupplyCounterMesh(root);
 
     // Paris-style exterior decoration: cornice bands per floor +
-    // iron balconies on upper floors + slate-grey mansard + chimney
-    // at the top of the topmost unlocked storey. Same cornice /
-    // balcony / mansard recipe the host uses on its own scene —
-    // matches the city's other Paris-style facades so the visited
-    // restaurant reads as part of the same neighbourhood.
-    //
-    // Phase 8.3b — ghostRoof: true. Visit mode has no exterior /
-    // interior toggle, so the mansard + cap render with the same
-    // 0.18-opacity ghost recipe the wall ghost system uses on the
-    // perimeter walls. Without it the player could see through the
-    // walls but the slate roof above blocked any view down into the
-    // kitchen from the city street's natural look-down angle.
+    // iron balconies on upper floors. Mansard + cap + chimney are
+    // SKIPPED in visit mode — see buildParisExteriorDecor's
+    // ghostRoof branch. The host's WorldScene hides those same
+    // pieces in interior view (applyStoreyVisibility) because the
+    // camera looks down into a focused floor and a slate roof would
+    // occlude it. Visit mode is always interior-view from the
+    // visitor's perspective, so the same rule applies. Cornice +
+    // balconies stay since they're at upper-floor cornice height,
+    // not on top of the roof.
     buildParisExteriorDecor(root, maxStoreys, { ghostRoof: true });
 
     // Front-door rating sign with the visited restaurant's name +
