@@ -750,20 +750,27 @@ export class VisitMode {
     tickMs: number,
     now: number,
   ): void {
-    if (snap.stationary) {
-      // Anchored at a station / seat — pin to the latest snapshot
-      // exactly. No interp, no velocity-derived facing.
-      c.groundPos.set(snap.lastPos.x, snap.lastPos.y);
-      return;
-    }
+    // ALWAYS LERP position between prev and last — the previous
+    // version pinned stationary characters to lastPos, but the
+    // waiter state machine pings between movingToWork → working
+    // → movingToWork every few ticks, so the brief "working"
+    // window forced a teleport jump (prev was far away from last
+    // because the waiter HAD just walked between them, but
+    // stationary=true short-circuited the interp). Smooth
+    // movement through every transition is more important than
+    // perfectly pinning a chef to their stove for one frame.
     const elapsed = now - snap.stampMs;
     const t = Math.max(0, Math.min(1, elapsed / tickMs));
     const x = snap.prevPos.x + (snap.lastPos.x - snap.prevPos.x) * t;
     const z = snap.prevPos.y + (snap.lastPos.y - snap.prevPos.y) * t;
     c.groundPos.set(x, z);
+    // facingY: only updates when the velocity vector is meaningful.
+    // For genuinely stationary characters (chef working at stove
+    // for many ticks, customer seated at table) prev === last, so
+    // velocity magnitude is ~0 and the previous facing is preserved.
     const vx = snap.lastPos.x - snap.prevPos.x;
     const vz = snap.lastPos.y - snap.prevPos.y;
-    if (Math.hypot(vx, vz) > 0.001) {
+    if (!snap.stationary && Math.hypot(vx, vz) > 0.001) {
       // GLB forward = -Z → atan2(-vx, -vz). Same convention as
       // StaffRouter + ErrandRouter so all roles + visit-mode actors
       // face along their motion vector consistently.
