@@ -326,17 +326,51 @@ export class ErrandRouter {
 
   update(dt: number): void {
     // Phase H Phase 5.4 — when server owns dispatch, the bridge
-    // subscription is the SOLE driver of local helper state. The
+    // subscription is the SOLE driver of local helper STATE. The
     // local tickHelper would otherwise advance phases on its own
     // clock and write back to cloud, fighting the server's tick.
-    // Skip the local tick entirely; the bridge syncs position +
-    // state on each cloud update.
     if (!this.serverOwnsErrand()) {
       for (const h of this.helpers) this.tickHelper(h, dt);
       // Phase I (H.65) — periodic publish of helper pose to the cloud
       // so a refresh / cross-device session resumes from the same spot.
       this.streamActorsToCloud(dt);
+    } else {
+      // Phase 8.3 — Always run per-frame smoothing toward the
+      // bridge-set target so the character walks continuously
+      // between server position updates (the 2 Hz tick made the
+      // visual snap ~1.5 m every 500 ms, and the character was
+      // facing sideways because facingY only updates when the local
+      // movement step runs). State machine + cloud writes stay
+      // gated to the bridge — only position interpolation runs here.
+      for (const h of this.helpers) this.smoothFollowServer(h, dt);
     }
+  }
+
+  /** Phase 8.3 — Per-frame position + facing smoother for server-
+   * authoritative helpers. The bridge sets h.target to wherever the
+   * server says the helper is walking to; this method walks
+   * h.character.groundPos toward that target at WALK_SPEED, exactly
+   * like moveActor does for the local-sim path. facingY is
+   * recomputed each frame so the model orients along its motion
+   * vector instead of staring sideways. */
+  private smoothFollowServer(h: ErrandActor, dt: number): void {
+    // Offscreen / idle helpers — no walking + no facing update.
+    if (h.state === "offscreen" || h.state === "idle"
+        || h.state === "atCounter") {
+      return;
+    }
+    const pos = h.character.groundPos;
+    const dx = h.target.x - pos.x;
+    const dz = h.target.y - pos.y;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.001) return;
+    const step = Math.min(dist, WALK_SPEED * dt);
+    pos.x += (dx / dist) * step;
+    pos.y += (dz / dist) * step;
+    // GLB forward = -Z (three.js standard) → atan2(-dx, -dz).
+    // Same convention as moveActor + StaffRouter so all roles face
+    // consistently along their motion vector.
+    h.character.facingY = Math.atan2(-dx, -dz);
   }
 
   /** Phase H Phase 5.4 — server-authoritative gate. Mirrors the
@@ -363,17 +397,32 @@ export class ErrandRouter {
     console.log("[Errand/Bridge] errand cloud bridge attached");
   }
 
-  /** Apply a cloud staff_actor row to the matching local helper. */
+  /** Apply a cloud staff_actor row to the matching local helper.
+   *
+   * Phase 8.3 — no longer snaps groundPos directly. The 2 Hz server
+   * tick produced a visible ~1.5 m teleport every 500 ms; instead we
+   * update h.target and let `smoothFollowServer` walk the position
+   * forward at WALK_SPEED each frame. Anti-drift: when local position
+   * has wandered > 2 m from the server's reported position (e.g.
+   * subscription resumed after a tab hide), snap to catch up
+   * instead of dragging the character across the room visibly.
+   * Phase transitions still snap to the server position so the
+   * "appear at the door" beat reads cleanly. */
   private reconcileCloudErrand(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
     if (row.role !== "errand") return;
     const h = this.helpers.find((helper) => helper.memberId === row.memberId);
     if (!h) return;
-    // Position lerps would fight smooth interpolation; just snap to
-    // the server's value. Server tick is 2 Hz so visible at modest
-    // distances; bumping the tick rate is the right fix if it
-    // feels jumpy.
-    h.character.groundPos.set(row.x, row.z);
+    const isPhaseChange = isErrandState(row.state) && h.state !== row.state;
+    const dx = row.x - h.character.groundPos.x;
+    const dz = row.z - h.character.groundPos.y;
+    const drift = Math.hypot(dx, dz);
+    // Always update the goal — smoothFollowServer reads it next frame.
     h.target.set(row.targetX, row.targetZ);
+    // Snap on phase change OR large drift; otherwise keep the smooth
+    // local interpolation that smoothFollowServer is driving.
+    if (isPhaseChange || drift > 2.0) {
+      h.character.groundPos.set(row.x, row.z);
+    }
     // State sync: the server writes errand phase names directly into
     // the `state` column (matches the local enum). Visibility flips
     // for "offscreen".
@@ -384,7 +433,7 @@ export class ErrandRouter {
       h.character.action = errandPoseFor(row.state);
       // Reset clocks on phase transition; without this a stale
       // value from a previous trip would carry forward.
-      if (h.state !== row.state || wasOffscreen) {
+      if (isPhaseChange || wasOffscreen) {
         h.clock = 0;
         h.replanAccum = 0;
         h.path = [];

@@ -286,7 +286,11 @@ export function buildRatingSign(
  * unlocked (1 = ground only, 4 = max). Cornice bands lay on top of
  * each of those storeys; balconies on storeys 1..N-1; mansard +
  * chimney on top of the topmost. */
-export function buildParisExteriorDecor(parent: THREE.Object3D, numStoreys: number): void {
+export function buildParisExteriorDecor(
+  parent: THREE.Object3D,
+  numStoreys: number,
+  opts: { ghostRoof?: boolean } = {},
+): void {
   const W = 10;
   const H = STOREY_HEIGHT;
   const cornerOffsetCx = 0.5;
@@ -297,6 +301,16 @@ export function buildParisExteriorDecor(parent: THREE.Object3D, numStoreys: numb
   const balconyMat = new THREE.MeshStandardMaterial({
     color: 0x1a1a1a, roughness: 0.4, metalness: 0.7,
   });
+  // Phase 8.3b — visit mode passes ghostRoof: true so the player can
+  // see into the visited restaurant from above. The walls already
+  // ghost via the per-direction wall tracker (line ~1688); the roof
+  // had no such system because the host hides the mansard wholesale
+  // in interior view (WorldScene.applyStoreyVisibility line ~4452).
+  // Visit mode has no exterior/interior toggle, so we always render
+  // the mansard + cap with the same ghost recipe the wall ghost uses
+  // (opacity 0.18, depthWrite false) — silhouette reads from the city
+  // street but the visitor can see into the kitchen.
+  const ghostRoof = opts.ghostRoof === true;
 
   // Cornice bands — one band at top of each unlocked storey.
   const cBandH = 0.14;
@@ -352,21 +366,41 @@ export function buildParisExteriorDecor(parent: THREE.Object3D, numStoreys: numb
   // place them at the visited save's expansion level.
   const topY = numStoreys * H;
   const mansardH = 1.2;
+  const mansardMat = ghostRoof
+    ? new THREE.MeshStandardMaterial({
+        color: 0x3a4048, roughness: 0.5, metalness: 0.05,
+        transparent: true, opacity: 0.18, depthWrite: false,
+      })
+    : new THREE.MeshStandardMaterial({
+        color: 0x3a4048, roughness: 0.5, metalness: 0.05,
+      });
   const mansard = new THREE.Mesh(
     new THREE.BoxGeometry(W + 0.2, mansardH, W + 0.2),
-    new THREE.MeshStandardMaterial({ color: 0x3a4048, roughness: 0.5, metalness: 0.05 }),
+    mansardMat,
   );
   mansard.position.set(cornerOffsetCx, topY + mansardH / 2, cornerOffsetCz);
-  mansard.castShadow = true;
+  // Ghost roof: keep castShadow OFF so transparent material doesn't
+  // cast a solid shadow inside the kitchen and ruin the see-through.
+  mansard.castShadow = !ghostRoof;
   parent.add(mansard);
 
+  const capMat = ghostRoof
+    ? new THREE.MeshStandardMaterial({
+        color: 0x2a3038, roughness: 0.55,
+        transparent: true, opacity: 0.18, depthWrite: false,
+      })
+    : new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 });
   const cap = new THREE.Mesh(
     new THREE.BoxGeometry(W - 0.6, 0.1, W - 0.6),
-    new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.55 }),
+    capMat,
   );
   cap.position.set(cornerOffsetCx, topY + mansardH + 0.05, cornerOffsetCz);
   parent.add(cap);
 
+  // Chimney stays solid in visit mode — it's a thin silhouette
+  // detail that doesn't occlude the interior, and ghosting it would
+  // look strange against the still-solid cornice bands. The mansard
+  // + cap above are what was blocking the view.
   const chimney = new THREE.Mesh(
     new THREE.BoxGeometry(0.4, 1.1, 0.4),
     new THREE.MeshStandardMaterial({ color: 0x9a6850, roughness: 0.9 }),

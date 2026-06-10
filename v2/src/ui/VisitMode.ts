@@ -1722,7 +1722,14 @@ export class VisitMode {
     // balcony / mansard recipe the host uses on its own scene —
     // matches the city's other Paris-style facades so the visited
     // restaurant reads as part of the same neighbourhood.
-    buildParisExteriorDecor(root, maxStoreys);
+    //
+    // Phase 8.3b — ghostRoof: true. Visit mode has no exterior /
+    // interior toggle, so the mansard + cap render with the same
+    // 0.18-opacity ghost recipe the wall ghost system uses on the
+    // perimeter walls. Without it the player could see through the
+    // walls but the slate roof above blocked any view down into the
+    // kitchen from the city street's natural look-down angle.
+    buildParisExteriorDecor(root, maxStoreys, { ghostRoof: true });
 
     // Front-door rating sign with the visited restaurant's name +
     // host's plaque style + live star rating average. All three
