@@ -3142,6 +3142,15 @@ export class Engine {
     // surfaces any drop in (clean+dirty+inflight) vs lifetimeAdded
     // to the console along with the recent action history.
     this.dishwareLeakWatcher?.tick(rawDt);
+    // Phase 8.3 — Visit-mode snapshot interpolation. When the player
+    // is touring another restaurant, the live staff + customer
+    // positions arrive every 500 ms via cloud subscriptions; this
+    // call LERPs each character's groundPos between the previous and
+    // latest snapshot so the on-screen motion is continuous instead
+    // of teleporting once per server tick. Must run BEFORE
+    // scene.update so the animator's pose composition reads the
+    // freshly-interpolated values.
+    this.visitMode.tickLiveMotion();
     this.scene.update(dt);
     // Exterior-only view kicks in below the 40% zoom-percent mark:
     // walls close, all unlocked storeys + roof show regardless of

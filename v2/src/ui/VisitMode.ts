@@ -222,6 +222,36 @@ export class VisitMode {
   private liveCustomerCharacters: Map<string, AnimatedCharacter> = new Map();
   private liveCustomerPendingLoads: Set<string> = new Set();
 
+  /** Phase 8.3 — Snapshot-interpolation buffers for live staff +
+   * customers. The previous render path snapped groundPos directly
+   * on every cloud update, which at 2 Hz server ticks produced a
+   * visible ~1.5 m teleport every 500 ms (helpers had the same bug
+   * inside the host's own restaurant — fixed there with the same
+   * pattern). Each cloud update pushes (prevPos = current last,
+   * lastPos = new server pos, stampMs = now). The per-frame
+   * `tickLiveMotion(dt)` LERPs groundPos between prev and last
+   * over the tick window so the on-screen character traces exactly
+   * what the server walked, one tick (~500 ms) late. facingY is
+   * computed from the snapshot velocity vector (last − prev) — the
+   * direction the server actually moved them, which is always
+   * correct even on a bending path. Sitting / idle characters get
+   * facing preserved from when they were last moving. */
+  private liveStaffSnapshots: Map<string, {
+    prevPos: THREE.Vector2;
+    lastPos: THREE.Vector2;
+    stampMs: number;
+    /** True when the character should not move this frame even if
+     * snapshots disagree slightly — used for `seated` / `eating` /
+     * `working` etc. where the server's row.x/z is a constant. */
+    stationary: boolean;
+  }> = new Map();
+  private liveCustomerSnapshots: Map<string, {
+    prevPos: THREE.Vector2;
+    lastPos: THREE.Vector2;
+    stampMs: number;
+    stationary: boolean;
+  }> = new Map();
+
   /** Phase H.A — Attaches plate/glass meshes to staff actors who are
    * actively transporting an order (ticket.state == "delivering").
    * Reads cloud rows; doesn't need any local-sim state. Same instance
@@ -588,6 +618,13 @@ export class VisitMode {
       this.scene.animator.add(animated);
       this.liveStaffCharacters.set(row.memberId, animated);
       this.liveStaffCount += 1;
+      // Phase 8.3 — Seed the snapshot buffer so the next update
+      // event has somewhere to roll prev/last from. Spawn position
+      // = server's current row.x/z, stationary = idle/working so
+      // a newly-spawned-at-station chef doesn't try to walk anywhere
+      // until the server actually moves them.
+      const stationaryAtSpawn = row.state === "idle" || row.state === "working";
+      this.pushStaffSnapshot(row.memberId, row.x, row.z, stationaryAtSpawn);
       // H.A — Register the character root with the cloud-derived
       // visualizers. Any pending state cached from pre-load events
       // gets reconciled now that we have a host to attach to.
@@ -601,11 +638,15 @@ export class VisitMode {
     }
   }
 
-  /** Apply one row update — snap the character's groundPos to the
-   * server's position. With the server stepping at 10 Hz this gives
-   * an effectively smooth walk; the per-frame animation routine
-   * picks up the moved groundPos and lerps the visible model
-   * position the same way it does for the player's own characters. */
+  /** Apply one row update — push the server's position into the
+   * snapshot buffer for snapshot-interpolation playback. `tickLiveMotion`
+   * runs each frame and LERPs groundPos between the prev + last
+   * snapshots so the on-screen character moves smoothly instead of
+   * snapping ~1.5 m every 500 ms tick.
+   *
+   * Server tick is 2 Hz, so the visible motion is ~500 ms behind
+   * the server's "now" — invisible at the scale we're rendering at,
+   * and a huge upgrade vs the previous direct-snap behaviour. */
   private applyLiveStaffUpdate(row: import("../cloud/SpacetimeClient").StaffActorRow): void {
     const c = this.liveStaffCharacters.get(row.memberId);
     if (!c) {
@@ -615,13 +656,119 @@ export class VisitMode {
       void this.spawnLiveStaffActor(row, this.activePlot?.id ?? 0n);
       return;
     }
-    c.groundPos.set(row.x, row.z);
     // Per-state animation: server publishes "idle" / "working" while
     // anchored at a station, anything else while in transit. Match
     // the action so the animator picks the right pose loop.
     const newAction: CharacterAction = row.state === "idle" || row.state === "working"
       ? "idle" : "walk";
     if (c.action !== newAction) c.action = newAction;
+    // Push the snapshot. `stationary` short-circuits the interp so
+    // anchored actors don't wobble between two near-identical positions.
+    const stationary = row.state === "idle" || row.state === "working";
+    this.pushStaffSnapshot(row.memberId, row.x, row.z, stationary);
+  }
+
+  /** Phase 8.3 — Roll the snapshot buffer forward: prevPos = previous
+   * last, lastPos = new server pos. On the first push for this key,
+   * seed both to the same coords so velocity = 0 and facing stays put. */
+  private pushStaffSnapshot(memberId: string, x: number, z: number, stationary: boolean): void {
+    const existing = this.liveStaffSnapshots.get(memberId);
+    if (!existing) {
+      this.liveStaffSnapshots.set(memberId, {
+        prevPos: new THREE.Vector2(x, z),
+        lastPos: new THREE.Vector2(x, z),
+        stampMs: performance.now(),
+        stationary,
+      });
+      // Seed groundPos so the very first render frame has a sensible
+      // value. Later snapshots feed through tickLiveMotion.
+      const c = this.liveStaffCharacters.get(memberId);
+      if (c) c.groundPos.set(x, z);
+    } else {
+      existing.prevPos.copy(existing.lastPos);
+      existing.lastPos.set(x, z);
+      existing.stampMs = performance.now();
+      existing.stationary = stationary;
+    }
+  }
+
+  /** Same shape for live customers. */
+  private pushCustomerSnapshot(key: string, x: number, z: number, stationary: boolean): void {
+    const existing = this.liveCustomerSnapshots.get(key);
+    if (!existing) {
+      this.liveCustomerSnapshots.set(key, {
+        prevPos: new THREE.Vector2(x, z),
+        lastPos: new THREE.Vector2(x, z),
+        stampMs: performance.now(),
+        stationary,
+      });
+      const c = this.liveCustomerCharacters.get(key);
+      if (c) c.groundPos.set(x, z);
+    } else {
+      existing.prevPos.copy(existing.lastPos);
+      existing.lastPos.set(x, z);
+      existing.stampMs = performance.now();
+      existing.stationary = stationary;
+    }
+  }
+
+  /** Phase 8.3 — Per-frame snapshot-interpolation. Engine.update calls
+   * this BEFORE scene.update so the animator sees the freshly
+   * interpolated groundPos + facingY when it composes each character's
+   * world transform.
+   *
+   * For each live actor: LERP groundPos between prevPos and lastPos
+   * based on wall-clock elapsed since the latest snapshot, clamped to
+   * one tick window (500 ms). Compute facingY from the snapshot
+   * velocity vector. Stationary characters skip LERP entirely so
+   * sitting customers don't shiver between micro-different server
+   * positions. */
+  tickLiveMotion(): void {
+    if (!this.activePlot) return;
+    const SERVER_TICK_MS = 500;
+    const now = performance.now();
+    for (const [memberId, snap] of this.liveStaffSnapshots) {
+      const c = this.liveStaffCharacters.get(memberId);
+      if (!c) continue;
+      this.applyOneSnapshot(c, snap, SERVER_TICK_MS, now);
+    }
+    for (const [key, snap] of this.liveCustomerSnapshots) {
+      const c = this.liveCustomerCharacters.get(key);
+      if (!c) continue;
+      this.applyOneSnapshot(c, snap, SERVER_TICK_MS, now);
+    }
+  }
+
+  private applyOneSnapshot(
+    c: AnimatedCharacter,
+    snap: {
+      prevPos: THREE.Vector2;
+      lastPos: THREE.Vector2;
+      stampMs: number;
+      stationary: boolean;
+    },
+    tickMs: number,
+    now: number,
+  ): void {
+    if (snap.stationary) {
+      // Anchored at a station / seat — pin to the latest snapshot
+      // exactly. No interp, no velocity-derived facing.
+      c.groundPos.set(snap.lastPos.x, snap.lastPos.y);
+      return;
+    }
+    const elapsed = now - snap.stampMs;
+    const t = Math.max(0, Math.min(1, elapsed / tickMs));
+    const x = snap.prevPos.x + (snap.lastPos.x - snap.prevPos.x) * t;
+    const z = snap.prevPos.y + (snap.lastPos.y - snap.prevPos.y) * t;
+    c.groundPos.set(x, z);
+    const vx = snap.lastPos.x - snap.prevPos.x;
+    const vz = snap.lastPos.y - snap.prevPos.y;
+    if (Math.hypot(vx, vz) > 0.001) {
+      // GLB forward = -Z → atan2(-vx, -vz). Same convention as
+      // StaffRouter + ErrandRouter so all roles + visit-mode actors
+      // face along their motion vector consistently.
+      c.facingY = Math.atan2(-vx, -vz);
+    }
   }
 
   /** Remove a live staff character — server deleted the row (player
@@ -637,6 +784,7 @@ export class VisitMode {
     this.scene.animator.remove(c.root);
     c.root.removeFromParent();
     this.liveStaffCharacters.delete(memberId);
+    this.liveStaffSnapshots.delete(memberId);
     this.liveStaffCount = Math.max(0, this.liveStaffCount - 1);
     this.refreshLivenessLabel();
   }
@@ -649,6 +797,7 @@ export class VisitMode {
     }
     this.liveStaffCharacters.clear();
     this.liveStaffPendingLoads.clear();
+    this.liveStaffSnapshots.clear();
     // Also dispose live customers (same lifecycle — both bound to the
     // current visit). Reset ticket counts so the next visit starts
     // clean. The subscription handlers stay attached but gated by
@@ -659,6 +808,7 @@ export class VisitMode {
     }
     this.liveCustomerCharacters.clear();
     this.liveCustomerPendingLoads.clear();
+    this.liveCustomerSnapshots.clear();
     this.liveTicketStates.clear();
     // Phase 8.1 — Bubble meta lives + dies with the visit.
     this.staffMetaByMember.clear();
@@ -762,6 +912,9 @@ export class VisitMode {
       this.scene.animator.add(animated);
       this.liveCustomerCharacters.set(key, animated);
       this.liveCustomerCount += 1;
+      // Phase 8.3 — Seed snapshot. A guest spawned in "walkingIn"
+      // is in transit; a guest spawned in "seated" is anchored.
+      this.pushCustomerSnapshot(key, row.x, row.z, action === "sit" || action === "idle");
       this.refreshLivenessLabel();
     } catch (err) {
       console.warn(`[Visit] failed to spawn live customer ${modelId}:`, err);
@@ -777,9 +930,13 @@ export class VisitMode {
       void this.spawnLiveCustomerActor(row, this.activePlot?.id ?? 0n);
       return;
     }
-    c.groundPos.set(row.x, row.z);
     const newAction = customerActionFor(row.state);
     if (c.action !== newAction) c.action = newAction;
+    // Phase 8.3 — snapshot interp instead of direct snap. "sit" states
+    // are stationary (server's row.x/z is the seat coords; LERP'ing
+    // micro-differences would jitter the model).
+    const stationary = newAction === "sit" || newAction === "idle";
+    this.pushCustomerSnapshot(key, row.x, row.z, stationary);
   }
 
   private removeLiveCustomerActor(key: string): void {
@@ -788,6 +945,7 @@ export class VisitMode {
     this.scene.animator.remove(c.root);
     c.root.removeFromParent();
     this.liveCustomerCharacters.delete(key);
+    this.liveCustomerSnapshots.delete(key);
     this.liveCustomerCount = Math.max(0, this.liveCustomerCount - 1);
     this.refreshLivenessLabel();
   }
