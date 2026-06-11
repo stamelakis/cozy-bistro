@@ -158,6 +158,10 @@ export class Engine {
    * walk the entire dining room out the door ("everyone wanders,
    * nobody sits"). */
   private furnitureCloudReady = false;
+  /** Phase 9.5 — one-shot latch for the retry-loop actor resync.
+   * Set after the first resyncAllActorsToCloud pass that runs with
+   * live cloud context + a synced roster. */
+  private actorsResynced = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -356,6 +360,19 @@ export class Engine {
       // hydrating before syncStaffToHeadcount lands would report
       // every row "missing" and skip the position restore.
       if (this.staffSyncDone) {
+        // Phase 9.5 — actor REGISTRATION had the same boot race as
+        // the bridges: the staffReady chain's resyncAllActorsToCloud
+        // no-ops without a restaurantId and was never retried, so a
+        // boot where GLBs beat auth left ZERO staff_actor rows on
+        // the server — which freezes that restaurant's entire
+        // offline sim (spawn gate requires staff) AND leaves no
+        // cooks/waiters for the tick to drive. One successful pass
+        // latches; register_staff_actor is idempotent server-side.
+        if (!this.actorsResynced) {
+          this.actorsResynced = true;
+          this.router?.resyncAllActorsToCloud();
+          this.errand?.resyncAllActorsToCloud();
+        }
         this.router?.hydrateFromCloud();
         this.errand?.hydrateFromCloud();
         this.router?.hydrateTicketsFromCloud(
