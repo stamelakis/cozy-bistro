@@ -150,6 +150,14 @@ export class Engine {
    * hydrating before actors exist would latch with every row
    * reported "missing" and skip the position restore. */
   private staffSyncDone = false;
+  /** Phase 9.5 — true once the furniture registry has finished its
+   * cloud restore (or the flag-off / failure paths resolved). The
+   * GUEST hydrate + bridge attach wait on this: importing seated
+   * guests against a registry with no resolved seats yet made
+   * refreshSeatedGuestPoses treat every guest's table as sold and
+   * walk the entire dining room out the door ("everyone wanders,
+   * nobody sits"). */
+  private furnitureCloudReady = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -335,8 +343,13 @@ export class Engine {
     // steady-state cost is a few boolean checks per second.
     window.setInterval(() => {
       if (!this.cloud.hasRestaurantContext()) return;
-      this.spawner?.attachGuestServerBridge();
-      void this.spawner?.hydrateFromCloud();
+      // Phase 9.5 — guests wait for the furniture registry's cloud
+      // restore. Seated guests imported before seats exist get
+      // "table sold" walk-outs from refreshSeatedGuestPoses.
+      if (this.furnitureCloudReady) {
+        this.spawner?.attachGuestServerBridge();
+        void this.spawner?.hydrateFromCloud();
+      }
       this.router?.attachServerBridge();
       this.errand?.attachServerBridge();
       // Staff/errand/ticket hydrates wait for actor registration —
@@ -2148,7 +2161,20 @@ export class Engine {
         const saveDone = this.furnitureRestorePromise ?? Promise.resolve();
         void saveDone.then(() => this.registry.restoreFromCloud()).then(() => {
           this.registry.subscribeToCloudChanges();
+        }).finally(() => {
+          // Phase 9.5 — unblock the guest hydrate/bridge retry loop.
+          // Importing seated guests BEFORE the furniture registry has
+          // seats made refreshSeatedGuestPoses think every table was
+          // sold and walk the whole dining room out the door (the
+          // "everyone wanders, nobody sits" bug). .finally so a
+          // restore failure degrades to the size-0 guard inside
+          // refreshSeatedGuestPoses instead of an empty restaurant.
+          this.furnitureCloudReady = true;
         });
+      } else {
+        // Furniture flag off — local save is the only furniture
+        // source and it's already restored; guests may hydrate.
+        this.furnitureCloudReady = true;
       }
       // Phase E read-side flip — when isServerSim("dishware") is on,
       // adopt the cloud's pool + dishwasher_batch rows as the truth.

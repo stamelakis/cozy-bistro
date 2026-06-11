@@ -2157,13 +2157,33 @@ export class GuestSpawner {
     if (!this.registry) return;
     const byId = new Map<string, ResolvedSeatSlot>();
     for (const s of this.registry.getResolvedSeatSlots()) byId.set(makeSeatId(s), s);
+    // Phase 9.5 — ZERO resolved seats means the furniture hasn't
+    // loaded yet (boot, mid-restore), not that the player sold every
+    // table while guests were seated. Walking guests out on that
+    // misread evicted the entire dining room during the post-reload
+    // hydrate. A restaurant that truly has no seats also has no
+    // seated guests to refresh, so skipping is always safe.
+    if (byId.size === 0) return;
     for (const g of this.guests) {
       const slot = byId.get(g.seatId);
       if (!slot) {
-        // Table sold under them. Walk them out gracefully. Reconcile
-        // any reserved plates BEFORE the walk so the dishware inventory
-        // doesn't silently drift down — eaten courses become dirty,
-        // in-flight ones go back to clean.
+        // Phase 9.5 — When the server owns guest states, the client
+        // NEVER walks a guest out on its own. A missing local slot
+        // here usually doesn't mean "table sold" — it means the
+        // guest row has an empty/unknown seat_uid (legacy
+        // client-spawned rows never mirrored seat_uid; a WC trip can
+        // also transit with the seat field in flux) or the furniture
+        // restore hasn't resolved that uid yet. Evicting locally
+        // desyncs from the server, which keeps the guest seated and
+        // keeps the meal running — the user-visible result was the
+        // whole dining room "wandering to the door while the kitchen
+        // works". The server's own grace logic despawns genuinely
+        // seatless guests.
+        if (this.serverOwnsGuestStates()) continue;
+        // Local-sim mode: table sold under them. Walk them out
+        // gracefully. Reconcile any reserved plates BEFORE the walk
+        // so the dishware inventory doesn't silently drift down —
+        // eaten courses become dirty, in-flight ones go back to clean.
         if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
           this.router.cancelTicket(g.id);
           this.settleGuestDishes(g);
