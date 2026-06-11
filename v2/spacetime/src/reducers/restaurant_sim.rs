@@ -4708,6 +4708,34 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // at the seat). The plate has landed, customer starts eating.
         "waitingForFood" if has_delivered_ticket_for_guest(ctx, g.id) =>
             Some(("eating".to_string(), 0)),
+        // Phase 9.11 — TICKETLESS watchdog. auto_place_next_course can
+        // fail silently (recipe catalog race, no stock + failed
+        // restock, restock unaffordable); pre-9.11 the guest then sat
+        // in waitingForFood with no ticket and NO retry path. Stage 1
+        // (≥20 s, ticketless): re-attempt placement — the pantry may
+        // have restocked or the catalog seeded meanwhile. Stage 2
+        // (≥120 s, still ticketless): the kitchen genuinely can't
+        // serve them — walk out (patience pinned → 1★, correct: they
+        // ordered and never got food). The clock guard keeps stage 1
+        // from firing during the normal order→ticket window.
+        "waitingForFood" if new_clock >= 20_000
+                && !has_any_ticket_for_guest(ctx, g.id) => {
+            if let Some(tid) = auto_place_next_course(ctx, &g) {
+                log::info!(
+                    "tick_guest_state: ticketless guest {} recovered — re-placed ticket {}",
+                    g.id, tid,
+                );
+                None
+            } else if new_clock >= 120_000 {
+                log::info!(
+                    "tick_guest_state: guest {} ticketless 120s — kitchen can't serve, leaving",
+                    g.id,
+                );
+                Some(("leaving".to_string(), 0))
+            } else {
+                None
+            }
+        },
         // eating → next course or leaving after EATING_DURATION_MS.
         // (See order_index advance below — server now owns this too.)
         //
@@ -5369,6 +5397,16 @@ fn has_delivered_ticket_for_guest(ctx: &ReducerContext, guest_id: u64) -> bool {
         }
     }
     false
+}
+
+/// Phase 9.11 — true if ANY ticket (any state) is bound to this
+/// guest. The waitingForFood watchdog uses it to detect the
+/// "ordered but no ticket ever materialised" orphan: auto_place can
+/// fail silently (catalog race, no stock + failed restock, restock
+/// unaffordable) and pre-9.11 nothing retried — the guest hung
+/// until patience death with the kitchen idle.
+fn has_any_ticket_for_guest(ctx: &ReducerContext, guest_id: u64) -> bool {
+    ctx.db.active_ticket().iter().any(|t| t.guest_id == guest_id)
 }
 
 /// Section A migration — true if any staff_actor in the same
