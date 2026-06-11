@@ -5094,7 +5094,12 @@ pub(crate) fn try_spawn_arrival_guest(
         seat_uid: seat_uid.clone(),
         seat_x,
         seat_z,
-        seat_facing_y: 0.0, // chair facing unknown server-side; client recomputes on hydrate
+        // Phase 9.10 — real chair facing from the mirrored seat_slot
+        // row (guests were spawning with facing 0 = staring at -Z
+        // regardless of which way the chair points). 0.0 fallback
+        // covers wait-mode spawns + legacy def-id assignments.
+        seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
+            .map(|s| s.facing_y).unwrap_or(0.0),
         seat_floor,
         seat_at_bar: false,
         plate_x: seat_x,
@@ -5608,9 +5613,12 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
     ctx.db.active_guest().id().update(ActiveGuest {
         state: "walkingIn".to_string(),
         state_clock_ms: 0,
-        seat_uid,
+        seat_uid: seat_uid.clone(),
         seat_x: sx,
         seat_z: sz,
+        // Phase 9.10 — real chair facing from the mirrored slot row.
+        seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid)
+            .map(|s| s.facing_y).unwrap_or(0.0),
         seat_floor: sf,
         plate_x: sx,
         plate_z: sz,
@@ -5744,6 +5752,33 @@ fn step_toward_target(x: f32, z: f32, target_x: f32, target_z: f32, speed: f32, 
 /// finish_cooking / deliver_ticket reducers.
 fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     let Some(t) = ctx.db.active_ticket().id().find(ticket_id) else { return };
+
+    // Phase 9.10 — ORPHANED-DELIVERING watchdog. A ticket in
+    // "delivering" must have a waiter actually carrying it
+    // (staff_actor.ticket_id == this id). Guest-leave cascades,
+    // releases and reassignments could strand a plate mid-walk with
+    // no carrier — observed live as 16 "delivering" tickets with
+    // idle chefs and starving guests, because NOTHING re-assigned a
+    // carrier-less delivering ticket (auto-assign only scans
+    // "ready"). Roll it back to "ready" so the next tick's
+    // auto_assign_ready_tickets hands it to a real waiter.
+    if t.state == "delivering" && !t.seat_at_bar {
+        let has_carrier = ctx.db.staff_actor()
+            .restaurant_id().filter(t.restaurant_id)
+            .any(|a| a.ticket_id == Some(t.id));
+        if !has_carrier {
+            log::info!(
+                "tick_ticket_state: ticket {} was delivering with NO carrier — rolled back to ready",
+                t.id,
+            );
+            ctx.db.active_ticket().id().update(ActiveTicket {
+                state: "ready".to_string(),
+                state_clock_ms: 0,
+                ..t
+            });
+            return;
+        }
+    }
 
     // Delivered tickets dwell briefly so the client gets one more
     // subscription event with the final state, then disappear.
