@@ -567,6 +567,53 @@ export class SpacetimeClient {
    * GuestSpawner.hydrateFromCloud needs to reconstruct a functional
    * local Guest from a server row.  Skipped purely-server fields
    * (e.g. archetype_patience_mult — derivable from archetype). */
+  /** Phase 9.1 — Look up a single active_guest row by server id and
+   * return it as a HydratableGuestRow. Used by GuestSpawner's
+   * onInsert bridge to hydrate a fresh server-spawned guest, which
+   * only carries the slim ActiveGuestRow shape through the
+   * subscription handler; importCloudGuest needs the full taste +
+   * waiting + state-clock columns from the table. */
+  getHydratableGuest(id: bigint): HydratableGuestRow | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      const g = this.conn.db.active_guest.id.find(id);
+      if (!g || g.restaurantId !== rid) return null;
+      return {
+        id: g.id,
+        clientTempId: g.clientTempId,
+        variant: g.variant,
+        archetype: g.archetype,
+        state: g.state,
+        stateClockMs: g.stateClockMs,
+        patienceMs: g.patienceMs,
+        x: g.x, z: g.z, floor: g.floor,
+        targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
+        seatUid: g.seatUid,
+        seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
+        seatFacingY: g.seatFacingY,
+        seatAtBar: g.seatAtBar,
+        plateX: g.plateX, plateZ: g.plateZ,
+        orderRecipes: g.orderRecipes,
+        orderIndex: g.orderIndex,
+        ticketId: g.ticketId ?? null,
+        reservedDishTiers: g.reservedDishTiers,
+        tasteDiet: g.tasteDiet,
+        tasteDecorPref: g.tasteDecorPref,
+        tasteWindowPref: g.tasteWindowPref,
+        tasteCuisineBias: g.tasteCuisineBias,
+        tasteDrinkTolerance: g.tasteDrinkTolerance,
+        willUseToilet: g.willUseToilet,
+        waitingChairUid: g.waitingChairUid,
+        waitingTimeoutMs: g.waitingTimeoutMs,
+        totalPaidCents: g.totalPaidCents,
+        totalSatisfactionX100: g.totalSatisfactionX100,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   listActiveGuests(): HydratableGuestRow[] {
     if (!this.conn || this.restaurantId == null) return [];
     const out: HydratableGuestRow[] = [];

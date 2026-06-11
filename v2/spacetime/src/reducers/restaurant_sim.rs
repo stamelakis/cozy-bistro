@@ -5137,12 +5137,19 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     if !restaurant_open { return; }
     if free_seats == 0 { return; }
 
-    // Owner-offline gate.  See doc comment above.
-    let owner_online = ctx.db.player().identity().find(rest.owner)
+    // Phase 9.1 — owner_online gate DROPPED. Per Path B (chosen by
+    // user), the server is the sole continuous simulator. Spawning
+    // fires regardless of whether the owner's tab is open; the
+    // foreground client's local spawnGuest call is gated off in
+    // tandem (GuestSpawner.update) so there's no double-spawn race.
+    // last_seen / OFFLINE_THRESHOLD_MICROS stays referenced because
+    // a few downstream reducers still check it for other purposes;
+    // keep the local binding around in case we re-instate selective
+    // throttling later.
+    let _owner_online = ctx.db.player().identity().find(rest.owner)
         .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch())
             < OFFLINE_THRESHOLD_MICROS)
         .unwrap_or(false);
-    if owner_online { return; }
 
     // Pick a variant by hashing the current micros + restaurant id so
     // consecutive spawns vary instead of cloning the same character.

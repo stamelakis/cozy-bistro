@@ -997,8 +997,25 @@ export class GuestSpawner {
     this.refreshSeatedGuestPoses();
     // Walk waiting guests into real seats as those become available.
     this.promoteWaitingGuests();
+    // Phase 9.1 — Foreground client spawn is GATED OFF when server
+    // owns spawning (the default since Phase 9.1 dropped the
+    // try_server_spawn_guest owner_online check). Server runs
+    // continuously and is the sole writer of active_guest rows;
+    // the new server-driven onInsert subscription handler then calls
+    // importCloudGuest so a server-spawned row materialises locally.
+    //
+    // Without this gate, the local spawn fires once a second AND the
+    // server fires every ~5.5 s on its own clock — a double-spawn
+    // race that filled the restaurant past capacity within seconds.
+    //
+    // The cooldown still advances so when serverOwnsGuestSpawn is
+    // off (admin override / future flag) the original cadence
+    // applies; only the spawn call itself is gated.
+    const serverOwnsGuestSpawn = isServerSim("guests") && this.cloud != null;
     if (this.restaurantOpen && this.spawnCooldown <= 0 && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
-      void this.spawnGuest();
+      if (!serverOwnsGuestSpawn) {
+        void this.spawnGuest();
+      }
       // Apply weather multiplier first, then halve if a paid boost is on.
       // Weather values >1 slow spawning (rainy), <1 speed it up (festival).
       const weatherMult = this.game.weather.getCurrent().spawnRateMultiplier;
@@ -1408,9 +1425,41 @@ export class GuestSpawner {
     if (!this.cloud || this.guestServerBridgeAttached) return;
     this.guestServerBridgeAttached = true;
     this.cloud.subscribeActiveGuestChanges({
+      // Phase 9.1 — Server is now the sole spawner (owner_online gate
+      // dropped). New active_guest rows arrive via onInsert; we
+      // materialise the corresponding local guest the same way
+      // hydrateFromCloud does on reload. The lookup gate filters
+      // duplicates: a row we already imported (or one a still-live
+      // local spawn raced in before this flag flipped) doesn't get
+      // a second character. The subscription handler only carries
+      // the slim ActiveGuestRow; we re-fetch the row by id to get
+      // the full HydratableGuestRow shape importCloudGuest needs
+      // (taste columns, waiting columns, state-clock).
+      onInsert: (row) => {
+        if (this.findLocalGuestByServerId(row.id)) return;
+        if (!this.cloud) return;
+        const hydratable = this.cloud.getHydratableGuest(row.id);
+        if (!hydratable) {
+          console.warn(`[Spawner/Bridge] onInsert: row ${row.id} not in cache`);
+          return;
+        }
+        if (hydratable.clientTempId
+            && this.guests.some((g) => g.id === hydratable.clientTempId)) return;
+        void this.importCloudGuest(hydratable).catch((e) =>
+          console.warn("[Spawner/Bridge] importCloudGuest on insert failed:", e));
+      },
       onUpdate: (row) => this.reconcileCloudGuest(row),
+      // Phase 9.1 — Server-driven despawn. When the server deletes
+      // an active_guest row (leaving dwell expired, etc.), the
+      // local character vanishes too. Without this gate, a
+      // server-despawned guest would linger locally as a ghost
+      // until the next reload's hydrateFromCloud reconciliation.
+      onDelete: (id) => {
+        const idx = this.guests.findIndex((g) => g.serverMirrorId === id);
+        if (idx >= 0) this.despawnGuest(idx);
+      },
     });
-    console.log("[Spawner/Bridge] guest cloud bridge attached");
+    console.log("[Spawner/Bridge] guest cloud bridge attached (insert+update+delete)");
   }
 
   /** Apply a cloud active_guest row's state transitions to the local
