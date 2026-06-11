@@ -387,6 +387,8 @@ pub fn restaurant_tick(
     // GuestSpawner already runs at 5.5 s intervals, and there's no
     // value in adding a parallel server path that races it.
     try_server_spawn_guest(ctx, rid, now);
+    // Phase 9.6 — seat the longest-waiting guest when a chair frees.
+    try_promote_waiting_guest(ctx, rid);
 
     // Energy audit (C) — early-out: if this restaurant has NOTHING
     // going on (no guests, no tickets, no actors, no dishwasher
@@ -1553,6 +1555,14 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
 
     let rating_raw = (base_x100 + 50) / 100; // round-half-up to nearest star
     let rating = rating_raw.clamp(1, 5) as u32;
+    // Phase 9.6 — dissatisfied visits pin the rating to 1★. The vibe
+    // math above scores the AMBIENCE; a guest who stormed out unserved
+    // (total_paid == 0) or was timed/forced out mid-meal (patience
+    // pinned to 0 — angry timeout or table sold under them) didn't
+    // care how nice the wallpaper was. Without this, a maxed-out
+    // restaurant collected 5★ from every angry walkout and LOST
+    // customers never dented the rating at all.
+    let rating = if g.total_paid_cents == 0 || g.patience_ms <= 0 { 1 } else { rating };
 
     // tipMultByRating: 1 → 0%, 2 → 0%, 3 → 5%, 4 → 15%, 5 → 30%.
     // Stored × 1000 (basis points scaled by 10) for integer math.
@@ -3428,8 +3438,40 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 });
                 return;
             }
-            // wash_phase == "drop": done with the trip. Clear wash
-            // fields + return home. Inventory motion stays with H.21.
+            // wash_phase == "drop": done with the trip.
+            //
+            // Phase 9.6 — the completed trip IS the inventory motion.
+            // Pre-9.6 this cleared the wash fields and left the
+            // dirty→clean move to the client (or the gated H.21
+            // loader); when the client had no matching local dirty
+            // pile (post-reload), the pool's dirty count never
+            // dropped and the dispatcher re-picked the same trip
+            // forever — the "waiter with a cleaning bubble doing
+            // nothing for 5 hours" loop. Sink trips wash 2 pieces,
+            // dishwasher trips 8; tier-preserving (per-row moves).
+            // The client's bridge-trip completion skips its local
+            // washOne/loadDishwasher when serverSim dishware is on,
+            // so the pool subscription is the single source of truth.
+            let station_def = ctx.db.placed_furniture().uid()
+                .find(a.wash_target_uid.clone())
+                .map(|s| s.def_id).unwrap_or_default();
+            let mut quota: u32 = if station_def.starts_with("dishwasher") { 8 } else { 2 };
+            let dirty_rows: Vec<(String, u32)> = ctx.db.dishware_pool()
+                .restaurant_id().filter(a.restaurant_id)
+                .filter(|p| p.dirty > 0)
+                .map(|p| (p.kind.clone(), p.tier))
+                .collect();
+            for (kind, tier) in dirty_rows {
+                if quota == 0 { break; }
+                let key = pool_key(a.restaurant_id, &kind, tier);
+                let Some(p) = ctx.db.dishware_pool().key().find(key) else { continue };
+                let take = p.dirty.min(quota);
+                if take == 0 { continue; }
+                quota -= take;
+                apply_pool_delta(ctx, a.restaurant_id, &kind, tier,
+                    take as i32, -(take as i32), "wash-trip");
+            }
+            // Clear wash fields + return home.
             ctx.db.staff_actor().member_id().update(StaffActor {
                 x: new_x,
                 z: new_z,
@@ -4926,17 +4968,49 @@ pub(crate) fn try_spawn_arrival_guest(
         .restaurant_id().filter(restaurant_id)
         .count();
 
-    // Seat pre-assignment — gates the spawn. No free table → no
-    // spawn. This is what was missing pre-H.89 and produced ghosts.
-    let Some((seat_uid, seat_x, seat_z, seat_floor)) =
-        try_assign_seat_for(ctx, restaurant_id, door_x, door_z, None)
-    else {
-        log::info!(
-            "try_spawn_arrival_guest: no free seat in restaurant {} — skipping spawn",
-            restaurant_id,
-        );
-        return false;
-    };
+    // Seat pre-assignment. Phase 9.6 — a full house no longer turns
+    // everyone away: arrivals are population-driven, and when no
+    // seat is free the guest may WAIT near the door for one to open
+    // up. Willingness scales with the restaurant's rating average
+    // (5.0★ → everyone waits, ≤2.0★ → nobody does), and so does the
+    // wait timeout. try_promote_waiting_guest seats them the moment
+    // a chair frees; the Phase 6.1b waiting-timeout tick walks them
+    // out (dissatisfied) if it never does.
+    let mut wait_mode = false;
+    let mut waiting_timeout_ms: i64 = 0;
+    let (seat_uid, seat_x, seat_z, seat_floor) =
+        match try_assign_seat_for(ctx, restaurant_id, door_x, door_z, None) {
+            Some(s) => s,
+            None => {
+                let avg_x100 = avg_rating_x100(ctx, restaurant_id); // 100..500
+                let willing_pct = ((avg_x100 - 200) / 3).clamp(0, 100) as u64;
+                let roll_h = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
+                    .wrapping_mul(restaurant_id.wrapping_add(31));
+                if willing_pct == 0 || (roll_h >> 7) % 100 >= willing_pct {
+                    log::info!(
+                        "try_spawn_arrival_guest: no free seat in restaurant {} — guest unwilling to wait (avg rating x100 = {})",
+                        restaurant_id, avg_x100,
+                    );
+                    return false;
+                }
+                // Cap concurrent waiters so the doorway doesn't mob.
+                let waiting_now = ctx.db.active_guest()
+                    .restaurant_id().filter(restaurant_id)
+                    .filter(|g| g.state == "waiting")
+                    .count();
+                if waiting_now >= 4 {
+                    return false;
+                }
+                wait_mode = true;
+                // 36 s at 1★ avg up to 100 s at 5★ — better
+                // restaurants are worth a longer wait.
+                waiting_timeout_ms = 20_000 + avg_x100 * 160;
+                // Fan wait spots alternately left/right of the door.
+                let side = if waiting_now % 2 == 0 { 1.0 } else { -1.0 };
+                let wx = door_x + side * (0.9 + 0.9 * (waiting_now / 2) as f32);
+                (String::new(), wx, door_z - 0.6, 0u32)
+            }
+        };
 
     // Pseudo-random rolls — Date.now()/random() are disallowed in
     // scheduled-reducer context, so we hash (timestamp ^ restaurant_id
@@ -4993,7 +5067,9 @@ pub(crate) fn try_spawn_arrival_guest(
         taste_cuisine_bias: String::new(),
         taste_drink_tolerance: 0.0,
         will_use_toilet,
-        state: "walkingIn".to_string(),
+        // Phase 9.6 — "waiting" guests park near the door until
+        // try_promote_waiting_guest hands them a freed seat.
+        state: if wait_mode { "waiting".to_string() } else { "walkingIn".to_string() },
         state_clock_ms: 0,
         patience_ms: scale_patience(ORDER_PATIENCE_BASE_MS, patience_mult_x100),
         // H.89 — populate seat fields from try_assign_seat_for above.
@@ -5025,8 +5101,11 @@ pub(crate) fn try_spawn_arrival_guest(
         order_index: 0,
         ticket_id: None,
         reserved_dish_tiers: String::new(),
-        waiting_chair_uid: String::new(),
-        waiting_timeout_ms: 0,
+        // Phase 9.6 — synthetic wait-spot id; the client's waiting
+        // branch keys on a non-empty value to pose the guest at the
+        // wait spot. Not a furniture uid on purpose (no chair claim).
+        waiting_chair_uid: if wait_mode { format!("wait-{}", h & 0xFFFF) } else { String::new() },
+        waiting_timeout_ms,
         total_paid_cents: 0,
         total_satisfaction_x100: 0,
         dishes_settled: false,
@@ -5430,6 +5509,57 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
 ///   subscribers see the guest standing at the table centre, not on
 ///   a specific chair. The client's local sim, if running, will
 ///   override with proper chair coords.
+/// Phase 9.6 — average visit rating × 100 from the cloud rating
+/// history CSV. 300 (3.0★) when no history exists yet so brand-new
+/// restaurants get a middling willingness-to-wait instead of zero.
+fn avg_rating_x100(ctx: &ReducerContext, rid: u64) -> i64 {
+    let csv = ctx.db.restaurant().id().find(rid)
+        .and_then(|r| r.cloud_rating_history_csv)
+        .unwrap_or_default();
+    let mut sum = 0i64;
+    let mut n = 0i64;
+    for s in csv.split(',') {
+        if let Ok(v) = s.trim().parse::<i64>() {
+            sum += v;
+            n += 1;
+        }
+    }
+    if n == 0 { 300 } else { (sum * 100) / n }
+}
+
+/// Phase 9.6 — seat the longest-waiting "waiting" guest when a chair
+/// frees up. Called every restaurant tick; cheap no-op when nobody
+/// is waiting. The promoted guest re-enters the normal walkingIn →
+/// seated flow toward the freshly assigned seat.
+fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
+    let Some(g) = ctx.db.active_guest()
+        .restaurant_id().filter(rid)
+        .find(|g| g.state == "waiting")
+    else { return };
+    let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id))
+    else { return };
+    log::info!(
+        "try_promote_waiting_guest: guest {} → seat {} in restaurant {}",
+        g.id, seat_uid, rid,
+    );
+    ctx.db.active_guest().id().update(ActiveGuest {
+        state: "walkingIn".to_string(),
+        state_clock_ms: 0,
+        seat_uid,
+        seat_x: sx,
+        seat_z: sz,
+        seat_floor: sf,
+        plate_x: sx,
+        plate_z: sz,
+        target_x: sx,
+        target_z: sz,
+        target_floor: sf,
+        waiting_chair_uid: String::new(),
+        waiting_timeout_ms: 0,
+        ..g
+    });
+}
+
 fn try_assign_seat_for(
     ctx: &ReducerContext,
     rid: u64,
@@ -6872,7 +7002,36 @@ pub fn sell_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
     // Cascade — if the deleted item was a dishwasher, drop its batch
     // row too so a fresh placement of the same uid starts clean.
     if ctx.db.dishwasher_batch().furniture_uid().find(uid.clone()).is_some() {
-        ctx.db.dishwasher_batch().furniture_uid().delete(uid);
+        ctx.db.dishwasher_batch().furniture_uid().delete(uid.clone());
+    }
+    // Phase 9.6 — selling a seat out from under its diners evicts
+    // them DISSATISFIED. seat_uid is either the furniture uid itself
+    // (server-assigned) or "<uid>#<slot>" (client-assigned table
+    // slots); prefix-with-# match covers both without false matches
+    // on uids that merely share a prefix. patience_ms pinned to 0 is
+    // the dissatisfaction signal the rollup reads (rating 1★); the
+    // standard leaving dwell despawns + settles them.
+    let evictees: Vec<ActiveGuest> = ctx.db.active_guest()
+        .restaurant_id().filter(existing.restaurant_id)
+        .filter(|g| !is_leaving_state(&g.state)
+            && (g.seat_uid == uid
+                || g.seat_uid.starts_with(&format!("{uid}#"))
+                || g.waiting_chair_uid == uid))
+        .collect();
+    for g in evictees {
+        log::info!(
+            "sell_furniture: evicting guest {} (seat {} sold) — leaving dissatisfied",
+            g.id, uid,
+        );
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state: "leaving".to_string(),
+            state_clock_ms: 0,
+            patience_ms: 0,
+            target_x: 0.0,
+            target_z: 0.0,
+            target_floor: 0,
+            ..g
+        });
     }
     Ok(())
 }

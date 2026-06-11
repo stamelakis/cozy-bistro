@@ -240,7 +240,13 @@ export class AdminModal {
     // Migrated from the in-sidebar dev section (P12). Sits between
     // the sliders and Money so the most-used dev controls (speed +
     // money) are grouped near the top.
-    if (this.time) body.appendChild(this.buildSpeedSection(this.time));
+    // Phase 9.6 — speed section REMOVED. The world simulates 24/7 in
+    // real time on the server; pause/2×/4× only desynced the local
+    // render + day-clock yoke from reality and read as a lie. The
+    // buildSpeedSection helper stays (dead) in case a render-only
+    // pause ever comes back.
+    void this.time;
+    void this.buildSpeedSection;
 
     // === Money section ===
     body.appendChild(this.buildMoneySection());

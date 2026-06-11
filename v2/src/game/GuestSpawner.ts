@@ -1495,6 +1495,31 @@ export class GuestSpawner {
       }
     }
 
+    // Phase 9.6 — server promoted a waiting guest onto a freed seat
+    // (try_promote_waiting_guest flipped waiting → walkingIn with the
+    // seat fields populated). Adopt the seat + walk them over. The
+    // local promoteWaitingGuests is gated under serverOwnsGuestStates
+    // so this bridge is the only promotion path.
+    if (g.state === "waitingForSeat" && row.state === "walkingIn" && row.seatUid) {
+      if (g.waiting) {
+        this.claimedWaitingChairs.delete(g.waiting.chairUid);
+        g.waiting = undefined;
+      }
+      g.seatId = row.seatUid as SeatId;
+      g.seatPos.set(row.seatX, row.seatZ);
+      g.seatFloor = row.seatFloor;
+      g.platePos.set(row.seatX, row.seatZ);
+      this.occupiedSeats.add(row.seatUid as SeatId);
+      g.target = new THREE.Vector2(row.seatX, row.seatZ);
+      this.planPath(g);
+      g.passedExterior = true;
+      g.passedDoor = true;
+      g.state = "walkingIn";
+      g.character.action = "walk";
+      g.stateClock = 0;
+      console.log(`[Spawner/Bridge] waiting guest ${g.id} promoted → seat ${row.seatUid}`);
+    }
+
     // waitingForFood → eating: server saw a delivered ticket bound to
     // this guest. Fire the local "plate landed" effects. Without this
     // bridge step the local case "waitingForFood" handler runs the
@@ -2409,6 +2434,12 @@ export class GuestSpawner {
         this.applyAngryLeave(g);
         continue;
       }
+      // Phase 9.6 — promotion is server-owned now. The server's
+      // try_promote_waiting_guest assigns the freed seat and flips
+      // the row waiting → walkingIn; the bridge adopts it locally.
+      // Promoting here too would race the server onto a DIFFERENT
+      // seat and leave one of the two claims orphaned.
+      if (this.serverOwnsGuestStates()) continue;
       // Only promote once the guest is actually parked at the chair.
       if (g.state !== "waitingForSeat") continue;
       const available = this.listFunctionalSeats().find((s) => {

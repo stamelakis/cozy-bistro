@@ -1791,12 +1791,18 @@ export class StaffRouter {
         }
         const isDishwasher = trip.stationDefId.startsWith("dishwasher");
         const totalPieces = 1 + trip.extraDirtyIds.length;
-        for (let i = 0; i < totalPieces; i++) {
-          if (isDishwasher) {
-            const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
-            if (!ok) this.washCallbacks?.washOne(trip.kind);
-          } else {
-            this.washCallbacks?.washOne(trip.kind);
+        // Phase 9.6 — server's tick_wash_trip moves the inventory at
+        // drop completion now; running washOne/loadDishwasher here
+        // too would double-clean. The pool subscription delivers the
+        // server's counts; this branch keeps only the local visuals.
+        if (!isServerSim("dishware")) {
+          for (let i = 0; i < totalPieces; i++) {
+            if (isDishwasher) {
+              const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+              if (!ok) this.washCallbacks?.washOne(trip.kind);
+            } else {
+              this.washCallbacks?.washOne(trip.kind);
+            }
           }
         }
         this.busyWashUids.delete(trip.stationUid);
@@ -3199,18 +3205,23 @@ export class StaffRouter {
               // becomes clean ("waiter dumped it in the sink on the
               // way past"). Without this fallback, the loaded dish
               // would silently leak from the inventory.
+              // Phase 9.6 — inventory motion is server-side now (the
+              // drop-completion in tick_wash_trip washes the pieces);
+              // local loads would double-clean. Visual-only here.
               let loadedCount = 0;
-              for (let i = 0; i < totalPieces; i++) {
-                const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
-                if (ok) {
-                  loadedCount++;
-                } else {
-                  this.dishwareLogger?.(`dishwasher-load-failed kind=${trip.kind} uid=${trip.stationUid} (piece ${i + 1}/${totalPieces}) → washOne fallback`);
-                  this.washCallbacks?.washOne(trip.kind);
+              if (!isServerSim("dishware")) {
+                for (let i = 0; i < totalPieces; i++) {
+                  const ok = this.washCallbacks?.loadDishwasher(trip.stationUid, trip.stationDefId, trip.kind) ?? false;
+                  if (ok) {
+                    loadedCount++;
+                  } else {
+                    this.dishwareLogger?.(`dishwasher-load-failed kind=${trip.kind} uid=${trip.stationUid} (piece ${i + 1}/${totalPieces}) → washOne fallback`);
+                    this.washCallbacks?.washOne(trip.kind);
+                  }
                 }
-              }
-              if (loadedCount < totalPieces) {
-                this.dishwareLogger?.(`batch-trip partial: ${loadedCount}/${totalPieces} into dishwasher, rest sink-fallback`);
+                if (loadedCount < totalPieces) {
+                  this.dishwareLogger?.(`batch-trip partial: ${loadedCount}/${totalPieces} into dishwasher, rest sink-fallback`);
+                }
               }
               // Dishwashers don't lock — clearing busyWashUids is a
               // safety net for legacy code paths that may still have
