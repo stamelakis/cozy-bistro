@@ -1,57 +1,299 @@
 /**
- * Welcome / how-to-play modal. Auto-shows on the player's very first
- * visit (no save in localStorage), then dismissed by clicking outside
+ * Game guide modal. Auto-shows on the player's very first visit (no
+ * dismissal flag in localStorage), then dismissed by clicking outside
  * or the X. The HUD also gets a "?" button so the player can re-open
  * it later.
  *
- * Content is hard-coded (a real tutorial system would walk the player
- * through each UI element; this is just the get-started cheat sheet).
+ * Rewritten as a TABBED guide after the server-authoritative
+ * migration: the world now runs 24/7 on the server (no pause, no
+ * fast-forward), and the old single-page cheat sheet was wrong about
+ * most of that. Content is hard-coded and grouped into six tabs:
+ * Basics / Customers / Staff / Icons / Economy / Multiplayer. The
+ * Icons tab quotes the status-bubble strings EXACTLY as the routers
+ * render them (StaffRouter chefLabel/waiterLabel/barmanLabel,
+ * ErrandRouter errandLabel, GuestSpawner guestLabel, VisitMode
+ * buildStaffLabel/buildGuestLabel) — update it when those change.
  */
 
 const STORAGE_KEY = "cozy-bistro-3d-help-dismissed-v1";
 
-interface HelpSection {
-  title: string;
-  body: string;
+/** One renderable chunk of tab content. Kept as plain data so the
+ * DOM-building loop stays tiny and every block shares the same
+ * styling. No markdown / innerHTML — everything is textContent. */
+type HelpBlock =
+  | { kind: "p"; text: string }
+  | { kind: "h"; text: string }
+  | { kind: "ul"; items: string[] }
+  | { kind: "legend"; rows: ReadonlyArray<readonly [string, string]> };
+
+interface HelpTab {
+  label: string;
+  blocks: HelpBlock[];
 }
 
-const SECTIONS: HelpSection[] = [
+const TABS: HelpTab[] = [
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "The loop",
-    body: "Guests walk in, sit, order, eat, pay, and leave. Your chef cooks tickets at the stove; the waiter carries plates to the seat. Hire more chefs/waiters from the bottom-left panel when the queue stacks up.",
+    label: "Basics",
+    blocks: [
+      {
+        kind: "p",
+        text: "Run a bistro on a busy shared street: build out the floor, put recipes on the menu, hire a crew, and serve whoever walks in. Profits buy furniture, better recipes and tier expansions (1 → 5) — each tier adds recipes, extra seats and a whole new floor.",
+      },
+      { kind: "h", text: "The world never pauses" },
+      {
+        kind: "ul",
+        items: [
+          "Your restaurant lives on a server and runs 24/7. There is no pause button and no fast-forward — it's a persistent online world.",
+          "While you're logged off it keeps going: guests arrive, eat and pay; staff cook, serve and wash dishes; salaries and rent are charged; errand helpers restock the pantry; training and recipe timers keep counting.",
+          "Logging in simply points the camera at the live simulation. Money, rating and the day counter are the server's numbers — exactly where they got to without you.",
+        ],
+      },
+      { kind: "h", text: "Getting started" },
+      {
+        kind: "ul",
+        items: [
+          "Build: pick a furniture piece, then click the floor to place it. R rotates, Esc cancels, SELL MODE refunds 50%.",
+          "Menu: choose which recipes guests can order (up to 3 per category).",
+          "Staff: hire at least one chef and one waiter — without them nothing gets cooked or served.",
+          "Reopen this guide any time with the ? button.",
+        ],
+      },
+    ],
   },
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "Build & sell (top-right)",
-    body: "Click a furniture button, then click the floor to place. Press R to rotate. Press Esc to cancel. Hit \"SELL MODE\" to refund 50% on any placed item.",
+    label: "Customers",
+    blocks: [
+      { kind: "h", text: "Arrivals" },
+      {
+        kind: "ul",
+        items: [
+          "The neighbourhood sends guests on its own schedule. Weather (rain pushes people indoors), your décor's attraction and a paid Boost change the rate — your seat count does not.",
+          "Every guest has a personality (🙂 casual, ⚡ rushed, 🍷 foodie, 📸 tourist, 💕 date night, 😠 grump, 🕵️ critic) plus tastes, and picks a free chair to match: food vs drink table, favourite theme, décor, window, quiet corner, or the bar.",
+        ],
+      },
+      { kind: "h", text: "When the house is full" },
+      {
+        kind: "ul",
+        items: [
+          "Arrivals may WAIT near the door. Willingness scales with your rating average: at ≤2.0★ nobody waits, at 5.0★ everyone does — and the wait timer stretches from ~50 s at 2★ up to ~100 s at 5★. At most 4 guests wait at once.",
+          "Waiting guests are seated automatically the moment a chair frees. If their timer runs out first, they leave angry.",
+        ],
+      },
+      { kind: "h", text: "Patience & walkouts" },
+      {
+        kind: "ul",
+        items: [
+          "Each guest has a patience pool: roughly 60 s to get their order taken and 90 s per course for the food, stretched or squeezed by personality (⚡ 0.6× … 🍷 1.3×).",
+          "Patience empty → angry walkout: a red “-1★ (gave up)” pops above them, the Lost counter ticks up, and a 1★ review is recorded.",
+        ],
+      },
+      { kind: "h", text: "Ratings (1–5★ per visit)" },
+      {
+        kind: "ul",
+        items: [
+          "Food satisfaction and recipe level, dishware quality, furniture style & comfort, the bathroom, overwhelming dish piles and smoke from hoodless stoves all weigh in. The 🕵️ Food Critic's review counts three times.",
+          "A guest who never got food — or was evicted mid-meal (e.g. you sold their table) — always records 1★.",
+          "WC trips: some guests use the toilet or wash their hands. No toilet when needed hurts badly, busy or shabby bathrooms hurt a little, and a clean well-equipped one lifts the score even for guests who never go.",
+        ],
+      },
+    ],
   },
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "Menu picker (bottom-center)",
-    body: "Click MENU to choose which recipes guests can order. You can run up to 3 per category. Recipes you haven't unlocked yet won't appear here.",
+    label: "Staff",
+    blocks: [
+      { kind: "h", text: "Roles" },
+      {
+        kind: "ul",
+        items: [
+          "Chef ($80) — claims the most urgent queued ticket, walks to a free matching station (stove, counter, …) on their floor, cooks it, returns. More chefs cook in parallel.",
+          "Waiter ($70) — takes orders at the table, carries ready plates out, and washes dishes between jobs. Service outranks washing: a dish run only starts when nobody is waiting to order and no plate is ready, and only one waiter washes at a time (up to 4 pieces per trip).",
+          "Barman ($80, Tier 2+) — owns the bar counter: takes bar-stool guests' orders, mixes and serves them directly. No waiter involved.",
+          "Errand helper ($65) — when the pantry dips below its targets they walk out the door, shop off-screen and unload at the supply counter. Each trip costs money (≈$2 per ingredient unit).",
+          "Staff prefer their assigned floor and only cross the stairs when their own floor has been quiet for a moment.",
+        ],
+      },
+      { kind: "h", text: "Training & pay" },
+      {
+        kind: "ul",
+        items: [
+          "Training runs on real time — 3 h to level 1, doubling up to 48 h for level 5 — and finishes even while you're logged off. One trainee at a time. Trained waiters walk faster; trained chefs cook faster.",
+          "Salaries: $6 per member per real minute, +$1/min per training level — charged around the clock, including while you're offline. Size your crew for the hours you're away.",
+        ],
+      },
+    ],
   },
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "Tier expansion",
-    body: "The pink tier bar (bottom-center) sells higher-tier recipes. Each tier costs more but unlocks fancier (and more lucrative) dishes.",
+    label: "Icons",
+    blocks: [
+      {
+        kind: "p",
+        text: "Every guest bubble starts with who they are:",
+      },
+      {
+        kind: "legend",
+        rows: [
+          ["🙂", "Casual Diner"],
+          ["⚡", "Quick Lunch — impatient, small order"],
+          ["🍷", "Foodie — patient, orders big, tips well"],
+          ["📸", "Tourist"],
+          ["💕", "Date Night"],
+          ["😠", "Grumpy Critic — stingy tipper"],
+          ["🕵️", "Food Critic — rare; rating counts 3×, tips 3×"],
+        ],
+      },
+      { kind: "h", text: "Guests" },
+      {
+        kind: "legend",
+        rows: [
+          ["🪑 42s", "waiting by the door for a seat (seconds left)"],
+          ["📋 / 📋🥤", "just seated, browsing the menu (🥤 = drink table)"],
+          ["📋 37s", "waiting for a waiter to take the order"],
+          ["⏳", "order placed — the kitchen is on it"],
+          ["⏳ 55s / 🥤 55s", "waiting for food / drink (patience left)"],
+          ["🍴 / 🥤", "eating / drinking (green bubble)"],
+          ["🚻", "toilet trip"],
+          ["🧼", "washing hands at a sink"],
+          ["🎨 🪟 🤫 🍸", "seat tastes: décor / window / quiet corner / bar fan"],
+          ["red bubble", "patience nearly gone (~10 s) — about to storm out"],
+        ],
+      },
+      { kind: "h", text: "Pop-ups" },
+      {
+        kind: "legend",
+        rows: [
+          ["+$N", "course paid"],
+          ["★★★★☆", "the rating they leave on the way out"],
+          ["tip +$N", "tip on top (rating, personality & weather)"],
+          ["-1★ (gave up)", "angry walkout — counted as Lost"],
+        ],
+      },
+      { kind: "h", text: "Waiter" },
+      {
+        kind: "legend",
+        rows: [
+          ["📋 → order", "walking over to take an order"],
+          ["📋 ordering", "taking the order"],
+          ["→ pickup", "fetching a ready plate"],
+          ["🍽️ serving", "delivering it to the table"],
+          ["🧽 → dirty", "going to collect dirty dishes"],
+          ["🧽 → wash", "carrying them to a sink / dishwasher"],
+          ["🧽 washing", "scrubbing / loading"],
+          ["← back", "returning to their post"],
+        ],
+      },
+      { kind: "h", text: "Chef" },
+      {
+        kind: "legend",
+        rows: [
+          ["→ stove", "walking to a free station"],
+          ["🍳 cooking", "cooking the ticket"],
+          ["← back", "returning"],
+        ],
+      },
+      { kind: "h", text: "Barman" },
+      {
+        kind: "legend",
+        rows: [
+          ["→ bar", "heading to the bar counter"],
+          ["🍸 mixing", "preparing a drink"],
+          ["← bar", "back behind the bar"],
+        ],
+      },
+      { kind: "h", text: "Errand helper (purple bubble)" },
+      {
+        kind: "legend",
+        rows: [
+          ["📦 leaving", "heading out the door"],
+          ["📦 to shop", "walking up the street to shop"],
+          ["📦 returning", "back with the goods"],
+          ["📦 → counter", "carrying them to the supply counter"],
+          ["📦 dropping off", "unloading into the pantry"],
+          ["← back", "done — returning to their spot"],
+        ],
+      },
+      { kind: "h", text: "While visiting another restaurant" },
+      {
+        kind: "legend",
+        rows: [
+          ["🥘 / 🍷 / 🍽 + dish", "their chef / barman / waiter working that dish"],
+          ["🛒 → · 🛒 shopping · 🛒 ←", "their errand helper's shopping trip"],
+          ["📦 unloading · 🛒 done", "the delivery arriving"],
+          ["🔴 LIVE / ❄ STATIC", "overlay badge: real-time feed vs snapshot"],
+        ],
+      },
+    ],
   },
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "Upgrades (top-center)",
-    body: "Click UPGRADES to level individual recipes. Each level gives +30% sell price and more satisfaction, but costs more each step.",
+    label: "Economy",
+    blocks: [
+      { kind: "h", text: "Income" },
+      {
+        kind: "ul",
+        items: [
+          "A dish's price = ingredient cost + profit; profit grows with the recipe's tier and level. Each served course pops “+$N”.",
+          "Tips on exit: 5% / 15% / 30% of the bill at 3★ / 4★ / 5★, multiplied by personality (😠 0.4× … 🕵️ 3×) and weather.",
+        ],
+      },
+      { kind: "h", text: "Recurring costs" },
+      {
+        kind: "ul",
+        items: [
+          "Rent per in-game day by tier: $40 / $80 / $160 / $320 / $640, scaled by plot size. Your first 30 days are rent-free; after that it's charged at every day rollover.",
+          "Wages: $6/min per staff member (+$1/min per training level) — around the clock, even while you're offline.",
+          "Auto-shop: ingredients cost ≈$2 per unit, bought whenever stock dips below target (tune targets in Pantry).",
+          "One in-game day = 12 real minutes. Served / Lost and daily revenue / expenses reset at the rollover.",
+        ],
+      },
+      { kind: "h", text: "Dishes" },
+      {
+        kind: "ul",
+        items: [
+          "Every course dirties a plate or glass. Waiters haul up to 4 pieces per run to a sink (scrubbed clean on the spot) or a dishwasher (holds up to 10 plates + 5 glasses, then washes by itself — the Pro model is faster).",
+          "No clean dishes = service stalls, and an overwhelming dirty pile costs a rating star. Buy extra sets in Pantry → Dishware.",
+        ],
+      },
+      { kind: "h", text: "Investments" },
+      {
+        kind: "ul",
+        items: [
+          "Recipe development (UPGRADES): $30, doubling each level, plus ingredients. It takes REAL time — about 1 min at Tier 1 Level 1, doubling per tier and per level — and the timer keeps running while you're logged off. Each level raises the sell price and satisfaction; one recipe at a time.",
+          "Boost: $80 buys 60 s of 2× guest arrivals, then a 15-minute cooldown.",
+          "Expand: Tiers 2–5 cost $10k / $20k / $40k / $80k and unlock new recipes, extra seats (T2–T4) and one more floor each.",
+        ],
+      },
+    ],
   },
+  // ────────────────────────────────────────────────────────────────
   {
-    title: "Auto-shop & pantry (bottom-right)",
-    body: "Ingredients auto-restock when below 8 units. Toggle off to manage stock manually. The errand helper makes a visible run to the door whenever a delivery arrives.",
-  },
-  {
-    title: "Speed controls",
-    body: "Use the ‖ / 1× / 2× / 4× buttons (under the HUD) to pause or fast-forward. Camera stays responsive while paused.",
-  },
-  {
-    title: "Boost",
-    body: "Pay $80 for a 60-second guest-spawn boost when you want to grind revenue. Useful right after a furniture splurge to catch back up.",
+    label: "Multiplayer",
+    blocks: [
+      {
+        kind: "p",
+        text: "Every plot on the street is another real player's restaurant — the same server simulates them all, around the clock.",
+      },
+      {
+        kind: "ul",
+        items: [
+          "Click a plot and choose Visit to walk through it. A 🔴 LIVE badge means you're watching their actual service in real time — staff trips, guest bubbles and kitchen tickets (🍽 seated · 👤 staff · 🍳 cooking · 🛎 ready). ❄ STATIC means you're seeing a snapshot because no live data is flowing right now.",
+          "You're on display the same way: anyone can visit your place and watch your crew work, even while you're offline.",
+          "The plaque by your door shows your restaurant's name and live star rating to everyone — customise it with the sign editor.",
+          "Use the chat panel to talk with other owners; the HUD shows how many players are online.",
+        ],
+      },
+    ],
   },
 ];
 
 export class HelpModal {
   private readonly root: HTMLElement;
+  private readonly tabButtons: HTMLButtonElement[] = [];
+  private readonly content: HTMLDivElement;
+  private activeTab = 0;
   /** Optional gate set by the Engine — when present and returns
    * false the modal refuses to show. Used to block the welcome
    * pop while the auth flow is still in progress so the help
@@ -81,7 +323,7 @@ export class HelpModal {
 
     const body = document.createElement("div");
     Object.assign(body.style, {
-      width: "min(560px, calc(100vw - 40px))",
+      width: "min(640px, calc(100vw - 40px))",
       maxHeight: "84vh",
       display: "flex",
       flexDirection: "column",
@@ -103,7 +345,7 @@ export class HelpModal {
       marginBottom: "12px",
     } as Partial<CSSStyleDeclaration>);
     const title = document.createElement("div");
-    title.textContent = "Welcome to Cozy Bistro";
+    title.textContent = "Cozy Bistro — Game Guide";
     Object.assign(title.style, { fontSize: "20px", fontWeight: "700", letterSpacing: "0.04em" } as Partial<CSSStyleDeclaration>);
     header.appendChild(title);
     const closeBtn = document.createElement("button");
@@ -123,37 +365,51 @@ export class HelpModal {
     header.appendChild(closeBtn);
     body.appendChild(header);
 
-    const scroller = document.createElement("div");
-    Object.assign(scroller.style, {
+    // ── Tab bar ──────────────────────────────────────────────────
+    const tabBar = document.createElement("div");
+    Object.assign(tabBar.style, {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "6px",
+      paddingBottom: "10px",
+      marginBottom: "10px",
+      borderBottom: "1px solid rgba(255,245,220,0.15)",
+    } as Partial<CSSStyleDeclaration>);
+    TABS.forEach((tab, i) => {
+      const btn = document.createElement("button");
+      btn.textContent = tab.label;
+      Object.assign(btn.style, {
+        background: "transparent",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.25)",
+        borderRadius: "6px",
+        padding: "5px 11px",
+        cursor: "pointer",
+        font: "inherit",
+        fontSize: "12px",
+        fontWeight: "600",
+        opacity: "0.75",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => this.selectTab(i);
+      this.tabButtons.push(btn);
+      tabBar.appendChild(btn);
+    });
+    body.appendChild(tabBar);
+
+    // ── Scrollable content area (swapped per tab) ────────────────
+    this.content = document.createElement("div");
+    Object.assign(this.content.style, {
       flex: "1",
       overflowY: "auto",
       paddingRight: "4px",
+      minHeight: "0",
     } as Partial<CSSStyleDeclaration>);
-    body.appendChild(scroller);
-
-    for (const section of SECTIONS) {
-      const block = document.createElement("div");
-      Object.assign(block.style, { marginBottom: "12px" } as Partial<CSSStyleDeclaration>);
-      const h = document.createElement("div");
-      h.textContent = section.title;
-      Object.assign(h.style, {
-        fontSize: "13px",
-        fontWeight: "700",
-        marginBottom: "2px",
-        color: "#ffd986",
-      } as Partial<CSSStyleDeclaration>);
-      block.appendChild(h);
-      const p = document.createElement("div");
-      p.textContent = section.body;
-      Object.assign(p.style, { opacity: "0.9" } as Partial<CSSStyleDeclaration>);
-      block.appendChild(p);
-      scroller.appendChild(block);
-    }
+    body.appendChild(this.content);
 
     const footer = document.createElement("button");
     footer.textContent = "Got it — start playing";
     Object.assign(footer.style, {
-      marginTop: "10px",
+      marginTop: "12px",
       padding: "9px 18px",
       background: "rgba(120, 200, 120, 0.25)",
       color: "#fff5dc",
@@ -167,6 +423,89 @@ export class HelpModal {
     } as Partial<CSSStyleDeclaration>);
     footer.onclick = () => this.hide();
     body.appendChild(footer);
+
+    this.selectTab(0);
+  }
+
+  /** Highlight tab `i`'s button and rebuild the content area from its
+   * block list. Scroll position resets so each tab starts at the top. */
+  private selectTab(i: number): void {
+    this.activeTab = i;
+    this.tabButtons.forEach((btn, j) => {
+      const active = j === i;
+      Object.assign(btn.style, {
+        background: active ? "rgba(255,217,134,0.16)" : "transparent",
+        color: active ? "#ffd986" : "#fff5dc",
+        borderColor: active ? "rgba(255,217,134,0.6)" : "rgba(255,245,220,0.25)",
+        opacity: active ? "1" : "0.75",
+      } as Partial<CSSStyleDeclaration>);
+    });
+    this.content.replaceChildren();
+    for (const block of TABS[this.activeTab].blocks) {
+      this.content.appendChild(this.renderBlock(block));
+    }
+    this.content.scrollTop = 0;
+  }
+
+  private renderBlock(block: HelpBlock): HTMLElement {
+    switch (block.kind) {
+      case "h": {
+        const h = document.createElement("div");
+        h.textContent = block.text;
+        Object.assign(h.style, {
+          fontSize: "13px",
+          fontWeight: "700",
+          margin: "10px 0 4px",
+          color: "#ffd986",
+        } as Partial<CSSStyleDeclaration>);
+        return h;
+      }
+      case "p": {
+        const p = document.createElement("div");
+        p.textContent = block.text;
+        Object.assign(p.style, { opacity: "0.9", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+        return p;
+      }
+      case "ul": {
+        const ul = document.createElement("ul");
+        Object.assign(ul.style, {
+          margin: "0 0 10px",
+          paddingLeft: "18px",
+          opacity: "0.9",
+        } as Partial<CSSStyleDeclaration>);
+        for (const item of block.items) {
+          const li = document.createElement("li");
+          li.textContent = item;
+          Object.assign(li.style, { marginBottom: "4px" } as Partial<CSSStyleDeclaration>);
+          ul.appendChild(li);
+        }
+        return ul;
+      }
+      case "legend": {
+        const grid = document.createElement("div");
+        Object.assign(grid.style, {
+          display: "grid",
+          gridTemplateColumns: "max-content 1fr",
+          columnGap: "14px",
+          rowGap: "3px",
+          margin: "0 0 10px",
+        } as Partial<CSSStyleDeclaration>);
+        for (const [icon, meaning] of block.rows) {
+          const iconEl = document.createElement("div");
+          iconEl.textContent = icon;
+          Object.assign(iconEl.style, {
+            fontWeight: "600",
+            whiteSpace: "nowrap",
+          } as Partial<CSSStyleDeclaration>);
+          grid.appendChild(iconEl);
+          const meaningEl = document.createElement("div");
+          meaningEl.textContent = meaning;
+          Object.assign(meaningEl.style, { opacity: "0.85" } as Partial<CSSStyleDeclaration>);
+          grid.appendChild(meaningEl);
+        }
+        return grid;
+      }
+    }
   }
 
   show(): void {
