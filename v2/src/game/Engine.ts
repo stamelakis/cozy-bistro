@@ -162,6 +162,8 @@ export class Engine {
    * Set after the first resyncAllActorsToCloud pass that runs with
    * live cloud context + a synced roster. */
   private actorsResynced = false;
+  /** Phase 9.7 — one-shot latch for the retry-loop seat-slot push. */
+  private seatSlotsPushed = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -353,6 +355,13 @@ export class Engine {
       if (this.furnitureCloudReady) {
         this.spawner?.attachGuestServerBridge();
         void this.spawner?.hydrateFromCloud();
+        // Phase 9.7 — one-shot seat-slot push so the server's
+        // assignment list reflects THIS session's furniture even
+        // when the player never edits anything before logging off.
+        if (!this.seatSlotsPushed) {
+          this.seatSlotsPushed = true;
+          this.registry.mirrorSeatSlotsNow();
+        }
       }
       this.router?.attachServerBridge();
       this.errand?.attachServerBridge();

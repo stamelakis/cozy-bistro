@@ -17,11 +17,11 @@ use crate::tables::{
     dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
     placed_furniture, player, player_save, recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, staff_actor, weather_state,
+    restaurant_tick_state, seat_slot, staff_actor, weather_state,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
     RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
-    RestaurantTickSchedule, RestaurantTickState, StaffActor,
+    RestaurantTickSchedule, RestaurantTickState, SeatSlot, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -5509,6 +5509,54 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
 ///   subscribers see the guest standing at the table centre, not on
 ///   a specific chair. The client's local sim, if running, will
 ///   override with proper chair coords.
+/// Phase 9.7 — Replace the restaurant's seat_slot rows with the
+/// client's freshly resolved seat list. Owner-only. Entries are
+/// "seat_uid;x;z;floor;facing;plate_x;plate_z;at_bar" joined by "|".
+/// Fired from FurnitureRegistry on every placement mutation (same
+/// cadence as update_restaurant_aggregates) — a full replace keeps
+/// the server's picture exact without tombstone bookkeeping.
+#[reducer]
+pub fn replace_seat_slots(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    slots_csv: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can replace seat slots".into());
+    }
+    let stale: Vec<String> = ctx.db.seat_slot()
+        .restaurant_id().filter(restaurant_id)
+        .map(|s| s.seat_uid.clone())
+        .collect();
+    for uid in stale {
+        ctx.db.seat_slot().seat_uid().delete(uid);
+    }
+    let mut inserted = 0u32;
+    for entry in slots_csv.split('|') {
+        let parts: Vec<&str> = entry.split(';').collect();
+        if parts.len() != 8 { continue; }
+        let (Ok(x), Ok(z), Ok(floor), Ok(facing), Ok(px), Ok(pz)) = (
+            parts[1].parse::<f32>(), parts[2].parse::<f32>(),
+            parts[3].parse::<u32>(), parts[4].parse::<f32>(),
+            parts[5].parse::<f32>(), parts[6].parse::<f32>(),
+        ) else { continue };
+        ctx.db.seat_slot().insert(SeatSlot {
+            seat_uid: parts[0].to_string(),
+            restaurant_id,
+            x, z, floor,
+            facing_y: facing,
+            plate_x: px,
+            plate_z: pz,
+            at_bar: parts[7] == "1",
+        });
+        inserted += 1;
+    }
+    log::info!("replace_seat_slots: restaurant {} now has {} seat slots", restaurant_id, inserted);
+    Ok(())
+}
+
 /// Phase 9.6 — average visit rating × 100 from the cloud rating
 /// history CSV. 300 (3.0★) when no history exists yet so brand-new
 /// restaurants get a middling willingness-to-wait instead of zero.
@@ -5590,9 +5638,36 @@ fn try_assign_seat_for(
             taken_targets.push((other.target_x, other.target_z));
         }
     }
-    // Find the closest free table.
+    // Phase 9.7 — prefer the REAL seat list the client mirrors into
+    // seat_slot (one row per chair-at-table slot, uid in the client's
+    // "{tableUid}#{slotIndex}" format). The legacy fallback below
+    // guessed from furniture def_ids — which matched the TABLES, so
+    // a 65-seat room read as ~17 "seats", guests rendered sitting on
+    // tabletops, and none of the server's uids matched the client's
+    // occupancy bookkeeping. Fallback only runs while a restaurant
+    // has never pushed slots (pre-9.7 client).
     let mut best: Option<(String, f32, f32, u32)> = None;
     let mut best_dist = f32::INFINITY;
+    let mut have_slots = false;
+    for s in ctx.db.seat_slot().restaurant_id().filter(rid) {
+        have_slots = true;
+        if taken_uids.contains(&s.seat_uid) { continue; }
+        let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
+            let dx = s.x - tx;
+            let dz = s.z - tz;
+            dx * dx + dz * dz < SEAT_OCCUPANCY_RADIUS_SQ
+        });
+        if occupied_by_target { continue; }
+        let dx = s.x - from_x;
+        let dz = s.z - from_z;
+        let dist = dx * dx + dz * dz;
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some((s.seat_uid.clone(), s.x, s.z, s.floor));
+        }
+    }
+    if have_slots { return best; }
+    // Legacy fallback — def-id guess (tables as seats).
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if !is_seat_providing_def(&f.def_id) { continue; }
         if taken_uids.contains(&f.uid) { continue; }

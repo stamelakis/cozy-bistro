@@ -1186,6 +1186,23 @@ export class SpacetimeClient {
    * Inputs are absolute (post-mutation) sums × 100 so the wire format
    * is integer. Idempotent on the server side — no-op when the
    * pushed values match what's already on the row. */
+  /** Phase 9.7 — Replace the server's seat_slot rows with the
+   * client's freshly resolved seat list. Entries are
+   * "seat_uid;x;z;floor;facing;plate_x;plate_z;at_bar" joined "|".
+   * Fired from FurnitureRegistry alongside updateRestaurantAggregates
+   * on every placement mutation. */
+  replaceSeatSlots(slotsCsv: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.replaceSeatSlots({
+        restaurantId: this.restaurantId,
+        slotsCsv,
+      });
+    } catch (e) {
+      console.warn("[Cloud] replaceSeatSlots failed:", e);
+    }
+  }
+
   updateRestaurantAggregates(
     styleX100: number,
     comfortX100: number,

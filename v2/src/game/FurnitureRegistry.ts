@@ -258,6 +258,27 @@ export class FurnitureRegistry {
   private mirrorAggregates(): void {
     if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
+    // Phase 9.7 — mirror the REAL seat list so the server assigns
+    // guests to actual chair-at-table slots instead of guessing from
+    // def_ids (the guess matched the TABLES: phantom one-seat-per-
+    // table capacity, guests rendered on tabletops, and seat uids
+    // the client's occupancy map could never match). Only slots with
+    // a chair actually parked in them count as sittable. Uid format
+    // MUST stay `${tableUid}#${slotIndex}` — the makeSeatId shape
+    // GuestSpawner keys occupiedSeats on.
+    const slotEntries: string[] = [];
+    for (const s of this.getResolvedSeatSlots()) {
+      if (!s.chairUid) continue;
+      slotEntries.push([
+        `${s.tableUid}#${s.slotIndex}`,
+        s.x.toFixed(3), s.z.toFixed(3),
+        String(s.floor),
+        s.facingY.toFixed(4),
+        s.platePos.x.toFixed(3), s.platePos.z.toFixed(3),
+        s.atBar ? "1" : "0",
+      ].join(";"));
+    }
+    this.cloud.replaceSeatSlots(slotEntries.join("|"));
     const stats = this.getAggregateStats();
     const bath = this.getBathroomScore();
     this.cloud.updateRestaurantAggregates(
@@ -270,6 +291,16 @@ export class FurnitureRegistry {
       // by 100 to match the rest of the reducer's integer units.
       stats.attractionBonus * 100,
     );
+  }
+
+  /** Phase 9.7 — public one-shot for Engine's retry loop: push the
+   * current aggregates + seat slots even when no placement mutation
+   * has fired this session (plain reload). Without this, a freshly
+   * deployed server (or one whose seat_slot rows predate a layout
+   * change made on another device) would keep assigning from a
+   * stale/empty slot list until the player happened to move a chair. */
+  mirrorSeatSlotsNow(): void {
+    this.mirrorAggregates();
   }
 
   /** Indices into a host's surfaceSlots that are currently occupied by

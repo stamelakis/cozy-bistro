@@ -1705,3 +1705,30 @@ pub struct RecipeUpgradeInFlight {
     /// Unix microseconds. Mirrors Date.now() × 1000 from the client.
     pub completes_at_micros: i64,
 }
+
+/// Phase 9.7 — The restaurant's REAL dining seats, mirrored from the
+/// client's FurnitureRegistry.getResolvedSeatSlots() on every
+/// furniture change. One row per chair-at-table slot; seat_uid is the
+/// client's makeSeatId format "{tableUid}#{slotIndex}" so server-
+/// assigned seats match the client's occupancy bookkeeping exactly.
+///
+/// Why this exists: the server previously GUESSED seats from
+/// furniture def_ids (is_seat_providing_def matched the TABLES
+/// themselves) — one phantom seat per table, guests rendered sitting
+/// on tabletops, server "full" at ~17 guests in a 65-seat room, and
+/// none of its seat uids matched the client's. try_assign_seat_for
+/// prefers these rows whenever any exist for the restaurant.
+#[table(name = seat_slot, public)]
+pub struct SeatSlot {
+    #[primary_key]
+    pub seat_uid: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub x: f32,
+    pub z: f32,
+    pub floor: u32,
+    pub facing_y: f32,
+    pub plate_x: f32,
+    pub plate_z: f32,
+    pub at_bar: bool,
+}

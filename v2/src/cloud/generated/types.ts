@@ -423,6 +423,19 @@ export const SaveSnapshot = __t.object("SaveSnapshot", {
 });
 export type SaveSnapshot = __Infer<typeof SaveSnapshot>;
 
+export const SeatSlot = __t.object("SeatSlot", {
+  seatUid: __t.string(),
+  restaurantId: __t.u64(),
+  x: __t.f32(),
+  z: __t.f32(),
+  floor: __t.u32(),
+  facingY: __t.f32(),
+  plateX: __t.f32(),
+  plateZ: __t.f32(),
+  atBar: __t.bool(),
+});
+export type SeatSlot = __Infer<typeof SeatSlot>;
+
 export const StaffActor = __t.object("StaffActor", {
   memberId: __t.string(),
   restaurantId: __t.u64(),

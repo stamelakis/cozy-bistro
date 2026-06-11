@@ -83,6 +83,7 @@ import RecordVisitReducer from "./record_visit_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import ReleaseDirtyPileReducer from "./release_dirty_pile_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
+import ReplaceSeatSlotsReducer from "./replace_seat_slots_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
@@ -166,6 +167,7 @@ import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
+import SeatSlotRow from "./seat_slot_table";
 import StaffActorRow from "./staff_actor_table";
 import VisitEventRow from "./visit_event_table";
 import WeatherStateRow from "./weather_state_table";
@@ -599,6 +601,20 @@ const tablesSchema = __schema({
       { name: 'save_snapshot_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
     ],
   }, SaveSnapshotRow),
+  seat_slot: __table({
+    name: 'seat_slot',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'seat_slot_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+      { accessor: 'seat_uid', name: 'seat_slot_seat_uid_idx_btree', algorithm: 'btree', columns: [
+        'seatUid',
+      ] },
+    ],
+    constraints: [
+      { name: 'seat_slot_seat_uid_key', constraint: 'unique', columns: ['seatUid'] },
+    ],
+  }, SeatSlotRow),
   staff_actor: __table({
     name: 'staff_actor',
     indexes: [
@@ -694,6 +710,7 @@ const reducersSchema = __reducers(
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
   __reducerSchema("release_dirty_pile", ReleaseDirtyPileReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
+  __reducerSchema("replace_seat_slots", ReplaceSeatSlotsReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),
   __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
