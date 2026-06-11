@@ -352,69 +352,29 @@ export class ErrandRouter {
       // so a refresh / cross-device session resumes from the same spot.
       this.streamActorsToCloud(dt);
     } else {
-      // Phase 8.3 — Always run per-frame smoothing toward the
-      // bridge-set target so the character walks continuously
-      // between server position updates (the 2 Hz tick made the
-      // visual snap ~1.5 m every 500 ms, and the character was
-      // facing sideways because facingY only updates when the local
-      // movement step runs). State machine + cloud writes stay
-      // gated to the bridge — only position interpolation runs here.
-      for (const h of this.helpers) this.smoothFollowServer(h, dt);
+      // Phase 9.8 — Server decides the PHASE + TARGET; the local
+      // pathfinder renders the walk. The 8.3 snapshot replay traced
+      // the server's straight-line positions exactly, which meant
+      // helpers clipped straight through furniture (the server has
+      // no obstacle map). moveActor pathfinds around obstacles
+      // toward the bridge-set target and computes facing; the
+      // bridge re-anchors position on every phase transition (door,
+      // road edge, counter — points both sims agree on), so drift
+      // within a leg self-corrects at the next anchor.
+      for (const h of this.helpers) {
+        if (h.state === "offscreen" || h.state === "idle"
+            || h.state === "atCounter") continue;
+        this.moveActor(h, dt);
+      }
     }
   }
 
-  /** Phase 8.3 — Snapshot-interpolation smoother for server-
-   * authoritative helpers. Plays back the server's positional
-   * snapshots (one per 500 ms tick) by linearly interpolating
-   * between the previous and the latest received position based
-   * on wall-clock elapsed since the latest snapshot.
-   *
-   * Why this and not "walk toward target": the previous attempt
-   * raced the server — even matching speeds, drift accumulated and
-   * triggered backward snaps because the server's tick boundary
-   * and the client's rAF boundary aren't aligned. Snapshot
-   * interpolation guarantees the on-screen character traces EXACTLY
-   * the path the server walked (one tick late), no possibility of
-   * desync. The 500 ms lag is invisible at this scale; the previous
-   * 1.5 m teleport every 500 ms was very visible.
-   *
-   * facingY comes from the velocity vector (lastServerPos -
-   * prevServerPos) — the direction the server actually moved them,
-   * which is correct even when the path bends mid-trip. */
-  private smoothFollowServer(h: ErrandActor, _dt: number): void {
-    // Offscreen / idle / dwelling helpers — no movement. Facing
-    // preserved from when motion last stopped.
-    if (h.state === "offscreen" || h.state === "idle"
-        || h.state === "atCounter") {
-      return;
-    }
-    // No snapshots yet (haven't received first staff_actor update
-    // for this helper since attach). Skip; the very next bridge
-    // call seeds prev+last so smoothing starts on the second tick.
-    if (h.lastServerPos == null) return;
-    const lastPos = h.lastServerPos;
-    const prevPos = h.prevServerPos ?? lastPos;
-    // Interpolation parameter: fraction of the tick window elapsed
-    // since lastServerStampMs. Clamped to [0, 1] so a long pause
-    // (tab inactive) doesn't extrapolate past the latest snapshot.
-    const SERVER_TICK_MS = 500;
-    const elapsed = performance.now() - h.lastServerStampMs;
-    const t = Math.max(0, Math.min(1, elapsed / SERVER_TICK_MS));
-    const x = prevPos.x + (lastPos.x - prevPos.x) * t;
-    const z = prevPos.y + (lastPos.y - prevPos.y) * t;
-    h.character.groundPos.set(x, z);
-    // facingY from server velocity. If lastPos === prevPos (helper
-    // standing still mid-phase), keep the previous facing — atan2(0,0)
-    // returns 0 which would snap them to facing -Z and look like a
-    // sudden rotation. Threshold 0.001 m ignores floating-point noise.
-    const vx = lastPos.x - prevPos.x;
-    const vz = lastPos.y - prevPos.y;
-    if (Math.hypot(vx, vz) > 0.001) {
-      // GLB forward = -Z (three.js standard) → atan2(-vx, -vz).
-      // Same convention as moveActor + StaffRouter.
-      h.character.facingY = Math.atan2(-vx, -vz);
-    }
-  }
+  // Phase 9.8 — smoothFollowServer (8.3 snapshot replay) REMOVED:
+  // replaying the server's straight-line positions made helpers clip
+  // through furniture (the server has no obstacle map). update() now
+  // runs the pathfound moveActor toward the bridge-set target; the
+  // bridge's snapshot bookkeeping (prev/lastServerPos) remains for
+  // the offscreen-return re-anchor only.
 
   /** Phase H Phase 5.4 — server-authoritative gate. Mirrors the
    * StaffRouter pattern; true when isServerSim("tickets") + cloud
