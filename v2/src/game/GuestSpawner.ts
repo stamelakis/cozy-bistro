@@ -1423,6 +1423,12 @@ export class GuestSpawner {
    * spawner's cloud handle is wired. No-op if already attached. */
   attachGuestServerBridge(): void {
     if (!this.cloud || this.guestServerBridgeAttached) return;
+    // Phase 9.2 — Same boot-race guard as hydrateFromCloud. The
+    // subscribe call below silently registers NOTHING when conn or
+    // restaurantId is missing; latching the flag on that no-op left
+    // the bridge permanently dead whenever GLB loads finished before
+    // login did. Engine retries at 1 Hz until the context exists.
+    if (!this.cloud.hasRestaurantContext()) return;
     this.guestServerBridgeAttached = true;
     this.cloud.subscribeActiveGuestChanges({
       // Phase 9.1 — Server is now the sole spawner (owner_online gate
@@ -1723,6 +1729,14 @@ export class GuestSpawner {
   async hydrateFromCloud(): Promise<void> {
     if (!this.cloud) return;
     if (this.cloudHydrated) return;
+    // Phase 9.2 — Don't latch during the boot window. Engine's
+    // staffReady callback fires this on GLB load completion, which
+    // races the auth + subscription flow; before restaurantId is
+    // resolved listActiveGuests() returns [] unconditionally, and
+    // latching on that empty answer left the hydrate permanently
+    // dead (the "reload shows an empty restaurant" bug). Engine
+    // retries at 1 Hz until the context exists.
+    if (!this.cloud.hasRestaurantContext()) return;
     const cloudRows = this.cloud.listActiveGuests();
     // Even if cloud is empty, mark hydrated so we don't keep retrying.
     this.cloudHydrated = true;

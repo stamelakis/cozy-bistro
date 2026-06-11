@@ -433,6 +433,11 @@ export class ErrandRouter {
    * character animation + visibility match. */
   attachServerBridge(): void {
     if (!this.cloud || this.errandBridgeAttached) return;
+    // Phase 9.2 — Boot-race guard: subscribeStaffActorChanges
+    // registers nothing before conn + restaurantId resolve; latching
+    // on the no-op left the bridge dead when GLB loads beat auth.
+    // Engine retries at 1 Hz until ready.
+    if (!this.cloud.hasRestaurantContext()) return;
     this.errandBridgeAttached = true;
     this.cloud.subscribeStaffActorChanges({
       onUpdate: (row) => this.reconcileCloudErrand(row),
@@ -614,8 +619,16 @@ export class ErrandRouter {
    * units added).  Acceptable for now — the visible bug (teleport to
    * home) is the major complaint; the payload-loss only matters if
    * the user happens to refresh during an active shopping run. */
+  /** Phase 9.2 — once-latch, set only when the cloud context is
+   * actually live so a too-early call doesn't permanently no-op the
+   * hydrate (same boot-race story as the bridges). */
+  private cloudHydratedErrand = false;
+
   hydrateFromCloud(): void {
     if (!this.cloud) return;
+    if (this.cloudHydratedErrand) return;
+    if (!this.cloud.hasRestaurantContext()) return;
+    this.cloudHydratedErrand = true;
     const rows = this.cloud.listStaffActors();
     let updated = 0;
     for (const row of rows) {

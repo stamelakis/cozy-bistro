@@ -759,7 +759,11 @@ export class StaffRouter {
     if (!this.cloud) return;
     const rows = this.cloud.listActiveTickets();
     if (rows.length === 0) {
-      console.log("[H.48b] hydrateTicketsFromCloud: no cloud active_ticket rows");
+      // Phase 9.2 — log once, not on every 5 Hz retry tick.
+      if (!this.loggedEmptyTicketHydrate) {
+        this.loggedEmptyTicketHydrate = true;
+        console.log("[H.48b] hydrateTicketsFromCloud: no cloud active_ticket rows");
+      }
       return;
     }
     // Build local server-id set so we don't double-import.
@@ -810,10 +814,15 @@ export class StaffRouter {
       this.tickets.push(ticket);
       imported += 1;
     }
-    console.log(
-      `[H.48b] hydrateTicketsFromCloud: ${imported} tickets imported` +
-      (skippedNoGuest > 0 ? ` (${skippedNoGuest} skipped — no matching local guest)` : ""),
-    );
+    // Phase 9.2 — only log when something actually imported; the
+    // 5 Hz retry loop calls this repeatedly and an all-deduped pass
+    // is the steady-state, not news.
+    if (imported > 0) {
+      console.log(
+        `[H.48b] hydrateTicketsFromCloud: ${imported} tickets imported` +
+        (skippedNoGuest > 0 ? ` (${skippedNoGuest} skipped — no matching local guest)` : ""),
+      );
+    }
   }
 
   /** Apply cloud staff_actor state to every matching local actor.
@@ -825,6 +834,10 @@ export class StaffRouter {
   hydrateFromCloud(): void {
     if (!this.cloud) return;
     if (this.cloudHydratedStaff) return;
+    // Phase 9.2 — Boot-race guard: don't latch on the empty answer
+    // listStaffActors gives before conn + restaurantId resolve.
+    // Engine retries at 1 Hz until the context exists.
+    if (!this.cloud.hasRestaurantContext()) return;
     const rows = this.cloud.listStaffActors();
     this.cloudHydratedStaff = true;
     if (rows.length === 0) {
@@ -1460,6 +1473,12 @@ export class StaffRouter {
    * cloud handle present. */
   attachServerBridge(): void {
     if (!this.cloud || this.serverBridgeAttached) return;
+    // Phase 9.2 — Boot-race guard. The subscribe calls below silently
+    // register nothing when the websocket or restaurantId isn't
+    // resolved yet; latching serverBridgeAttached on that no-op left
+    // the bridge permanently dead whenever the staffReady GLB chain
+    // beat the auth flow. Engine retries at 1 Hz until ready.
+    if (!this.cloud.hasRestaurantContext()) return;
     this.serverBridgeAttached = true;
     this.cloud.subscribeActiveTicketChanges({
       onInsert: (row) => this.reconcileCloudTicket(row),
@@ -1473,6 +1492,9 @@ export class StaffRouter {
   }
 
   private serverBridgeAttached = false;
+  /** Phase 9.2 — one-shot guard for the empty-ticket-hydrate log so
+   * the 5 Hz retry loop doesn't spam the console. */
+  private loggedEmptyTicketHydrate = false;
 
   /** Apply a cloud active_ticket row's state to our local Ticket. */
   private reconcileCloudTicket(row: import("../cloud/SpacetimeClient").ActiveTicketRow): void {

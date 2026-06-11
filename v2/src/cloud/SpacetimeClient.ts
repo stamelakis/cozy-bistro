@@ -567,6 +567,19 @@ export class SpacetimeClient {
    * GuestSpawner.hydrateFromCloud needs to reconstruct a functional
    * local Guest from a server row.  Skipped purely-server fields
    * (e.g. archetype_patience_mult — derivable from archetype). */
+  /** Phase 9.2 — True when both the websocket connection AND the
+   * player's restaurant id are resolved. The subscription bridges
+   * (guest / staff / ticket) and the one-shot hydrates are
+   * meaningless before this point — subscribe calls would silently
+   * register nothing and list* calls return []. Callers use this to
+   * avoid latching their once-only flags during the boot window
+   * (Engine's staffReady fires on GLB load completion, which races
+   * the auth + subscription flow; pre-9.2 whoever lost the race had
+   * a permanently dead bridge). */
+  hasRestaurantContext(): boolean {
+    return this.conn != null && this.restaurantId != null;
+  }
+
   /** Phase 9.1 — Look up a single active_guest row by server id and
    * return it as a HydratableGuestRow. Used by GuestSpawner's
    * onInsert bridge to hydrate a fresh server-spawned guest, which

@@ -144,6 +144,12 @@ export class Engine {
   private running = false;
   private lastResizeCheckAt = 0;
   private hudAccumulator = 0;
+  /** Phase 9.2 — true once syncStaffToHeadcount has registered every
+   * saved staff member into the router. The bridge-retry block in
+   * update() holds off on the staff/ticket hydrates until then —
+   * hydrating before actors exist would latch with every row
+   * reported "missing" and skip the position restore. */
+  private staffSyncDone = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -310,6 +316,40 @@ export class Engine {
     // players see the sign-up / login form.
     this.game.setAuthGated(true);
     this.installAuthGate(container);
+    // Phase 9.2 — Bridge/hydrate retry loop. The original wiring
+    // fired attachGuestServerBridge / hydrateFromCloud exactly once
+    // from the staffReady GLB callback, which races the auth +
+    // subscription flow; when GLBs finished first (common for a
+    // returning player with a warm cache) conn/restaurantId weren't
+    // resolved yet, the subscribe calls registered nothing, and the
+    // once-flags latched a permanently dead bridge — server-spawned
+    // guests never materialised and a reload showed an empty
+    // restaurant.
+    //
+    // setInterval, NOT the rAF tick: browsers fully suspend
+    // requestAnimationFrame in hidden tabs, so a tick-based retry
+    // can never recover a tab that finished login while hidden.
+    // Interval timers keep firing (clamped to 1 Hz in background),
+    // which is exactly the cadence we want. Every call below is
+    // internally guarded (once-flag + hasRestaurantContext), so the
+    // steady-state cost is a few boolean checks per second.
+    window.setInterval(() => {
+      if (!this.cloud.hasRestaurantContext()) return;
+      this.spawner?.attachGuestServerBridge();
+      void this.spawner?.hydrateFromCloud();
+      this.router?.attachServerBridge();
+      this.errand?.attachServerBridge();
+      // Staff/errand/ticket hydrates wait for actor registration —
+      // hydrating before syncStaffToHeadcount lands would report
+      // every row "missing" and skip the position restore.
+      if (this.staffSyncDone) {
+        this.router?.hydrateFromCloud();
+        this.errand?.hydrateFromCloud();
+        this.router?.hydrateTicketsFromCloud(
+          (serverId) => this.spawner?.findLocalGuestIdByServerId(serverId),
+        );
+      }
+    }, 1000);
     // SfxPlayer is constructed early — before the HUD — because the
     // HUD's volume slider reads its initial value from
     // `actions.getSfxVolume()` SYNCHRONOUSLY during construction.
@@ -1510,6 +1550,10 @@ export class Engine {
           // the local sim spawned a fresh helper at home; cloud has
           // the actual mid-trip pose we want to resume from.
           this.errand?.hydrateFromCloud();
+          // Phase 9.2 — actors are registered; the update() retry
+          // block may now run the staff/ticket hydrates if the calls
+          // above no-opped on missing cloud context.
+          this.staffSyncDone = true;
         }).catch((err) => {
           // Phase I (H.77) — surface failures.  Without a catch, any
           // rejected promise inside syncStaffToHeadcount (e.g. one of
@@ -1522,6 +1566,9 @@ export class Engine {
           console.error("[Engine] syncStaffToHeadcount chain failed:", err);
           this.router?.resyncAllActorsToCloud();
           this.errand?.resyncAllActorsToCloud();
+          // Phase 9.2 — even on partial GLB failure, let the retry
+          // block attempt the hydrates for whatever actors DID land.
+          this.staffSyncDone = true;
         });
       } else {
         console.warn("[Engine] no staff pair — skipping syncStaffToHeadcount");
