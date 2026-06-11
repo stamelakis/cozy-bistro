@@ -5133,9 +5133,18 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     // first server spawn even before their save persists.
     let save = ctx.db.player_save().identity().find(rest.owner);
     let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
-    let free_seats = save.as_ref().map(|s| s.free_seats).unwrap_or(4);
     if !restaurant_open { return; }
-    if free_seats == 0 { return; }
+    // Phase 9.3 — free_seats gate DROPPED. It read player_save.
+    // free_seats, a counter only the FOREGROUND client maintains —
+    // frozen at whatever it was when the tab closed. Logging off
+    // with a full restaurant froze it at 0 and silently disabled
+    // ALL offline spawning until the next login ("the rule that
+    // takes over when I'm off"). The real capacity check is
+    // try_spawn_arrival_guest's server-side seat pre-assignment
+    // (H.89), which counts actual free chairs from placed_furniture
+    // minus occupied seat_uids and returns false when full — fresh
+    // every tick, no staleness. restaurant_open stays: it's an
+    // explicit player toggle, eagerly pushed on change (Phase 6.3).
 
     // Phase 9.1 — owner_online gate DROPPED. Per Path B (chosen by
     // user), the server is the sole continuous simulator. Spawning

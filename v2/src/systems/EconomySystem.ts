@@ -28,13 +28,21 @@ export class EconomySystem {
    * accumulate adds (tips/revenue/etc.) coexist with client-side
    * spends without either side overwriting the other.
    *
-   * Initialized to 0 on construction; load() restores it from the
-   * cloud row on hydrate so the first sync after reconnect doesn't
-   * fire a spurious "I just earned $1M" delta. Subscription handlers
-   * for cloud_money_cents updates also advance this in lockstep with
-   * the local money mutation so server-driven adds don't generate a
-   * second copy on the next push. */
-  private lastSyncedCents = 0;
+   * Phase 9.3 — null means UNANCHORED: no successful local↔cloud
+   * reconciliation has happened yet this session. Both delta
+   * consumers MUST refuse to compute a delta against an unanchored
+   * baseline:
+   *   - Engine's 5s push: computing (localSave − 0) on a fresh boot
+   *     pushed the player's ENTIRE saved balance to the cloud as if
+   *     it were new income…
+   *   - restaurant.onUpdate handler: …and computing (cloud − 0) on
+   *     the first row update earned the entire CLOUD balance on top
+   *     of the local save.
+   *   Together those two roughly DOUBLED the balance on every
+   *   reload (the 100k → 3.4M dupe). The first anchor must always
+   *   be an ADOPTION (setMoney to cloud + noteSyncedCents), never a
+   *   delta. */
+  private lastSyncedCents: number | null = null;
 
   /** Phase 7.7 — Caller informs the sync system that money has been
    * synced (in either direction) and the local↔cloud delta is now 0.
@@ -46,8 +54,9 @@ export class EconomySystem {
   }
 
   /** Phase 7.7 — Read the last-synced baseline. Engine.update uses
-   * (local * 100) - lastSyncedCents to compute the delta to push. */
-  getLastSyncedCents(): number {
+   * (local * 100) - lastSyncedCents to compute the delta to push.
+   * Phase 9.3 — null = unanchored; callers must adopt, not delta. */
+  getLastSyncedCents(): number | null {
     return this.lastSyncedCents;
   }
 

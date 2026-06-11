@@ -2084,6 +2084,15 @@ export class Engine {
         const cooldownElapsed = (now - lastGrant) >= GRANT_COOLDOWN_MS;
         if (didClaim || cooldownElapsed) {
           this.game.economy.earnMoney(bonus, "grant");
+          // Phase 9.3 — Eager-push the grant to cloud_money_cents.
+          // The grant lands BEFORE the first money anchor (the
+          // delta-sync baseline is null until the first cloud
+          // adoption), so without this push the adoption would
+          // overwrite local with the cloud value and silently wipe
+          // the grant. Order doesn't matter: if the bump lands
+          // before adoption it's included in the adopted value; if
+          // after, the onUpdate delta credits it back.
+          this.cloud.bumpCloudMoneyCents(Math.round(bonus * 100));
           localStorage.setItem(grantKey, String(now));
           const reason = didClaim ? "fresh claim" : `3h grant (last was ${Math.floor((now - lastGrant) / 3600000)}h ago)`;
           console.log(`[Engine] +$${bonus} starter cash bonus for ${mine.kind} plot — ${reason}`);
@@ -3038,10 +3047,18 @@ export class Engine {
       // push doesn't double-count server adds.
       const localCents = Math.round(this.game.economy.getMoney() * 100);
       const lastSynced = this.game.economy.getLastSyncedCents();
-      const deltaCents = localCents - lastSynced;
-      if (deltaCents !== 0) {
-        this.cloud.bumpCloudMoneyCents(deltaCents);
-        this.game.economy.noteSyncedCents(localCents);
+      // Phase 9.3 — NEVER push against an unanchored baseline. On a
+      // fresh boot lastSynced is null until the first cloud adoption
+      // (applyPendingVisitRollup or the restaurant.onUpdate handler)
+      // anchors it; computing (localSave − 0) here pushed the
+      // player's entire saved balance to the cloud as fake income on
+      // every reload — half of the 100k → 3.4M doubling loop.
+      if (lastSynced !== null) {
+        const deltaCents = localCents - lastSynced;
+        if (deltaCents !== 0) {
+          this.cloud.bumpCloudMoneyCents(deltaCents);
+          this.game.economy.noteSyncedCents(localCents);
+        }
       }
       // H.46 — push today's revenue + expense totals so visitors,
       // the leaderboard, and any second-device session see live

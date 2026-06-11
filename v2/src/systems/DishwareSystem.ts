@@ -202,26 +202,20 @@ export class DishwareSystem {
       this.log("restoreFromCloud → no cloud rows, keeping local hydrate state");
       return;
     }
-    // Safety guard for Phase H default-on. Only restore from cloud
-    // when local has the STARTER hydrate values — anything beyond
-    // that means the user's localStorage already has gameplay state
-    // and we shouldn't clobber it.
-    //
-    // The "is local just starters?" check: STARTER_PLATE_COUNT clean
-    // plates at tier 1 + STARTER_GLASS_COUNT clean glasses at tier 1,
-    // nothing else owned. Anything beyond that — extra tiers, dirty
-    // pieces, lifetime > starter total — means the user has played
-    // and localStorage is the authoritative state.
-    const starterTotal = STARTER_PLATE_COUNT + STARTER_GLASS_COUNT;
-    const localTotal = this.getOwned("plate") + this.getOwned("glass");
-    const onlyStarter = localTotal <= starterTotal
-        && this.getDirty("plate") === 0 && this.getDirty("glass") === 0
-        && this.plates.size <= 1 && this.glasses.size <= 1;
-    if (!onlyStarter) {
-      this.log(`restoreFromCloud: local has gameplay state (${localTotal} pieces, ${this.getDirty("plate")} dirty plates) — keeping local. Mirroring local up to cloud.`);
-      this.mirrorAllPools();
-      return;
-    }
+    // Phase 9.3 — CLOUD WINS whenever it has rows. The old guard
+    // here kept the LOCAL save when it had "gameplay state" and
+    // mirrored it UP to the cloud — exactly backwards under Path B:
+    // the server keeps washing + dirtying dishes 24/7 (guests use
+    // plates, wash trips run, dishwasher batches flush) while the
+    // local save is a snapshot from the moment the tab closed.
+    // Keeping local on reload (a) silently discarded every dish-state
+    // change the server made while away (the "my dirty dishes
+    // vanished / changed after reload" bug) and (b) stomped the
+    // cloud's correct per-tier clean/dirty distribution with the
+    // stale one. The pools.length === 0 early-return above still
+    // protects the genuinely-fresh-cloud case (new restaurant or
+    // pre-mirror save) — local seeds the cloud exactly once via the
+    // backfill path, then the cloud is canonical forever.
     this.suppressMirrorForReload = true;
     try {
       this.plates.clear();

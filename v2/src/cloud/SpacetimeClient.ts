@@ -3488,23 +3488,34 @@ export class SpacetimeClient {
         // ── Phase 7.7 — Adopt server-driven cloud_money_cents changes ──
         const cloudCents = Number(newRow.cloudMoneyCents);
         const lastSynced = this.game.economy.getLastSyncedCents();
-        const deltaCents = cloudCents - lastSynced;
-        if (deltaCents !== 0) {
-          // Convert to dollars and apply to local money. earn handles
-          // positive delta (server credited a tip / revenue), charge
-          // handles negative (server debited salary / rent / restock /
-          // errand cost). Either way, log nothing in the transaction
-          // log — these are server-originated changes that the player
-          // didn't authorize via the local UI. Their reasons live in
-          // the server-side log (log::info lines) and not the local
-          // ledger UI.
-          const deltaDollars = deltaCents / 100;
-          if (deltaDollars > 0) {
-            this.game.economy.earn(deltaDollars);
-          } else {
-            this.game.economy.charge(-deltaDollars);
-          }
+        if (lastSynced === null) {
+          // Phase 9.3 — First contact this session: ADOPT, never
+          // delta. Computing (cloud − 0) here earned the entire
+          // cloud balance ON TOP of the local-save balance — the
+          // other half of the 100k → 3.4M doubling loop. Cloud is
+          // canonical under Path B; the local save's cash is just a
+          // stale snapshot of it.
+          this.game.economy.setMoney(cloudCents / 100);
           this.game.economy.noteSyncedCents(cloudCents);
+        } else {
+          const deltaCents = cloudCents - lastSynced;
+          if (deltaCents !== 0) {
+            // Convert to dollars and apply to local money. earn handles
+            // positive delta (server credited a tip / revenue), charge
+            // handles negative (server debited salary / rent / restock /
+            // errand cost). Either way, log nothing in the transaction
+            // log — these are server-originated changes that the player
+            // didn't authorize via the local UI. Their reasons live in
+            // the server-side log (log::info lines) and not the local
+            // ledger UI.
+            const deltaDollars = deltaCents / 100;
+            if (deltaDollars > 0) {
+              this.game.economy.earn(deltaDollars);
+            } else {
+              this.game.economy.charge(-deltaDollars);
+            }
+            this.game.economy.noteSyncedCents(cloudCents);
+          }
         }
         // ── Phase 7.8 — Adopt server-appended cloud_rating_history_csv ──
         // Server's accumulate_pending_visit_rollup appends each
