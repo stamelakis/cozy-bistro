@@ -2432,13 +2432,15 @@ export class GuestSpawner {
    * absent or unknown, spawnGuest falls back to its random pick. */
   triggerExternalArrival(variantHint?: string): void {
     if (!this.restaurantOpen) return;
-    // Flag semantics rewritten (see update() comment): local sim
-    // always runs as the source of truth. The mirror inside
-    // spawnGuest() will publish the new guest to active_guest when
-    // isServerSim("guests") is on. No more bail to spawnServerGuestForArrival —
-    // that path produced cloud rows that the local sim couldn't
-    // see (different code path) and led to the "customers stuck at
-    // the door" problem.
+    // Phase 9.4 — Server owns the pedestrian→guest conversion now.
+    // try_arrival_handoff (pedestrians.rs) converts EVERY arrival
+    // walker into an active_guest row, online or off; the row lands
+    // here via the onInsert bridge like any other server spawn.
+    // This was the LAST client-side guest spawn path — firing it
+    // would double-spawn against the server's conversion within a
+    // couple of seconds.
+    if (isServerSim("guests") && this.cloud != null) return;
+    // Legacy local-sim path (flag off / cloud absent only).
     if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
     void this.spawnGuest(variantHint);
     // Pause the local cooldown briefly so the external arrival

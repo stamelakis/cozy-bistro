@@ -124,32 +124,25 @@ pub fn pedestrian_tick(ctx: &ReducerContext, _schedule: PedestrianTickSchedule) 
 }
 
 /// Phase H.33 — Convert an expired customer-arrival pedestrian to an
-/// ActiveGuest server-side IFF the target plot's owner is offline.
-/// Foreground owners still handle the conversion via the client-side
-/// SharedPedestrians.onArrival → triggerExternalArrival path; this
-/// branch yields when the owner's Player.last_seen_at is recent
-/// (within OFFLINE_THRESHOLD_MICROS = 30 s). Without the gate both
-/// paths would fire and double-spawn the guest.
+/// ActiveGuest server-side.
+///
+/// Phase 9.4 — owner_online gate DROPPED. The server is the sole
+/// converter now, online or off (Path B). The client-side
+/// SharedPedestrians.onArrival → triggerExternalArrival path is
+/// gated off in tandem (it was the last client-side guest spawn);
+/// the owner sees the walk-in arrive via the active_guest onInsert
+/// bridge like every other guest. `now_micros` stays in the
+/// signature for the caller's other uses.
 fn try_arrival_handoff(ctx: &ReducerContext, p: &Pedestrian, now_micros: i64) {
+    let _ = now_micros;
     // Ambient walker — no plot to deliver to.
     if p.target_plot_id == 0 { return; }
     let Some(b) = ctx.db.building().id().find(p.target_plot_id) else { return; };
     let zero = Identity::__dummy();
     if b.owner_identity == zero { return; }
-    // Foreground guard — skip when the owner pinged presence recently.
-    // Player.last_seen_at refreshes every 30 s via pingPresence; 30 s
-    // window matches the heartbeat interval so a tab that just dropped
-    // a single ping is still considered online.
-    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
-    let owner_online = ctx.db.player().identity().find(b.owner_identity)
-        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < OFFLINE_THRESHOLD_MICROS)
-        .unwrap_or(false);
-    if owner_online {
-        return; // client handles via triggerExternalArrival
-    }
-    // Find the offline owner's restaurant. There's at most one per
-    // identity in the current single-restaurant model; we iterate
-    // because Restaurant.owner is indexed but not unique.
+    // Find the owner's restaurant. There's at most one per identity
+    // in the current single-restaurant model; we iterate because
+    // Restaurant.owner is indexed but not unique.
     let Some(rest) = ctx.db.restaurant().iter().find(|r| r.owner == b.owner_identity) else { return; };
     crate::reducers::restaurant_sim::try_spawn_arrival_guest(
         ctx,
