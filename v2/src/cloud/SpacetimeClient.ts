@@ -1186,6 +1186,27 @@ export class SpacetimeClient {
    * Inputs are absolute (post-mutation) sums × 100 so the wire format
    * is integer. Idempotent on the server side — no-op when the
    * pushed values match what's already on the row. */
+  /** Phase 9.9 — In-flight recipe upgrade deadlines from the cloud.
+   * The server's restaurant_tick completes these while the tab is
+   * closed (deadline row deleted + recipe id appended to the
+   * pending-completions CSV), so on reload the CLOUD list is the
+   * truth: a local-save timer with no matching row here is either
+   * already completed (drained separately) or never started. */
+  listRecipeUpgradesInFlight(): { recipeId: string; completesAtMs: number }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: { recipeId: string; completesAtMs: number }[] = [];
+    try {
+      for (const r of this.conn.db.recipe_upgrade_in_flight.iter()) {
+        if (r.restaurantId !== this.restaurantId) continue;
+        out.push({
+          recipeId: r.recipeId,
+          completesAtMs: Number(r.completesAtMicros) / 1000,
+        });
+      }
+    } catch { /* table not wired pre-publish */ }
+    return out;
+  }
+
   /** Phase 9.7 — Replace the server's seat_slot rows with the
    * client's freshly resolved seat list. Entries are
    * "seat_uid;x;z;floor;facing;plate_x;plate_z;at_bar" joined "|".

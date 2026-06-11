@@ -123,6 +123,31 @@ export class CookingSystem {
     return this.recipeTrainingCompletesAt[recipeId] ?? null;
   }
 
+  /** Phase 9.9 — Adopt the cloud's in-flight upgrade deadlines as
+   * truth on reconnect. The local save restored whatever timers were
+   * running at the last autosave; the SERVER kept ticking while the
+   * tab was closed (recipe_upgrade_in_flight rows are deleted on
+   * completion and the recipe id lands in the pending-completions
+   * CSV, drained separately). So after this call:
+   *   - a cloud row → its deadline replaces the local one (fixes
+   *     "timer shows the wrong remaining time" after reload),
+   *   - no cloud row → the local entry is DROPPED (fixes the ghost
+   *     countdown ticking toward a moment in the past for an
+   *     upgrade the server already completed).
+   * Mirrors restoreBoostStateFromCloud's shape. */
+  restoreRecipeUpgradesFromCloud(
+    rows: { recipeId: string; completesAtMs: number }[],
+  ): void {
+    const next: Record<string, number> = {};
+    for (const r of rows) next[r.recipeId] = r.completesAtMs;
+    const before = Object.keys(this.recipeTrainingCompletesAt).sort().join(",") || "(none)";
+    const after = Object.keys(next).sort().join(",") || "(none)";
+    if (before !== after) {
+      console.log(`[9.9] recipe upgrade timers: local [${before}] → cloud [${after}] — adopting cloud`);
+    }
+    this.recipeTrainingCompletesAt = next;
+  }
+
   /** Start a recipe-upgrade timer. Returns true when it actually
    * started (recipe wasn't already training, current level < max).
    * Caller is responsible for debiting money / materials. */

@@ -164,6 +164,10 @@ export class Engine {
   private actorsResynced = false;
   /** Phase 9.7 — one-shot latch for the retry-loop seat-slot push. */
   private seatSlotsPushed = false;
+  /** Phase 9.9 — one-shot latch for adopting the cloud's in-flight
+   * recipe-upgrade deadlines (drops ghost timers the server already
+   * completed; corrects stale remaining-time on live ones). */
+  private recipeUpgradesRestored = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -361,6 +365,16 @@ export class Engine {
         if (!this.seatSlotsPushed) {
           this.seatSlotsPushed = true;
           this.registry.mirrorSeatSlotsNow();
+        }
+        // Phase 9.9 — adopt cloud recipe-upgrade deadlines (drop
+        // ghost timers the server already completed; correct stale
+        // remaining-time on live ones). Same once-latched shape as
+        // restoreBoostStateFromCloud.
+        if (!this.recipeUpgradesRestored) {
+          this.recipeUpgradesRestored = true;
+          this.game.cooking.restoreRecipeUpgradesFromCloud(
+            this.cloud.listRecipeUpgradesInFlight(),
+          );
         }
       }
       this.router?.attachServerBridge();
