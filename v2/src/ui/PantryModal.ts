@@ -38,6 +38,10 @@ export class PantryModal {
   private qtyEls: Map<string, HTMLElement> = new Map();
   /** Per-row "used today" badge cells (small orange text). */
   private usedTodayEls: Map<string, HTMLElement> = new Map();
+  /** SELL-BACK — per-row "Sell 5" buttons. tickRefresh re-labels +
+   * re-enables them as stock moves so the refund shown always matches
+   * what a click would actually sell. */
+  private sellBtns: Map<string, HTMLButtonElement> = new Map();
   /** Last seen auto-shop wall-clock timestamp, so we re-render the summary
    * line when a fresh restock fires. */
   private lastSeenAutoShopMs = 0;
@@ -149,8 +153,8 @@ export class PantryModal {
     const headerRow = document.createElement("div");
     Object.assign(headerRow.style, {
       display: "grid",
-      gridTemplateColumns: "22px 1fr 60px 50px 50px",
-      gap: "10px",
+      gridTemplateColumns: "22px 1fr 56px 44px 40px 66px",
+      gap: "8px",
       padding: "4px 6px",
       fontSize: "10px",
       fontWeight: "700",
@@ -160,7 +164,7 @@ export class PantryModal {
       borderBottom: "1px solid rgba(255,245,220,0.18)",
       marginBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
-    headerRow.innerHTML = `<span></span><span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span>`;
+    headerRow.innerHTML = `<span></span><span>Ingredient</span><span style="text-align:right">Unit Cost</span><span style="text-align:right">Stock</span><span style="text-align:right">Used</span><span style="text-align:center">Sell</span>`;
     this.ingredientsPane.appendChild(headerRow);
 
     this.list = document.createElement("div");
@@ -629,6 +633,9 @@ export class PantryModal {
           this.lastUsed.set(stock.id, used);
         }
       }
+      // SELL-BACK — keep the sell button's clamp + refund in step
+      // with the live stock count.
+      this.updateSellBtn(stock.id, stock.quantity);
     }
     if (this.totalLine) {
       const totalUsed = this.game.cooking.getTotalConsumedToday();
@@ -638,6 +645,62 @@ export class PantryModal {
     }
     this.updateRestockSummary();
     this.refreshDishware();
+  }
+
+  // === SELL-BACK — pantry ingredients sell at 50% of catalog cost ===
+
+  /** Units a click would sell right now (up to 5, clamped to stock)
+   * plus the 50% refund for them, formatted for display. The cents
+   * math mirrors the server's integer division (units × unit_cost_cents
+   * / 2) so the number shown is the number credited. */
+  private sellQuoteFor(id: string, qty: number): { units: number; refund: string } {
+    const units = Math.min(5, Math.max(0, Math.floor(qty)));
+    const refundCents = Math.floor((units * getIngredientCost(id) * 100) / 2);
+    const refund = (refundCents / 100).toFixed(2).replace(/\.00$/, "");
+    return { units, refund };
+  }
+
+  /** Re-label + re-enable one row's sell button for the given live
+   * stock count. Disabled at 0 stock and while the cloud is offline
+   * (the refund is credited server-side — selling without a
+   * connection would just throw stock away). */
+  private updateSellBtn(id: string, qty: number): void {
+    const btn = this.sellBtns.get(id);
+    if (!btn) return;
+    const { units, refund } = this.sellQuoteFor(id, qty);
+    const cloudReady = this.game.cooking.cloud?.hasRestaurantContext() ?? false;
+    const enabled = units > 0 && cloudReady;
+    const label = units > 0 ? `Sell ${units} · +$${refund}` : "Sell 5";
+    if (btn.textContent !== label) btn.textContent = label;
+    btn.disabled = !enabled;
+    btn.style.opacity = enabled ? "1" : "0.35";
+    btn.style.cursor = enabled ? "pointer" : "not-allowed";
+    btn.title = !cloudReady
+      ? "Cloud offline — selling needs a connection (the refund is credited server-side)."
+      : units > 0
+      ? `Sell ${units} unit${units === 1 ? "" : "s"} back at 50% of $${getIngredientCost(id)}/unit → +$${refund}`
+      : "Nothing in stock to sell.";
+  }
+
+  /** Sell up to 5 units of one ingredient. The server reducer clamps
+   * to ITS stock, decrements pantry_stock (row kept at 0), and credits
+   * cloud_money_cents — the Phase 7.7 restaurant.onUpdate delta-sync
+   * lands the refund in the local wallet, so this handler must NOT
+   * call earnMoney. Locally we decrement the pantry array by the same
+   * clamped amount for instant UI; a negative addPantryStock does NOT
+   * mirror a delta up (the H.36 mirror is gated on quantity > 0), so
+   * the server's own decrement stays the only cloud-side change. */
+  private handleSellIngredient(id: string): void {
+    const cooking = this.game.cooking;
+    const cloud = cooking.cloud;
+    if (!cloud?.hasRestaurantContext()) return;
+    const { units } = this.sellQuoteFor(id, cooking.getIngredientQuantity(id));
+    if (units <= 0) return;
+    cloud.sellPantryStock(id, units);
+    cooking.addPantryStock(id, -units);
+    const qtyEl = this.qtyEls.get(id);
+    if (qtyEl) this.pulseRow(qtyEl, "rgba(220, 170, 100, 0.45)");
+    this.tickRefresh();
   }
 
   /** Briefly flash an element's background to draw the eye to a change.
@@ -685,14 +748,15 @@ export class PantryModal {
     this.list.innerHTML = "";
     this.qtyEls.clear();
     this.usedTodayEls.clear();
+    this.sellBtns.clear();
     let totalValue = 0;
     for (const stock of pantry) {
       const cost = getIngredientCost(stock.id);
       const row = document.createElement("div");
       Object.assign(row.style, {
         display: "grid",
-        gridTemplateColumns: "22px 1fr 60px 50px 50px",
-        gap: "10px",
+        gridTemplateColumns: "22px 1fr 56px 44px 40px 66px",
+        gap: "8px",
         padding: "4px 6px",
         borderBottom: "1px solid rgba(255,245,220,0.06)",
         fontVariantNumeric: "tabular-nums",
@@ -724,14 +788,27 @@ export class PantryModal {
       usedEl.style.fontWeight = "600";
       usedEl.style.color = "#e0a050";
       usedEl.style.fontSize = "11px";
+      // SELL-BACK — per-row "Sell 5" button. Sells up to 5 units back
+      // at 50% of the catalog cost; label carries the live refund.
+      const sellBtn = document.createElement("button");
+      Object.assign(sellBtn.style, {
+        background: "rgba(255,210,120,0.12)", color: "#ffd47a",
+        border: "1px solid rgba(255,210,120,0.35)", borderRadius: "3px",
+        cursor: "pointer", font: "inherit", fontSize: "9px",
+        padding: "2px 3px", lineHeight: "1.25",
+      } as Partial<CSSStyleDeclaration>);
+      sellBtn.onclick = () => this.handleSellIngredient(stock.id);
       row.appendChild(iconEl);
       row.appendChild(nameEl);
       row.appendChild(costEl);
       row.appendChild(qtyEl);
       row.appendChild(usedEl);
+      row.appendChild(sellBtn);
       this.list.appendChild(row);
       this.qtyEls.set(stock.id, qtyEl);
       this.usedTodayEls.set(stock.id, usedEl);
+      this.sellBtns.set(stock.id, sellBtn);
+      this.updateSellBtn(stock.id, stock.quantity);
       this.lastQty.set(stock.id, stock.quantity);
       this.lastUsed.set(stock.id, usedToday);
       totalValue += cost * stock.quantity;

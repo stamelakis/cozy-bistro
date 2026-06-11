@@ -2294,6 +2294,26 @@ export class SpacetimeClient {
     }
   }
 
+  /** SELL-BACK — Sell up to `units` of one pantry ingredient back at
+   * 50% of the seeded ingredient_cost catalog price. The server clamps
+   * to the current pantry_stock quantity, decrements the row (keeping
+   * it at 0 per Phase 7.3), and credits the refund to cloud_money_cents
+   * — the Phase 7.7 restaurant.onUpdate delta-sync adopts the credit
+   * locally, so callers must NOT earn money client-side. */
+  sellPantryStock(ingredientId: string, units: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!ingredientId || units <= 0) return;
+    try {
+      this.conn.reducers.sellPantryStock({
+        restaurantId: this.restaurantId,
+        ingredientId,
+        units: Math.round(units),
+      });
+    } catch (e) {
+      console.warn("[Cloud] sellPantryStock failed:", e);
+    }
+  }
+
   /** H.41 — Seed one row of the ingredient_cost catalog at boot.  Mirrors
    * INGREDIENT_COSTS in src/data/ingredients.ts.  Server uses these to
    * bill auto-shop restocks to Restaurant.pending_restock_cost_cents
@@ -2574,6 +2594,37 @@ export class SpacetimeClient {
       });
     } catch (e) {
       console.warn("[Cloud] bumpDishwarePool failed:", e);
+    }
+  }
+
+  /** SELL-BACK — Sell `count` CLEAN pieces of one (kind, tier) pool
+   * back at 50% of `unitPriceCents` (priced client-side from
+   * src/data/dishwareCatalog.ts — the server has no dish price table;
+   * owner-gating covers it). The server clamps to the row's clean
+   * count, decrements through its pool mutator, and credits the
+   * refund to cloud_money_cents (adopted locally by the Phase 7.7
+   * delta-sync). Callers must NOT mutate the local DishwareSystem
+   * pool: every local pool delta auto-mirrors up via bumpDishwarePool,
+   * which would double-deduct — the dishware_pool subscription applies
+   * the server's decrement instead. */
+  sellDishware(
+    kind: "plate" | "glass",
+    tier: number,
+    count: number,
+    unitPriceCents: number,
+  ): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (count <= 0) return;
+    try {
+      this.conn.reducers.sellDishware({
+        restaurantId: this.restaurantId,
+        kind,
+        tier,
+        count: Math.round(count),
+        unitPriceCents: BigInt(Math.max(0, Math.round(unitPriceCents))),
+      });
+    } catch (e) {
+      console.warn("[Cloud] sellDishware failed:", e);
     }
   }
 

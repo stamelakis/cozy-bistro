@@ -89,7 +89,9 @@ import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
+import SellDishwareReducer from "./sell_dishware_reducer";
 import SellFurnitureReducer from "./sell_furniture_reducer";
+import SellPantryStockReducer from "./sell_pantry_stock_reducer";
 import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
@@ -716,7 +718,9 @@ const reducersSchema = __reducers(
   __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
+  __reducerSchema("sell_dishware", SellDishwareReducer),
   __reducerSchema("sell_furniture", SellFurnitureReducer),
+  __reducerSchema("sell_pantry_stock", SellPantryStockReducer),
   __reducerSchema("send_chat_global", SendChatGlobalReducer),
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),

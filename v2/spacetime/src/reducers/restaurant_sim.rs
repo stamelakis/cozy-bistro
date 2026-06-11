@@ -1803,6 +1803,63 @@ pub fn bump_pantry_stock(
     Ok(())
 }
 
+/// SELL-BACK — Owner sells excess pantry ingredients back to the
+/// supplier at 50% of the catalog unit cost.  `units` is clamped to
+/// the current pantry_stock quantity; the refund is credited to
+/// cloud_money_cents server-side (money is SERVER-authoritative —
+/// the client's Phase 7.7 restaurant.onUpdate delta-sync adopts the
+/// credit, so the client must NOT earn locally).  The stock row is
+/// KEPT at quantity=0 rather than deleted — Phase 7.3 semantics, so
+/// OUT ingredients stay visible to try_dispatch_errand_trip.
+///
+/// Ingredients with no ingredient_cost row sell for 0 cents (stock
+/// still decrements) — the same graceful-degradation pattern
+/// try_restock_pantry / try_dispatch_errand_trip use for pricing.
+#[reducer]
+pub fn sell_pantry_stock(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    ingredient_id: String,
+    units: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can sell pantry stock".into());
+    }
+    if ingredient_id.is_empty() {
+        return Err("ingredient_id required".into());
+    }
+    if units == 0 { return Ok(()); }
+    let key = format!("{}:{}", restaurant_id, ingredient_id);
+    let Some(stock) = ctx.db.pantry_stock().key().find(key) else {
+        return Ok(()); // no row — nothing to sell, silent no-op
+    };
+    let sold = units.min(stock.quantity);
+    if sold == 0 { return Ok(()); } // shelf already empty
+    let remaining = stock.quantity - sold;
+    ctx.db.pantry_stock().key().update(PantryStock {
+        quantity: remaining,
+        ..stock
+    });
+    // Unit price from the seeded ingredient_cost catalog (cents).
+    let unit_cost = ctx.db.ingredient_cost().ingredient_id().find(ingredient_id.clone())
+        .map(|c| c.cost_cents)
+        .unwrap_or(0);
+    let refund_cents = unit_cost.max(0).saturating_mul(sold as i64) / 2;
+    if refund_cents > 0 {
+        ctx.db.restaurant().id().update(Restaurant {
+            cloud_money_cents: r.cloud_money_cents.saturating_add(refund_cents),
+            ..r
+        });
+    }
+    log::info!(
+        "sell_pantry_stock: restaurant {} sold {} × {} for {} cents (50% of {} c/unit), {} left",
+        restaurant_id, sold, ingredient_id, refund_cents, unit_cost, remaining,
+    );
+    Ok(())
+}
+
 /// Phase H.37 — Client seeds the recipe_ingredients lookup at boot,
 /// one row per RecipeDefinition in src/data/recipes.ts. Idempotent
 /// upsert — repeated calls with the same content are a no-op.
@@ -2874,6 +2931,61 @@ pub fn bump_dishware_pool(
         return Err("Only the owner can bump dishware pool".into());
     }
     apply_pool_delta(ctx, restaurant_id, &kind, tier, clean_delta, dirty_delta, "bump_dishware_pool");
+    Ok(())
+}
+
+/// SELL-BACK — Owner sells clean dishware pieces back at 50% of the
+/// client-supplied unit price.  The server has no dishware price
+/// table (the catalog lives in src/data/dishwareCatalog.ts), so the
+/// owner-gated client passes unit_price_cents — acceptable because
+/// bump_dishware_pool already trusts owner-signed deltas wholesale.
+/// `count` clamps to the pool row's CLEAN count only; dirty pieces
+/// can never be sold.  The decrement routes through apply_pool_delta
+/// (source "sell") so saturating math, empty-row pruning, and the
+/// audit log behave like every other pool mutation — and the owner's
+/// dishware_pool subscription delivers the new clean count to the
+/// client (which must NOT mutate its local pool: a local mutation
+/// would auto-mirror a second decrement up via bump_dishware_pool).
+/// Refund is credited to cloud_money_cents (server-authoritative;
+/// Phase 7.7 delta-sync adopts it client-side).
+#[reducer]
+pub fn sell_dishware(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: String,
+    tier: u32,
+    count: u32,
+    unit_price_cents: i64,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can sell dishware".into());
+    }
+    if kind != "plate" && kind != "glass" {
+        return Err("kind must be \"plate\" or \"glass\"".into());
+    }
+    if count == 0 { return Ok(()); }
+    let key = pool_key(restaurant_id, &kind, tier);
+    let clean = ctx.db.dishware_pool().key().find(key)
+        .map(|p| p.clean)
+        .unwrap_or(0);
+    // Clamp to CLEAN only (never dirty); also bound to i32 range for
+    // the delta cast — pool counts are tiny, this is pure hygiene.
+    let sold = count.min(clean).min(i32::MAX as u32);
+    if sold == 0 { return Ok(()); } // nothing clean at this tier
+    apply_pool_delta(ctx, restaurant_id, &kind, tier, -(sold as i32), 0, "sell");
+    let refund_cents = unit_price_cents.max(0).saturating_mul(sold as i64) / 2;
+    if refund_cents > 0 {
+        ctx.db.restaurant().id().update(Restaurant {
+            cloud_money_cents: r.cloud_money_cents.saturating_add(refund_cents),
+            ..r
+        });
+    }
+    log::info!(
+        "sell_dishware: restaurant {} sold {} clean {} t{} for {} cents (50% of {} c/piece)",
+        restaurant_id, sold, kind, tier, refund_cents, unit_price_cents.max(0),
+    );
     Ok(())
 }
 

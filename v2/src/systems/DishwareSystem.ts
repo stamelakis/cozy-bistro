@@ -667,6 +667,29 @@ export class DishwareSystem {
     return true;
   }
 
+  /** SELL-BACK — Record the sale of `count` pieces in the lifetime
+   * accounting WITHOUT touching the pool. The pool decrement arrives
+   * through the dishware_pool subscription when the server's
+   * sell_dishware reducer applies it — mutating the pool here would
+   * auto-mirror a SECOND decrement up via bumpDishwarePool (every
+   * applyPoolDelta call mirrors), double-deducting server-side.
+   *
+   * Lifetime drops by `count` and the purchase log gains a negative
+   * entry so computeLifetimeFromLog stays consistent (STARTER +
+   * sum(log) == lifetime) and the widget's LEAK detector doesn't
+   * count sold dishes as leaked. Same accounting deleteOne (H.94)
+   * uses, minus the pool write. */
+  recordSale(kind: DishKind, tier: number, count: number): void {
+    if (count <= 0) return;
+    if (kind === "plate") {
+      this.lifetimeAddedPlate = Math.max(0, this.lifetimeAddedPlate - count);
+    } else {
+      this.lifetimeAddedGlass = Math.max(0, this.lifetimeAddedGlass - count);
+    }
+    this.purchaseLog.push({ kind, tier, count: -count, at: Date.now() });
+    this.log(`recordSale(${kind}, t${tier}, -${count}) → lifetime ${this.getLifetimeAdded()} (pool decrement arrives via subscription)`);
+  }
+
   /** Recompute the "expected" lifetime totals straight from STARTER
    * + sum(purchaseLog). This is the canonical formula — if the
    * mutable lifetime counters ever disagree, this is the value
@@ -678,7 +701,10 @@ export class DishwareSystem {
       if (p.kind === "plate") plate += p.count;
       else glass += p.count;
     }
-    return { plate, glass };
+    // SELL-BACK — sells/deletes append negative counts; clamp at 0 so
+    // a pathological log can never drive lifetime below zero (matches
+    // the Math.max(0, …) the mutable counters use).
+    return { plate: Math.max(0, plate), glass: Math.max(0, glass) };
   }
 
   /** Phase I (H.83) — Reconcile a kind's pool to canonical lifetime.
@@ -1085,11 +1111,18 @@ export class DishwareSystem {
     // it can only grow via buySet (one append per purchase).
 
     // Step 1 — load the audit log.
+    //
+    // SELL-BACK — negative counts are VALID entries: deleteOne (H.94)
+    // and recordSale append `count: -n` so sold / deleted pieces stay
+    // subtracted from the canonical lifetime. The old `p.count > 0`
+    // filter silently dropped them on reload, which resurrected every
+    // sold dish as a phantom LEAK after the next hydrate. Only
+    // zero-count rows are junk.
     const sawLogField = Array.isArray(purchaseLog);
     if (sawLogField) {
       this.purchaseLog = purchaseLog!
         .filter((p) => p && typeof p.tier === "number" && typeof p.count === "number"
-          && p.tier >= 1 && p.tier <= 5 && p.count > 0)
+          && p.tier >= 1 && p.tier <= 5 && p.count !== 0)
         .map((p) => ({
           kind: p.kind === "glass" ? "glass" : "plate" as DishKind,
           tier: Math.floor(p.tier),
