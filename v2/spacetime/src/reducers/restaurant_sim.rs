@@ -4441,6 +4441,34 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // (walkingToDoor, exitingDoor, walkingOut). The short
     // LEAVING_DWELL_MS (4 s) applies to "leaving"/"done"; the longer
     // LEAVING_VARIANT_DWELL_MS (30 s) applies to the client variants.
+    // Phase 9.16 — UNKNOWN-STATE watchdog. Guests carrying legacy
+    // client-era state strings ("atToilet", "atSink",
+    // "returningFromToilet", "walkingToWait", …) match NO transition
+    // arm, NO patience branch, nothing — immortal statues parked at
+    // fixtures (observed: four guests frozen in "atToilet" for 90 s+
+    // with id series thousands older than the live crowd). Anything
+    // the server's state machine doesn't own gets walked out; the
+    // standard leaving flow settles + despawns them.
+    const SERVER_STATES: [&str; 9] = [
+        "walkingIn", "waiting", "seated", "ordering", "waitingForFood",
+        "eating", "wcWalking", "wcSitting", "wcWashing",
+    ];
+    if !is_leaving_state(&g.state) && !SERVER_STATES.contains(&g.state.as_str()) {
+        log::info!(
+            "tick_guest_state: guest {} in unknown state '{}' — flipping to leaving",
+            g.id, g.state,
+        );
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state: "leaving".to_string(),
+            state_clock_ms: 0,
+            target_x: 0.0,
+            target_z: 0.0,
+            target_floor: 0,
+            ..g
+        });
+        return;
+    }
+
     if is_leaving_state(&g.state) {
         let advanced_clock = g.state_clock_ms.saturating_add(dt_ms);
         let dwell_threshold = if g.state == "leaving" || g.state == "done" {
