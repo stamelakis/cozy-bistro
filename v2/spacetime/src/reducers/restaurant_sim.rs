@@ -5796,6 +5796,27 @@ fn step_toward_target(x: f32, z: f32, target_x: f32, target_z: f32, speed: f32, 
 fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     let Some(t) = ctx.db.active_ticket().id().find(ticket_id) else { return };
 
+    // Phase 9.14 — GUESTLESS-TICKET watchdog. The guest-despawn
+    // cascade deletes a leaving guest's tickets, but a ticket
+    // created in the same tick window can slip through and live
+    // forever (observed: ids 3289/3412 queued for WEEKS while the
+    // id counter reached 49600+ — permanently showing "1 queued",
+    // wasting chef claim cycles, and pinning one reserved plate
+    // each, which is exactly the dishware "LEAK 2"). Any ticket
+    // whose guest row no longer exists is dead work: release the
+    // chef and delete it, whatever state it's in.
+    if ctx.db.active_guest().id().find(t.guest_id).is_none() {
+        log::info!(
+            "tick_ticket_state: ticket {} ({}) has no guest {} — deleting fossil",
+            t.id, t.state, t.guest_id,
+        );
+        if !t.assigned_chef_id.is_empty() {
+            release_chef_from_ticket(ctx, &t.assigned_chef_id);
+        }
+        ctx.db.active_ticket().id().delete(t.id);
+        return;
+    }
+
     // Phase 9.10 — ORPHANED-DELIVERING watchdog. A ticket in
     // "delivering" must have a waiter actually carrying it
     // (staff_actor.ticket_id == this id). Guest-leave cascades,
