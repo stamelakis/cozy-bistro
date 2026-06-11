@@ -5094,14 +5094,17 @@ pub(crate) fn try_spawn_arrival_guest(
         seat_uid: seat_uid.clone(),
         seat_x,
         seat_z,
-        // Phase 9.10 — real chair facing from the mirrored seat_slot
-        // row (guests were spawning with facing 0 = staring at -Z
-        // regardless of which way the chair points). 0.0 fallback
-        // covers wait-mode spawns + legacy def-id assignments.
+        // Phase 9.10 — real chair facing + bar flag from the mirrored
+        // seat_slot row (guests spawned facing -Z regardless of chair
+        // orientation, and seat_at_bar was hardcoded false — which
+        // killed the entire barman flow server-side: bar-seat tickets
+        // route through the barman pool keyed on this flag). Fallbacks
+        // cover wait-mode spawns + legacy def-id assignments.
         seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
             .map(|s| s.facing_y).unwrap_or(0.0),
         seat_floor,
-        seat_at_bar: false,
+        seat_at_bar: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
+            .map(|s| s.at_bar).unwrap_or(false),
         plate_x: seat_x,
         plate_z: seat_z,
         x: door_x,
@@ -5616,9 +5619,11 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
         seat_uid: seat_uid.clone(),
         seat_x: sx,
         seat_z: sz,
-        // Phase 9.10 — real chair facing from the mirrored slot row.
-        seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid)
+        // Phase 9.10 — real chair facing + bar flag from the slot row.
+        seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
             .map(|s| s.facing_y).unwrap_or(0.0),
+        seat_at_bar: ctx.db.seat_slot().seat_uid().find(seat_uid)
+            .map(|s| s.at_bar).unwrap_or(false),
         seat_floor: sf,
         plate_x: sx,
         plate_z: sz,
