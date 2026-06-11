@@ -395,6 +395,26 @@ export class Engine {
           this.actorsResynced = true;
           this.router?.resyncAllActorsToCloud();
           this.errand?.resyncAllActorsToCloud();
+          // Phase 9.12 — purge GHOST staff_actor rows. Member ids
+          // rotate across sessions (fresh-storage boots mint new
+          // ones) and nothing ever unregistered the old rows, so
+          // the server accumulated phantom actors it kept
+          // dispatching — work happened invisibly (errand trips
+          // delivering with no rendered helper; the staff panel
+          // reading "3 idle" while ghost ids shopped). Any cloud
+          // row whose member_id isn't in the CURRENT roster gets
+          // unregistered (owner-gated reducer; releases held
+          // tickets internally).
+          const known = new Set<string>();
+          for (const role of ["chef", "waiter", "barman", "errand"] as const) {
+            for (const m of this.game.staff.getMembers(role)) known.add(m.id);
+          }
+          for (const row of this.cloud.listStaffActors()) {
+            if (!known.has(row.memberId)) {
+              console.log(`[9.12] purging ghost staff_actor ${row.memberId} (${row.role}) — not in current roster`);
+              this.cloud.unregisterStaffActor(row.memberId);
+            }
+          }
         }
         this.router?.hydrateFromCloud();
         this.errand?.hydrateFromCloud();
