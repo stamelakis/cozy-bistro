@@ -586,6 +586,12 @@ export class SpacetimeClient {
    * Pre-9.17 the balance moved invisibly and read as a dupe. */
   private pendingServerLedger = 0;
   private lastServerLedgerFlushMs = 0;
+  /** Phase 9.20 — false until the first authoritative restaurant
+   * row has been ADOPTED this session. Guards against the boot-seed
+   * race: onSubscriptionReady seeds lastSyncedCents from a row that's
+   * often still stale, defeating the null-only adoption guard and
+   * narrating real offline earnings as a sudden live-income jump. */
+  private moneyAdoptedThisSession = false;
 
   /** Phase 9.1 — Look up a single active_guest row by server id and
    * return it as a HydratableGuestRow. Used by GuestSpawner's
@@ -3566,11 +3572,21 @@ export class SpacetimeClient {
       this.applyPendingVisitRollup();
       // Phase 7.7 — Seed the delta-sync baseline from the cloud row
       // so the first 5s syncCloudMoney push doesn't fire a spurious
-      // "I just earned $1M" delta. Phase 7.2's setMoney path also
-      // calls noteSyncedCents, but only when pending counters were
-      // non-zero. This is the no-pending fast path.
+      // "I just earned $1M" delta.
+      //
+      // Phase 9.20 — DO NOT seed if the authoritative row hasn't been
+      // adopted yet. The restaurant row in the subscription cache at
+      // this point is often a STALE pre-settlement value; seeding the
+      // baseline from it defeats the onUpdate adoption guard, so the
+      // real offline-settled value lands seconds later as a live
+      // "+$50k income" delta that reads like a dupe. Leaving the
+      // baseline null when unadopted lets the first onUpdate adopt
+      // cleanly (setMoney + one labelled reconciliation line). Engine's
+      // 5s push is itself guarded on lastSynced !== null, so there's no
+      // spurious push in the gap. We only seed here once adoption has
+      // already happened (rollup's setMoney path sets the flag below).
       const restRow = this.conn?.db.restaurant.id.find(this.restaurantId);
-      if (restRow != null) {
+      if (restRow != null && this.moneyAdoptedThisSession) {
         this.game.economy.noteSyncedCents(Number(restRow.cloudMoneyCents));
       }
       // H.30 — same shape for day rollovers. Each pending day fires
@@ -3636,15 +3652,37 @@ export class SpacetimeClient {
         // ── Phase 7.7 — Adopt server-driven cloud_money_cents changes ──
         const cloudCents = Number(newRow.cloudMoneyCents);
         const lastSynced = this.game.economy.getLastSyncedCents();
-        if (lastSynced === null) {
-          // Phase 9.3 — First contact this session: ADOPT, never
-          // delta. Computing (cloud − 0) here earned the entire
-          // cloud balance ON TOP of the local-save balance — the
-          // other half of the 100k → 3.4M doubling loop. Cloud is
-          // canonical under Path B; the local save's cash is just a
-          // stale snapshot of it.
-          this.game.economy.setMoney(cloudCents / 100);
+        if (lastSynced === null || !this.moneyAdoptedThisSession) {
+          // Phase 9.3 + 9.20 — First AUTHORITATIVE row this session:
+          // ADOPT, never delta. The cloud_money_cents total already
+          // folds in everything the server earned while the tab was
+          // closed, so the first row we trust is the offline-settled
+          // value. setMoney REPLACES (can't compound past cloud);
+          // earn()-ing the gap would (a) misreport real offline
+          // earnings as live "Service income" and (b) — since
+          // onSubscriptionReady seeds the baseline from a row that's
+          // often still stale at boot — narrate a $50k+ jump seconds
+          // after load that reads exactly like a dupe. The
+          // moneyAdoptedThisSession flag makes this fire on the
+          // FIRST onUpdate regardless of whether the baseline was
+          // pre-seeded (the null guard alone wasn't enough — the
+          // seed defeated it).
+          const before = this.game.economy.getMoney();
+          const after = cloudCents / 100;
+          this.game.economy.setMoney(after);
           this.game.economy.noteSyncedCents(cloudCents);
+          this.moneyAdoptedThisSession = true;
+          // One honest reconciliation line so the books balance and
+          // the jump is LABELLED (offline earnings/costs) instead of
+          // looking like instantaneous live income. Skip sub-dollar
+          // noise + the no-change case.
+          const recon = after - before;
+          if (Math.abs(recon) >= 1) {
+            this.game.economy.recordTransaction(
+              recon >= 0 ? "Offline earnings (while away)" : "Offline costs (while away)",
+              recon,
+            );
+          }
         } else {
           const deltaCents = cloudCents - lastSynced;
           if (deltaCents !== 0) {
