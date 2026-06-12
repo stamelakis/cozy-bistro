@@ -1428,6 +1428,13 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
     match def_id {
         "stove" | "stove-electric" => Some("stove"),
         "microwave" => Some("microwave"),
+        // Phase 9.24 — "counter" was MISSING here, so EVERY counter-
+        // appliance recipe (desserts, appetizers, pies, pickles —
+        // pistachio-cream, apple-pie, house-pickles…) could never be
+        // matched to a station server-side: its ticket queued forever
+        // and the chef stood idle (no station to claim). Both
+        // counter defs from the client catalog now map to "counter".
+        "counter" | "counter-drawer" => Some("counter"),
         "coffee-machine" => Some("coffee"),
         "blender" => Some("blender"),
         "toaster" => Some("toaster"),
