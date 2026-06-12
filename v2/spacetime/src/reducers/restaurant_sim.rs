@@ -1367,12 +1367,18 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
             assigned_chef_id: actor_member_id.clone(),
             ..ticket
         });
+        // Phase 9.21 — stand IN FRONT of the station, not inside it.
+        // target = station center made the chef cook from inside the
+        // stove mesh. Offset ~1 m along the station's facing (same
+        // rot_y stand-spot convention the WC picker uses).
+        let stand_x = station.x + station.rot_y.sin();
+        let stand_z = station.z + station.rot_y.cos();
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
             ticket_id: Some(ticket_id),
-            target_x: station.x,
-            target_z: station.z,
+            target_x: stand_x,
+            target_z: stand_z,
             target_floor: station.floor,
             assigned_stove_uid: station_uid.clone(),
             ..actor
@@ -4775,6 +4781,33 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         return;
     }
 
+    // Phase 9.21 — WC-STUCK watchdog. A guest who's spent more than
+    // WC_STUCK_MS in any WC state never finished the cycle (fixture
+    // unreachable, mid-walk desync, etc.) — observed as customers
+    // standing in the bathroom "forever" not using anything. Give up
+    // on the trip and send them back to their seat so the normal
+    // seated→ordering flow resumes; wc_completed stays false so they
+    // take the (small) "tried but couldn't" rating hit, not the
+    // success bonus.
+    const WC_STUCK_MS: i64 = 45_000;
+    if matches!(g.state.as_str(), "wcWalking" | "wcSitting" | "wcWashing")
+        && g.state_clock_ms.saturating_add(dt_ms) >= WC_STUCK_MS {
+        log::info!(
+            "tick_guest_state: guest {} stuck in {} {}ms — abandoning WC trip → seated",
+            g.id, g.state, g.state_clock_ms,
+        );
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state: "seated".to_string(),
+            state_clock_ms: 0,
+            wc_target_uid: None,
+            target_x: g.seat_x,
+            target_z: g.seat_z,
+            target_floor: g.seat_floor,
+            ..g
+        });
+        return;
+    }
+
     if is_leaving_state(&g.state) {
         let advanced_clock = g.state_clock_ms.saturating_add(dt_ms);
         let dwell_threshold = if g.state == "leaving" || g.state == "done" {
@@ -5972,7 +6005,16 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
             any_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
         }
     }
-    same_floor_best.or(any_floor_best)
+    // Phase 9.21 — SAME-FLOOR ONLY. The server steps guest bodies in
+    // 2D (no stair pathing), so a cross-floor fixture target just
+    // slides the guest's x/z to the fixture's coords on THEIR OWN
+    // floor — they "use" a bathroom that's actually a storey away
+    // (and often get stuck mid-air over it). Dropping the cross-floor
+    // fallback means a guest with no same-floor fixture simply
+    // skips the WC trip (the seated→ordering arm fires normally),
+    // which is correct: they couldn't reach it anyway.
+    let _ = any_floor_best;
+    same_floor_best
 }
 
 /// H.12 — Server-side fallback seat assignment. Called from
