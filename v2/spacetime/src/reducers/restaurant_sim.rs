@@ -5238,7 +5238,15 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             }
         },
         // wcWalking → wcSitting on arrival at the toilet.
-        "wcWalking" if arrived => Some(("wcSitting".to_string(), 0)),
+        // Phase 9.22 — when the fixture is on ANOTHER floor the client
+        // is climbing stairs (≈5-8 s) while the server's 2D body slid
+        // straight to the x/z in ~2 s. Hold the sit-transition for a
+        // stair-climb grace so the state doesn't pop the guest onto
+        // the toilet before they've visibly arrived. Same-floor keeps
+        // the snappy arrival-only behaviour.
+        "wcWalking" if arrived
+            && (g.floor == effective_target_floor || new_clock >= CROSS_FLOOR_WC_WALK_MS) =>
+            Some(("wcSitting".to_string(), 0)),
         // wcSitting → wcWashing after WC_USE_MS — the toilet trip.
         "wcSitting" if new_clock >= WC_USE_MS => Some(("wcWashing".to_string(), 0)),
         // wcWashing → seated after WC_WASH_MS — back to the seat.
@@ -5846,6 +5854,10 @@ const SEATED_DWELL_MS: i64 = 4_000;
 const EATING_DURATION_MS: i64 = 8_000;
 /// Time the guest dwells on the toilet before washing hands.
 const WC_USE_MS: i64 = 6_000;
+/// Phase 9.22 — stair-climb grace before a cross-floor WC guest is
+/// allowed to "sit". Covers a typical up-and-over stair walk so the
+/// client's stair pathfinder finishes before the server flips state.
+const CROSS_FLOOR_WC_WALK_MS: i64 = 7_000;
 /// Time the guest dwells at the sink before returning to seat.
 const WC_WASH_MS: i64 = 3_000;
 /// Phase H.23 — extra grace beyond SEATED_DWELL_MS during which a WC
@@ -6005,16 +6017,14 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
             any_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
         }
     }
-    // Phase 9.21 — SAME-FLOOR ONLY. The server steps guest bodies in
-    // 2D (no stair pathing), so a cross-floor fixture target just
-    // slides the guest's x/z to the fixture's coords on THEIR OWN
-    // floor — they "use" a bathroom that's actually a storey away
-    // (and often get stuck mid-air over it). Dropping the cross-floor
-    // fallback means a guest with no same-floor fixture simply
-    // skips the WC trip (the seated→ordering arm fires normally),
-    // which is correct: they couldn't reach it anyway.
-    let _ = any_floor_best;
-    same_floor_best
+    // Phase 9.22 — Prefer same-floor, but ALLOW cross-floor (the
+    // client owns the stair-aware visual walk; the bridge routes the
+    // guest up/down via g.toiletFloor/sinkFloor, and the wcWalking→
+    // wcSitting transition is time-gated for the climb so the state
+    // doesn't race ahead). The returned tuple's 4th element is the
+    // fixture's floor, which flows to active_guest.target_floor and
+    // thence to the bridge.
+    same_floor_best.or(any_floor_best)
 }
 
 /// H.12 — Server-side fallback seat assignment. Called from

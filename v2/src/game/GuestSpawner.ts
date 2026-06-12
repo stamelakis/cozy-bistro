@@ -1669,6 +1669,17 @@ export class GuestSpawner {
     if (g.state === "seated" && row.state === "wcWalking") {
       g.returnSeatPos = g.seatPos.clone();
       g.target = new THREE.Vector2(row.targetX, row.targetZ);
+      // Phase 9.22 — CRITICAL for cross-floor WC: tell the local
+      // stair-aware pathfinder which floor the fixture is on. Without
+      // this, pickPathTargetFloor defaults to the guest's CURRENT
+      // floor and routes them flat to the fixture's x/z — they
+      // "use" a bathroom a storey away instead of climbing the
+      // stairs. row.targetFloor carries the server's fixture floor.
+      if (g.willWashOnly) {
+        g.sinkFloor = row.targetFloor;
+      } else {
+        g.toiletFloor = row.targetFloor;
+      }
       g.state = g.willWashOnly ? "walkingToSink" : "walkingToToilet";
       g.stateClock = 0;
       g.character.action = "walk";
@@ -1701,6 +1712,9 @@ export class GuestSpawner {
       g.usedToilet = true;
       g.toiletAttemptComplete = true;
       g.target = new THREE.Vector2(row.targetX, row.targetZ);
+      // Phase 9.22 — the sink may be on a different floor than the
+      // toilet; route the walk-to-sink leg with stairs too.
+      g.sinkFloor = row.targetFloor;
       g.state = "walkingToSink";
       g.stateClock = 0;
       g.character.action = "walk";
