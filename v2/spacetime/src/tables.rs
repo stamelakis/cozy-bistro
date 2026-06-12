@@ -1758,3 +1758,14 @@ pub struct SeatSlot {
     pub plate_z: f32,
     pub at_bar: bool,
 }
+
+/// Phase 9.19 — The player's auto-shop stock target (one uniform
+/// number, tuned in the Pantry UI). The errand dispatcher shops
+/// toward THIS instead of its old hardcoded "below 3 units" floor —
+/// which left helpers idle while the HUD showed "45 below target".
+#[table(name = pantry_target, public)]
+pub struct PantryTarget {
+    #[primary_key]
+    pub restaurant_id: u64,
+    pub target: u32,
+}

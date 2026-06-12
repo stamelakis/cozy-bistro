@@ -15,14 +15,15 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Time
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
-    placed_furniture, player, player_save, prepared_serving, recipe_ingredients,
-    recipe_level, recipe_meta,
+    pantry_target, placed_furniture, player, player_save, prepared_serving,
+    recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, staff_actor, weather_state,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
-    DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
-    PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight,
-    Restaurant, RestaurantTickSchedule, RestaurantTickState, SeatSlot, StaffActor,
+    DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
+    PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
+    RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
+    SeatSlot, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -4039,6 +4040,16 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     // (which is the seeded master catalog the client publishes at
     // boot) closes that gap retroactively — any ingredient with no
     // pantry row OR qty < threshold gets added to needs.
+    // Phase 9.19 — shop toward the PLAYER'S stock target (mirrored
+    // into pantry_target by the client; the +/- control in the
+    // pantry UI). The old hardcoded "below 3 units" floor left
+    // helpers idle while the HUD showed dozens of ingredients
+    // "below target" — the server simply didn't know what the
+    // player's target was. Fallback to the legacy floor for
+    // restaurants that haven't pushed a target yet.
+    let target = ctx.db.pantry_target().restaurant_id().find(rid)
+        .map(|t| t.target.max(1))
+        .unwrap_or(ERRAND_RESTOCK_THRESHOLD);
     let mut needs: Vec<(String, u32)> = Vec::new();
     for cost in ctx.db.ingredient_cost().iter() {
         let ing = cost.ingredient_id.clone();
@@ -4047,8 +4058,11 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
         let qty = ctx.db.pantry_stock().key().find(key)
             .map(|p| p.quantity)
             .unwrap_or(0);
-        if qty >= ERRAND_RESTOCK_THRESHOLD { continue; }
-        needs.push((ing, ERRAND_UNITS_PER_INGREDIENT));
+        if qty >= target { continue; }
+        // Buy up to the deficit, capped per trip so one scarce
+        // ingredient doesn't hog the whole carry capacity.
+        let units = (target - qty).min(ERRAND_UNITS_PER_INGREDIENT.max(10));
+        needs.push((ing, units));
         if needs.len() >= ERRAND_CARRY_CAP { break; }
     }
     if needs.is_empty() { return; }
@@ -6002,6 +6016,33 @@ fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32
 ///   subscribers see the guest standing at the table centre, not on
 ///   a specific chair. The client's local sim, if running, will
 ///   override with proper chair coords.
+/// Phase 9.19 — Mirror the player's auto-shop stock target so the
+/// errand dispatcher shops toward it. Owner-gated upsert.
+#[reducer]
+pub fn set_pantry_target(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    target: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set the pantry target".into());
+    }
+    let clamped = target.clamp(1, 200);
+    if let Some(existing) = ctx.db.pantry_target().restaurant_id().find(restaurant_id) {
+        if existing.target == clamped { return Ok(()); }
+        ctx.db.pantry_target().restaurant_id().update(PantryTarget {
+            target: clamped,
+            ..existing
+        });
+    } else {
+        ctx.db.pantry_target().insert(PantryTarget { restaurant_id, target: clamped });
+    }
+    log::info!("set_pantry_target: restaurant {} → {}", restaurant_id, clamped);
+    Ok(())
+}
+
 /// Phase 9.7 — Replace the restaurant's seat_slot rows with the
 /// client's freshly resolved seat list. Owner-only. Entries are
 /// "seat_uid;x;z;floor;facing;plate_x;plate_z;at_bar" joined by "|".

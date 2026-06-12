@@ -82,6 +82,7 @@ import SetGuestWaitingChairReducer from "../set_guest_waiting_chair_reducer";
 import SetHiredStaffMemberReducer from "../set_hired_staff_member_reducer";
 import SetIngredientCostReducer from "../set_ingredient_cost_reducer";
 import SetMemberTrainingDeadlineReducer from "../set_member_training_deadline_reducer";
+import SetPantryTargetReducer from "../set_pantry_target_reducer";
 import SetPlayerNameReducer from "../set_player_name_reducer";
 import SetPreparedServingReducer from "../set_prepared_serving_reducer";
 import SetRecipeIngredientsReducer from "../set_recipe_ingredients_reducer";
@@ -184,6 +185,7 @@ export type SetGuestWaitingChairParams = __Infer<typeof SetGuestWaitingChairRedu
 export type SetHiredStaffMemberParams = __Infer<typeof SetHiredStaffMemberReducer>;
 export type SetIngredientCostParams = __Infer<typeof SetIngredientCostReducer>;
 export type SetMemberTrainingDeadlineParams = __Infer<typeof SetMemberTrainingDeadlineReducer>;
+export type SetPantryTargetParams = __Infer<typeof SetPantryTargetReducer>;
 export type SetPlayerNameParams = __Infer<typeof SetPlayerNameReducer>;
 export type SetPreparedServingParams = __Infer<typeof SetPreparedServingReducer>;
 export type SetRecipeIngredientsParams = __Infer<typeof SetRecipeIngredientsReducer>;

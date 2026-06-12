@@ -254,6 +254,12 @@ export const PantryStock = __t.object("PantryStock", {
 });
 export type PantryStock = __Infer<typeof PantryStock>;
 
+export const PantryTarget = __t.object("PantryTarget", {
+  restaurantId: __t.u64(),
+  target: __t.u32(),
+});
+export type PantryTarget = __Infer<typeof PantryTarget>;
+
 export const PasswordResetRequest = __t.object("PasswordResetRequest", {
   id: __t.u64(),
   username: __t.string(),

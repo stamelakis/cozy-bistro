@@ -110,6 +110,7 @@ import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetIngredientCostReducer from "./set_ingredient_cost_reducer";
 import SetMemberTrainingDeadlineReducer from "./set_member_training_deadline_reducer";
+import SetPantryTargetReducer from "./set_pantry_target_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetPreparedServingReducer from "./set_prepared_serving_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
@@ -158,6 +159,7 @@ import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import PantryStockRow from "./pantry_stock_table";
+import PantryTargetRow from "./pantry_target_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
 import PedestrianRow from "./pedestrian_table";
 import PlacedFurnitureRow from "./placed_furniture_table";
@@ -458,6 +460,17 @@ const tablesSchema = __schema({
       { name: 'pantry_stock_key_key', constraint: 'unique', columns: ['key'] },
     ],
   }, PantryStockRow),
+  pantry_target: __table({
+    name: 'pantry_target',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'pantry_target_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'pantry_target_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
+    ],
+  }, PantryTargetRow),
   password_reset_request: __table({
     name: 'password_reset_request',
     indexes: [
@@ -755,6 +768,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_hired_staff_member", SetHiredStaffMemberReducer),
   __reducerSchema("set_ingredient_cost", SetIngredientCostReducer),
   __reducerSchema("set_member_training_deadline", SetMemberTrainingDeadlineReducer),
+  __reducerSchema("set_pantry_target", SetPantryTargetReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_prepared_serving", SetPreparedServingReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),

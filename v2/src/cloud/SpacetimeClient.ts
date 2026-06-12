@@ -1214,6 +1214,22 @@ export class SpacetimeClient {
     return out;
   }
 
+  /** Phase 9.19 — Mirror the player's auto-shop stock target so the
+   * server's errand dispatcher shops toward it instead of its old
+   * hardcoded below-3-units floor. Engine pushes on boot + whenever
+   * the player adjusts the +/- control. */
+  setPantryTarget(target: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.setPantryTarget({
+        restaurantId: this.restaurantId,
+        target: Math.max(1, Math.round(target)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setPantryTarget failed:", e);
+    }
+  }
+
   /** Phase 9.7 — Replace the server's seat_slot rows with the
    * client's freshly resolved seat list. Entries are
    * "seat_uid;x;z;floor;facing;plate_x;plate_z;at_bar" joined "|".

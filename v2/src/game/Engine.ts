@@ -164,6 +164,9 @@ export class Engine {
   private actorsResynced = false;
   /** Phase 9.7 — one-shot latch for the retry-loop seat-slot push. */
   private seatSlotsPushed = false;
+  /** Phase 9.19 — change-tracker for the pantry stock-target push;
+   * -1 forces one push on boot. */
+  private lastPushedStockTarget = -1;
   /** Phase 9.9 — one-shot latch for adopting the cloud's in-flight
    * recipe-upgrade deadlines (drops ghost timers the server already
    * completed; corrects stale remaining-time on live ones). */
@@ -363,6 +366,15 @@ export class Engine {
     // steady-state cost is a few boolean checks per second.
     window.setInterval(() => {
       if (!this.cloud.hasRestaurantContext()) return;
+      // Phase 9.19 — keep the server's pantry_target in step with
+      // the player's stock-target control. Change-tracked so the
+      // reducer fires once per adjustment (plus once at boot), not
+      // every second.
+      const stockTarget = this.game.getStockTarget();
+      if (stockTarget !== this.lastPushedStockTarget) {
+        this.lastPushedStockTarget = stockTarget;
+        this.cloud.setPantryTarget(stockTarget);
+      }
       // Phase 9.5 — guests wait for the furniture registry's cloud
       // restore. Seated guests imported before seats exist get
       // "table sold" walk-outs from refreshSeatedGuestPoses.
