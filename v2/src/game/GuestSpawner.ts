@@ -1957,6 +1957,15 @@ export class GuestSpawner {
     }
 
     this.guests.push(guest);
+    // Task A — a guest IMPORTED already in "eating" state never crossed
+    // the waitingForFood→eating transition in reconcileCloudGuest (which
+    // is the only other place showPlateForGuest fires under Path B), so
+    // their table would render empty even though they're mid-meal. Drop
+    // the plate now that the guest is in this.guests + has its seat/
+    // platePos resolved, mirroring the transition's side effect.
+    if (state === "eating") {
+      this.showPlateForGuest(guest);
+    }
     if (DEBUG_GUEST_LOGS) {
       console.log(`[H.47] imported cloud guest ${localId} (server id ${row.id}) state=${state} seat=${row.seatUid || "none"}`);
     }
@@ -3053,21 +3062,32 @@ export class GuestSpawner {
       const x = g.platePos.x + dx;
       const z = g.platePos.y + dz;
       const tier = g.reservedDishTiers[i];
-      const mesh = builder.build(tier);
-      mesh.position.set(x, tableTop, z);
-      // Parent leftover plates/glasses to the SEAT's floor group so
-      // they hide with that storey — same fix as showPlateForGuest
-      // for the served-food icons bleeding through floors below.
-      const mount = this.getStoreyMount?.(g.seatFloor) ?? this.scene;
-      mount.add(mesh);
-      const localId = this.nextDirtyId;
-      this.dirtyTableMeshes.push({
-        id: localId, mesh, kind, claimedBy: null,
-        pos: new THREE.Vector2(x, z),
-        floor: g.seatFloor,
-        seatId,
-      });
-      this.nextDirtyId += 1;
+      // Task A — under Path B the host renders dirty piles from the
+      // cloud dirty_pile table via Engine's DirtyPileVisualizer (same
+      // path visitors use). Creating the LOCAL leftover mesh here too
+      // would double-render the same pile at the same table spot, so
+      // leave the local dirtyTableMeshes dormant and rely on the cloud
+      // mirror below. The mirror (addDirtyPile) still fires so the
+      // cloud row — and therefore both the host's own visualizer AND
+      // any visitor's — shows the leftover. Flag OFF keeps the original
+      // local-mesh renderer (no cloud visualizer is wired in that mode).
+      if (!this.serverOwnsGuestStates()) {
+        const mesh = builder.build(tier);
+        mesh.position.set(x, tableTop, z);
+        // Parent leftover plates/glasses to the SEAT's floor group so
+        // they hide with that storey — same fix as showPlateForGuest
+        // for the served-food icons bleeding through floors below.
+        const mount = this.getStoreyMount?.(g.seatFloor) ?? this.scene;
+        mount.add(mesh);
+        const localId = this.nextDirtyId;
+        this.dirtyTableMeshes.push({
+          id: localId, mesh, kind, claimedBy: null,
+          pos: new THREE.Vector2(x, z),
+          floor: g.seatFloor,
+          seatId,
+        });
+        this.nextDirtyId += 1;
+      }
       // Phase H.B — Mirror to cloud so visitors (and post-H.D the
       // host's own renderer) can see this pile. Server assigns the
       // auto_inc id; we stash the returned cloud id by binding it

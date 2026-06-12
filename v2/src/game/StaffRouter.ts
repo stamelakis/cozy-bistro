@@ -1846,6 +1846,21 @@ export class StaffRouter {
       if (t.appliance !== "bar") continue;
       if (t.state === "queued" || t.state === "cooking") count += 1;
     }
+    // Path B fallback — under serverOwnsTicketDispatch the local barman
+    // never runs tryClaimDrinkForBarman (which is what stamps
+    // ticket.assignedChefId = barman). Instead the staff_actor bridge
+    // (reconcileCloudStaffActor) drives the barman: it sets actor.ticketId
+    // + actor.state on a cloud-claim, and the local state machine carries
+    // them movingToWork → working → returningHome. If the ticket-scan
+    // above found nothing (assignedChefId came back as the SERVER's id,
+    // not the local barman id), treat a busy actor as ≥1 so the badge
+    // tracks reality the same way chefs do.
+    if (count === 0) {
+      const b = this.barmen.find((x) => x.memberId === barmanMemberId);
+      if (b && (b.ticketId != null || b.state === "movingToWork" || b.state === "working")) {
+        count = 1;
+      }
+    }
     return count;
   }
 
@@ -1861,6 +1876,20 @@ export class StaffRouter {
     if (w.ticketId) count += 1;
     if (w.washTrip) count += 1;
     if (w.takeOrderRequest) count += 1;
+    // Path B fallback — under serverOwnsTicketDispatch the local waiter's
+    // delivery / take-order / wash trips are all started by the
+    // staff_actor bridge (reconcileCloudStaffActor) rather than the local
+    // idle picker. The bridge always drives actor.state to movingToWork
+    // and the local state machine advances it through working, but the
+    // specific trip FIELD it sets depends on what local context exists
+    // (e.g. the cloud-wash branch needs a LOCAL dirty mesh, which Path B
+    // no longer spawns on the host — so washTrip can be null while the
+    // waiter is genuinely off doing server-side wash work). Count any
+    // non-idle, non-returning-home actor as ≥1 so a busy waiter shows a
+    // badge even when none of the three trip fields happen to be set.
+    if (count === 0 && (w.state === "movingToWork" || w.state === "working")) {
+      count = 1;
+    }
     return count;
   }
 

@@ -373,6 +373,34 @@ pub fn restaurant_tick(
         tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
     }
 
+    // Phase 9.23 — dirty-pile reaper. Piles (positioned table
+    // leftovers, inserted on settle for the host + visitors to SEE)
+    // have a genuinely independent lifecycle from the abstract
+    // dishware pool, so coupling their cleanup to pool washing alone
+    // left orphans whenever the dishwasher cleaned the pool without a
+    // wash trip. This bounds the total: leftovers accumulate as
+    // guests eat, then drain steadily as staff "clear tables" — keep
+    // only the most recent DIRTY_PILE_CAP, deleting oldest (lowest
+    // auto-inc id) first. Robust + self-healing (drains any orphan
+    // backlog), and reads correctly: a busy room shows a scatter of
+    // dirty dishes that get bussed over the following seconds.
+    const DIRTY_PILE_CAP: usize = 24;
+    /// Max piles cleared per tick so a big backlog drains visibly
+    /// over several seconds instead of vanishing in one frame.
+    const DIRTY_PILE_REAP_PER_TICK: usize = 3;
+    let pile_ids: Vec<u64> = ctx.db.dirty_pile()
+        .restaurant_id().filter(rid)
+        .map(|d| d.id)
+        .collect();
+    if pile_ids.len() > DIRTY_PILE_CAP {
+        let mut sorted = pile_ids;
+        sorted.sort_unstable(); // ascending = oldest first
+        let over = sorted.len() - DIRTY_PILE_CAP;
+        for id in sorted.into_iter().take(over.min(DIRTY_PILE_REAP_PER_TICK)) {
+            ctx.db.dirty_pile().id().delete(id);
+        }
+    }
+
     // Phase I (H.71) — continuous server-side guest spawning while
     // the owner is OFFLINE.  Closes the user-reported "I log in,
     // nothing changes" gap: previously NEW guests only materialized
@@ -3309,6 +3337,26 @@ fn apply_pool_delta(
     source: &str,
 ) {
     if clean_delta == 0 && dirty_delta == 0 { return; }
+    // Phase 9.23 — pile lifecycle is coupled to the pool HERE, the
+    // single choke point every cleaning path flows through (wash
+    // trip AND dishwasher-batch flush). A dirty decrease means N
+    // pieces of this kind just got cleaned → remove up to N visible
+    // table piles of the same kind so the leftover meshes disappear.
+    // Centralising here (rather than in the wash trip) is what fixes
+    // the orphaned-pile accumulation: the dishwasher batch cleans the
+    // pool without ever running a wash trip.
+    if dirty_delta < 0 {
+        let want = (-dirty_delta) as usize;
+        let pile_ids: Vec<u64> = ctx.db.dirty_pile()
+            .restaurant_id().filter(restaurant_id)
+            .filter(|d| d.kind == kind)
+            .take(want)
+            .map(|d| d.id)
+            .collect();
+        for id in pile_ids {
+            ctx.db.dirty_pile().id().delete(id);
+        }
+    }
     let key = pool_key(restaurant_id, kind, tier);
     let existing = ctx.db.dishware_pool().key().find(key.clone());
     let (cur_clean, cur_dirty) = match &existing {
@@ -3894,6 +3942,10 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 let take = p.dirty.min(quota);
                 if take == 0 { continue; }
                 quota -= take;
+                // Phase 9.23 — pile cleanup is centralised in
+                // apply_pool_delta (fires for the dishwasher-batch
+                // flush too, not just wash trips), so no explicit
+                // pile delete here.
                 apply_pool_delta(ctx, a.restaurant_id, &kind, tier,
                     take as i32, -(take as i32), "wash-trip");
             }
@@ -6799,6 +6851,27 @@ fn settle_guest_dishes(ctx: &ReducerContext, g: &ActiveGuest) {
             (1u32, 0u32) // reservation refund back to clean
         };
         bump_dishware(ctx, g.restaurant_id, kind, tier, clean_delta, dirty_delta);
+        // Phase 9.23 — eaten course leaves a VISIBLE dirty pile on the
+        // table. Pre-9.23 only the client's add_dirty_pile reducer
+        // wrote these rows, and that path is gated off under Path B —
+        // so dirty plates went invisible after the migration. The
+        // server now writes the pile on its own despawn/settle; the
+        // wash-trip completion deletes them (below). slot_index fans
+        // up to 4 leftovers around the seat so they don't stack.
+        if i < order_index && !g.seat_uid.is_empty() {
+            ctx.db.dirty_pile().insert(DirtyPile {
+                id: 0,
+                restaurant_id: g.restaurant_id,
+                seat_uid: g.seat_uid.clone(),
+                kind: kind.to_string(),
+                tier,
+                slot_index: (i % 4) as i32,
+                floor: g.seat_floor,
+                x: g.seat_x,
+                z: g.seat_z,
+                claimed_by: String::new(),
+            });
+        }
     }
     log::info!(
         "settle_guest_dishes: guest {} ({} reservations, {} eaten)",

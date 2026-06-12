@@ -39,6 +39,7 @@ import { ErrandRouter } from "./ErrandRouter";
 import { FurnitureRegistry } from "./FurnitureRegistry";
 import { Pathfinding } from "./Pathfinding";
 import { SeatMarkers } from "../scene/SeatMarkers";
+import { DirtyPileVisualizer } from "../scene/DirtyPileVisualizer";
 import { PersonalSpace, type MovableActor } from "./PersonalSpace";
 import { SaveSystem } from "./SaveSystem";
 import { featureFlags } from "./featureFlags";
@@ -75,6 +76,19 @@ export class Engine {
    * a check every second and prints recent mutation history if the
    * inventory total drifts below the lifetime-added baseline. */
   private dishwareLeakWatcher?: DishwareLeakWatcher;
+  /** Task A — Cloud-driven dirty-pile renderer for the HOST's OWN
+   * restaurant. Under Path B the server despawns guests directly
+   * (guest-bridge onDelete → despawnGuest), bypassing the local
+   * finalizeVisit → spawnLeftoversForGuest that used to leave a dirty-
+   * plate mesh on the table — so tables never showed leftovers. The
+   * server still writes dirty_pile rows, so we subscribe to our OWN
+   * restaurant's rows and render them with the SAME visualizer VisitMode
+   * uses for other players' restaurants. Per-floor storey mounts give
+   * the piles the same per-storey visibility as the served-food plates. */
+  private hostDirtyPiles?: DirtyPileVisualizer;
+  /** Once-latch so the interval retry loop only subscribes the host
+   * dirty-pile feed a single time after the restaurant context lands. */
+  private hostDirtyPileSubscribed = false;
   errand?: ErrandRouter;
   pedestrians?: PedestrianSpawner;
   sharedPedestrians?: SharedPedestrians;
@@ -381,6 +395,32 @@ export class Engine {
       if (this.furnitureCloudReady) {
         this.spawner?.attachGuestServerBridge();
         void this.spawner?.hydrateFromCloud();
+        // Task A — subscribe the host's OWN restaurant dirty_pile rows
+        // and feed the cloud-driven visualizer. Default restaurantId
+        // (omitted) scopes the subscription to this player's restaurant.
+        // Once-latched; the server is the sole writer under Path B (its
+        // despawn path writes the rows + the host's local finalize path
+        // is bypassed), so there's no double-render with the dormant
+        // local dirtyTableMeshes. Gated on featureFlags.guests so the
+        // pure-local sim (flag off) keeps using its own leftover meshes.
+        if (!this.hostDirtyPileSubscribed && this.hostDirtyPiles && featureFlags.guests) {
+          this.hostDirtyPileSubscribed = true;
+          const piles = this.hostDirtyPiles;
+          this.cloud.subscribeDirtyPileChanges({
+            onInsert: (row) => piles.onPile(row),
+            onUpdate: (row) => piles.onPile(row),
+            onDelete: (id) => piles.onPileDelete(id),
+          });
+          // Initial-snapshot replay: a late-registered onInsert handler
+          // doesn't get re-fired for rows already in the subscription
+          // cache, so seed the visualizer with whatever piles exist
+          // right now (same snapshot-then-deltas pattern the guest
+          // bridge uses via hydrateFromCloud + subscribeActiveGuestChanges).
+          for (const row of this.cloud.listDirtyPiles()) {
+            piles.onPile(row);
+          }
+          console.log("[Task A] host dirty-pile visualizer subscribed to own restaurant");
+        }
         // Phase 9.7 — one-shot seat-slot push so the server's
         // assignment list reflects THIS session's furniture even
         // when the player never edits anything before logging off.
@@ -1225,6 +1265,22 @@ export class Engine {
       // (without this the served-food icons on Floor 2 bled through
       // the slab when the player switched to Floor 0).
       this.spawner.getStoreyMount = (floor: number) => this.scene.getStoreyMount(floor);
+      // Task A — stand up the host's own cloud-driven dirty-pile
+      // renderer. Parent each pile to its storey group (same per-floor
+      // mount the served-food plates use) so leftovers on Floor 1 hide
+      // when the player focuses Floor 0 instead of bleeding through the
+      // slab. Built once; the dirty_pile subscription is attached in the
+      // post-context interval loop below (hostDirtyPileSubscribed latch).
+      if (!this.hostDirtyPiles) {
+        this.hostDirtyPiles = new DirtyPileVisualizer();
+        const storeys = WorldScene.getNumStoreys();
+        for (let f = 0; f < storeys; f += 1) {
+          this.hostDirtyPiles.setStoreyMount(f, this.scene.getStoreyMount(f));
+        }
+        // Fallback to the ground-floor mount for any row whose floor has
+        // no registered storey group yet (defensive; matches VisitMode).
+        this.hostDirtyPiles.setFallbackRoot(this.scene.getStoreyMount(0));
+      }
       // We deliberately don't wire dishware.onDishWashed: the wash
       // trip path removes the specific mesh it picked up (via
       // pickupDirty) and firing onDishWashed afterward would yank a
@@ -1330,7 +1386,11 @@ export class Engine {
               : (r.appliances?.[0] ?? r.stationNeeded ?? "stove");
             this.cloud.setRecipeMeta({
               recipeId: r.id,
-              baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1000),
+              // ×1.5 mirrors Game.COOK_TIME_GLOBAL_MULT (private there,
+              // so the factor is duplicated here). Keeps server-spawned
+              // background-guest cook times in step with the foreground
+              // place_order path that already routes through that mult.
+              baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1.5 * 1000),
               appliance,
               sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
               satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),

@@ -40,6 +40,11 @@ export class StockStatusWidget {
   private readonly dishBadge: HTMLElement;
   private readonly dishCaret: HTMLElement;
   private readonly dishTooltip: HTMLElement;
+  // Task E — main-panel quick-sell buttons (one clean piece of the
+  // player's current TOP owned tier). Surfaces the sell action that
+  // previously only lived in the per-tier breakdown popup.
+  private readonly sellPlateBtn: HTMLButtonElement;
+  private readonly sellGlassBtn: HTMLButtonElement;
   private readonly storageRow: HTMLElement;
   private readonly storageBadge: HTMLElement;
   private readonly storageCaret: HTMLElement;
@@ -117,6 +122,23 @@ export class StockStatusWidget {
     this.dishTooltip = makeFloatingTooltip();
     document.body.appendChild(this.dishTooltip);
     attachHoverTooltip(this.dishRow, this.dishTooltip, this.dishCaret);
+
+    // Task E — compact sell buttons directly in the DISHWARE card so
+    // selling is reachable without opening the per-tier popup. Each
+    // sells ONE clean piece of the player's current top owned tier;
+    // the click delegates to the SAME handleSellDishware path the popup
+    // uses (cloud.sellDishware + dish.recordSale, no double-count).
+    const sellRow = document.createElement("div");
+    Object.assign(sellRow.style, {
+      display: "flex", gap: "4px", marginTop: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    this.sellPlateBtn = makeMainSellButton();
+    this.sellGlassBtn = makeMainSellButton();
+    this.sellPlateBtn.onclick = () => this.handleSellTopTier("plate");
+    this.sellGlassBtn.onclick = () => this.handleSellTopTier("glass");
+    sellRow.appendChild(this.sellPlateBtn);
+    sellRow.appendChild(this.sellGlassBtn);
+    dishwareCard.appendChild(sellRow);
     this.root.appendChild(dishwareCard);
 
     const kitchenCard = makeSectionCard("🍳 KITCHEN", "rgba(140,210,140,0.7)");
@@ -290,6 +312,15 @@ export class StockStatusWidget {
       `<span style="color:${glassColor};font-weight:700">${glassClean}</span>` +
       `<span style="opacity:0.6"> / ${glassLifetime}</span>` +
       glassExtra;
+
+    // === Task E — main-panel quick-sell buttons ===
+    // Reflect the player's current TOP owned clean tier per kind: show
+    // the refund (+$X) and disable when there's nothing clean to sell or
+    // the cloud is offline (selling is credited server-side). Same 50%-
+    // of-per-piece refund the popup buttons advertise.
+    const mainSellReady = this.game.dishware.cloud?.hasRestaurantContext() ?? false;
+    this.refreshMainSellButton(this.sellPlateBtn, "plate", "🍽 plate", mainSellReady);
+    this.refreshMainSellButton(this.sellGlassBtn, "glass", "🥤 glass", mainSellReady);
 
     // === Dishware tooltip body ===
     const dishScroll = this.dishTooltip.scrollTop;
@@ -485,6 +516,59 @@ export class StockStatusWidget {
     dish.recordSale(kind, tier, 1);
     this.update();
   }
+
+  /** Task E — resolve the player's current TOP owned tier for `kind`
+   * (highest tier with at least one CLEAN piece) and sell one of it via
+   * the shared handleSellDishware path. No-op when nothing clean is
+   * owned / cloud is offline; the button is also disabled in those
+   * cases so this is just a guard. */
+  private handleSellTopTier(kind: DishKind): void {
+    const tier = this.topOwnedTier(kind);
+    if (tier == null) return;
+    this.handleSellDishware(kind, tier);
+  }
+
+  /** Highest tier of `kind` that has a clean piece available to sell,
+   * or null when none is owned clean. Mirrors the popup's "sort tiers
+   * descending" so the main-panel button targets the same prestige
+   * piece the user would reach for first. */
+  private topOwnedTier(kind: DishKind): number | null {
+    const rows = this.game.dishware.getTierBreakdown(kind);
+    let best: number | null = null;
+    for (const r of rows) {
+      if (r.clean <= 0) continue;
+      if (best == null || r.tier > best) best = r.tier;
+    }
+    return best;
+  }
+
+  /** Task E — paint one main-panel sell button: label with the refund
+   * for the current top owned tier, disabled when nothing is sellable. */
+  private refreshMainSellButton(
+    btn: HTMLButtonElement,
+    kind: DishKind,
+    noun: string,
+    cloudReady: boolean,
+  ): void {
+    const tier = this.topOwnedTier(kind);
+    const unitCents = tier != null ? dishwareUnitPriceCents(kind, tier) : null;
+    const canSell = cloudReady && tier != null && unitCents != null;
+    if (canSell) {
+      const refundCents = Math.floor(unitCents / 2);
+      const refundStr = (refundCents / 100).toFixed(2).replace(/\.00$/, "");
+      btn.textContent = `Sell ${noun} (+$${refundStr})`;
+      btn.title = `Sell one clean T${tier} ${kind} back for $${refundStr} `
+        + `(50% of $${(unitCents / 100).toFixed(2).replace(/\.00$/, "")}/piece).`;
+    } else {
+      btn.textContent = `Sell ${noun}`;
+      btn.title = !cloudReady
+        ? "Cloud offline — selling needs a connection (the refund is credited server-side)."
+        : `No clean ${kind} to sell.`;
+    }
+    btn.disabled = !canSell;
+    btn.style.cursor = canSell ? "pointer" : "not-allowed";
+    btn.style.opacity = canSell ? "1" : "0.4";
+  }
 }
 
 /** SELL-BACK — Per-piece catalog price in cents for one (kind, tier):
@@ -552,6 +636,27 @@ function makeCaret(): HTMLElement {
     opacity: "0.6", fontSize: "9px", flexShrink: "0",
   } as Partial<CSSStyleDeclaration>);
   return caret;
+}
+
+/** Task E — compact sell button for the main DISHWARE card. Styled to
+ * match the amber per-tier "Sell" buttons in the popup so the action
+ * reads consistently in both places. Label + enabled state are set
+ * per-frame in update(). */
+function makeMainSellButton(): HTMLButtonElement {
+  const btn = document.createElement("button");
+  Object.assign(btn.style, {
+    flex: "1",
+    background: "rgba(255,210,120,0.12)",
+    color: "#ffd47a",
+    border: "1px solid rgba(255,210,120,0.35)",
+    borderRadius: "3px",
+    padding: "2px 4px",
+    cursor: "pointer",
+    font: "inherit",
+    fontSize: "10px",
+    fontWeight: "600",
+  } as Partial<CSSStyleDeclaration>);
+  return btn;
 }
 
 /** A free-floating tooltip element. Appended to document.body and

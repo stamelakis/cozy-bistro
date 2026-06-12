@@ -26,6 +26,22 @@ import type { StatusEntry } from "./StatusBubbles";
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
 const STOREY_HEIGHT = 3;
 
+/** Task D — Nominal cloud position-update cadence (ms). Used to SEED a
+ * snapshot's interpolation window on the first update; subsequent
+ * windows adapt to the actually-measured gap between updates. The
+ * playback clamp range below brackets the adaptive window so a single
+ * delayed packet can't either snap (too short) or smear into visible
+ * lag (too long). */
+const SERVER_TICK_MS = 500;
+/** Floor of the adaptive LERP window — never interpolate over less than
+ * this, so a fast burst of two updates doesn't make the character snap. */
+const MIN_INTERP_MS = 350;
+/** Ceiling of the adaptive LERP window. If the server goes quiet longer
+ * than this we'd rather the character arrive at lastPos and wait than
+ * crawl forever toward a stale target; also caps how far behind "now"
+ * the visible position can lag. */
+const MAX_INTERP_MS = 1500;
+
 /** Customer character variants — duplicates the GuestSpawner's roster
  * so a visited save's ghost customers cycle through the same set of
  * faces the player sees in their own restaurant. Kept inline here so
@@ -240,6 +256,14 @@ export class VisitMode {
     prevPos: THREE.Vector2;
     lastPos: THREE.Vector2;
     stampMs: number;
+    /** Task D — Measured wall-clock gap (ms) between the two most recent
+     * cloud updates for this actor. The LERP window adapts to this so
+     * motion stays continuous regardless of the actual server cadence:
+     * a fixed 500 ms window made the character reach lastPos and then
+     * FREEZE until the next (possibly 1+ s later) update arrived, then
+     * teleport across the accumulated gap. Seeded to 500 ms on the first
+     * update and clamped at playback time. */
+    intervalMs: number;
     /** True when the character should not move this frame even if
      * snapshots disagree slightly — used for `seated` / `eating` /
      * `working` etc. where the server's row.x/z is a constant. */
@@ -249,6 +273,7 @@ export class VisitMode {
     prevPos: THREE.Vector2;
     lastPos: THREE.Vector2;
     stampMs: number;
+    intervalMs: number;
     stationary: boolean;
   }> = new Map();
 
@@ -594,10 +619,21 @@ export class VisitMode {
         return;
       }
       const floor = Math.max(0, row.floor);
+      // Task D (half-buried fix) — CharacterLoader.liftFeetToOrigin
+      // leaves the model at position.y = (its feet-lift offset) so the
+      // feet sit on y=0. The host preserves that through the animator
+      // (which captures _baseY from position.y at add-time); the old
+      // visit code OVERWROTE position.y with floor*STOREY_HEIGHT,
+      // throwing the lift away and sinking the body ~half its bbox into
+      // the floor. Read the loader's lift first, then add the storey
+      // offset on top so feet land on the slab, and stamp _feetLift so
+      // the animator's sit-slab math (slabY = _baseY − _feetLift) is
+      // floor-correct.
+      const feetLift = model.position.y;
       // Server x/z are restaurant-local (origin at the visited plot's
       // centre); visitorRoot is parented at that same plot world pos,
       // so position the model in visitorRoot-local coords.
-      model.position.set(row.x, floor * STOREY_HEIGHT, row.z);
+      model.position.set(row.x, floor * STOREY_HEIGHT + feetLift, row.z);
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(row.x, row.z),
@@ -607,6 +643,7 @@ export class VisitMode {
         action: row.state === "idle" || row.state === "working" ? "idle" : "walk",
         phase: Math.random() * 5,
         seatHeight: 0,
+        _feetLift: feetLift,
       };
       // Visitor root may have been disposed between the load start
       // and now — bail when it's gone.
@@ -672,12 +709,14 @@ export class VisitMode {
    * last, lastPos = new server pos. On the first push for this key,
    * seed both to the same coords so velocity = 0 and facing stays put. */
   private pushStaffSnapshot(memberId: string, x: number, z: number, stationary: boolean): void {
+    const now = performance.now();
     const existing = this.liveStaffSnapshots.get(memberId);
     if (!existing) {
       this.liveStaffSnapshots.set(memberId, {
         prevPos: new THREE.Vector2(x, z),
         lastPos: new THREE.Vector2(x, z),
-        stampMs: performance.now(),
+        stampMs: now,
+        intervalMs: SERVER_TICK_MS,
         stationary,
       });
       // Seed groundPos so the very first render frame has a sensible
@@ -687,19 +726,25 @@ export class VisitMode {
     } else {
       existing.prevPos.copy(existing.lastPos);
       existing.lastPos.set(x, z);
-      existing.stampMs = performance.now();
+      // Measure the real gap since the previous update so the LERP
+      // window can stretch to cover sparse cadences (continuous motion
+      // instead of move-then-freeze-then-teleport).
+      existing.intervalMs = now - existing.stampMs;
+      existing.stampMs = now;
       existing.stationary = stationary;
     }
   }
 
   /** Same shape for live customers. */
   private pushCustomerSnapshot(key: string, x: number, z: number, stationary: boolean): void {
+    const now = performance.now();
     const existing = this.liveCustomerSnapshots.get(key);
     if (!existing) {
       this.liveCustomerSnapshots.set(key, {
         prevPos: new THREE.Vector2(x, z),
         lastPos: new THREE.Vector2(x, z),
-        stampMs: performance.now(),
+        stampMs: now,
+        intervalMs: SERVER_TICK_MS,
         stationary,
       });
       const c = this.liveCustomerCharacters.get(key);
@@ -707,7 +752,8 @@ export class VisitMode {
     } else {
       existing.prevPos.copy(existing.lastPos);
       existing.lastPos.set(x, z);
-      existing.stampMs = performance.now();
+      existing.intervalMs = now - existing.stampMs;
+      existing.stampMs = now;
       existing.stationary = stationary;
     }
   }
@@ -718,24 +764,28 @@ export class VisitMode {
    * world transform.
    *
    * For each live actor: LERP groundPos between prevPos and lastPos
-   * based on wall-clock elapsed since the latest snapshot, clamped to
-   * one tick window (500 ms). Compute facingY from the snapshot
+   * based on wall-clock elapsed since the latest snapshot, over an
+   * ADAPTIVE window (the measured gap between the two most recent
+   * updates, clamped to [MIN_INTERP_MS, MAX_INTERP_MS]). The old fixed
+   * 500 ms window made the character reach lastPos and freeze whenever
+   * updates arrived slower than 500 ms, then teleport across the gap on
+   * the next packet; matching the window to the real cadence keeps the
+   * on-screen motion continuous. Compute facingY from the snapshot
    * velocity vector. Stationary characters skip LERP entirely so
    * sitting customers don't shiver between micro-different server
    * positions. */
   tickLiveMotion(): void {
     if (!this.activePlot) return;
-    const SERVER_TICK_MS = 500;
     const now = performance.now();
     for (const [memberId, snap] of this.liveStaffSnapshots) {
       const c = this.liveStaffCharacters.get(memberId);
       if (!c) continue;
-      this.applyOneSnapshot(c, snap, SERVER_TICK_MS, now);
+      this.applyOneSnapshot(c, snap, now);
     }
     for (const [key, snap] of this.liveCustomerSnapshots) {
       const c = this.liveCustomerCharacters.get(key);
       if (!c) continue;
-      this.applyOneSnapshot(c, snap, SERVER_TICK_MS, now);
+      this.applyOneSnapshot(c, snap, now);
     }
   }
 
@@ -745,9 +795,9 @@ export class VisitMode {
       prevPos: THREE.Vector2;
       lastPos: THREE.Vector2;
       stampMs: number;
+      intervalMs: number;
       stationary: boolean;
     },
-    tickMs: number,
     now: number,
   ): void {
     // ALWAYS LERP position between prev and last — the previous
@@ -759,6 +809,12 @@ export class VisitMode {
     // stationary=true short-circuited the interp). Smooth
     // movement through every transition is more important than
     // perfectly pinning a chef to their stove for one frame.
+    //
+    // Adaptive window: interpolate over the gap we actually measured
+    // between the last two updates so playback tracks the real cadence
+    // rather than assuming a fixed 500 ms. Clamped so a fast burst
+    // can't snap and a long stall can't smear into lag.
+    const tickMs = Math.max(MIN_INTERP_MS, Math.min(MAX_INTERP_MS, snap.intervalMs));
     const elapsed = now - snap.stampMs;
     const t = Math.max(0, Math.min(1, elapsed / tickMs));
     const x = snap.prevPos.x + (snap.lastPos.x - snap.prevPos.x) * t;
@@ -902,7 +958,12 @@ export class VisitMode {
         return;
       }
       const floor = Math.max(0, row.floor);
-      model.position.set(row.x, floor * STOREY_HEIGHT, row.z);
+      // Task D (half-buried fix) — preserve the loader's feet-lift the
+      // same way the staff spawn above does, so seated/standing guests
+      // rest on the floor instead of sinking into it. _feetLift keeps
+      // the animator's sit-slab math correct on upper storeys.
+      const feetLift = model.position.y;
+      model.position.set(row.x, floor * STOREY_HEIGHT + feetLift, row.z);
       const action: CharacterAction = customerActionFor(row.state);
       const animated: AnimatedCharacter = {
         root: model,
@@ -914,6 +975,7 @@ export class VisitMode {
         // spawn so the sitting pose lands on the cushion when state
         // is "seated" / "eating".
         seatHeight: 0.5,
+        _feetLift: feetLift,
       };
       this.visitorRoot.add(model);
       this.scene.animator.add(animated);

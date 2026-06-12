@@ -106,7 +106,16 @@ const DEFAULT_STOCK_TARGET = 5;
 // being only "modestly busy" while 6 waiters were full-out). At 1.0
 // the same 4 chefs comfortably feed ~25 concurrent; staffing
 // recommendations in the scenario notes scale from there.
-const COOK_TIME_GLOBAL_MULT = 1.0;
+//
+// Path-B tuning: bumped 1.0 → 1.5 because server-authoritative cooking
+// read "a bit fast" / frantic — the ~50% longer cook makes the kitchen
+// animation legible without changing the dish-per-customer math (this
+// scales BOTH the base cook sent at place_order via getBaseCookSeconds
+// AND the per-chef target via getEffectiveCookSecondsForChef, so the
+// server's cook timer and the local estimate stay in lockstep). The
+// setRecipeMeta background-guest path is scaled by the same factor so
+// fully-backgrounded restaurants cook at the same pace.
+const COOK_TIME_GLOBAL_MULT = 1.5;
 
 /** Duration (in REAL minutes) for the next recipe upgrade. Base is
  * 1 minute at tier 1 / current level 1, doubling per tier AND per
