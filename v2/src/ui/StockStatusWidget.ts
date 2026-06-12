@@ -138,7 +138,12 @@ export class StockStatusWidget {
     this.sellGlassBtn.onclick = () => this.handleSellTopTier("glass");
     sellRow.appendChild(this.sellPlateBtn);
     sellRow.appendChild(this.sellGlassBtn);
-    dishwareCard.appendChild(sellRow);
+    // Phase 9.27 — sidebar sell row REMOVED from view. Selling now
+    // lives in the Pantry → Dishware → STOCK rows (next to the per-
+    // tier counts, mirroring the BUY grid), per the user's request.
+    // The buttons stay constructed (detached) to satisfy the readonly
+    // fields + their refresh path; they're simply not mounted.
+    void sellRow;
     this.root.appendChild(dishwareCard);
 
     const kitchenCard = makeSectionCard("🍳 KITCHEN", "rgba(140,210,140,0.7)");

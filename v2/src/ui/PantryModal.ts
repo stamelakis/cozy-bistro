@@ -1,6 +1,6 @@
 import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
-import { GLASS_SETS, PLATE_SETS, type DishwareSetDef } from "../data/dishwareCatalog";
+import { GLASS_SETS, PLATE_SETS, type DishKind, type DishwareSetDef } from "../data/dishwareCatalog";
 import { ingredientIcon } from "./foodIcons";
 
 /**
@@ -295,6 +295,8 @@ export class PantryModal {
   /** Per-set Stock readout cells (the "you own ×N at this tier" lines).
    * Refilled by refreshDishware on every tick the Dishware tab is open. */
   private dishStockEls: Map<string, HTMLElement> = new Map();
+  /** Per-tier SELL buttons in the dishware STOCK rows (Phase 9.27). */
+  private dishSellEls: Map<string, HTMLButtonElement> = new Map();
 
   private buildDishwareSection(parent: HTMLElement): void {
     // Aggregate summary stays at the top — quick at-a-glance count of
@@ -321,8 +323,8 @@ export class PantryModal {
       marginTop: "6px",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(stockGrid);
-    stockGrid.appendChild(this.buildStockColumn("Plates", PLATE_SETS));
-    stockGrid.appendChild(this.buildStockColumn("Glasses", GLASS_SETS));
+    stockGrid.appendChild(this.buildStockColumn("Plates", PLATE_SETS, "plate"));
+    stockGrid.appendChild(this.buildStockColumn("Glasses", GLASS_SETS, "glass"));
 
     // === BUY — purchase new sets at each tier ===
     const buyHeading = document.createElement("div");
@@ -348,7 +350,7 @@ export class PantryModal {
   /** Read-only column showing the player's per-tier inventory of one
    * kind (plates or glasses). Each set in the catalog gets a row with
    * a tier badge + name + a live "clean × N / dirty × M" cell. */
-  private buildStockColumn(label: string, sets: readonly DishwareSetDef[]): HTMLElement {
+  private buildStockColumn(label: string, sets: readonly DishwareSetDef[], kind: DishKind): HTMLElement {
     const col = document.createElement("div");
     Object.assign(col.style, {
       display: "flex", flexDirection: "column", gap: "3px",
@@ -367,7 +369,7 @@ export class PantryModal {
     for (const set of sets) {
       const row = document.createElement("div");
       Object.assign(row.style, {
-        display: "grid", gridTemplateColumns: "26px 1fr 80px",
+        display: "grid", gridTemplateColumns: "24px 1fr 56px 46px",
         alignItems: "center", gap: "4px",
         padding: "2px 2px",
         borderBottom: "1px solid rgba(255,245,220,0.05)",
@@ -389,13 +391,48 @@ export class PantryModal {
         fontSize: "10px", lineHeight: "1.2", textAlign: "right",
         fontVariantNumeric: "tabular-nums",
       } as Partial<CSSStyleDeclaration>);
+      // Phase 9.27 — per-tier SELL button, sitting in the STOCK rows
+      // (mirrors the BUY grid below: buy on the bottom, sell on top).
+      // Sells ONE clean piece of this tier back at 50% of the per-piece
+      // catalog price. Refund label updates live in refreshDishware().
+      const refundPer = (set.cost / set.setSize) / 2;
+      const sellBtn = document.createElement("button");
+      sellBtn.textContent = `+$${refundPer % 1 === 0 ? refundPer.toFixed(0) : refundPer.toFixed(2)}`;
+      Object.assign(sellBtn.style, {
+        fontSize: "9px", padding: "2px 0", borderRadius: "3px",
+        border: "1px solid rgba(255,200,120,0.4)",
+        background: "rgba(255,200,120,0.14)", color: "#ffd9a0",
+        cursor: "pointer", fontWeight: "700",
+      } as Partial<CSSStyleDeclaration>);
+      sellBtn.title = `Sell one clean ${kind} of T${set.tier} for $${refundPer.toFixed(2)}`;
+      sellBtn.onclick = () => this.handleSellDishTier(kind, set);
       row.appendChild(tierBadge);
       row.appendChild(nameEl);
       row.appendChild(countEl);
+      row.appendChild(sellBtn);
       col.appendChild(row);
       this.dishStockEls.set(set.id, countEl);
+      this.dishSellEls.set(set.id, sellBtn);
     }
     return col;
+  }
+
+  /** Phase 9.27 — sell ONE clean piece of (kind, tier) back at 50% of
+   * the per-piece catalog price. Server-authoritative: the
+   * sell_dishware reducer credits cloud_money_cents and decrements the
+   * clean pool; the pool subscription updates the UI, and recordSale
+   * keeps the leak detector from counting the sale as a loss. No local
+   * money or pool mutation here (that would double-count). */
+  private handleSellDishTier(kind: DishKind, set: DishwareSetDef): void {
+    const dish = this.game.dishware;
+    const cloud = dish.cloud;
+    if (!cloud?.hasRestaurantContext()) return;
+    const row = dish.getTierBreakdown(kind).find((r) => r.tier === set.tier);
+    if (!row || row.clean <= 0) return; // nothing clean to sell
+    const unitCents = Math.round((set.cost / set.setSize) * 100); // full price; server halves
+    cloud.sellDishware(kind, set.tier, 1, unitCents);
+    dish.recordSale(kind, set.tier, 1);
+    this.refreshDishware();
   }
 
   private buildDishwareColumn(label: string, sets: readonly DishwareSetDef[]): HTMLElement {
@@ -521,10 +558,21 @@ export class PantryModal {
     // the BUY column below.
     const plateBreakdown = dish.getTierBreakdown("plate");
     const glassBreakdown = dish.getTierBreakdown("glass");
+    const cloudReady = this.game.dishware.cloud?.hasRestaurantContext() ?? false;
     const fillStockRow = (set: DishwareSetDef, breakdown: Array<{ tier: number; clean: number; dirty: number }>): void => {
       const cell = this.dishStockEls.get(set.id);
+      const sellBtn = this.dishSellEls.get(set.id);
       if (!cell) return;
       const row = breakdown.find((r) => r.tier === set.tier);
+      const clean = row?.clean ?? 0;
+      // Phase 9.27 — sell button: enabled only when there's a clean
+      // piece to sell AND the cloud (the sole money writer) is live.
+      if (sellBtn) {
+        const canSell = cloudReady && clean > 0;
+        sellBtn.disabled = !canSell;
+        sellBtn.style.opacity = canSell ? "1" : "0.3";
+        sellBtn.style.cursor = canSell ? "pointer" : "not-allowed";
+      }
       if (!row || (row.clean === 0 && row.dirty === 0)) {
         cell.textContent = "—";
         cell.style.color = "rgba(255,245,220,0.4)";
