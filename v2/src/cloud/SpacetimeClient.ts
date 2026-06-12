@@ -580,6 +580,13 @@ export class SpacetimeClient {
     return this.conn != null && this.restaurantId != null;
   }
 
+  /** Phase 9.17 — aggregation buffer for server-originated money
+   * deltas so the ledger shows "Service income +$X" / "Operating
+   * costs (cloud) −$X" lines (~10 s cadence) instead of nothing.
+   * Pre-9.17 the balance moved invisibly and read as a dupe. */
+  private pendingServerLedger = 0;
+  private lastServerLedgerFlushMs = 0;
+
   /** Phase 9.1 — Look up a single active_guest row by server id and
    * return it as a HydratableGuestRow. Used by GuestSpawner's
    * onInsert bridge to hydrate a fresh server-spawned guest, which
@@ -3604,6 +3611,25 @@ export class SpacetimeClient {
               this.game.economy.charge(-deltaDollars);
             }
             this.game.economy.noteSyncedCents(cloudCents);
+            // Phase 9.17 — make server-originated money VISIBLE in
+            // the ledger. The Phase 7.7 "log nothing" decision left
+            // the books showing only local salary charges while the
+            // balance climbed from invisible service revenue — the
+            // user reasonably read that as a dupe. Aggregate the
+            // deltas and flush one line every ~10 s so a dinner rush
+            // doesn't write a ledger row per plate.
+            this.pendingServerLedger += deltaDollars;
+            const nowMs = Date.now();
+            if (nowMs - this.lastServerLedgerFlushMs >= 10_000
+                && Math.abs(this.pendingServerLedger) >= 0.01) {
+              const amt = this.pendingServerLedger;
+              this.game.economy.recordTransaction(
+                amt >= 0 ? "Service income" : "Operating costs (cloud)",
+                amt,
+              );
+              this.pendingServerLedger = 0;
+              this.lastServerLedgerFlushMs = nowMs;
+            }
           }
         }
         // ── Phase 7.8 — Adopt server-appended cloud_rating_history_csv ──
