@@ -5258,7 +5258,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // from firing during the normal order→ticket window.
         "waitingForFood" if new_clock >= 20_000
                 && !has_any_ticket_for_guest(ctx, g.id) => {
-            if let Some(tid) = auto_place_next_course(ctx, &g) {
+            if let Some(tid) = auto_place_next_course(ctx, &g, None) {
                 log::info!(
                     "tick_guest_state: ticketless guest {} recovered — re-placed ticket {}",
                     g.id, tid,
@@ -5291,7 +5291,14 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
                 .filter(|s| !s.trim().is_empty())
                 .count() as u32;
             if g.order_index + 1 < total_courses {
-                Some(("seated".to_string(), 0))
+                // Phase 9.26 — the waiter took the WHOLE order in one
+                // visit, so subsequent courses flow straight to
+                // waitingForFood (kitchen cooks the next plate, waiter
+                // delivers) instead of bouncing back to seated →
+                // ordering → ANOTHER take-order trip per course. That
+                // per-course re-ordering was the "waiter takes one
+                // plate at a time, back and forth" the user reported.
+                Some(("waitingForFood".to_string(), 0))
             } else {
                 Some(("leaving".to_string(), 0))
             }
@@ -5335,23 +5342,23 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // this directly via place_order; backgrounded tabs rely on the
     // server now. auto_place_next_course bails on idempotency when
     // a non-terminal ticket already exists.
-    if final_state == "waitingForFood" {
-        auto_place_next_course(ctx, &g);
-    }
-
-    // H.11 — server-side order_index advance when transitioning
-    // eating → seated. The client's local sim ALSO advances this on
-    // its own eating→seated path; idempotent because the new
-    // order_index value lines up with what the client would have
-    // set after EATING_DURATION_MS elapsed. Necessary for the
-    // server's "next course or leaving" branch to fire correctly
-    // on subsequent ticks — without bumping it, the server would
-    // re-trigger the same transition indefinitely.
-    let new_order_index = if g.state == "eating" && final_state == "seated" {
+    // Phase 9.26 — order_index advance moved ABOVE auto_place so the
+    // next-course ticket is placed for the RIGHT course. Advancing on
+    // eating → waitingForFood (the new direct next-course path).
+    let new_order_index = if g.state == "eating" && final_state == "waitingForFood" {
         g.order_index.saturating_add(1)
     } else {
         g.order_index
     };
+
+    if final_state == "waitingForFood" {
+        // Place the ticket for the course at new_order_index. For the
+        // first-course ordering→waitingForFood path new_order_index ==
+        // g.order_index (no advance); for the eating→waitingForFood
+        // next-course path it's the freshly incremented index so the
+        // kitchen cooks the NEXT plate, not the just-eaten one.
+        auto_place_next_course(ctx, &g, Some(new_order_index));
+    }
 
     // H.16 — credit the just-finished course's price + satisfaction
     // when transitioning out of "eating" (either to "seated" for the
@@ -5360,8 +5367,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // foreground client's creditCourse still handles the real
     // economy.earnMoney). Parses the CSV entry at the OLD
     // order_index (the course just finished).
+    // Phase 9.26 — next-course transition is now eating→waitingForFood
+    // (was eating→seated); credit the just-eaten course on either it
+    // or the final eating→leaving.
     let course_just_finished =
-        g.state == "eating" && (final_state == "seated" || final_state == "leaving");
+        g.state == "eating" && (final_state == "waitingForFood" || final_state == "leaving");
     let (added_paid, added_sat) = if course_just_finished {
         let idx = g.order_index as usize;
         let price = parse_csv_index_i64(g.order_prices_csv.as_deref(), idx).unwrap_or(0);
@@ -5382,8 +5392,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     //      window).
     // Other transitions inherit new_patience (decremented above).
     // patience_active filter prevents WC trips from getting the bump.
-    let patience_refresh = (g.state == "ordering" && final_state == "waitingForFood")
-        || (g.state == "eating" && final_state == "seated");
+    // Phase 9.26 — both "took the order" (ordering→waitingForFood) and
+    // "finished a course, next plate incoming" (eating→waitingForFood)
+    // get a fresh serve-patience budget.
+    let patience_refresh = final_state == "waitingForFood"
+        && (g.state == "ordering" || g.state == "eating");
     let final_patience = if patience_refresh {
         scale_patience(SERVE_PATIENCE_BASE_MS, g.patience_mult_x100)
     } else {
@@ -6985,7 +6998,7 @@ pub fn set_guest_order(
 /// Returns the new ticket id on success, None on any of the bail
 /// conditions above. Caller uses this to know whether the place
 /// succeeded for logging.
-fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> {
+fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: Option<u32>) -> Option<u64> {
     // Phase H Phase 4c — if the order CSVs are empty (a foreground
     // client-spawned guest where Phase 4b gated the local
     // buildOrder + mirrorGuestOrder), build the order server-side
@@ -7044,7 +7057,10 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest) -> Option<u64> 
     if recipes.is_empty() || appliances.is_empty() || cook_seconds.is_empty() {
         return None;
     }
-    let idx = g.order_index as usize;
+    // Phase 9.26 — idx_override lets the eating→waitingForFood next-
+    // course path place the ticket for the ADVANCED course without
+    // cloning the (non-Clone) guest row; falls back to g.order_index.
+    let idx = idx_override.unwrap_or(g.order_index) as usize;
     if idx >= recipes.len() || idx >= appliances.len() || idx >= cook_seconds.len() {
         return None;
     }

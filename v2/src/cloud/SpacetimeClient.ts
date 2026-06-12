@@ -1339,16 +1339,36 @@ export class SpacetimeClient {
       if (restRow != null) {
         const cloudCents = Number(restRow.cloudMoneyCents);
         const cloudDollars = cloudCents / 100;
-        // Only adopt when meaningfully different — same-value setMoney
-        // is harmless but a stale-cache compare avoids an unnecessary
-        // re-render and ledger spam in some downstream listeners.
-        if (Math.abs(this.game.economy.getMoney() - cloudDollars) >= 0.01) {
+        // Phase 9.25 — adopt the cloud balance AND record a labelled
+        // ledger line for the gap. This setMoney was previously
+        // SILENT, so a returning session whose local save lagged the
+        // (canonical) cloud by the server's between-save earnings
+        // showed a $100k+ balance jump with NO ledger entry — it
+        // read as fabricated money. setMoney REPLACES (local→cloud,
+        // can't dupe); the line just explains where the jump came
+        // from. Also claim the session adoption so the
+        // restaurant.onUpdate first-contact handler doesn't re-jump
+        // the same gap a second time.
+        const before = this.game.economy.getMoney();
+        const recon = cloudDollars - before;
+        if (Math.abs(recon) >= 0.01) {
           this.game.economy.setMoney(cloudDollars);
+          if (Math.abs(recon) >= 1) {
+            this.game.economy.recordTransaction(
+              recon >= 0
+                ? "Reconciled — earnings while away"
+                : "Reconciled — costs while away",
+              recon,
+            );
+          }
         }
         // Phase 7.7 — Align the delta-sync baseline with the cloud
         // value we just adopted, so the next 5s sync push doesn't
         // try to re-bump for the gap that's already reconciled.
         this.game.economy.noteSyncedCents(cloudCents);
+        // Phase 9.25 — this WAS the session's money adoption; flag it
+        // so the onUpdate first-contact path takes the delta branch.
+        this.moneyAdoptedThisSession = true;
       }
     }
     // Served counter — bumps the HUD's "served today" + drives

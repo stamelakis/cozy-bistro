@@ -1618,20 +1618,25 @@ export class GuestSpawner {
       g.stateClock = 0;
     }
 
-    // eating → seated (Phase 3c): server's intermediate course advance.
-    // Local handler would have called beginNextCourse; with server in
-    // charge that path is gated off, so the bridge fires the matching
-    // local effects:
+    // eating → waitingForFood (Phase 9.26 — was eating→seated): the
+    // server's intermediate course advance. The waiter took the whole
+    // order in one visit, so a finished course goes STRAIGHT to
+    // waiting-for-the-next-plate (no re-order trip). The local handler
+    // would have called beginNextCourse; with the server in charge
+    // that's gated off, so the bridge fires the matching local effects:
     //   - credit the just-finished course
     //   - remove the plate
     //   - sync orderIndex from cloud (server bumped it)
     //   - patience reset
-    //   - reserve a clean dish for the next course (server doesn't sim
-    //     the dishware pool yet — local pool is still the source)
+    //   - reserve a clean dish for the next course (local pool is still
+    //     the dishware source)
     //   - mirror reserved tiers so settle_guest_dishes sees it on despawn
     // Skips enqueueOrder — server's auto_place_next_course already
-    // creates the next ticket when state transitions to waitingForFood.
-    if (g.state === "eating" && row.state === "seated") {
+    // created the next ticket when it flipped to waitingForFood. Guard
+    // on g.orderIndex < row.orderIndex so this only fires on the COURSE
+    // ADVANCE, not the ordinary waitingForFood the guest is already in.
+    if (g.state === "eating" && row.state === "waitingForFood"
+        && row.orderIndex > g.orderIndex) {
       this.creditCourse(g);
       this.removePlateForGuest(g.id);
       g.orderIndex = Math.min(g.order.length, row.orderIndex);
@@ -1646,7 +1651,7 @@ export class GuestSpawner {
           this.mirrorGuestReservedTiers(g);
         }
       }
-      g.state = "seated";
+      g.state = "waitingForFood";
       g.stateClock = 0;
     }
 
