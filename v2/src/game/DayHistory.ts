@@ -6,6 +6,8 @@
  * Cap at MAX_DAYS to keep saves bounded. Older entries are dropped.
  */
 
+import { isServerSim } from "./featureFlags";
+
 const MAX_DAYS = 60;
 
 export interface DayRecord {
@@ -37,7 +39,17 @@ export class DayHistory {
     }
     // H.63 — mirror to cloud.  Server idempotency makes repeat-on-
     // re-rollover safe.
-    if (this.cloud) {
+    //
+    // Path B — when the server sim owns the restaurant, the server's
+    // tick_day_clock appends one record per rollover itself and is
+    // the SOLE writer of cloud_day_history_json (that's what gives
+    // offline days real numbers in Daily Trends). The client only
+    // ADOPTS: live via the restaurant.onUpdate diff in
+    // SpacetimeClient + once at boot via the Engine retry loop.
+    // Pushing the local ring buffer too would overwrite server-
+    // appended offline records. Same isServerSim gate style as
+    // CookingSystem.consumeIngredients.
+    if (this.cloud && !isServerSim("guests")) {
       this.cloud.setCloudDayHistory(this.days);
     }
   }

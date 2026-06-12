@@ -1706,6 +1706,32 @@ pub struct RecipeUpgradeInFlight {
     pub completes_at_micros: i64,
 }
 
+/// Prepared servings — cook-ahead dishes sitting on the pass, one row
+/// per (restaurant, recipe) pair with a non-zero count.  Mirrors
+/// CookingSystem.preparedServings on the client, which was save-only
+/// before this table existed: a reload mid-service lost every prepped
+/// dish (ingredients already spent, dishes gone).  The client mirrors
+/// every mutation via set_prepared_serving (count 0 deletes the row)
+/// and adopts the rows wholesale on boot via the Engine retry loop's
+/// restorePreparedServingsFromCloud — same read/write split as
+/// recipe_upgrade_in_flight above.
+///
+/// Composite key as a String "{rid}:{recipe_id}" — the same pattern
+/// H.36 uses for pantry_stock.  NEW additive table; primitives only —
+/// migration-safe.
+#[table(name = prepared_serving, public)]
+pub struct PreparedServing {
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub recipe_id: String,
+    /// How many cooked servings of this recipe are waiting on the
+    /// pass. Rows are deleted (not zeroed) when the count hits 0,
+    /// matching the client's `delete preparedServings[id]`.
+    pub count: u32,
+}
+
 /// Phase 9.7 — The restaurant's REAL dining seats, mirrored from the
 /// client's FurnitureRegistry.getResolvedSeatSlots() on every
 /// furniture change. One row per chair-at-table slot; seat_uid is the

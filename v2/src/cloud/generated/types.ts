@@ -318,6 +318,14 @@ export const PlayerSave = __t.object("PlayerSave", {
 });
 export type PlayerSave = __Infer<typeof PlayerSave>;
 
+export const PreparedServing = __t.object("PreparedServing", {
+  key: __t.string(),
+  restaurantId: __t.u64(),
+  recipeId: __t.string(),
+  count: __t.u32(),
+});
+export type PreparedServing = __Infer<typeof PreparedServing>;
+
 export const RecipeIngredients = __t.object("RecipeIngredients", {
   recipeId: __t.string(),
   ingredients: __t.string(),

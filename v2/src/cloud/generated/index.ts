@@ -111,6 +111,7 @@ import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetIngredientCostReducer from "./set_ingredient_cost_reducer";
 import SetMemberTrainingDeadlineReducer from "./set_member_training_deadline_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
+import SetPreparedServingReducer from "./set_prepared_serving_reducer";
 import SetRecipeIngredientsReducer from "./set_recipe_ingredients_reducer";
 import SetRecipeLevelReducer from "./set_recipe_level_reducer";
 import SetRecipeMetaReducer from "./set_recipe_meta_reducer";
@@ -162,6 +163,7 @@ import PedestrianRow from "./pedestrian_table";
 import PlacedFurnitureRow from "./placed_furniture_table";
 import PlayerRow from "./player_table";
 import PlayerSaveRow from "./player_save_table";
+import PreparedServingRow from "./prepared_serving_table";
 import RecipeIngredientsRow from "./recipe_ingredients_table";
 import RecipeLevelRow from "./recipe_level_table";
 import RecipeMetaRow from "./recipe_meta_table";
@@ -517,6 +519,20 @@ const tablesSchema = __schema({
       { name: 'player_save_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, PlayerSaveRow),
+  prepared_serving: __table({
+    name: 'prepared_serving',
+    indexes: [
+      { accessor: 'key', name: 'prepared_serving_key_idx_btree', algorithm: 'btree', columns: [
+        'key',
+      ] },
+      { accessor: 'restaurant_id', name: 'prepared_serving_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'prepared_serving_key_key', constraint: 'unique', columns: ['key'] },
+    ],
+  }, PreparedServingRow),
   recipe_ingredients: __table({
     name: 'recipe_ingredients',
     indexes: [
@@ -740,6 +756,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_ingredient_cost", SetIngredientCostReducer),
   __reducerSchema("set_member_training_deadline", SetMemberTrainingDeadlineReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
+  __reducerSchema("set_prepared_serving", SetPreparedServingReducer),
   __reducerSchema("set_recipe_ingredients", SetRecipeIngredientsReducer),
   __reducerSchema("set_recipe_level", SetRecipeLevelReducer),
   __reducerSchema("set_recipe_meta", SetRecipeMetaReducer),

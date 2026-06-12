@@ -148,6 +148,32 @@ export class CookingSystem {
     this.recipeTrainingCompletesAt = next;
   }
 
+  /** Path B — Adopt the cloud's prepared_serving rows as truth on
+   * reconnect. preparedServings was save-only before this: a reload
+   * mid-service lost every cook-ahead dish on the pass even though
+   * the ingredients were already spent. Cloud rows win WHOLESALE,
+   * exactly like restoreRecipeUpgradesFromCloud above:
+   *   - a cloud row → its count replaces the local one,
+   *   - no cloud row → the local entry is DROPPED (the dish was
+   *     consumed in another session, or the save predates the
+   *     mirror).
+   * Does NOT re-fire the mirror — the cloud already holds these. */
+  restorePreparedServingsFromCloud(
+    rows: { recipeId: string; count: number }[],
+  ): void {
+    const next: Record<string, number> = {};
+    for (const r of rows) {
+      const n = Math.max(0, Math.floor(r.count));
+      if (r.recipeId && n > 0) next[r.recipeId] = n;
+    }
+    const before = Object.keys(this.preparedServings).sort().join(",") || "(none)";
+    const after = Object.keys(next).sort().join(",") || "(none)";
+    if (before !== after) {
+      console.log(`[PathB] prepared servings: local [${before}] → cloud [${after}] — adopting cloud`);
+    }
+    this.preparedServings = next;
+  }
+
   /** Start a recipe-upgrade timer. Returns true when it actually
    * started (recipe wasn't already training, current level < max).
    * Caller is responsible for debiting money / materials. */
@@ -471,8 +497,20 @@ export class CookingSystem {
     return Object.values(this.preparedServings).reduce((sum, count) => sum + count, 0);
   }
 
+  /** Path B — mirror one recipe's current prepared-serving count to
+   * the cloud's prepared_serving table so cook-ahead dishes survive a
+   * reload (they were save-only before: ingredients spent, dishes
+   * gone). Reads the post-mutation count so callers just mutate then
+   * call this. Bails silently when cloud isn't wired (tests /
+   * pre-auth boot); the server upserts and deletes the row at 0. */
+  private mirrorPreparedServing(recipeId: string): void {
+    if (!this.cloud) return;
+    this.cloud.setPreparedServing(recipeId, this.preparedServings[recipeId] ?? 0);
+  }
+
   storePreparedServing(recipeId: string): void {
     this.preparedServings[recipeId] = (this.preparedServings[recipeId] ?? 0) + 1;
+    this.mirrorPreparedServing(recipeId);
   }
 
   /** Removes a single prepared serving. Returns true if one was actually decremented. */
@@ -487,14 +525,20 @@ export class CookingSystem {
     } else {
       this.preparedServings[recipeId] = next;
     }
+    this.mirrorPreparedServing(recipeId);
     return true;
   }
 
   /** Drop zero-or-negative prepared-serving entries; used by the save-repair tool. */
   prunePreparedServings(): void {
+    const dropped = Object.entries(this.preparedServings)
+      .filter(([, quantity]) => quantity <= 0)
+      .map(([recipeId]) => recipeId);
     this.preparedServings = Object.fromEntries(
       Object.entries(this.preparedServings).filter(([, quantity]) => quantity > 0),
     );
+    // Path B — mirror the repairs so the cloud drops the same rows.
+    for (const recipeId of dropped) this.mirrorPreparedServing(recipeId);
   }
 
   // === Errand orders (groceries the player has queued but not yet sent) ===

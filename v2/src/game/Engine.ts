@@ -168,6 +168,16 @@ export class Engine {
    * recipe-upgrade deadlines (drops ghost timers the server already
    * completed; corrects stale remaining-time on live ones). */
   private recipeUpgradesRestored = false;
+  /** Path B — one-shot latch for adopting the cloud's
+   * prepared_serving rows (cook-ahead dishes on the pass survive a
+   * reload). Same shape as recipeUpgradesRestored. */
+  private preparedServingsRestored = false;
+  /** Path B — one-shot latch for adopting the server-written
+   * cloud_day_history_json ring buffer at boot. Live updates flow
+   * through the restaurant.onUpdate adoption in SpacetimeClient;
+   * this covers the boot snapshot via the same 1 Hz retry loop that
+   * fixed the other hydrate races. */
+  private dayHistoryRestored = false;
 
   // ===== Phase I — FPS cap + on-screen FPS counter =====
   // Lets the player pin the frame rate so the GPU / fan don't spin
@@ -375,6 +385,36 @@ export class Engine {
           this.game.cooking.restoreRecipeUpgradesFromCloud(
             this.cloud.listRecipeUpgradesInFlight(),
           );
+        }
+        // Path B — adopt the cloud's prepared-serving rows (cook-
+        // ahead dishes on the pass). Cloud wins wholesale; same
+        // once-latched shape as the recipe upgrades above.
+        if (!this.preparedServingsRestored) {
+          this.preparedServingsRestored = true;
+          this.game.cooking.restorePreparedServingsFromCloud(
+            this.cloud.listPreparedServings(),
+          );
+        }
+        // Path B — one-shot boot adoption of the server-written day
+        // history. The server's tick_day_clock is the sole writer of
+        // cloud_day_history_json now; the restaurant.onUpdate
+        // adoption in SpacetimeClient covers live changes but only
+        // fires on row CHANGES — this picks up the snapshot that was
+        // already in the subscription cache at boot (offline days
+        // stop reading as zeros in Daily Trends). Skips when the
+        // cloud has no history yet so a legacy local save isn't
+        // wiped.
+        if (!this.dayHistoryRestored) {
+          this.dayHistoryRestored = true;
+          try {
+            const cloudDays = this.cloud.getCloudDayHistory();
+            if (cloudDays && cloudDays.length > 0) {
+              this.game.history.applyCloudSnapshot(cloudDays);
+              console.log(`[PathB] day-history boot adoption: ${cloudDays.length} days from cloud`);
+            }
+          } catch (e) {
+            console.warn("[Engine] day-history boot adoption failed:", e);
+          }
         }
       }
       this.router?.attachServerBridge();

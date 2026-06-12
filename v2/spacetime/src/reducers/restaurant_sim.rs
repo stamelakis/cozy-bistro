@@ -15,13 +15,14 @@ use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Time
 use crate::tables::{
     active_guest, active_menu, active_ticket, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
-    placed_furniture, player, player_save, recipe_ingredients, recipe_level, recipe_meta,
+    placed_furniture, player, player_save, prepared_serving, recipe_ingredients,
+    recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, staff_actor, weather_state,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PlacedFurniture,
-    RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight, Restaurant,
-    RestaurantTickSchedule, RestaurantTickState, SeatSlot, StaffActor,
+    PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta, RecipeUpgradeInFlight,
+    Restaurant, RestaurantTickSchedule, RestaurantTickState, SeatSlot, StaffActor,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -537,20 +538,56 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     let rent_per_day_cents = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
 
     let mut day_rolled = false;
+    // Path B (server-written day history) — the server is the sole
+    // writer of cloud_day_history_json now. Pre-this, the CLIENT
+    // pushed a record at each foreground rollover, so days that
+    // rolled while the owner was offline had no record at all and
+    // the Daily Trends modal showed zeros for them. Each loop
+    // iteration below appends one record for the day that just
+    // ended, capped to the client's 60-entry ring buffer.
+    //
+    // Lazily materialized — Some(new blob) only when ≥1 day rolls
+    // this tick, so the 2 Hz no-roll path never clones the JSON.
+    let mut history_json: Option<String> = None;
+    let mut days_rolled: u32 = 0;
     while elapsed >= DAY_LENGTH_MS {
         elapsed -= DAY_LENGTH_MS;
         pending = pending.saturating_add(1);
         day_rolled = true;
+        days_rolled = days_rolled.saturating_add(1);
         // The day that JUST ENDED is base_day_number + (pending - 1).
         // base_day_number is the day the client last persisted; each
         // pending bump represents another day completed since then.
+        let ended_day = base_day_number.saturating_add(pending).saturating_sub(1);
         // Charge rent IFF offline AND day > GRACE.
-        if !owner_online {
-            let ended_day = base_day_number.saturating_add(pending).saturating_sub(1);
-            if ended_day > RENT_GRACE_DAYS {
-                rent_to_charge_cents = rent_to_charge_cents.saturating_add(rent_per_day_cents);
-            }
+        if !owner_online && ended_day > RENT_GRACE_DAYS {
+            rent_to_charge_cents = rent_to_charge_cents.saturating_add(rent_per_day_cents);
         }
+        // Path B — append this day's history record just BEFORE the
+        // daily counters reset below. Only the FIRST rolled day in a
+        // multi-day drain carries the live cloud_daily_* totals; any
+        // further pending days roll with zeroed counters — correct,
+        // because the totals reset at each rollover, so nothing
+        // accrued for those intermediate days.
+        let (rev_cents, exp_cents, srv, lst) = if days_rolled == 1 {
+            (
+                r.cloud_daily_revenue_cents,
+                r.cloud_daily_expenses_cents,
+                r.cloud_daily_served,
+                r.cloud_daily_lost,
+            )
+        } else {
+            (0i64, 0i64, 0u32, 0u32)
+        };
+        let record = build_day_record_json(ctx, &r, ended_day, rev_cents, exp_cents, srv, lst);
+        let next = match history_json.as_deref() {
+            Some(s) => append_day_history_record(s, &record),
+            None => append_day_history_record(
+                r.cloud_day_history_json.as_deref().unwrap_or(""),
+                &record,
+            ),
+        };
+        history_json = Some(next);
     }
     if elapsed == r.day_elapsed_ms
         && pending == r.pending_days_advanced
@@ -580,7 +617,10 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
             r.cloud_daily_lost,
         )
     };
-    ctx.db.restaurant().id().update(Restaurant {
+    // Path B — the history blob only changes when a day rolled; the
+    // no-roll path moves the existing value through `..r` untouched
+    // (no clone in the every-tick write).
+    let mut updated = Restaurant {
         day_elapsed_ms: elapsed,
         pending_days_advanced: pending,
         cloud_money_cents: r.cloud_money_cents.saturating_sub(rent_to_charge_cents),
@@ -589,13 +629,216 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         cloud_daily_served: new_daily_served,
         cloud_daily_lost: new_daily_lost,
         ..r
-    });
+    };
+    if let Some(json) = history_json {
+        updated.cloud_day_history_json = Some(json);
+    }
+    ctx.db.restaurant().id().update(updated);
+    if day_rolled {
+        log::info!(
+            "tick_day_clock: rid {} appended {} day-history record(s) (last ended day {})",
+            rid, days_rolled,
+            base_day_number.saturating_add(pending).saturating_sub(1),
+        );
+    }
     if rent_to_charge_cents > 0 {
         log::info!(
             "tick_day_clock: rid {} debited {} cents offline rent ({} pending days)",
             rid, rent_to_charge_cents, pending,
         );
     }
+}
+
+// === Path B — server-written day history helpers =====================
+//
+// The client's DayHistory ring buffer (src/game/DayHistory.ts) is a
+// JSON array of DayRecord objects pushed once per rollover. The
+// server now appends those records itself in tick_day_clock so days
+// that roll while the owner is offline still show real numbers in
+// the Daily Trends modal. Everything below exists to write records
+// that are byte-identical to what the client's JSON.stringify
+// produced, without pulling a JSON crate into the wasm build.
+
+/// One Daily-Trends record, serialized to MATCH the client's
+/// DayRecord shape exactly — field names, field order and JS number
+/// formatting (see DayHistory.DayRecord + the history.push call in
+/// Game.rolloverDay):
+///   {"dayNumber":12,"served":34,"lost":2,"revenue":210.5,
+///    "expenses":80,"net":130.5,"rating":4.25,
+///    "weatherEmoji":"☀️","weatherLabel":"Sunny"}
+/// Money fields are dollars (the cloud columns store cents); rating
+/// is the average of the most recent ~20 entries of
+/// cloud_rating_history_csv (3.0 when unrated, matching the client's
+/// getAverageRating default); weather comes from the global
+/// weather_state row id=1.
+fn build_day_record_json(
+    ctx: &ReducerContext,
+    r: &Restaurant,
+    ended_day: u32,
+    revenue_cents: i64,
+    expenses_cents: i64,
+    served: u32,
+    lost: u32,
+) -> String {
+    let kind = ctx.db.weather_state().id().find(1u32).map(|w| w.kind);
+    let (emoji, label) = weather_emoji_label(kind.as_deref().unwrap_or(""));
+    let rating = day_history_rating(r.cloud_rating_history_csv.as_deref().unwrap_or(""));
+    let revenue = revenue_cents as f64 / 100.0;
+    let expenses = expenses_cents as f64 / 100.0;
+    let net = (revenue_cents.saturating_sub(expenses_cents)) as f64 / 100.0;
+    format!(
+        "{{\"dayNumber\":{},\"served\":{},\"lost\":{},\"revenue\":{},\"expenses\":{},\"net\":{},\"rating\":{},\"weatherEmoji\":\"{}\",\"weatherLabel\":\"{}\"}}",
+        ended_day,
+        served,
+        lost,
+        fmt_js_number(revenue),
+        fmt_js_number(expenses),
+        fmt_js_number(net),
+        fmt_js_number(rating),
+        emoji,
+        label,
+    )
+}
+
+/// Weather kind → the (emoji, label) pair the client's WEATHER_TYPES
+/// table pairs with it (src/game/WeatherSystem.ts — keep in sync).
+/// Unknown / missing kinds fall back to sunny, matching the client's
+/// WEATHER_TYPES[0] fallback.
+fn weather_emoji_label(kind: &str) -> (&'static str, &'static str) {
+    match kind {
+        "cloudy" => ("⛅", "Cloudy"),
+        "rainy" => ("🌧️", "Rainy"),
+        "heavy-rain" => ("⛈️", "Heavy Rain"),
+        "festival" => ("🎉", "Festival Day"),
+        "cold" => ("🥶", "Cold Snap"),
+        "snowy" => ("❄️", "Snowy"),
+        _ => ("☀️", "Sunny"),
+    }
+}
+
+/// Rating stored with a day record — the average of the last 20
+/// entries of cloud_rating_history_csv (1-5 ints), or 3.0 when the
+/// restaurant has no ratings yet (the client's getAverageRating
+/// unrated default).
+fn day_history_rating(csv: &str) -> f64 {
+    let vals: Vec<i64> = csv
+        .split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .filter(|n| (1..=5).contains(n))
+        .collect();
+    if vals.is_empty() {
+        return 3.0;
+    }
+    let recent = &vals[vals.len().saturating_sub(20)..];
+    let sum: i64 = recent.iter().sum();
+    sum as f64 / recent.len() as f64
+}
+
+/// JS-style JSON number formatting at 2-decimal precision:
+/// JSON.stringify(80) === "80", JSON.stringify(130.5) === "130.5",
+/// JSON.stringify(4.25) === "4.25". Trailing zeros (and a bare
+/// trailing dot) are trimmed so a server-written value is
+/// byte-identical to what the client's JSON.stringify produced for
+/// the same number.
+fn fmt_js_number(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    let s = format!("{:.2}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s.is_empty() || s == "-" || s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Append one record to the JSON-array blob, dropping the OLDEST
+/// records to keep at most 60 entries (DayHistory.MAX_DAYS on the
+/// client) and the whole blob under the 16 KB budget the
+/// set_cloud_day_history reducer enforces. `current` may be empty,
+/// "[]", or a legacy client-written array — existing records pass
+/// through byte-identical (sliced, never re-serialized), so nothing
+/// the client wrote pre-cutover gets perturbed.
+fn append_day_history_record(current: &str, record: &str) -> String {
+    const MAX_DAYS: usize = 60; // = DayHistory.MAX_DAYS
+    const MAX_BYTES: usize = 16_000; // mirrors setCloudDayHistory's guard
+    let trimmed = current.trim();
+    let inner = trimmed
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or("");
+    let mut items = split_top_level_json_items(inner);
+    items.push(record);
+    let mut start = items.len().saturating_sub(MAX_DAYS);
+    // Size guard — keep dropping oldest while the serialized form
+    // would overflow the column budget. With ~150-byte records and a
+    // 60-entry cap this never fires in practice; it only defends
+    // against oversized legacy blobs.
+    while start + 1 < items.len() {
+        let total: usize = items[start..].iter().map(|s| s.len() + 1).sum::<usize>() + 1;
+        if total <= MAX_BYTES {
+            break;
+        }
+        start += 1;
+    }
+    let kept = &items[start..];
+    let mut out = String::with_capacity(kept.iter().map(|s| s.len() + 1).sum::<usize>() + 2);
+    out.push('[');
+    for (i, it) in kept.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(it);
+    }
+    out.push(']');
+    out
+}
+
+/// Split a JSON array's INNER text into its top-level elements.
+/// Depth + string-literal aware scanner (handles escapes), so a
+/// record field containing "}," can't break the split — without
+/// needing a full JSON parser in the wasm module. Operates on bytes;
+/// multi-byte UTF-8 sequences (the weather emoji) never collide with
+/// the ASCII delimiters being matched, and splits only happen at
+/// ASCII commas, so slicing stays on char boundaries.
+fn split_top_level_json_items(inner: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let bytes = inner.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                let item = inner[start..i].trim();
+                if !item.is_empty() {
+                    items.push(item);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = inner[start..].trim();
+    if !last.is_empty() {
+        items.push(last);
+    }
+    items
 }
 
 /// Phase H.32 — Client pushes its absolute current money in cents.
@@ -1987,6 +2230,55 @@ pub fn set_recipe_level(
         ctx.db.recipe_level().key().update(row);
     } else {
         ctx.db.recipe_level().insert(row);
+    }
+    Ok(())
+}
+
+/// Path B — Prepared-servings mirror. Upserts the count of cook-ahead
+/// dishes sitting on the pass for one recipe; count 0 DELETES the row
+/// (matching the client's `delete preparedServings[id]` at zero).
+/// CookingSystem fires this on every preparedServings mutation so a
+/// reload mid-service no longer loses the prepped dishes. Owner-only.
+/// Idempotent on identical counts. Same composite-key idiom as
+/// pantry_stock / recipe_level.
+#[reducer]
+pub fn set_prepared_serving(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    recipe_id: String,
+    count: u32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can set prepared servings".into());
+    }
+    if recipe_id.is_empty() || recipe_id.len() > 64 {
+        return Err("recipe_id must be 1-64 chars".into());
+    }
+    let key = format!("{}:{}", restaurant_id, recipe_id);
+    let existing = ctx.db.prepared_serving().key().find(key.clone());
+    if count == 0 {
+        if existing.is_some() {
+            ctx.db.prepared_serving().key().delete(key);
+        }
+        return Ok(());
+    }
+    if let Some(e) = &existing {
+        if e.count == count {
+            return Ok(());
+        }
+    }
+    let row = PreparedServing {
+        key,
+        restaurant_id,
+        recipe_id,
+        count,
+    };
+    if existing.is_some() {
+        ctx.db.prepared_serving().key().update(row);
+    } else {
+        ctx.db.prepared_serving().insert(row);
     }
     Ok(())
 }

@@ -2301,6 +2301,42 @@ export class SpacetimeClient {
     }
   }
 
+  /** Path B — Prepared-servings mirror. Upsert the count of
+   * cook-ahead dishes sitting on the pass for one recipe; the server
+   * deletes the row at count 0. Fired from CookingSystem's
+   * mirrorPreparedServing on every preparedServings mutation.
+   * Idempotent server-side on identical counts. */
+  setPreparedServing(recipeId: string, count: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    if (!recipeId) return;
+    try {
+      this.conn.reducers.setPreparedServing({
+        restaurantId: this.restaurantId,
+        recipeId,
+        count: Math.max(0, Math.round(count)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setPreparedServing failed:", e);
+    }
+  }
+
+  /** Path B — Prepared-servings read side: every prepared_serving
+   * row for this restaurant. The Engine boot retry loop feeds these
+   * to CookingSystem.restorePreparedServingsFromCloud (cloud wins
+   * wholesale, same one-shot shape as the recipe-upgrade deadlines). */
+  listPreparedServings(): { recipeId: string; count: number }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: { recipeId: string; count: number }[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const p of this.conn.db.prepared_serving.iter()) {
+        if (p.restaurantId !== rid) continue;
+        out.push({ recipeId: p.recipeId, count: p.count });
+      }
+    } catch { /* table not wired pre-publish */ }
+    return out;
+  }
+
   /** SELL-BACK — Sell up to `units` of one pantry ingredient back at
    * 50% of the seeded ingredient_cost catalog price. The server clamps
    * to the current pantry_stock quantity, decrements the row (keeping
@@ -3646,6 +3682,26 @@ export class SpacetimeClient {
             .map((s) => parseInt(s.trim(), 10))
             .filter((n) => Number.isFinite(n) && n >= 1 && n <= 5);
           this.game.reputation.applyCloudRatingHistory(history);
+        }
+        // ── Path B — Adopt server-appended cloud_day_history_json ──
+        // The server's tick_day_clock is the sole writer of the day
+        // history now (one record per rollover, online or offline);
+        // the client's DayHistory.push mirror is gated off behind
+        // isServerSim. Diff old vs new (same shape as the rating CSV
+        // above) so unrelated Restaurant updates don't re-parse the
+        // blob. Own try-catch so a malformed blob can't skip the
+        // daily-totals adoption below.
+        const oldDayHistJson = oldRow.cloudDayHistoryJson ?? "";
+        const newDayHistJson = newRow.cloudDayHistoryJson ?? "";
+        if (oldDayHistJson !== newDayHistJson && newDayHistJson !== "") {
+          try {
+            const days = JSON.parse(newDayHistJson);
+            if (Array.isArray(days) && days.length > 0) {
+              this.game.history.applyCloudSnapshot(days);
+            }
+          } catch (e) {
+            console.warn("[Cloud] day-history adoption failed:", e);
+          }
         }
         // ── Phase 7.8 — Adopt cloud daily totals as local truth ──
         // Server bumps cloud_daily_revenue/expenses/served/lost on
