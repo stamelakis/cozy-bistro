@@ -440,15 +440,27 @@ export class ErrandRouter {
     // Keep target current — only used by the bubble UI + dispatch
     // bookkeeping; the smoother no longer reads it for motion.
     h.target.set(row.targetX, row.targetZ);
-    // State sync: the server writes errand phase names directly into
-    // the `state` column (matches the local enum). Visibility flips
-    // for "offscreen".
-    if (isErrandState(row.state)) {
+    // State sync. Phase 9.20 — the server keeps the trip phase in
+    // the ERRAND_PHASE column ("walkingToCounter", "offscreen", …)
+    // and writes GENERIC actor states ("movingToWork"/"working")
+    // into `state`. The old check read only `state`, which never
+    // matched an errand phase name — the bridge silently dropped
+    // every transition, local helpers stayed posed "idle" forever,
+    // and the panel showed "3 idle" while their server twins
+    // shopped invisibly. Resolve the phase from errandPhase first;
+    // fall back to `state` for legacy rows; treat a phase-less
+    // "idle" row as the trip-complete signal.
+    const resolved: ErrandState | null =
+      row.errandPhase && isErrandState(row.errandPhase) ? row.errandPhase
+      : isErrandState(row.state) ? row.state
+      : row.state === "idle" ? "idle"
+      : null;
+    if (resolved != null) {
       const wasOffscreen = h.state === "offscreen";
-      const isPhaseChange = h.state !== row.state;
-      h.state = row.state;
-      h.character.root.visible = row.state !== "offscreen";
-      h.character.action = errandPoseFor(row.state);
+      const isPhaseChange = h.state !== resolved;
+      h.state = resolved;
+      h.character.root.visible = resolved !== "offscreen";
+      h.character.action = errandPoseFor(resolved);
       // Coming back from offscreen is a legitimate teleport — the
       // helper was invisible at the offscreen anchor and now needs
       // to re-appear at row.x/z (road edge). Snap groundPos AND
@@ -596,18 +608,27 @@ export class ErrandRouter {
       const h = this.helpers.find((helper) => helper.memberId === row.memberId);
       if (!h) continue;
       h.character.groundPos.set(row.x, row.z);
-      if (isErrandState(row.state)) {
-        h.state = row.state;
+      // Phase 9.20 — same column fix as the bridge: the server keeps
+      // the trip phase in ERRAND_PHASE and writes generic states into
+      // `state`, so reading only row.state never matched mid-trip
+      // helpers and a reload froze them as idle statues.
+      const st: ErrandState | null =
+        row.errandPhase && isErrandState(row.errandPhase) ? row.errandPhase
+        : isErrandState(row.state) ? row.state
+        : row.state === "idle" ? "idle"
+        : null;
+      if (st != null) {
+        h.state = st;
         h.target.set(row.targetX, row.targetZ);
         // Restore visibility — only "offscreen" hides the model.
-        h.character.root.visible = row.state !== "offscreen";
-        h.character.action = errandPoseFor(row.state);
+        h.character.root.visible = st !== "offscreen";
+        h.character.action = errandPoseFor(st);
         // Reset trip-internal flags that aren't persisted.
         h.clock = 0;
         h.replanAccum = 0;
         h.path = [];
         // For mid-trip resumes, re-plan now so moveActor has a path.
-        if (isWalkingState(row.state)) this.planPath(h);
+        if (isWalkingState(st)) this.planPath(h);
       }
       updated++;
     }
