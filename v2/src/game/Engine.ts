@@ -2753,15 +2753,54 @@ export class Engine {
       zIndex: "10001",
       pointerEvents: "none",
     } as Partial<CSSStyleDeclaration>);
-    banner.textContent = "📍 Click on a floor tile to set the waiter rest spot — ESC to cancel";
+    banner.textContent = "📍 Move over a floor tile, then click to set the waiter rest spot — ESC to cancel";
     this.container.appendChild(banner);
 
     const canvas = this.renderer.domElement;
+    const raycaster = new THREE.Raycaster();
+    // Phase 9.33 — live tile highlight that follows the cursor so the
+    // player can SEE which tile they're aiming at before committing. A
+    // translucent disc + bright ring lying flat on the focused storey,
+    // tile-snapped (floor + 0.5) so it reads as a discrete tile. Parented
+    // to worldRoot so its position is in restaurant-local space (matches
+    // the coords we hand setWaiterRestSpot).
+    const preview = this.makeTilePreview(0x86ff86);
+    this.scene.worldRoot.add(preview.group);
+    preview.group.visible = false;
+
+    // Raycast the cursor to the focused storey's floor plane → tile-
+    // snapped restaurant-local x/z, or null when the ray misses.
+    const tileUnderCursor = (clientX: number, clientY: number): { x: number; z: number; floor: number; planeY: number } | null => {
+      const rect = canvas.getBoundingClientRect();
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera.threeCamera);
+      const focused = this.scene.getFocusedStorey();
+      const planeY = focused * WorldScene.getStoreyHeight();
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
+      const hitWorld = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(plane, hitWorld)) return null;
+      // World → restaurant-local (subtract worldRoot's city-shift), then
+      // snap to the tile centre so the highlight + the saved spot align.
+      const x = Math.floor(hitWorld.x - this.scene.worldRoot.position.x) + 0.5;
+      const z = Math.floor(hitWorld.z - this.scene.worldRoot.position.z) + 0.5;
+      return { x, z, floor: focused, planeY };
+    };
+
     const cleanup = (): void => {
       this.waiterRestPlacementActive = false;
       canvas.removeEventListener("pointerdown", onCanvasPointer, true);
+      canvas.removeEventListener("pointermove", onCanvasMove, true);
       window.removeEventListener("keydown", onKey, true);
       banner.remove();
+      this.scene.worldRoot.remove(preview.group);
+      preview.dispose();
+    };
+    const onCanvasMove = (e: PointerEvent): void => {
+      const tile = tileUnderCursor(e.clientX, e.clientY);
+      if (!tile) { preview.group.visible = false; return; }
+      preview.group.position.set(tile.x, tile.planeY + 0.05, tile.z);
+      preview.group.visible = true;
     };
     const onCanvasPointer = (e: PointerEvent): void => {
       // Left-click only.  Right-click would otherwise interfere
@@ -2769,28 +2808,20 @@ export class Engine {
       if (e.button !== 0) return;
       e.stopPropagation();
       e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera.threeCamera);
-      const focused = this.scene.getFocusedStorey();
-      const storeyH = WorldScene.getStoreyHeight();
-      const planeY = focused * storeyH;
-      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -planeY);
-      const hitWorld = new THREE.Vector3();
-      if (!raycaster.ray.intersectPlane(plane, hitWorld)) {
+      const tile = tileUnderCursor(e.clientX, e.clientY);
+      if (!tile) {
         this.floatingText?.pop(0, 1, "📍 Couldn't find a floor under that click", "#ff8866");
         cleanup();
         return;
       }
-      // Convert world → restaurant-local (subtract worldRoot's
-      // translation, which is the city-shift offset).
-      const localX = hitWorld.x - this.scene.worldRoot.position.x;
-      const localZ = hitWorld.z - this.scene.worldRoot.position.z;
-      this.cloud.setWaiterRestSpot(localX, localZ, focused);
-      this.staffPanel.setWaiterRestStatus({ x: localX, z: localZ, floor: focused });
-      this.floatingText?.pop(localX, planeY, `📍 Waiter rest spot set`, "#86ff86");
+      this.cloud.setWaiterRestSpot(tile.x, tile.z, tile.floor);
+      this.staffPanel.setWaiterRestStatus({ x: tile.x, z: tile.z, floor: tile.floor });
+      this.floatingText?.pop(tile.x, tile.planeY, `📍 Waiter rest spot set`, "#86ff86");
+      // Phase 9.33 — confirmation flash: an expanding, fading ring at the
+      // chosen tile so the click visibly "lands". Self-removes; outlives
+      // cleanup (which tears down the hover preview).
+      this.spawnPlacementFlash(tile.x, tile.z, tile.planeY, 0x86ff86);
+      this.sfx?.chime?.();
       cleanup();
     };
     const onKey = (e: KeyboardEvent): void => {
@@ -2800,7 +2831,59 @@ export class Engine {
       }
     };
     canvas.addEventListener("pointerdown", onCanvasPointer, true);
+    canvas.addEventListener("pointermove", onCanvasMove, true);
     window.addEventListener("keydown", onKey, true);
+  }
+
+  /** Phase 9.33 — Build a flat tile-highlight: a translucent filled disc
+   * under a brighter ring, both lying on the XZ plane. Returned with a
+   * dispose() that frees the geometries + materials. Used by the
+   * placement modes so the player sees the tile they're aiming at. */
+  private makeTilePreview(color: number): { group: THREE.Group; dispose: () => void } {
+    const group = new THREE.Group();
+    const discGeo = new THREE.CircleGeometry(0.5, 40);
+    const discMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+    const disc = new THREE.Mesh(discGeo, discMat);
+    disc.rotation.x = -Math.PI / 2;
+    const ringGeo = new THREE.RingGeometry(0.48, 0.6, 40);
+    const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    group.add(disc, ring);
+    group.renderOrder = 999; // draw over the floor, no depth fighting
+    return {
+      group,
+      dispose: () => { discGeo.dispose(); discMat.dispose(); ringGeo.dispose(); ringMat.dispose(); },
+    };
+  }
+
+  /** Phase 9.33 — A one-shot expanding/fading ring at (localX, localZ)
+   * on storey-plane Y, parented to worldRoot. Animates ~450ms then
+   * removes + disposes itself. Confirms a placement click landed. */
+  private spawnPlacementFlash(localX: number, localZ: number, planeY: number, color: number): void {
+    const geo = new THREE.RingGeometry(0.3, 0.5, 40);
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+    const ring = new THREE.Mesh(geo, mat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(localX, planeY + 0.06, localZ);
+    ring.renderOrder = 1000;
+    this.scene.worldRoot.add(ring);
+    const start = performance.now();
+    const DUR = 450;
+    const step = (): void => {
+      const t = (performance.now() - start) / DUR;
+      if (t >= 1) {
+        this.scene.worldRoot.remove(ring);
+        geo.dispose();
+        mat.dispose();
+        return;
+      }
+      const s = 1 + t * 2.6;
+      ring.scale.set(s, s, s);
+      mat.opacity = 0.9 * (1 - t);
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   /** Latch so re-clicking the Set button while placement is already

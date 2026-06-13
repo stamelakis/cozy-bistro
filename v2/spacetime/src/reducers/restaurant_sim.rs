@@ -1399,8 +1399,15 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         // target = station center made the chef cook from inside the
         // stove mesh. Offset ~1 m along the station's facing (same
         // rot_y stand-spot convention the WC picker uses).
-        let stand_x = station.x + station.rot_y.sin();
-        let stand_z = station.z + station.rot_y.cos();
+        // Phase 9.31 — bar counters seat customers on the +facing side,
+        // so a BARMAN must stand BEHIND (−facing) to mix; a cook stands
+        // IN FRONT (+facing). Without this the barman mixed from the
+        // customer side / inside the bar mesh.
+        let (stand_x, stand_z) = if is_bar {
+            (station.x - station.rot_y.sin(), station.z - station.rot_y.cos())
+        } else {
+            (station.x + station.rot_y.sin(), station.z + station.rot_y.cos())
+        };
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
@@ -1440,6 +1447,56 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
         "toaster" => Some("toaster"),
         "bar-counter" | "bar-end" => Some("bar"),
         _ => None,
+    }
+}
+
+/// Phase 9.31 — Where a staff member idles / returns when they have no
+/// active work, chosen by ROLE so the floor reads sensibly instead of
+/// everyone drifting back to their spawn tile (which left chefs in the
+/// dining room, idle waiters loitering wherever they last stood — e.g.
+/// a sink by the WC — and barmen on the wrong side of the counter):
+///   - waiter: the player-pinned rest spot (set_waiter_rest_spot) when
+///     set; otherwise the stand spot IN FRONT of the nearest cook
+///     station on their home floor — the food-pickup area, where a
+///     waiter is actually useful.
+///   - chef:   the stand spot IN FRONT of the nearest cook station on
+///     their home floor, so an idle chef waits at the stove.
+///   - barman: the stand spot BEHIND the nearest bar counter, so they
+///     never stand on the customer side / inside the counter mesh.
+/// Falls back to the actor's own home_x/z when the floor has no station
+/// of the relevant kind. Offsets mirror the dispatch stand-spot maths +
+/// the client's chefStandPosFor / barmanInsideStandFor convention.
+fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32) {
+    let rid = actor.restaurant_id;
+    // A pinned waiter rest spot wins outright.
+    if actor.role == "waiter" {
+        if let Some(r) = ctx.db.restaurant().id().find(rid) {
+            if r.waiter_rest_set {
+                return (r.waiter_rest_x, r.waiter_rest_z, r.waiter_rest_floor);
+            }
+        }
+    }
+    let want_bar = actor.role == "barman";
+    let mut best: Option<(f32, f32, f32)> = None; // (stand_x, stand_z, dist²)
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        if f.floor != actor.home_floor { continue; }
+        let Some(provides) = def_provides(&f.def_id) else { continue };
+        let is_bar = provides == "bar";
+        if want_bar != is_bar { continue; }
+        // Bar → stand BEHIND (−facing); cook station → IN FRONT (+facing).
+        let (sx, sz) = if is_bar {
+            (f.x - f.rot_y.sin(), f.z - f.rot_y.cos())
+        } else {
+            (f.x + f.rot_y.sin(), f.z + f.rot_y.cos())
+        };
+        let d = (f.x - actor.home_x).powi(2) + (f.z - actor.home_z).powi(2);
+        if best.map_or(true, |(_, _, bd)| d < bd) {
+            best = Some((sx, sz, d));
+        }
+    }
+    match best {
+        Some((sx, sz, _)) => (sx, sz, actor.home_floor),
+        None => (actor.home_x, actor.home_z, actor.home_floor),
     }
 }
 
@@ -1540,9 +1597,9 @@ fn release_chef_from_ticket(ctx: &ReducerContext, chef_member_id: &str) {
     if c.state == "idle" || c.state == "returningHome" {
         return;
     }
-    let home_x = c.home_x;
-    let home_z = c.home_z;
-    let home_floor = c.home_floor;
+    // Phase 9.31 — role-aware idle home (chef → stove stand) instead of
+    // the spawn tile, so an idle chef waits at the stove.
+    let (home_x, home_z, home_floor) = staff_home_target(ctx, &c);
     ctx.db.staff_actor().member_id().update(StaffActor {
         state: "returningHome".to_string(),
         state_clock_ms: 0,
@@ -1572,9 +1629,9 @@ fn release_waiter_from_ticket(ctx: &ReducerContext, waiter_member_id: &str) {
     if w.state == "idle" || w.state == "returningHome" {
         return;
     }
-    let home_x = w.home_x;
-    let home_z = w.home_z;
-    let home_floor = w.home_floor;
+    // Phase 9.31 — role-aware idle home (waiter → pinned rest spot, else
+    // the kitchen food-pickup area) instead of the spawn tile.
+    let (home_x, home_z, home_floor) = staff_home_target(ctx, &w);
     ctx.db.staff_actor().member_id().update(StaffActor {
         state: "returningHome".to_string(),
         state_clock_ms: 0,
@@ -3891,14 +3948,15 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 let station = ctx.db.placed_furniture().uid().find(a.wash_target_uid.clone());
                 let Some(station) = station else {
                     // Station vanished mid-trip (sold). Abort home.
+                    let (hx, hz, hf) = staff_home_target(ctx, &a);
                     ctx.db.staff_actor().member_id().update(StaffActor {
                         x: new_x,
                         z: new_z,
                         state: "returningHome".to_string(),
                         state_clock_ms: 0,
-                        target_x: a.home_x,
-                        target_z: a.home_z,
-                        target_floor: a.home_floor,
+                        target_x: hx,
+                        target_z: hz,
+                        target_floor: hf,
                         wash_target_uid: String::new(),
                         wash_phase: String::new(),
                         wash_dirty_id: -1,
@@ -3956,15 +4014,16 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 apply_pool_delta(ctx, a.restaurant_id, &kind, tier,
                     take as i32, -(take as i32), "wash-trip");
             }
-            // Clear wash fields + return home.
+            // Clear wash fields + return home (role-aware — Phase 9.31).
+            let (hx, hz, hf) = staff_home_target(ctx, &a);
             ctx.db.staff_actor().member_id().update(StaffActor {
                 x: new_x,
                 z: new_z,
                 state: "returningHome".to_string(),
                 state_clock_ms: 0,
-                target_x: a.home_x,
-                target_z: a.home_z,
-                target_floor: a.home_floor,
+                target_x: hx,
+                target_z: hz,
+                target_floor: hf,
                 wash_target_uid: String::new(),
                 wash_phase: String::new(),
                 wash_dirty_id: -1,
@@ -4672,9 +4731,10 @@ fn compute_waiter_transition(ctx: &ReducerContext, a: &StaffActor, arrived: bool
         // post-update step in tick_staff_actor clear the field.
         if phase != "pickup" && phase != "deliver" {
             if a.take_order_guest_id.is_some() && a.state_clock_ms >= TAKE_ORDER_DWELL_MS {
+                let (hx, hz, hf) = staff_home_target(ctx, a); // Phase 9.31
                 return ((
                     "returningHome".to_string(), 0,
-                    a.home_x, a.home_z, a.home_floor,
+                    hx, hz, hf,
                     None, None,
                 ), false);
             }
@@ -4724,8 +4784,9 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
     -> (WaiterTransition, bool) {
     let Some(ticket_id) = a.ticket_id else {
         // Defensive: phase set but no ticket — return home.
+        let (hx, hz, hf) = staff_home_target(ctx, a); // Phase 9.31
         return ((
-            "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+            "returningHome".to_string(), 0, hx, hz, hf,
             None, None,
         ), false);
     };
@@ -4733,8 +4794,9 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
         // Ticket vanished (guest left, cancellation cascade) — send
         // waiter home with no further action. release_waiter_from_ticket
         // would have hit this path for the cascade case already.
+        let (hx, hz, hf) = staff_home_target(ctx, a); // Phase 9.31
         return ((
-            "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+            "returningHome".to_string(), 0, hx, hz, hf,
             None, None,
         ), false);
     };
@@ -4754,8 +4816,9 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
         state_clock_ms: 0,
         ..ticket
     });
+    let (hx, hz, hf) = staff_home_target(ctx, a); // Phase 9.31
     ((
-        "returningHome".to_string(), 0, a.home_x, a.home_z, a.home_floor,
+        "returningHome".to_string(), 0, hx, hz, hf,
         None, None,
     ), false)
 }

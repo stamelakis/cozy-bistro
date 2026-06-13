@@ -330,13 +330,10 @@ export class StockStatusWidget {
     // === Dishware tooltip body ===
     const dishScroll = this.dishTooltip.scrollTop;
     const dishLines: string[] = [];
-    // SELL-BACK — sell buttons only work while the cloud has a
-    // restaurant context (the refund is credited server-side).
-    const sellCloudReady = dish.cloud?.hasRestaurantContext() ?? false;
     dishLines.push(`<div style="font-weight:700;margin-bottom:3px">🍽️ Dishware</div>`);
-    dishLines.push(renderDishSection("Plates", "plate", dish, sellCloudReady));
+    dishLines.push(renderDishSection("Plates", "plate", dish));
     dishLines.push(`<div style="height:4px"></div>`);
-    dishLines.push(renderDishSection("Glasses", "glass", dish, sellCloudReady));
+    dishLines.push(renderDishSection("Glasses", "glass", dish));
     // Phase I (H.82) — canonical account.  Show every state bucket
     // and confirm the sum matches the lifetime invariant.
     const plateAccount = plateClean + plateDirty + plateInWash + plateInUse;
@@ -409,18 +406,9 @@ export class StockStatusWidget {
         this.update();
       };
     });
-    // SELL-BACK — Wire per-tier "Sell" buttons. Each sells ONE clean
-    // piece of (kind, tier) at 50% of the catalog per-piece price.
-    const sellButtons = this.dishTooltip.querySelectorAll("button.dish-sell-btn");
-    sellButtons.forEach((el) => {
-      const btn = el as HTMLButtonElement;
-      const kind = btn.getAttribute("data-sell-kind") as DishKind | null;
-      const tierStr = btn.getAttribute("data-sell-tier");
-      if (!kind || !tierStr) return;
-      const tier = parseInt(tierStr, 10);
-      if (!Number.isInteger(tier)) return;
-      btn.onclick = (): void => this.handleSellDishware(kind, tier);
-    });
+    // Phase 9.30 — per-tier "Sell" buttons removed from this popup;
+    // selling lives in the Pantry → Dishware → STOCK rows now, so there
+    // are no dish-sell-btn elements left to wire here.
 
     // === Storage badge ===
     // Phase I (H.80) — Show ACTUAL pantry stock vs total capacity,
@@ -690,12 +678,13 @@ function makeFloatingTooltip(): HTMLElement {
 /** Renders the per-tier breakdown for plates or glasses inside the
  * dishware tooltip. Sorts tiers descending so the prestige rows lead.
  * H.94 — each row has a "−1" button so the player can clear out
- * lower-tier stock they've outgrown. SELL-BACK — each row also gets a
- * "Sell" button that sells ONE clean piece back at 50% of the catalog
- * per-piece price (disabled at 0 clean / cloud offline). Buttons carry
+ * lower-tier stock they've outgrown. Phase 9.30 — the per-tier "Sell"
+ * button was removed from this popup; selling now lives only in the
+ * Pantry → Dishware → STOCK rows (9.27), per the user's request, so the
+ * info tooltip stays a read-out (plus the −1 cleanup). Buttons carry
  * data-attrs that the post-innerHTML wiring in update() reads to call
- * deleteOne / handleSellDishware. */
-function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"], sellCloudReady: boolean): string {
+ * deleteOne. */
+function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"]): string {
   const lines: string[] = [];
   lines.push(`<div style="font-weight:700;opacity:0.85">${label}</div>`);
   const rows = dish.getTierBreakdown(kind);
@@ -714,30 +703,7 @@ function renderDishSection(label: string, kind: DishKind, dish: Game["dishware"]
         + `style="margin-left:6px;background:rgba(255,90,90,0.15);color:#ffb0b0;`
         + `border:1px solid rgba(255,90,90,0.35);border-radius:3px;padding:0 5px;`
         + `cursor:pointer;font:inherit;font-size:9px">−1</button>`;
-      // SELL-BACK — sell one CLEAN piece at 50% of the per-piece
-      // catalog price. Dirty pieces can't be sold (server clamps to
-      // clean too); unknown tiers render no button.
-      let sellBtn = "";
-      const unitCents = dishwareUnitPriceCents(kind, r.tier);
-      if (unitCents != null) {
-        const refundCents = Math.floor(unitCents / 2);
-        const refundStr = (refundCents / 100).toFixed(2).replace(/\.00$/, "");
-        const canSell = sellCloudReady && r.clean > 0;
-        const title = !sellCloudReady
-          ? "Cloud offline — selling needs a connection (the refund is credited server-side)."
-          : r.clean <= 0
-          ? `No clean ${kind} at T${r.tier} to sell (dirty pieces can't be sold).`
-          : `Sell one clean ${kind} of T${r.tier} back for $${refundStr} `
-            + `(50% of $${(unitCents / 100).toFixed(2).replace(/\.00$/, "")}/piece).`;
-        sellBtn = `<button class="dish-sell-btn" data-sell-kind="${kind}" data-sell-tier="${r.tier}" `
-          + (canSell ? "" : "disabled ")
-          + `title="${title}" `
-          + `style="margin-left:4px;background:rgba(255,210,120,0.12);color:#ffd47a;`
-          + `border:1px solid rgba(255,210,120,0.35);border-radius:3px;padding:0 5px;`
-          + `cursor:${canSell ? "pointer" : "not-allowed"};opacity:${canSell ? "1" : "0.4"};`
-          + `font:inherit;font-size:9px">Sell +$${refundStr}</button>`;
-      }
-      lines.push(`<div style="padding-left:4px">${tierBadge} · ${cleanSpan}${dirtySpan}${delBtn}${sellBtn}</div>`);
+      lines.push(`<div style="padding-left:4px">${tierBadge} · ${cleanSpan}${dirtySpan}${delBtn}</div>`);
     }
   }
   return lines.join("");

@@ -720,7 +720,11 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
         const base = g.orderRequested ? `${prefix} ${menuIcon} ${secs}s` : `${prefix} ${menuIcon}`;
         return tasteIcons ? `${base} ${tasteIcons}` : base;
       }
-      return `${prefix} ⏳`;
+      // Order placed, waiting for the kitchen — show the serve-patience
+      // countdown (was a bare ⏳ with no number, so the timer looked
+      // frozen / invisible between ordering and the first plate landing).
+      const serveSecs = Math.max(0, Math.ceil(g.patience));
+      return `${prefix} ${drinkTable ? "🥤" : "⏳"} ${serveSecs}s`;
     }
     case "waitingForFood": {
       // Show patience countdown so the player feels the urgency.
@@ -1051,6 +1055,7 @@ export class GuestSpawner {
     for (let i = this.guests.length - 1; i >= 0; i -= 1) {
       const g = this.guests[i];
       if (localOwnsPatience) this.tickPatience(g, dt);
+      else this.tickPatienceDisplay(g, dt);
       this.tickGuest(g, dt);
       // Remove guest if they finished walking out — OR if they've been
       // trying to leave for an absurd amount of time (got stuck in a
@@ -1136,6 +1141,20 @@ export class GuestSpawner {
    * — that's how the player saw "23 plates without buying"). The
    * plates the customer ALREADY ate before patience ran out still
    * become dirty + show on the table the same as a finalized visit. */
+  /** Phase 9.32 — Display-only patience countdown for server-canonical
+   * mode. The server owns the authoritative patience_ms AND the
+   * angry-leave transition; reconcileCloudGuest snaps g.patience to the
+   * cloud value on every push. Between those ~500ms pushes we decrement
+   * locally so the "Ns" above the guest ticks down smoothly each frame
+   * instead of stepping in server-tick jumps. NEVER fires angry-leave —
+   * that's the server's call. Clamped at 0 so the label shows "0s"
+   * rather than going negative while the server's next tick flips them
+   * to leaving. */
+  private tickPatienceDisplay(g: ActiveGuest, dt: number): void {
+    if (g.state !== "seated" && g.state !== "waitingForFood") return;
+    if (g.patience > 0) g.patience = Math.max(0, g.patience - dt);
+  }
+
   private tickPatience(g: ActiveGuest, dt: number): void {
     if (g.state !== "seated" && g.state !== "waitingForFood") return;
     g.patience -= dt;
@@ -1474,6 +1493,18 @@ export class GuestSpawner {
   private reconcileCloudGuest(row: import("../cloud/SpacetimeClient").ActiveGuestRow): void {
     const g = this.findLocalGuestByServerId(row.id);
     if (!g) return;
+
+    // Phase 9.32 — keep the local patience clock in lockstep with the
+    // server's authoritative patience_ms so the countdown above a
+    // guest's head actually RUNS. In server-canonical mode the local
+    // tickPatience decrement is gated off, and patience was previously
+    // only written on hydrate + course transitions — so the on-screen
+    // "Ns" froze at its last value. The server decrements patience_ms
+    // each tick and pushes the row, so this refreshes the display every
+    // update; tickPatienceDisplay smooths the gaps between pushes.
+    if (this.serverOwnsGuestStates()) {
+      g.patience = Number(row.patienceMs) / 1000;
+    }
 
     // Phase H Phase 4d — populate local g.order from cloud's
     // order_recipes CSV when empty. With Phase 4b gating the local
