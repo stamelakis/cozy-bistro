@@ -43,6 +43,12 @@ export interface AnimatedCharacter {
    * and update _baseY each frame so the animator's reset doesn't snap
    * the body back to its starting storey. */
   _feetLift?: number;
+  /** Phase 9.29 — "keep hidden for a non-floor reason" flag. Owners
+   * that need a character invisible regardless of the focused storey
+   * (e.g. ErrandRouter while a helper is off-map shopping) set this
+   * instead of writing root.visible directly, so the animator stays the
+   * single authority for visibility and ANDs floor-focus with this. */
+  _keepHidden?: boolean;
 }
 
 export class CharacterAnimator {
@@ -68,6 +74,21 @@ export class CharacterAnimator {
   // a character with feet just below the frustum but head visible
   // still ticks.
   private readonly cullSphere = new THREE.Sphere(new THREE.Vector3(), 0.9);
+
+  // Phase 9.29 — floor-focus body gate. When the player is looking at
+  // one storey (interior view via the FloorSelector), characters on
+  // OTHER storeys hide so the view only shows the customers + staff on
+  // the floor being looked at. Mirrors StatusBubbles' floor filter and
+  // WorldScene.applyStoreyVisibility (which already hides upper storey
+  // GROUPS) — characters are parented to the always-visible scene/world
+  // root, so without this they'd leak across floors even though their
+  // bubbles + the surrounding geometry are correctly floor-gated.
+  // Engine wires these once; unset = no gating (every character shows).
+  getFocusedFloor?: () => number;
+  getStoreyHeight?: () => number;
+  /** True when zoomed out to the exterior building view, where every
+   * floor should render (no per-storey focus). */
+  isExteriorView?: () => boolean;
 
   /** Phase I (perf) — wire the camera + worldRoot so update() can
    * frustum-cull off-screen characters.  worldRoot is needed because
@@ -115,6 +136,12 @@ export class CharacterAnimator {
       wy = this.worldRoot!.position.y;
       wz = this.worldRoot!.position.z;
     }
+    // Phase 9.29 — resolve the floor-focus gate once per frame. When an
+    // interior storey is focused, `gateFloor` is that storey and any
+    // character whose rounded floor differs is hidden below. Exterior
+    // view (or unwired hooks) leaves gateFloor undefined → show all.
+    const gateStoreyH = this.getStoreyHeight?.() ?? 3;
+    const gateFloor = this.isExteriorView?.() ? undefined : this.getFocusedFloor?.();
     for (const c of this.characters) {
       // CRITICAL: ALWAYS sync root.position from groundPos BEFORE
       // the cull decision.  Three.js does its own frustum cull at
@@ -133,6 +160,23 @@ export class CharacterAnimator {
       const baseY = c._baseY ?? 0;
       c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
       c.root.rotation.set(0, c.facingY, 0);
+
+      // Phase 9.29 — floor-focus body gate. A character is visible only
+      // when it's on the focused storey (same maths as the status-bubble
+      // filter) AND no owner has flagged it _keepHidden for a non-floor
+      // reason (e.g. an errand helper off-map shopping). The animator is
+      // the single writer of root.visible so those two conditions AND
+      // cleanly instead of two systems fighting over the boolean.
+      // Skipping the pose tick for hidden characters also reclaims the
+      // work the cull would have done. A character mid-stair rounds
+      // toward the nearer slab, so they pop in/out at the half-way point
+      // — acceptable for a brief transit, and matches their bubble.
+      const offFloor = gateFloor !== undefined && Math.round(baseY / gateStoreyH) !== gateFloor;
+      if (offFloor || c._keepHidden) {
+        if (c.root.visible) c.root.visible = false;
+        continue;
+      }
+      if (!c.root.visible) c.root.visible = true;
 
       if (cull) {
         // Sphere centred on the character's torso (groundPos + ~0.45 m

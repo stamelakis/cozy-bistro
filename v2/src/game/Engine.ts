@@ -333,6 +333,15 @@ export class Engine {
     // work in half.  Safe to call this early: setCullCamera just
     // stores refs; the actual frustum is rebuilt every update().
     this.scene.animator.setCullCamera(this.camera.threeCamera, this.scene.worldRoot);
+    // Phase 9.29 — floor-focus body gate. Same hooks the status bubbles
+    // use, so a character's BODY hides on non-focused storeys exactly as
+    // its bubble does (and as the storey geometry already does). Without
+    // this, characters — parented to the always-visible world root —
+    // float across hidden upper floors while their bubbles/walls are
+    // correctly gated, which reads as "seeing it all at once".
+    this.scene.animator.getFocusedFloor = () => this.scene.getFocusedStorey();
+    this.scene.animator.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    this.scene.animator.isExteriorView = () => this.scene.isExteriorMode();
 
     const savedState = SaveSystem.loadFromStorage();
     // Track whether we booted on a truly fresh device (no localStorage

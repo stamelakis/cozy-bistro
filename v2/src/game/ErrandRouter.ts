@@ -171,7 +171,11 @@ export class ErrandRouter {
 
   addHelper(char: AnimatedCharacter, memberId: string): void {
     char.action = "idle"; // override the default "carry" pose
-    char.root.visible = true; // belt-and-suspenders in case of a recycled char
+    // Belt-and-suspenders in case of a recycled char. Clear the
+    // floor-gate's _keepHidden flag too (a prior life may have left it
+    // set while offscreen); the animator owns root.visible from here.
+    char.root.visible = true;
+    char._keepHidden = false;
     // Snap them to a fresh randomized loiter spot near the counter so
     // they don't all line up at the same coord when more than one is
     // hired.
@@ -246,6 +250,7 @@ export class ErrandRouter {
     // were offscreen, the engine will remove the model anyway, but a
     // stray invisible root makes debugging miserable.
     removed.character.root.visible = true;
+    removed.character._keepHidden = false;
     this.helpers.splice(idx, 1);
     // H.65 — drop the cloud row so a re-hydrate after a fire doesn't
     // resurrect the just-fired helper at a stale position.
@@ -459,7 +464,9 @@ export class ErrandRouter {
       const wasOffscreen = h.state === "offscreen";
       const isPhaseChange = h.state !== resolved;
       h.state = resolved;
-      h.character.root.visible = resolved !== "offscreen";
+      // Phase 9.29 — only "offscreen" forces a non-floor hide; the
+      // animator ANDs this with floor-focus to set root.visible.
+      h.character._keepHidden = resolved === "offscreen";
       h.character.action = errandPoseFor(resolved);
       // Coming back from offscreen is a legitimate teleport — the
       // helper was invisible at the offscreen anchor and now needs
@@ -620,8 +627,9 @@ export class ErrandRouter {
       if (st != null) {
         h.state = st;
         h.target.set(row.targetX, row.targetZ);
-        // Restore visibility — only "offscreen" hides the model.
-        h.character.root.visible = st !== "offscreen";
+        // Restore visibility — only "offscreen" hides the model. The
+        // animator ANDs _keepHidden with floor-focus for root.visible.
+        h.character._keepHidden = st === "offscreen";
         h.character.action = errandPoseFor(st);
         // Reset trip-internal flags that aren't persisted.
         h.clock = 0;
@@ -686,7 +694,7 @@ export class ErrandRouter {
         this.moveActor(h, dt);
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
           // Hide the helper entirely — they've "left the screen" to shop.
-          h.character.root.visible = false;
+          h.character._keepHidden = true;
           h.state = "offscreen";
           h.clock = 0;
           h.character.action = "idle";
@@ -698,7 +706,7 @@ export class ErrandRouter {
           // Pop back into view at the same pavement edge, now carrying.
           // Walk back to the EXTERIOR door anchor first; we'll step
           // through the wall from there.
-          h.character.root.visible = true;
+          h.character._keepHidden = false;
           h.target = this.doorExteriorPos.clone();
           this.planPath(h);
           h.state = "walkingFromRoadEdge";

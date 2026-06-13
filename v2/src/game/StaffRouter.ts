@@ -3611,7 +3611,10 @@ function chefLabel(state: StaffActor["state"]): string {
   switch (state) {
     case "movingToWork": return "→ stove";
     case "working":       return "🍳 cooking";
-    case "returningHome": return "← back";
+    // Phase 9.28 — returningHome is winding down, not working. Empty
+    // label → no status bubble + not counted as "working" on the
+    // staff panel (getStaffWorkingCount counts non-empty labels).
+    case "returningHome": return "";
     default:              return "";
   }
 }
@@ -3620,7 +3623,7 @@ function barmanLabel(b: StaffActor): string {
   switch (b.state) {
     case "movingToWork": return "→ bar";
     case "working":       return "🍸 mixing";
-    case "returningHome": return "← bar";
+    case "returningHome": return ""; // Phase 9.28 — winding down = idle
     default:              return "";
   }
 }
@@ -3639,7 +3642,9 @@ function waiterLabel(w: StaffActor): string {
       if (w.takeOrderRequest) return "📋 ordering";
       if (w.washTrip) return "🧽 washing";
       return "🍽️ serving";
-    case "returningHome": return "← back";
+    // Phase 9.28 — walking back to rest reads as idle: no bubble, not
+    // counted as "working" on the panel.
+    case "returningHome": return "";
     default:              return "";
   }
 }
