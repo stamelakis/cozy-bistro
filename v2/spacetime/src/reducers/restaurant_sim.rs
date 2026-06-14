@@ -1456,9 +1456,8 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
 /// dining room, idle waiters loitering wherever they last stood — e.g.
 /// a sink by the WC — and barmen on the wrong side of the counter):
 ///   - waiter: the player-pinned rest spot (set_waiter_rest_spot) when
-///     set; otherwise the stand spot IN FRONT of the nearest cook
-///     station on their home floor — the food-pickup area, where a
-///     waiter is actually useful.
+///     set; otherwise their OWN spawn home (9.35 — see staff_home_target
+///     for why a shared kitchen tile was a footgun).
 ///   - chef:   the stand spot IN FRONT of the nearest cook station on
 ///     their home floor, so an idle chef waits at the stove.
 ///   - barman: the stand spot BEHIND the nearest bar counter, so they
@@ -1466,16 +1465,45 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
 /// Falls back to the actor's own home_x/z when the floor has no station
 /// of the relevant kind. Offsets mirror the dispatch stand-spot maths +
 /// the client's chefStandPosFor / barmanInsideStandFor convention.
+/// Phase 9.35 — small, STABLE per-member offset (≈ ±0.6 tiles) derived
+/// from the member id. Staff that share a single home spot (a pinned
+/// rest spot, or the same nearest station) would otherwise target the
+/// exact same tile; PersonalSpace then shoves some out of arrival range
+/// and they never flip returningHome → idle, so they never get
+/// re-dispatched. A deterministic offset fans them out without jittering
+/// every tick (which would make them twitch).
+fn member_jitter(member_id: &str) -> (f32, f32) {
+    let h: u32 = member_id.bytes().fold(0u32, |a, b| a.wrapping_mul(131).wrapping_add(b as u32));
+    let dx = ((h % 13) as f32 / 13.0 - 0.5) * 1.2;
+    let dz = (((h / 13) % 13) as f32 / 13.0 - 0.5) * 1.2;
+    (dx, dz)
+}
+
 fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32) {
     let rid = actor.restaurant_id;
-    // A pinned waiter rest spot wins outright.
+    let (jx, jz) = member_jitter(&actor.member_id);
+    // Waiter: a pinned rest spot wins (fanned out so the pool doesn't
+    // stack on one tile). With NO rest spot a waiter returns to its OWN
+    // spawn home — those are already spread out and always reachable.
+    //
+    // Phase 9.35 — DON'T send waiters to a shared cook-station stand spot
+    // (the 9.31 default): it crowded them, and worse, a single
+    // unreachable shared target — e.g. a rest spot the player pinned
+    // outside the building — stalled the ENTIRE waiter pool in
+    // returningHome forever (they could never arrive → never went idle →
+    // never got dispatched). The placement UI now also rejects
+    // out-of-bounds rest spots, but per-waiter homes are the safety net.
     if actor.role == "waiter" {
         if let Some(r) = ctx.db.restaurant().id().find(rid) {
             if r.waiter_rest_set {
-                return (r.waiter_rest_x, r.waiter_rest_z, r.waiter_rest_floor);
+                return (r.waiter_rest_x + jx, r.waiter_rest_z + jz, r.waiter_rest_floor);
             }
         }
+        return (actor.home_x, actor.home_z, actor.home_floor);
     }
+    // Chef → in front of the nearest cook station; barman → behind the
+    // nearest bar. Jittered so a multi-chef kitchen doesn't stack on one
+    // stand spot. Falls back to the spawn home when the floor has none.
     let want_bar = actor.role == "barman";
     let mut best: Option<(f32, f32, f32)> = None; // (stand_x, stand_z, dist²)
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
@@ -1495,7 +1523,7 @@ fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32
         }
     }
     match best {
-        Some((sx, sz, _)) => (sx, sz, actor.home_floor),
+        Some((sx, sz, _)) => (sx + jx, sz + jz, actor.home_floor),
         None => (actor.home_x, actor.home_z, actor.home_floor),
     }
 }

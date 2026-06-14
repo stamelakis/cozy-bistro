@@ -2784,6 +2784,12 @@ export class Engine {
       // snap to the tile centre so the highlight + the saved spot align.
       const x = Math.floor(hitWorld.x - this.scene.worldRoot.position.x) + 0.5;
       const z = Math.floor(hitWorld.z - this.scene.worldRoot.position.z) + 0.5;
+      // Phase 9.35 — reject clicks outside the restaurant. A click up near
+      // the horizon hits the floor plane far off-map; storing that as the
+      // rest spot strands every waiter walking toward an unreachable tile.
+      // Bound to the focused floor's furniture footprint + a few tiles.
+      const b = this.focusedFloorBounds(focused);
+      if (b && (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ)) return null;
       return { x, z, floor: focused, planeY };
     };
 
@@ -2810,8 +2816,9 @@ export class Engine {
       e.preventDefault();
       const tile = tileUnderCursor(e.clientX, e.clientY);
       if (!tile) {
-        this.floatingText?.pop(0, 1, "📍 Couldn't find a floor under that click", "#ff8866");
-        cleanup();
+        // Out of bounds / off the floor — keep placement active so the
+        // player can re-aim instead of getting kicked out of the mode.
+        this.floatingText?.pop(0, 1, "📍 Aim inside your restaurant", "#ffcf66");
         return;
       }
       this.cloud.setWaiterRestSpot(tile.x, tile.z, tile.floor);
@@ -2884,6 +2891,27 @@ export class Engine {
       requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
+  }
+
+  /** Phase 9.35 — axis-aligned bounds of the placed furniture on `floor`,
+   * padded by a few tiles, in restaurant-local coords. Used to keep the
+   * waiter-rest placement inside the building so an off-map click can't
+   * pin an unreachable spot. Returns null when the floor has no furniture
+   * (nothing to anchor to → don't restrict). */
+  private focusedFloorBounds(floor: number): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    let any = false;
+    for (const item of this.registry.snapshotItems()) {
+      if (item.floor !== floor) continue;
+      any = true;
+      if (item.x < minX) minX = item.x;
+      if (item.x > maxX) maxX = item.x;
+      if (item.z < minZ) minZ = item.z;
+      if (item.z > maxZ) maxZ = item.z;
+    }
+    if (!any) return null;
+    const M = 3; // tiles of slack so a rest spot just off the furniture still works
+    return { minX: minX - M, maxX: maxX + M, minZ: minZ - M, maxZ: maxZ + M };
   }
 
   /** Latch so re-clicking the Set button while placement is already
