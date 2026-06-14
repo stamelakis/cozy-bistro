@@ -1097,6 +1097,28 @@ pub fn set_waiter_rest_spot(
         && r.waiter_rest_floor == floor {
         return Ok(()); // idempotent no-op
     }
+    // Phase 9.35 — reject a spot pinned OUTSIDE the building. An
+    // unreachable rest spot strands every waiter walking toward it (they
+    // never arrive → never idle → never re-dispatch — a total service
+    // stall). The client's placement guard already blocks this, but
+    // enforce it server-side too so an out-of-date client can't
+    // re-introduce the stall. Bounds = this floor's furniture footprint
+    // + a few tiles of slack; skipped when the floor has no furniture.
+    let (mut minx, mut maxx, mut minz, mut maxz) =
+        (f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY);
+    let mut any = false;
+    for f in ctx.db.placed_furniture().restaurant_id().filter(restaurant_id) {
+        if f.floor != floor { continue; }
+        any = true;
+        minx = minx.min(f.x); maxx = maxx.max(f.x);
+        minz = minz.min(f.z); maxz = maxz.max(f.z);
+    }
+    if any {
+        const M: f32 = 3.0;
+        if x < minx - M || x > maxx + M || z < minz - M || z > maxz + M {
+            return Err("Waiter rest spot must be inside the restaurant".into());
+        }
+    }
     ctx.db.restaurant().id().update(Restaurant {
         waiter_rest_set: true,
         waiter_rest_x: x,
