@@ -970,6 +970,11 @@ export class Engine {
     this.seatMarkers.getStoreyHeight = () => WorldScene.getStoreyHeight();
     this.statusBubbles.getFocusedFloor = () => this.scene.getFocusedStorey();
     this.statusBubbles.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    // Phase 9.37 — gameplay pops (+$N, tips, ratings, cleaning) follow the
+    // same focused-floor filter as the bubbles, so other floors' pops
+    // don't leak into the view.
+    this.floatingText.getFocusedFloor = () => this.scene.getFocusedStorey();
+    this.floatingText.getStoreyHeight = () => WorldScene.getStoreyHeight();
     if (savedState?.furniture && savedState.furniture.length > 0) {
       // SaveGameState.furniture mirrors the 2D PlacedFurniture shape
       // ({position:{x,y}, rotation:degrees}). Re-instantiate each item
@@ -2832,14 +2837,14 @@ export class Engine {
       }
       if (!inBounds(hit)) {
         // The highlight was already amber here, so this isn't a surprise.
-        this.floatingText?.pop(hit.x, hit.planeY, "📍 Too far — pick a tile inside your restaurant", "#ff8c44");
+        this.floatingText?.pop(hit.x, hit.z, "📍 Too far — pick a tile inside your restaurant", "#ff8c44", hit.floor);
         this.spawnPlacementFlash(hit.x, hit.z, hit.planeY, 0xff8c44);
         cleanup();
         return;
       }
       this.cloud.setWaiterRestSpot(hit.x, hit.z, hit.floor);
       this.staffPanel.setWaiterRestStatus({ x: hit.x, z: hit.z, floor: hit.floor });
-      this.floatingText?.pop(hit.x, hit.planeY, `📍 Waiter rest spot set`, "#86ff86");
+      this.floatingText?.pop(hit.x, hit.z, `📍 Waiter rest spot set`, "#86ff86", hit.floor);
       // Phase 9.33 — confirmation flash: an expanding, fading ring at the
       // chosen tile so the click visibly "lands". Self-removes; outlives
       // cleanup (which tears down the hover preview).

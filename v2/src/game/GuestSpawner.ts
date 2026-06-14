@@ -1196,7 +1196,7 @@ export class GuestSpawner {
     if (!this.serverOwnsGuestStates()) {
       this.game.reputation.recordRating(1);
     }
-    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a");
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a", g.currentFloor);
     this.sfx?.thud();
     this.router.cancelTicket(g.id);
     this.settleGuestDishes(g);
@@ -2629,7 +2629,7 @@ export class GuestSpawner {
       // Loud announcement for a food critic so the player knows to ace it.
       // (archetype + taste were rolled before the seat pick above.)
       if (archetype.id === "critic") {
-        this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966");
+        this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966", 0);
         this.sfx?.alert();
       } else {
         this.sfx?.ding();
@@ -3000,7 +3000,7 @@ export class GuestSpawner {
       this.occupiedSeats.delete(g.seatId);
       // Real seat needs cleanup before the next guest can use it.
       this.dirtyUntil.set(g.seatId, this.elapsed + SEAT_CLEAN_SECONDS);
-      this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0");
+      this.floatingText?.pop(g.seatPos.x, g.seatPos.y, "🧹 cleaning", "#f0c8a0", g.seatFloor);
     }
     // Release any toilet / sink reservation they were holding so
     // a guest fired mid-trip doesn't deadlock the bathroom. Also
@@ -3533,7 +3533,7 @@ export class GuestSpawner {
           g.character.action = "idle";
           g.state = "atSink";
           g.stateClock = 0;
-          this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "🧼 washing…", "#a8d8f0");
+          this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "🧼 washing…", "#a8d8f0", g.currentFloor);
           if (DEBUG_GUEST_LOGS) console.log(`[Guest ${g.id}] arrived at sink → atSink (dwell ${TIME_AT_SINK}s)`);
         }
         break;
@@ -3961,7 +3961,7 @@ export class GuestSpawner {
     // dominating recipe quality / staff training / decor inputs.
     if (recipe.category === g.taste.preferredCategory) {
       satisfaction += 2;
-      this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y + 0.2, "♥ taste", "#ffd47a");
+      this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y + 0.2, "♥ taste", "#ffd47a", g.currentFloor);
     }
     // Phase 7.8 — Server is the sole writer for visit money. When
     // serverOwnsGuestStates is on, the server's
@@ -3980,7 +3980,7 @@ export class GuestSpawner {
     g.totalPaid += price;
     g.totalSatisfaction += satisfaction;
     // Floating "+$N" above the guest.
-    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${price}`, "#a8e2a8");
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `+$${price}`, "#a8e2a8", g.currentFloor);
     this.sfx?.chaching();
   }
 
@@ -4137,11 +4137,11 @@ export class GuestSpawner {
     // Visible feedback: a star rating floats up above their seat as they leave.
     const stars = "★".repeat(rating) + "☆".repeat(5 - rating);
     const ratingColor = rating >= 4 ? "#ffd966" : rating === 3 ? "#fff5dc" : "#ff9a9a";
-    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, stars, ratingColor);
+    this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, stars, ratingColor, g.currentFloor);
     if (tip > 0) {
       // Stagger the tip label so it doesn't overlap the stars.
       setTimeout(() => {
-        this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `tip +$${tip}`, "#a8e2a8");
+        this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `tip +$${tip}`, "#a8e2a8", g.currentFloor);
       }, 600);
     }
   }
