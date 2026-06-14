@@ -2764,13 +2764,16 @@ export class Engine {
     // tile-snapped (floor + 0.5) so it reads as a discrete tile. Parented
     // to worldRoot so its position is in restaurant-local space (matches
     // the coords we hand setWaiterRestSpot).
-    const preview = this.makeTilePreview(0x86ff86);
+    const preview = this.makeTilePreview();
     this.scene.worldRoot.add(preview.group);
     preview.group.visible = false;
 
     // Raycast the cursor to the focused storey's floor plane → tile-
-    // snapped restaurant-local x/z, or null when the ray misses.
-    const tileUnderCursor = (clientX: number, clientY: number): { x: number; z: number; floor: number; planeY: number } | null => {
+    // snapped restaurant-local x/z, or null ONLY when the ray misses the
+    // plane (e.g. aimed above the horizon). NO bounds check here — the
+    // highlight should still show (tinted) when you hover outside the
+    // building, not vanish.
+    const floorHit = (clientX: number, clientY: number): { x: number; z: number; floor: number; planeY: number } | null => {
       const rect = canvas.getBoundingClientRect();
       const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
       const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
@@ -2784,13 +2787,15 @@ export class Engine {
       // snap to the tile centre so the highlight + the saved spot align.
       const x = Math.floor(hitWorld.x - this.scene.worldRoot.position.x) + 0.5;
       const z = Math.floor(hitWorld.z - this.scene.worldRoot.position.z) + 0.5;
-      // Phase 9.35 — reject clicks outside the restaurant. A click up near
-      // the horizon hits the floor plane far off-map; storing that as the
-      // rest spot strands every waiter walking toward an unreachable tile.
-      // Bound to the focused floor's furniture footprint + a few tiles.
-      const b = this.focusedFloorBounds(focused);
-      if (b && (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ)) return null;
       return { x, z, floor: focused, planeY };
+    };
+    // Whether a tile is inside the focused floor's furniture footprint
+    // (+slack). Gates SAVING (an off-map pin strands every waiter walking
+    // toward an unreachable tile) and tints the highlight. Mirrors the
+    // server's set_waiter_rest_spot guard so the two never disagree.
+    const inBounds = (hit: { x: number; z: number; floor: number }): boolean => {
+      const b = this.focusedFloorBounds(hit.floor);
+      return !b || (hit.x >= b.minX && hit.x <= b.maxX && hit.z >= b.minZ && hit.z <= b.maxZ);
     };
 
     const cleanup = (): void => {
@@ -2803,9 +2808,10 @@ export class Engine {
       preview.dispose();
     };
     const onCanvasMove = (e: PointerEvent): void => {
-      const tile = tileUnderCursor(e.clientX, e.clientY);
-      if (!tile) { preview.group.visible = false; return; }
-      preview.group.position.set(tile.x, tile.planeY + 0.05, tile.z);
+      const hit = floorHit(e.clientX, e.clientY);
+      if (!hit) { preview.group.visible = false; return; }
+      preview.group.position.set(hit.x, hit.planeY + 0.05, hit.z);
+      preview.setValid(inBounds(hit)); // green inside the building, amber outside
       preview.group.visible = true;
     };
     const onCanvasPointer = (e: PointerEvent): void => {
@@ -2814,20 +2820,30 @@ export class Engine {
       if (e.button !== 0) return;
       e.stopPropagation();
       e.preventDefault();
-      const tile = tileUnderCursor(e.clientX, e.clientY);
-      if (!tile) {
-        // Out of bounds / off the floor — keep placement active so the
-        // player can re-aim instead of getting kicked out of the mode.
-        this.floatingText?.pop(0, 1, "📍 Aim inside your restaurant", "#ffcf66");
+      const hit = floorHit(e.clientX, e.clientY);
+      // Phase 9.36 — EVERY click exits the mode (calls cleanup). The 9.35
+      // "stay active on a bad click" left the placement listeners attached
+      // when the player gave up, and this handler stopPropagation()s every
+      // left-click — so the whole game silently swallowed clicks until ESC.
+      if (!hit) {
+        this.floatingText?.pop(0, 1, "📍 No floor there — try again, aim at your restaurant", "#ff8866");
+        cleanup();
         return;
       }
-      this.cloud.setWaiterRestSpot(tile.x, tile.z, tile.floor);
-      this.staffPanel.setWaiterRestStatus({ x: tile.x, z: tile.z, floor: tile.floor });
-      this.floatingText?.pop(tile.x, tile.planeY, `📍 Waiter rest spot set`, "#86ff86");
+      if (!inBounds(hit)) {
+        // The highlight was already amber here, so this isn't a surprise.
+        this.floatingText?.pop(hit.x, hit.planeY, "📍 Too far — pick a tile inside your restaurant", "#ff8c44");
+        this.spawnPlacementFlash(hit.x, hit.z, hit.planeY, 0xff8c44);
+        cleanup();
+        return;
+      }
+      this.cloud.setWaiterRestSpot(hit.x, hit.z, hit.floor);
+      this.staffPanel.setWaiterRestStatus({ x: hit.x, z: hit.z, floor: hit.floor });
+      this.floatingText?.pop(hit.x, hit.planeY, `📍 Waiter rest spot set`, "#86ff86");
       // Phase 9.33 — confirmation flash: an expanding, fading ring at the
       // chosen tile so the click visibly "lands". Self-removes; outlives
       // cleanup (which tears down the hover preview).
-      this.spawnPlacementFlash(tile.x, tile.z, tile.planeY, 0x86ff86);
+      this.spawnPlacementFlash(hit.x, hit.z, hit.planeY, 0x86ff86);
       this.sfx?.chime?.();
       cleanup();
     };
@@ -2843,23 +2859,32 @@ export class Engine {
   }
 
   /** Phase 9.33 — Build a flat tile-highlight: a translucent filled disc
-   * under a brighter ring, both lying on the XZ plane. Returned with a
-   * dispose() that frees the geometries + materials. Used by the
-   * placement modes so the player sees the tile they're aiming at. */
-  private makeTilePreview(color: number): { group: THREE.Group; dispose: () => void } {
+   * under a brighter ring, both lying on the XZ plane. `setValid` tints
+   * it green (a valid in-building tile) or amber (out of bounds) so the
+   * player gets live placement feedback. Returned with a dispose() that
+   * frees the geometries + materials. */
+  private makeTilePreview(): { group: THREE.Group; setValid: (valid: boolean) => void; dispose: () => void } {
     const group = new THREE.Group();
     const discGeo = new THREE.CircleGeometry(0.5, 40);
-    const discMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+    const discMat = new THREE.MeshBasicMaterial({ color: 0x86ff86, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
     const disc = new THREE.Mesh(discGeo, discMat);
     disc.rotation.x = -Math.PI / 2;
     const ringGeo = new THREE.RingGeometry(0.48, 0.6, 40);
-    const ringMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x86ff86, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false });
     const ring = new THREE.Mesh(ringGeo, ringMat);
     ring.rotation.x = -Math.PI / 2;
     group.add(disc, ring);
     group.renderOrder = 999; // draw over the floor, no depth fighting
+    let lastValid = true;
     return {
       group,
+      setValid: (valid: boolean): void => {
+        if (valid === lastValid) return;
+        lastValid = valid;
+        const c = valid ? 0x86ff86 : 0xff8c44;
+        discMat.color.setHex(c);
+        ringMat.color.setHex(c);
+      },
       dispose: () => { discGeo.dispose(); discMat.dispose(); ringGeo.dispose(); ringMat.dispose(); },
     };
   }
