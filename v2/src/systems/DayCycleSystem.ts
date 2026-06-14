@@ -61,6 +61,16 @@ export class DayCycleSystem {
     this.dayNumber = dayNumber;
   }
 
+  /** Phase 9.39 — adopt an authoritative within-day elapsed time (e.g.
+   * the server's day_elapsed_ms on reload) so the day/night lighting
+   * resumes at the correct TIME OF DAY instead of snapping back to dawn.
+   * Clamped into [0, dayLength) so a value the server already rolled
+   * over doesn't read as a finished day. */
+  setElapsedSeconds(seconds: number): void {
+    if (!Number.isFinite(seconds)) return;
+    this.elapsedSeconds = Math.max(0, Math.min(this.dayLengthSeconds - 0.001, seconds));
+  }
+
   /**
    * Reset the day timer and advance the day counter by 1. The scene should call this
    * after handling a `dayEnded` signal from {@link tick}; if it doesn't, subsequent

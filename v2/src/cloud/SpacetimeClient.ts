@@ -1130,6 +1130,18 @@ export class SpacetimeClient {
     return Number(r.pendingDaysAdvanced);
   }
 
+  /** Phase 9.39 — Read the server's authoritative within-day clock
+   * (day_elapsed_ms) so the client can adopt the correct TIME OF DAY on
+   * reload instead of resetting to dawn. The server advances this every
+   * tick (incl. offline), so it reflects the live time of day. Returns
+   * null when the Restaurant row isn't subscribed yet. */
+  getCloudDayElapsedMs(): number | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return null;
+    return Number(r.dayElapsedMs);
+  }
+
   /** H.30 — Atomically zero pending_days_advanced on the cloud row.
    * Caller should apply the days locally first (via N rollovers)
    * before clearing. */

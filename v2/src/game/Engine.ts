@@ -158,6 +158,11 @@ export class Engine {
   private running = false;
   private lastResizeCheckAt = 0;
   private hudAccumulator = 0;
+  /** Phase 9.39 — latched true once the server's day_elapsed_ms has been
+   * adopted into the local DayCycleSystem on first cloud contact, so the
+   * day/night lighting resumes at the correct time of day after a reload
+   * instead of resetting to dawn. */
+  private dayClockAdopted = false;
   /** Phase 9.2 — true once syncStaffToHeadcount has registered every
    * saved staff member into the router. The bridge-retry block in
    * update() holds off on the staff/ticket hydrates until then —
@@ -389,6 +394,20 @@ export class Engine {
     // steady-state cost is a few boolean checks per second.
     window.setInterval(() => {
       if (!this.cloud.hasRestaurantContext()) return;
+      // Phase 9.39 — adopt the server's within-day clock ONCE on first
+      // contact (i.e. on reload) so the day/night lighting resumes at the
+      // correct TIME OF DAY instead of snapping back to dawn (lights off).
+      // The server advances day_elapsed_ms every tick incl. offline, so
+      // it's the live time of day. After this the local DayCycleSystem
+      // ticks + re-syncs normally via syncDayClock.
+      if (!this.dayClockAdopted) {
+        const cloudMs = this.cloud.getCloudDayElapsedMs();
+        if (cloudMs != null) {
+          this.dayClockAdopted = true;
+          this.game.day.setElapsedSeconds(cloudMs / 1000);
+          console.log(`[Phase 9.39] adopted cloud day clock: ${(cloudMs / 1000).toFixed(0)}s elapsed → dayProgress ${this.game.day.getDayProgress().toFixed(2)}`);
+        }
+      }
       // Phase 9.19 — keep the server's pantry_target in step with
       // the player's stock-target control. Change-tracked so the
       // reducer fires once per adjustment (plus once at boot), not
