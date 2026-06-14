@@ -7272,11 +7272,26 @@ pub fn update_guest_position(
     if r.owner != ctx.sender {
         return Err("Only the owner can move their guests".into());
     }
+    // Phase 9.38 — the local sim has no "ordering" state; it collapses
+    // the menu-reading beat into "seated". So a foreground client's
+    // position mirror keeps pushing "seated" over the server's
+    // "ordering" — every cycle that REGRESSES the guest and (below)
+    // resets state_clock_ms, so the ordering clock never reaches the
+    // take-order completion OR the 10s fallback, and the customer
+    // ping-pongs seated↔ordering until patience runs out (the "waiter
+    // visits over and over, then the timer just ends" bug). Don't let
+    // the mirror move a guest OUT of "ordering" except to a genuine
+    // "leaving"; the position/target still update either way.
+    let new_state = if g.state == "ordering" && state != "leaving" {
+        g.state.clone()
+    } else {
+        state
+    };
     // Reset state_clock when the state label actually flips so the
     // server tick's countdown (eating timer, ordering wait) starts
     // from zero on the transition rather than carrying the prior
     // state's elapsed time forward.
-    let state_changed = g.state != state;
+    let state_changed = g.state != new_state;
     let new_clock = if state_changed { 0 } else { g.state_clock_ms };
     // Audit fix (B.3) — "leaving" writes via this reducer USED to
     // be silently blocked under the theory that mark_guest_leaving
@@ -7289,8 +7304,8 @@ pub fn update_guest_position(
     // changes to "leaving", new_clock=0 above gives us a fresh
     // LEAVING_DWELL countdown anyway. Subsequent same-state mirror
     // writes preserve the clock (state_changed=false), so duplicate
-    // pushes don't reset the despawn timer.
-    let new_state = state;
+    // pushes don't reset the despawn timer. (new_state computed above —
+    // 9.38 guards it against regressing the server's "ordering".)
     ctx.db.active_guest().id().update(ActiveGuest {
         x, z, floor, target_x, target_z, target_floor,
         state: new_state,
