@@ -1279,6 +1279,18 @@ pub fn consume_pending_day_advancement(
 /// more conservative about cross-floor assignments.
 const STAIR_TRAVERSAL_DIST: f32 = 15.0;
 
+/// Phase 9.41 — per-floor bias added when a candidate COOK STATION sits
+/// on a different floor than the ORDER (the guest's seat_floor). Large
+/// enough (>> any within-restaurant distance + chef stair commute) that
+/// a station on the order's own floor always beats one on another floor,
+/// so the order is cooked where it'll be delivered and the waiter doesn't
+/// cross floors to pick it up. Only when every station on the order's
+/// floor is occupied does the next-nearest floor win (the bias scales
+/// with floor distance, so it spills to an adjacent floor before a
+/// distant one). The chef may still commute across floors to reach the
+/// chosen station — that's the within-floor-tier tiebreaker.
+const SEAT_FLOOR_BIAS: f32 = 1000.0;
+
 /// Distance from a staff actor to a target point, with a per-floor
 /// stair penalty applied. Used for picking the "nearest" candidate
 /// across all four dispatchers.  Euclidean (sqrt) so the units are
@@ -1381,10 +1393,17 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
             if def_provides(&f.def_id) != Some(ticket.appliance.as_str()) { continue; }
             if occupied.contains(&f.uid) { continue; }
+            // Phase 9.41 — strongly prefer a station on the ORDER's floor
+            // (ticket.seat_floor) so the cook + pickup + delivery all land
+            // on one floor; falls back to the nearest other floor only when
+            // this floor's stations are full. Keyed on the STATION's floor,
+            // NOT the chef's — the chef may commute across floors.
+            let station_floor_bias = (f.floor as i32 - ticket.seat_floor as i32)
+                .unsigned_abs() as f32 * SEAT_FLOOR_BIAS;
             // Cheapest actor for this candidate station.
             let mut local_best: Option<(usize, f32)> = None;
             for (i, a) in pool.iter().enumerate() {
-                let d = staff_dist_to(a, f.x, f.z, f.floor);
+                let d = staff_dist_to(a, f.x, f.z, f.floor) + station_floor_bias;
                 if local_best.map(|(_, bd)| d < bd).unwrap_or(true) {
                     local_best = Some((i, d));
                 }
