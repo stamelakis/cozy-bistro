@@ -458,24 +458,37 @@ pub fn restaurant_tick(
     // trips. See try_server_wash_load for the gating rules.
     try_server_wash_load(ctx, rid);
 
-    // Phase H.8 — auto-assign ready tickets to idle waiters. Same
-    // pattern as H.6 but for the delivery side of the kitchen
-    // workflow. Without this, plates would sit at the pickup spot
-    // forever in a backgrounded tab. With it, the server pairs each
-    // ready ticket with an idle waiter, sets their target to the
-    // plate's pickup position, and marks the ticket "delivering".
-    // The two-leg waiter trip (pickup → seat) is encoded in the new
-    // delivery_phase field, which tick_staff_actor reads on arrival.
-    auto_assign_ready_tickets(ctx, rid);
+    // Phase 9.40 — Take-orders are dispatched BEFORE deliveries, capped
+    // to ~half the idle waiters when BOTH an order backlog and a delivery
+    // backlog exist, so the two SHARE the waiter pool. Previously delivery
+    // ran first and greedily consumed every idle waiter, so a kitchen with
+    // a delivery backlog left NO waiter free to take a new order: ordering
+    // guests starved out, the funnel stalled, few new tickets reached the
+    // kitchen, and only the one fastest chef stayed busy while the rest
+    // idled. ("waiter sitting idle while customers need orders" + "one chef
+    // takes all the work" were the same stall.)
+    let idle_waiter_count = ctx.db.staff_actor().restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter" && a.state == "idle"
+            && a.ticket_id.is_none() && a.take_order_guest_id.is_none()
+            && a.wash_target_uid.is_empty())
+        .count();
+    let ready_backlog = ctx.db.active_ticket().restaurant_id().filter(rid)
+        .any(|t| t.state == "ready");
+    // Both backlogs compete → take-orders get ceil-half (a single freed
+    // waiter still goes to an order, keeping the funnel moving; a pool
+    // splits evenly with delivery). No ready food → take orders freely.
+    let order_cap = if ready_backlog { (idle_waiter_count + 1) / 2 } else { usize::MAX };
 
-    // Phase H.34 — take-order dispatch. Picks idle waiters and walks
-    // them to seated/ordering guests who don't yet have a waiter en
-    // route. Foreground client owns this when alive; this branch is
-    // the backgrounded fallback so a reconnecting player sees the
-    // waiter actually finishing the order trip instead of the guest
-    // having already advanced via ORDERING_FALLBACK_MS. Gated on the
-    // owner being offline (same heuristic as H.33's arrival handoff).
-    try_dispatch_take_order(ctx, rid);
+    // Phase H.34 — take-order dispatch. Walks idle waiters to
+    // seated/ordering guests who don't yet have a waiter en route.
+    try_dispatch_take_order(ctx, rid, order_cap);
+
+    // Phase H.8 — auto-assign ready tickets to idle waiters (delivery).
+    // Runs AFTER take-orders now, so it gets the waiters they left.
+    // Without it, cooked plates would sit at the pickup spot forever in a
+    // backgrounded tab; the two-leg trip (pickup → seat) is encoded in
+    // delivery_phase, which tick_staff_actor reads on arrival.
+    auto_assign_ready_tickets(ctx, rid);
 
     // Phase H.35 — wash trip dispatch. Cosmetic for the offline case:
     // walks an idle waiter through a pseudo-pickup (any table) → wash
@@ -3773,7 +3786,7 @@ pub fn set_restaurant_name(
 /// Bar customers (seat_at_bar = true) are skipped here — the barman
 /// takes their order at the bar counter without a walk; they auto-
 /// advance via ORDERING_FALLBACK_MS (H.14) which is still fine.
-fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
+fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64, max_dispatch: usize) {
     // Phase H Phase 4 — the original H.34 gated this on owner-offline
     // because the local StaffRouter raced it when foregrounded. With
     // the Phase 1+3 bridges in place, the client no longer dispatches
@@ -3781,6 +3794,13 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
     // on; this path is now always-on. Coverage check below
     // (take_order_guest_id) keeps the dispatcher idempotent across
     // ticks so the same guest never gets two waiters.
+    //
+    // Phase 9.40 — `max_dispatch` caps how many waiters this consumes so
+    // a delivery backlog and an order backlog SHARE the waiter pool
+    // instead of delivery (which runs after this) always winning. The
+    // tick passes ~half the idle waiters when both backlogs exist, else
+    // usize::MAX (uncapped).
+    if max_dispatch == 0 { return; }
     let _ = ctx.db.restaurant().id().find(rid); // existence check; ignore rest
 
     // Set of guest_ids that already have a waiter en route. Used to
@@ -3806,7 +3826,9 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
     // Walk ordering guests in this restaurant. Skip bar customers
     // (barman path, no walk needed) and any guest already covered
     // by an existing waiter assignment.
+    let mut dispatched = 0usize;
     for g in ctx.db.active_guest().restaurant_id().filter(rid) {
+        if dispatched >= max_dispatch { break; } // Phase 9.40 — leave waiters for delivery
         if g.state != "ordering" { continue; }
         if g.seat_at_bar { continue; }
         if covered.contains(&g.id) { continue; }
@@ -3830,6 +3852,7 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64) {
             ..actor
         });
         covered.insert(g.id);
+        dispatched += 1; // Phase 9.40
     }
 }
 
