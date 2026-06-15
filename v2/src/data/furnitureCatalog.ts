@@ -934,14 +934,16 @@ export function inferQualityTier(def: FurnitureDef): 1 | 2 | 3 | 4 | 5 {
 // game offers $3,000 T5 fridges that a mid-game restaurant can afford with a
 // single busy day.
 //
-// Variant A1 (user pick): cost × tier^1.2. T5 ≈ ×6.9.
+// Variant A1: cost × tier^exponent. Phase 9.56 — exponent bumped two
+// steps, 1.2 → 1.4, so high-tier items escalate harder (T5 ≈ ×9.5,
+// was ×6.9).
 //
 // Snapped UP to the nearest $10 so the displayed price reads cleanly. T1
 // items skip both the multiplier and the rounding so chairs stay at $18 etc.
 // instead of getting bumped to $20 by ceiling rounding.
 // ============================================================================
 
-const TIER_PRICE_EXPONENT = 1.2;
+const TIER_PRICE_EXPONENT = 1.4;
 
 export function scaledCost(def: FurnitureDef): number {
   const tier = inferQualityTier(def);

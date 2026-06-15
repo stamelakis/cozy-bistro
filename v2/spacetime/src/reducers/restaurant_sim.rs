@@ -2703,11 +2703,11 @@ fn build_server_order(
     build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash)
 }
 
-/// Phase H.53 — TIER_BASE_PROFIT in cents.  Matches the client's
-/// [0, 3, 4, 5, 6, 7] × 100 dollars.  Indexed by recipe tier
-/// (1..5); tier 0 is a degenerate "unknown" that contributes no
-/// profit bonus.  Same shape as the client constant.
-const TIER_BASE_PROFIT_CENTS: [i64; 6] = [0, 300, 400, 500, 600, 700];
+/// Phase H.53 — TIER_BASE_PROFIT in cents.  MUST match the client's
+/// TIER_BASE_PROFIT in Game.ts. Phase 9.56 — per-tier step softened to
+/// $0.50 (was $1.00): [0, 3, 3.5, 4, 4.5, 5] × 100. Indexed by recipe
+/// tier (1..5); tier 0 is a degenerate "unknown" with no profit bonus.
+const TIER_BASE_PROFIT_CENTS: [i64; 6] = [0, 300, 350, 400, 450, 500];
 
 /// Phase H.53 — Satisfaction bonus per upgrade level, × 100.
 /// Matches the client's UPGRADE_SATISFACTION_PER_LEVEL = 1.5.
@@ -2765,12 +2765,14 @@ fn build_order_from_anchor(
     let cooks: Vec<String> = courses.iter().map(|c| c.base_cook_seconds_ms.to_string()).collect();
     // H.53 — apply upgrade-level price and satisfaction bonuses
     // per course.  Mirrors the client's effective formulas:
-    //   price = base + (level - 1) × TIER_BASE_PROFIT[tier]
+    //   price = base + (level - 1) × TIER_BASE_PROFIT[tier] / 2   (9.56)
     //   sat   = base + (level - 1) × 1.5  (× 100 here)
+    // Phase 9.56 — recipe upgrades now add +50% of L1 profit per level
+    // (was +100%), so the per-level bonus is HALF the tier base profit.
     let prices: Vec<String> = courses.iter().map(|c| {
         let level = recipe_level_for(ctx, restaurant_id, &c.recipe_id);
         let tier_idx = (c.tier as usize).min(TIER_BASE_PROFIT_CENTS.len() - 1);
-        let bonus_per_level = TIER_BASE_PROFIT_CENTS[tier_idx];
+        let bonus_per_level = TIER_BASE_PROFIT_CENTS[tier_idx] / 2;
         let effective = c.sell_price_cents.saturating_add(
             ((level as i64) - 1).saturating_mul(bonus_per_level),
         );
@@ -4992,7 +4994,7 @@ fn speed_for_role(role: &str) -> f32 {
 fn chef_cook_multiplier_x100(ctx: &ReducerContext, member_id: &str) -> i32 {
     let Some(m) = ctx.db.hired_staff_member().member_id().find(member_id.to_string())
     else { return 100; };
-    let raw = 100i32 - (m.upgrade_level as i32) * 10;
+    let raw = 100i32 - (m.upgrade_level as i32) * 3; // 9.56 — 10% → 3%/level
     raw.max(10) // floor matches client's 0.1× cap
 }
 
@@ -5013,7 +5015,7 @@ fn actor_speed_multiplier(ctx: &ReducerContext, role: &str, member_id: &str) -> 
     if role != "waiter" { return 1.0; }
     let Some(m) = ctx.db.hired_staff_member().member_id().find(member_id.to_string())
     else { return 1.0; };
-    1.0 + 0.10 * (m.upgrade_level as f32)
+    1.0 + 0.03 * (m.upgrade_level as f32) // 9.56 — 10% → 3%/level
 }
 
 /// Convenience: full walk speed for an actor, role base × training

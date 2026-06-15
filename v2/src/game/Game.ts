@@ -145,10 +145,10 @@ const AUTOSHOP_INTERVAL = 4;
 const AUTOSHOP_MAX_PER_TRIP = 10;
 /** Each recipe-upgrade level adds this much to satisfactionEffect. */
 const UPGRADE_SATISFACTION_PER_LEVEL = 1.5;
-/** Base profit per tier per upgrade level. Sell price = base * level + ingredient cost.
- *  Indexed by tier 1..5 (index 0 unused). So tier 1 dish at L1 → $3 profit,
- *  tier 5 dish at L10 → $70 profit. */
-const TIER_BASE_PROFIT = [0, 3, 4, 5, 6, 7];
+/** Base profit per tier. Phase 9.56 — the per-tier step is now $0.50
+ *  (was $1.00): tier 1 → $3, then +$0.50/tier up to tier 5 → $5.
+ *  Indexed by tier 1..5 (index 0 unused). */
+const TIER_BASE_PROFIT = [0, 3, 3.5, 4, 4.5, 5];
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -664,16 +664,28 @@ export class Game {
   }
 
   /** Effective profit for one serving of a recipe at its current upgrade
-   * level: base * level. */
+   * level. Phase 9.56 — each level above 1 now adds +50% of the L1
+   * profit (was +100%): L1 = base, L2 = base×1.5, L3 = base×2, … */
   getEffectiveProfit(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
     const tier = getRecipeLuxuryTier(recipe);
-    return this.getTierBaseProfit(tier) * level;
+    return this.getTierBaseProfit(tier) * (1 + 0.5 * (level - 1));
   }
 
   /** Final price the guest pays: profit + ingredient cost. */
   getEffectiveSellPrice(recipe: RecipeDefinition): number {
     return this.getEffectiveProfit(recipe) + this.getRecipeIngredientCost(recipe);
+  }
+
+  /** Phase 9.56 — the L1 (un-upgraded) sell price: tier base profit +
+   * ingredient cost, no upgrade bonus. The setRecipeMeta cloud mirror
+   * sends THIS (not the now-stale static catalog `sellPrice`) so
+   * server-spawned background guests get the same tier-scaled base the
+   * live client charges; build_server_order layers the per-level upgrade
+   * bonus on top. (The static catalog sellPrice still drives the recipe's
+   * luxury-TIER classification, so it must stay untouched.) */
+  getBaseSellPrice(recipe: RecipeDefinition): number {
+    return this.getTierBaseProfit(getRecipeLuxuryTier(recipe)) + this.getRecipeIngredientCost(recipe);
   }
 
   /** Satisfaction after upgrade level: +1.5 per level above 1. */

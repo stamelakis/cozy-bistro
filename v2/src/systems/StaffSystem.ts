@@ -420,13 +420,15 @@ export class StaffSystem {
    * the id is unknown. */
   getChefCookMultiplier(id: string): number {
     const level = this.getMemberUpgradeLevel(id);
-    return Math.max(0.1, 1 - 0.10 * level);
+    // Phase 9.56 — per-level training impact softened 10% → 3%.
+    return Math.max(0.1, 1 - 0.03 * level);
   }
 
   /** Waiter walk-speed multiplier for a SPECIFIC waiter. Higher =
    * faster. */
   getWaiterSpeedMultiplier(id: string): number {
-    return 1 + 0.10 * this.getMemberUpgradeLevel(id);
+    // Phase 9.56 — per-level training impact softened 10% → 3%.
+    return 1 + 0.03 * this.getMemberUpgradeLevel(id);
   }
 
   /** Per-trip carry capacity in units. The auto-shop dispatcher reads

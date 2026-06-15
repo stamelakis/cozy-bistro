@@ -1430,7 +1430,10 @@ export class Engine {
               // place_order path that already routes through that mult.
               baseCookSecondsMs: Math.round((r.preparationTimeSeconds ?? 5) * 1.5 * 1000),
               appliance,
-              sellPriceCents: Math.round((r.sellPrice ?? 0) * 100),
+              // Phase 9.56 — send the RECOMPUTED L1 base (tier base profit
+              // + ingredient), not the static catalog sellPrice, so the
+              // server's offline pricing tracks the new tier scaling.
+              sellPriceCents: Math.round(this.game.getBaseSellPrice(r) * 100),
               satisfactionX100Base: Math.round((r.satisfactionEffect ?? 4) * 100),
               category: r.category,
               tier: getRecipeLuxuryTier(r),
