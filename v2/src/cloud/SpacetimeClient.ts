@@ -1142,6 +1142,18 @@ export class SpacetimeClient {
     return Number(r.dayElapsedMs);
   }
 
+  /** Phase 9.42 — The server's current health-anomaly summary: a
+   * "|"-joined list like "order_queue:18|undelivered:5|chef_hog:71", or
+   * null when the kitchen is healthy / the row isn't subscribed yet. The
+   * in-game health badge parses + renders it. */
+  getHealthSummary(): string | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return null;
+    const s = r.healthSummaryCsv;
+    return s && s.length > 0 ? s : null;
+  }
+
   /** H.30 — Atomically zero pending_days_advanced on the cloud row.
    * Caller should apply the days locally first (via N rollovers)
    * before clearing. */

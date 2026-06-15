@@ -54,4 +54,5 @@ export default __t.row({
   boostExpiresAtMicros: __t.i64().name("boost_expires_at_micros"),
   cloudDailyServed: __t.u32().name("cloud_daily_served"),
   cloudDailyLost: __t.u32().name("cloud_daily_lost"),
+  healthSummaryCsv: __t.option(__t.string()).name("health_summary_csv"),
 });

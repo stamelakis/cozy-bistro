@@ -509,6 +509,16 @@ pub struct Restaurant {
     pub cloud_daily_served: u32,
     #[default(0u32)]
     pub cloud_daily_lost: u32,
+
+    /// Phase 9.42 — Observability. A "|"-joined list of currently-active
+    /// health anomalies the server detects each tick (e.g.
+    /// "order_queue:18|undelivered:5|chef_hog:71"), or None when the
+    /// kitchen is healthy. Change-detected: only rewritten + log::warn!d
+    /// when the set/counts change. The foreground client reads this into
+    /// the in-game health badge. End-of-struct + Option/None default keeps
+    /// the publish additive.
+    #[default(None::<String>)]
+    pub health_summary_csv: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

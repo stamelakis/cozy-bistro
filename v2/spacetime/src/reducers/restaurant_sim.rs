@@ -500,6 +500,10 @@ pub fn restaurant_tick(
     // guard pattern as H.33/H.34.
     try_dispatch_wash_trip(ctx, rid);
 
+    // Phase 9.42 — Observability. Scan post-dispatch state for anomalies
+    // and publish a compact summary the client renders as a health badge.
+    scan_restaurant_health(ctx, rid);
+
     // Phase H Phase 5.2 — errand-helper auto-shop dispatch. Owner-
     // offline gated initially (Phase 5.4 drops the gate). Detects
     // shortage in pantry_stock, picks list, charges
@@ -1328,6 +1332,99 @@ fn pop_nearest_staff(
         }
     }
     Some(pool.swap_remove(best_idx))
+}
+
+/// Phase 9.42 — Observability. Scans the restaurant for the anomaly
+/// patterns we'd otherwise hunt by hand (starved take-orders, undelivered
+/// food, a hogging chef, idle staff while work waits, a walkout spike) and
+/// publishes a compact "|"-joined summary to restaurant.health_summary_csv.
+/// Change-detected: only rewrites the row + log::warn!s when the issue
+/// set/counts actually change, so it neither spams the row subscription
+/// nor the logs. The foreground client renders the summary as a badge.
+fn scan_restaurant_health(ctx: &ReducerContext, rid: u64) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
+
+    // Guests by state.
+    let (mut ordering, mut waiting_food) = (0u32, 0u32);
+    for g in ctx.db.active_guest().restaurant_id().filter(rid) {
+        match g.state.as_str() {
+            "ordering" => ordering += 1,
+            "waitingForFood" => waiting_food += 1,
+            _ => {}
+        }
+    }
+    let _ = waiting_food; // reserved for a future "kitchen too slow" flag
+
+    // Tickets by state + per-chef in-flight cook share (for hog detection).
+    let (mut queued, mut ready, mut in_flight) = (0u32, 0u32, 0u32);
+    let mut cook_by_chef: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for t in ctx.db.active_ticket().restaurant_id().filter(rid) {
+        match t.state.as_str() {
+            "queued" => queued += 1,
+            "ready" => ready += 1,
+            "cooking" | "delivering" => {
+                if !t.assigned_chef_id.is_empty() {
+                    *cook_by_chef.entry(t.assigned_chef_id.clone()).or_insert(0) += 1;
+                    in_flight += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Idle staff.
+    let (mut chefs_idle, mut waiters_idle) = (0u32, 0u32);
+    for a in ctx.db.staff_actor().restaurant_id().filter(rid) {
+        if a.state != "idle" { continue; }
+        match a.role.as_str() {
+            "chef" => chefs_idle += 1,
+            "waiter" => waiters_idle += 1,
+            _ => {}
+        }
+    }
+
+    let mut flags: Vec<String> = Vec::new();
+    // Take-order: an IDLE waiter while guests wait to order is a dispatch
+    // regression (shouldn't happen post-9.40); otherwise a deep queue is
+    // just capacity (too few waiters for the crowd).
+    if waiters_idle > 0 && ordering > 0 {
+        flags.push(format!("waiter_starved:{ordering}"));
+    } else if ordering > 8 {
+        flags.push(format!("order_queue:{ordering}"));
+    }
+    // Cooking: an IDLE chef while tickets are queued is a dispatch
+    // regression; otherwise a deep queue is capacity.
+    if chefs_idle > 0 && queued > 0 {
+        flags.push(format!("chef_starved:{queued}"));
+    } else if queued > 6 {
+        flags.push(format!("cook_backlog:{queued}"));
+    }
+    // Delivery: a pile of cooked food waiting for a waiter.
+    if ready > 6 {
+        flags.push(format!("undelivered:{ready}"));
+    }
+    // One chef holding the lion's share of in-flight cooks.
+    if in_flight >= 4 {
+        if let Some(max_n) = cook_by_chef.values().copied().max() {
+            if max_n * 100 >= in_flight * 65 {
+                flags.push(format!("chef_hog:{}", max_n * 100 / in_flight));
+            }
+        }
+    }
+    // Walkout spike (needs a meaningful daily sample first).
+    let day_total = r.cloud_daily_served + r.cloud_daily_lost;
+    if day_total >= 20 && r.cloud_daily_lost * 100 >= day_total * 35 {
+        flags.push(format!("lost_spike:{}", r.cloud_daily_lost * 100 / day_total));
+    }
+
+    let summary = if flags.is_empty() { None } else { Some(flags.join("|")) };
+    if r.health_summary_csv != summary {
+        match &summary {
+            Some(s) => log::warn!("[health] restaurant {rid}: {s}"),
+            None => log::info!("[health] restaurant {rid}: healthy"),
+        }
+        ctx.db.restaurant().id().update(Restaurant { health_summary_csv: summary, ..r });
+    }
 }
 
 fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {

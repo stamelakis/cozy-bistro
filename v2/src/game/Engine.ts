@@ -228,6 +228,11 @@ export class Engine {
   /** The DOM badge that displays current FPS when showFps is on.
    * Built lazily on first use. */
   private fpsBadge: HTMLDivElement | null = null;
+  /** Phase 9.42 — in-game health badge + its hover detail panel. Built
+   * lazily; updated ~1 Hz from the server's health_summary_csv. */
+  private healthBadge: HTMLDivElement | null = null;
+  private healthTooltip: HTMLDivElement | null = null;
+  private healthAccum = 0;
   /** Current player-facing graphics quality preset. Captured at
    * construct from localStorage, mutated by applyGraphicsQuality. */
   private currentQuality: GraphicsQuality = "medium";
@@ -3010,6 +3015,85 @@ export class Engine {
     }
   }
 
+  /** Phase 9.42 — Observability. ~1 Hz, reads the server's
+   * health_summary_csv and renders a top-left badge: "✓ Healthy" (green)
+   * or "⚠ N issues" (amber) / "🚨 N issues" (red, when a dispatch
+   * regression is flagged). Hovering shows the human-readable list. This
+   * surfaces the same anomalies I'd otherwise hunt by hand. */
+  private updateHealthBadge(dt: number): void {
+    this.healthAccum += dt;
+    if (this.healthAccum < 1.0) return;
+    this.healthAccum = 0;
+    if (!this.healthBadge) {
+      const badge = document.createElement("div");
+      Object.assign(badge.style, {
+        position: "fixed", top: "8px", left: "8px",
+        padding: "4px 9px", background: "rgba(0,0,0,0.45)",
+        color: "#7fffa1", font: "12px/1.1 system-ui, sans-serif",
+        fontWeight: "700", borderRadius: "5px", cursor: "help",
+        zIndex: "10001", userSelect: "none",
+      } as Partial<CSSStyleDeclaration>);
+      const tip = document.createElement("div");
+      Object.assign(tip.style, {
+        position: "fixed", top: "34px", left: "8px", maxWidth: "340px",
+        padding: "8px 10px", background: "rgba(18,14,12,0.96)",
+        color: "#fff5dc", font: "11px/1.5 system-ui, sans-serif",
+        border: "1px solid #d8b98f", borderRadius: "6px",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.5)", zIndex: "10002",
+        display: "none", pointerEvents: "none",
+      } as Partial<CSSStyleDeclaration>);
+      badge.addEventListener("mouseenter", () => { if (tip.childNodes.length) tip.style.display = "block"; });
+      badge.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+      this.container.appendChild(badge);
+      this.container.appendChild(tip);
+      this.healthBadge = badge;
+      this.healthTooltip = tip;
+    }
+    const badge = this.healthBadge;
+    const tip = this.healthTooltip!;
+    const summary = this.cloud.getHealthSummary();
+    if (!summary) {
+      badge.textContent = "✓ Healthy";
+      badge.style.color = "#7fffa1";
+      badge.style.background = "rgba(0,0,0,0.45)";
+      tip.replaceChildren();
+      tip.style.display = "none";
+      return;
+    }
+    const items = summary.split("|").map((tok) => {
+      const [code, val = ""] = tok.split(":");
+      return Engine.formatHealthFlag(code, val);
+    });
+    const severe = items.some((i) => i.severe);
+    badge.textContent = `${severe ? "🚨" : "⚠"} ${items.length} issue${items.length === 1 ? "" : "s"}`;
+    badge.style.color = severe ? "#ff9a9a" : "#ffd47a";
+    badge.style.background = severe ? "rgba(80,12,12,0.72)" : "rgba(60,42,0,0.72)";
+    tip.replaceChildren(...items.map((i) => {
+      const row = document.createElement("div");
+      row.textContent = i.text;
+      row.style.margin = "2px 0";
+      if (i.severe) row.style.color = "#ff9a9a";
+      return row;
+    }));
+  }
+
+  /** Map a server health-flag code+value to a human-readable line +
+   * severity. `severe` (red) = a dispatch regression that shouldn't
+   * happen (idle staff while work waits); the rest are amber capacity/
+   * flow signals. */
+  private static formatHealthFlag(code: string, val: string): { text: string; severe: boolean } {
+    switch (code) {
+      case "waiter_starved": return { text: `🚨 Waiters idle while ${val} guests wait to order`, severe: true };
+      case "chef_starved":   return { text: `🚨 Chefs idle while ${val} orders are queued`, severe: true };
+      case "order_queue":    return { text: `🪑 ${val} guests waiting to order (take-order queue)`, severe: false };
+      case "cook_backlog":   return { text: `🍳 ${val} orders queued — kitchen behind`, severe: false };
+      case "undelivered":    return { text: `🍽️ ${val} plates cooked, waiting for a waiter`, severe: false };
+      case "chef_hog":       return { text: `👨‍🍳 One chef is handling ${val}% of the cooking`, severe: false };
+      case "lost_spike":     return { text: `💔 High walkout rate — ${val}% leaving angry`, severe: false };
+      default:               return { text: `${code} ${val}`, severe: false };
+    }
+  }
+
   /** Build the always-bottom Reset-Save section. Lives in its own
    * sidebar-bottom slot (after StaffPanel) so it's visually
    * separated from gameplay actions and can't be misclicked from
@@ -3622,6 +3706,8 @@ export class Engine {
     this.camera.update(rawDt);
     this.floatingText.update(rawDt);
     this.saver.update(rawDt);
+    // Phase 9.42 — health badge (~1 Hz internally), reads the server scan.
+    this.updateHealthBadge(rawDt);
 
     // Phase I — FPS badge refresh, same 5 Hz cadence as the HUD.
     // We average the rolling sample window into fpsAvg then push to
