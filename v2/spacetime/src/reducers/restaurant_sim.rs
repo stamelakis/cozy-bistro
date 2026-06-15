@@ -5528,8 +5528,20 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // long bathroom break shouldn't time out and be force-flipped to
     // leaving mid-pee. The "waiting" overflow chair has its own
     // waiting_timeout_ms clock (Phase H.5) so it's excluded here too.
+    //
+    // Phase 9.52 — "eating" REMOVED. A guest who's been served and is
+    // EATING is no longer waiting on anyone, so their patience must not
+    // keep ticking down. Including it meant a guest who waited a while
+    // (slow kitchen) ran out of patience MID-MEAL: the patience timeout
+    // (below) fired before the eating→leaving completion, flipping them
+    // to "leaving" with patience_ms = 0. The rating math then PINS any
+    // patience_ms <= 0 visit to 1★ — so every well-served-but-not-
+    // instant customer scored 1★. That's why a restaurant serving 81%
+    // of its guests still read 1.0 avg / 500-of-500 one-star. Eating now
+    // freezes patience; the meal completes via its own EATING_DURATION_MS
+    // clock, and the guest leaves with patience intact → a REAL rating.
     let patience_active = matches!(g.state.as_str(),
-        "walkingIn" | "seated" | "ordering" | "waitingForFood" | "eating"
+        "walkingIn" | "seated" | "ordering" | "waitingForFood"
     );
     let new_patience = if patience_active {
         (g.patience_ms - dt_ms).max(0)
