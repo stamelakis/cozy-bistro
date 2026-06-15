@@ -5023,6 +5023,46 @@ fn actor_walk_speed(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
 /// full ownership.
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    // Phase 9.48 — DEAD-BINDING self-heal. A chef/waiter can end up
+    // pinned to a task whose row no longer exists: the diverging client
+    // sim re-binds a stale ticket onto an actor the server had just
+    // released, the task then completes + its row is deleted, but the
+    // actor keeps the phantom binding — stuck "working", holding its
+    // stove, with nothing left to release it (no tick_ticket_state runs
+    // for a deleted ticket). Observed live: 7 of 9 chefs pinned to
+    // already-deleted tickets, so only 2 of 6 stoves ever cycled and the
+    // kitchen throttled to ~⅓ capacity. Detect any binding that points
+    // at a missing row and release the actor home. (Phase 9.48's mirror
+    // fix stops NEW ones; this clears the backlog + any future straggler.)
+    let ticket_gone = a.ticket_id
+        .map_or(false, |t| ctx.db.active_ticket().id().find(t).is_none());
+    let order_gone = a.take_order_guest_id
+        .map_or(false, |g| ctx.db.active_guest().id().find(g).is_none());
+    // A station held with no ticket behind it (release clears both
+    // together, auto-claim sets both together — so this only happens
+    // when the binding got corrupted).
+    let stove_orphan = !a.assigned_stove_uid.is_empty() && a.ticket_id.is_none();
+    if ticket_gone || order_gone || stove_orphan {
+        let (hx, hz, hf) = staff_home_target(ctx, &a);
+        log::info!(
+            "tick_staff_actor: releasing {} from a DEAD binding (ticket_gone={}, order_gone={}, stove_orphan={})",
+            a.member_id, ticket_gone, order_gone, stove_orphan,
+        );
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "returningHome".to_string(),
+            state_clock_ms: 0,
+            ticket_id: None,
+            assigned_stove_uid: String::new(),
+            take_order_guest_id: None,
+            delivery_phase: None,
+            target_x: hx,
+            target_z: hz,
+            target_floor: hf,
+            floor: hf,
+            ..a
+        });
+        return;
+    }
     // Phase H.35 — if this actor is in the middle of a server-dispatched
     // wash trip (wash_target_uid set + non-empty wash_phase), the trip
     // has its own multi-leg state machine that's incompatible with the
@@ -8156,37 +8196,27 @@ pub fn update_staff_actor(
         // idle waiter around still works.
         return Ok(());
     }
-    // Idle / returningHome actor with no server task — accept the client
-    // mirror as before (it isn't racing a server-owned binding).
-    // Reset the state-machine clock when the state label actually
-    // flips — otherwise leave it alone so the tick's countdown
-    // continues uninterrupted across a position-only update.
-    let state_changed = a.state != state;
-    let new_clock = if state_changed { 0 } else { a.state_clock_ms };
-    // H.8 audit fix: clear delivery_phase whenever the state label
-    // changes. The client doesn't know about server-side deliveries,
-    // so it never sends a deliveryPhase value. Preserving it across
-    // state changes via `..a` spread caused a stale "pickup" /
-    // "deliver" to hijack subsequent waiter trips (wash, take-order)
-    // when tick_staff_actor's arrival flip read the leftover phase.
-    // Preserving across same-state updates is fine — the row's just
-    // moving along its current target.
-    let new_delivery_phase = if state_changed { None } else { a.delivery_phase.clone() };
-    ctx.db.staff_actor().member_id().update(StaffActor {
-        state,
-        state_clock_ms: new_clock,
-        ticket_id,
-        x, z, floor,
-        target_x, target_z, target_floor,
-        assigned_stove_uid,
-        last_stove_uid,
-        wash_target_uid,
-        wash_dirty_id,
-        wash_phase,
-        take_order_guest_id,
-        delivery_phase: new_delivery_phase,
-        ..a
-    });
+    // Phase 9.48 — POSITION-ONLY mirror. The server now owns the ENTIRE
+    // staff state machine + every task binding (dispatch sets them,
+    // tick_staff_actor advances + releases them). The client mirror must
+    // NOT write state / ticket_id / assigned_stove_uid / take_order /
+    // wash fields: the local sim diverges, and in the brief window after
+    // the server released a chef (returningHome, momentarily not busy)
+    // it mirrored back state="working" + a stale ticket_id, re-pinning
+    // the chef to a phantom task that then vanished — the dead-binding
+    // bug the watchdog above had to clean up. Pre-9.48 this "non-busy"
+    // branch trustingly copied all those client fields. Now it accepts
+    // ONLY the body position (so a locally-rendered idle wander still
+    // shows for an idle actor) and preserves every server-owned field.
+    // The remaining params are part of the (frozen) reducer signature
+    // the client bindings call with — consumed here, intentionally
+    // unused, so the ABI is unchanged.
+    let _ = (
+        state, ticket_id, target_x, target_z, target_floor,
+        assigned_stove_uid, last_stove_uid, wash_target_uid,
+        wash_dirty_id, wash_phase, take_order_guest_id,
+    );
+    ctx.db.staff_actor().member_id().update(StaffActor { x, z, floor, ..a });
     Ok(())
 }
 
