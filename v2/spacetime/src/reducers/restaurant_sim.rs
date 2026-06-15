@@ -7411,17 +7411,20 @@ pub fn update_guest_position(
     if r.owner != ctx.sender {
         return Err("Only the owner can move their guests".into());
     }
-    // Phase 9.38 — the local sim has no "ordering" state; it collapses
-    // the menu-reading beat into "seated". So a foreground client's
-    // position mirror keeps pushing "seated" over the server's
-    // "ordering" — every cycle that REGRESSES the guest and (below)
-    // resets state_clock_ms, so the ordering clock never reaches the
-    // take-order completion OR the 10s fallback, and the customer
-    // ping-pongs seated↔ordering until patience runs out (the "waiter
-    // visits over and over, then the timer just ends" bug). Don't let
-    // the mirror move a guest OUT of "ordering" except to a genuine
-    // "leaving"; the position/target still update either way.
-    let new_state = if g.state == "ordering" && state != "leaving" {
+    // Phase 9.38 / 9.43 (migration stage 1) — the server is the sole
+    // authority for these "in-progress" states; the local sim either
+    // doesn't model them by the same name ("ordering" is collapsed into
+    // "seated"; the WC sub-states are walkingToToilet/atToilet/… locally)
+    // or shouldn't be allowed to wind them back. A foreground client's
+    // position mirror kept pushing its local name over the server's,
+    // which REGRESSES the guest and (below) resets state_clock_ms — e.g.
+    // ping-ponging seated↔ordering so the take-order never completes
+    // (9.38), or bouncing a WC trip. Don't let the mirror move a guest
+    // OUT of a server-owned state except to a genuine "leaving"; the
+    // position/target still update either way.
+    let server_owned_state = matches!(g.state.as_str(),
+        "ordering" | "wcWalking" | "wcSitting" | "wcWashing");
+    let new_state = if server_owned_state && state != "leaving" {
         g.state.clone()
     } else {
         state
@@ -7870,6 +7873,27 @@ pub fn update_staff_actor(
     if r.owner != ctx.sender {
         return Err("Only the owner can update their staff actors".into());
     }
+    // Phase 9.43 (migration stage 1) — the server owns a staff actor's
+    // TASK (its ticket/order/station binding + the state machine around
+    // it; tick_staff_actor advances it every tick). While the actor is
+    // mid-task, a foreground client's mirror must NOT regress its state
+    // or drop the binding — the client still runs its own staff sim, and
+    // a stale/stuck LOCAL actor (e.g. a frozen "→ pickup" waiter) would
+    // otherwise stomp the server's healthy one. So when the server has
+    // the actor bound to work, only the BODY POSITION follows the client;
+    // everything else stays server-authoritative. (If this ever exposed
+    // a server-side release gap, the 9.42 health scan flags the resulting
+    // waiter_starved / backlog so it's visible rather than silent.)
+    let server_busy = a.ticket_id.is_some()
+        || a.take_order_guest_id.is_some()
+        || !a.assigned_stove_uid.is_empty()
+        || !a.wash_target_uid.is_empty();
+    if server_busy {
+        ctx.db.staff_actor().member_id().update(StaffActor { x, z, floor, ..a });
+        return Ok(());
+    }
+    // Idle / returningHome actor with no server task — accept the client
+    // mirror as before (it isn't racing a server-owned binding).
     // Reset the state-machine clock when the state label actually
     // flips — otherwise leave it alone so the tick's countdown
     // continues uninterrupted across a position-only update.
