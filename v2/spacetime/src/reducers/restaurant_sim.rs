@@ -1388,6 +1388,27 @@ fn scan_restaurant_health(ctx: &ReducerContext, rid: u64) {
         }
     }
 
+    // Phase 9.47 — free chef cook-stations (every cookable appliance
+    // EXCEPT the bar). Used to tell apart two very different reasons a
+    // chef sits idle while tickets queue: a real dispatch gap (there's
+    // a free stove but no chef walked to it) vs. the kitchen simply
+    // being out of stations (every stove busy — idle chefs have nowhere
+    // to cook). The latter is fixed by buying stoves, NOT by hiring more
+    // chefs — which is exactly the trap the owner fell into (9 chefs, 5
+    // stoves, 4 chefs permanently idle).
+    let occupied_stations: std::collections::HashSet<String> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
+        .filter(|a| !a.assigned_stove_uid.is_empty())
+        .map(|a| a.assigned_stove_uid.clone())
+        .collect();
+    let mut chef_stations_free = 0u32;
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        if matches!(def_provides(&f.def_id), Some(ap) if ap != "bar")
+            && !occupied_stations.contains(&f.uid) {
+            chef_stations_free += 1;
+        }
+    }
+
     let mut flags: Vec<String> = Vec::new();
     // Take-order: an IDLE waiter while guests wait to order is a dispatch
     // regression (shouldn't happen post-9.40); otherwise a deep queue is
@@ -1397,10 +1418,16 @@ fn scan_restaurant_health(ctx: &ReducerContext, rid: u64) {
     } else if ordering > 8 {
         flags.push(format!("order_queue:{ordering}"));
     }
-    // Cooking: an IDLE chef while tickets are queued is a dispatch
-    // regression; otherwise a deep queue is capacity.
+    // Cooking: an idle chef while tickets queue is EITHER a dispatch
+    // regression (a free stove went unclaimed) OR the kitchen running
+    // out of stoves (every station busy). Phase 9.47 splits them so the
+    // badge gives the right advice — add stoves vs. investigate dispatch.
     if chefs_idle > 0 && queued > 0 {
-        flags.push(format!("chef_starved:{queued}"));
+        if chef_stations_free == 0 {
+            flags.push(format!("kitchen_full:{queued}"));
+        } else {
+            flags.push(format!("chef_starved:{queued}"));
+        }
     } else if queued > 6 {
         flags.push(format!("cook_backlog:{queued}"));
     }
@@ -5051,6 +5078,15 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
+        // Phase 9.46 — the server now owns the body for busy actors (the
+        // client mirror is ignored for them), so it must own the FLOOR
+        // too or a cross-floor waiter would keep its pre-trip storey
+        // forever. The abstract server model walks straight to the
+        // target with a stair-distance penalty, so the actor is
+        // conceptually on its target's floor for the whole leg — snap
+        // floor to target_floor. Same-floor tasks (the common case) are
+        // a no-op; idle/returning actors carry their home floor here.
+        floor: new_target_floor,
         state: new_state,
         state_clock_ms: if advance_clock {
             new_clock.saturating_add(dt_ms)
@@ -8101,7 +8137,23 @@ pub fn update_staff_actor(
         || !a.wash_target_uid.is_empty()
         || a.clean_seat_uid.is_some(); // 9.45 — mid seat-clean trip
     if server_busy {
-        ctx.db.staff_actor().member_id().update(StaffActor { x, z, floor, ..a });
+        // Phase 9.46 — IGNORE the client's mirrored position for a
+        // server-busy actor. Pre-9.46 we adopted the client's x/z/floor
+        // ("body follows the client"). But the client still runs its own
+        // staff sim, and whenever it DIVERGES — the local waiter never
+        // picked up the server's task and sits idle at its local home —
+        // that stale position got mirrored back ~once a second and
+        // OVERWROTE the straight-line step tick_staff_actor had just
+        // taken toward the task target. Net effect: the waiter ran in
+        // place, never reached the seat, the guest's patience expired,
+        // and the room bled walkouts while EVERY waiter read as "busy."
+        // (Diagnosed live: 12/12 waiters bound, 0 idle, positions frozen
+        // ~6 units from their targets, 48% walkout.) The server's own
+        // movement is the trustworthy driver — it's what powers offline
+        // play — so for busy actors we keep the server position and drop
+        // the mirror on the floor. Idle / returning actors (not busy)
+        // still adopt the client position below, so a player dragging an
+        // idle waiter around still works.
         return Ok(());
     }
     // Idle / returningHome actor with no server task — accept the client

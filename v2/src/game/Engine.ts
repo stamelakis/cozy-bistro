@@ -3085,6 +3085,7 @@ export class Engine {
     switch (code) {
       case "waiter_starved": return { text: `🚨 Waiters idle while ${val} guests wait to order`, severe: true };
       case "chef_starved":   return { text: `🚨 Chefs idle while ${val} orders are queued`, severe: true };
+      case "kitchen_full":   return { text: `🔥 Kitchen maxed out — ${val} orders queued, every stove busy (add stoves)`, severe: false };
       case "order_queue":    return { text: `🪑 ${val} guests waiting to order (take-order queue)`, severe: false };
       case "cook_backlog":   return { text: `🍳 ${val} orders queued — kitchen behind`, severe: false };
       case "undelivered":    return { text: `🍽️ ${val} plates cooked, waiting for a waiter`, severe: false };
