@@ -1741,7 +1741,11 @@ fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
     let ready_ids: Vec<u64> = ctx.db
         .active_ticket()
         .restaurant_id().filter(rid)
-        .filter(|t| t.state == "ready")
+        // Phase 9.50 — skip POOLED dishes (guest_id == 0): a cooked dish
+        // whose customer walked out has no seat to deliver to. It waits
+        // in the pool until a new order of the same recipe claims it
+        // (auto_place_next_course) or it spoils (tick_ticket_state).
+        .filter(|t| t.state == "ready" && t.guest_id != 0)
         .map(|t| t.id)
         .collect();
     if ready_ids.is_empty() { return; }
@@ -5414,11 +5418,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             // got deleted, with H.7's release path never firing
             // because tick_ticket_state's cooking→ready transition
             // never runs (the ticket row is gone).
-            let orphan_pairs: Vec<(u64, String)> = ctx.db
+            let orphan_pairs: Vec<(u64, String, String)> = ctx.db
                 .active_ticket()
                 .iter()
                 .filter(|t| t.guest_id == g.id)
-                .map(|t| (t.id, t.assigned_chef_id.clone()))
+                .map(|t| (t.id, t.state.clone(), t.assigned_chef_id.clone()))
                 .collect();
             // Audit fix — also find waiters mid-delivery with these
             // ticket ids. The H.8 server auto-pickup binds waiter.
@@ -5432,7 +5436,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             // the waiter arrives, leaving the waiter stuck in
             // movingToWork heading to a dead target.
             let orphan_tids: std::collections::HashSet<u64> =
-                orphan_pairs.iter().map(|(tid, _)| *tid).collect();
+                orphan_pairs.iter().map(|(tid, _, _)| *tid).collect();
             let waiters_to_release: Vec<String> = ctx.db
                 .staff_actor()
                 .iter()
@@ -5443,10 +5447,42 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
                 })
                 .map(|a| a.member_id.clone())
                 .collect();
-            for (tid, chef_id) in orphan_pairs {
-                ctx.db.active_ticket().id().delete(tid);
-                if !chef_id.is_empty() {
-                    release_chef_from_ticket(ctx, &chef_id);
+            // Phase 9.50 — COOKED-FOOD REUSE. The kitchen's work outlives
+            // the customer. Rather than deleting a dish the chef already
+            // started (and stranding the chef, and wasting the
+            // ingredients), ORPHAN it into the pool (guest_id = 0) so it
+            // finishes + waits for the next customer who orders the same
+            // recipe. Only a not-yet-started (queued) ticket is discarded.
+            for (tid, state, chef_id) in orphan_pairs {
+                let Some(t) = ctx.db.active_ticket().id().find(tid) else { continue };
+                // Pool only CHEF food a waiter delivers. Bar drinks are
+                // made + served by the barman end-to-end, and a not-yet-
+                // cooked (queued) ticket has no work to save — both keep
+                // the old delete-on-leave behaviour.
+                let poolable = !t.seat_at_bar
+                    && matches!(state.as_str(), "cooking" | "ready" | "delivering");
+                if poolable {
+                    if state == "cooking" {
+                        // Keep the chef cooking (do NOT release — its work
+                        // completes); just cut the customer link.
+                        ctx.db.active_ticket().id().update(ActiveTicket { guest_id: 0, ..t });
+                    } else {
+                        // Plated / mid-carry: pool the finished dish. A
+                        // "delivering" one rolls back to "ready" (its
+                        // waiter is in waiters_to_release below); reset
+                        // the clock so the pool-spoilage timer starts now.
+                        ctx.db.active_ticket().id().update(ActiveTicket {
+                            guest_id: 0,
+                            state: "ready".to_string(),
+                            state_clock_ms: 0,
+                            ..t
+                        });
+                    }
+                } else {
+                    ctx.db.active_ticket().id().delete(tid);
+                    if !chef_id.is_empty() {
+                        release_chef_from_ticket(ctx, &chef_id);
+                    }
                 }
             }
             for waiter_id in waiters_to_release {
@@ -6931,6 +6967,37 @@ fn step_toward_target(x: f32, z: f32, target_x: f32, target_z: f32, speed: f32, 
 fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     let Some(t) = ctx.db.active_ticket().id().find(ticket_id) else { return };
 
+    // Phase 9.50 — POOLED dish (guest_id == 0): a cooked-but-ownerless
+    // dish parked on the counter for reuse. It's exempt from the
+    // guestless watchdog below (it has NO guest BY DESIGN). A "cooking"
+    // pooled dish just keeps cooking → flips to "ready" via the normal
+    // cooking branch, staying pooled. A "ready" pooled dish ages here:
+    // if no new order claims it within POOL_EXPIRY_MS it spoils and is
+    // discarded so the pool can't grow without bound.
+    if t.guest_id == 0 {
+        const POOL_EXPIRY_MS: i64 = 45_000;
+        if t.state == "ready" {
+            let advanced = t.state_clock_ms.saturating_add(dt_ms);
+            if advanced >= POOL_EXPIRY_MS {
+                log::info!(
+                    "tick_ticket_state: pooled dish {} ({}) spoiled unclaimed — discarded",
+                    t.id, t.recipe_id,
+                );
+                ctx.db.active_ticket().id().delete(t.id);
+                return;
+            }
+            ctx.db.active_ticket().id().update(ActiveTicket { state_clock_ms: advanced, ..t });
+            return;
+        }
+        if t.state != "cooking" {
+            // Any other state for an ownerless dish is a dead end
+            // (shouldn't occur) — discard it.
+            ctx.db.active_ticket().id().delete(t.id);
+            return;
+        }
+        // "cooking" falls through to the cooking branch below.
+    }
+
     // Phase 9.14 — GUESTLESS-TICKET watchdog. The guest-despawn
     // cascade deletes a leaving guest's tickets, but a ticket
     // created in the same tick window can slip through and live
@@ -6939,8 +7006,9 @@ fn tick_ticket_state(ctx: &ReducerContext, ticket_id: u64, dt_ms: i64) {
     // wasting chef claim cycles, and pinning one reserved plate
     // each, which is exactly the dishware "LEAK 2"). Any ticket
     // whose guest row no longer exists is dead work: release the
-    // chef and delete it, whatever state it's in.
-    if ctx.db.active_guest().id().find(t.guest_id).is_none() {
+    // chef and delete it, whatever state it's in. (Pooled dishes
+    // with guest_id == 0 were already handled + returned above.)
+    if t.guest_id != 0 && ctx.db.active_guest().id().find(t.guest_id).is_none() {
         log::info!(
             "tick_ticket_state: ticket {} ({}) has no guest {} — deleting fossil",
             t.id, t.state, t.guest_id,
@@ -7613,6 +7681,40 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
     let recipe_id = recipes[idx].to_string();
     let appliance = appliances[idx].to_string();
     let base_cook_seconds_ms = cook_seconds[idx];
+
+    // Phase 9.50 — COOKED-FOOD REUSE. Before spending ingredients on a
+    // fresh cook, see if the pool already holds a dish of this exact
+    // recipe — one a previous customer left behind (guest_id == 0),
+    // still cooking or already plated. If so, claim it for THIS guest:
+    // the chef's work + the ingredients aren't wasted, and the customer
+    // is served faster. Point the dish at the new seat; its cook
+    // progress (and "ready" pickup spot) carry over untouched. Oldest
+    // pooled dish first (FIFO) so nothing lingers to spoil. This is the
+    // "undelivered food waits on the counter and serves whoever orders
+    // it next" mechanism — the chef never touches a customer.
+    if let Some(pooled) = ctx.db.active_ticket().restaurant_id().filter(g.restaurant_id)
+        .filter(|t| t.guest_id == 0
+            && t.recipe_id == recipe_id
+            && (t.state == "ready" || t.state == "cooking"))
+        .min_by_key(|t| t.id)
+    {
+        let pid = pooled.id;
+        let from_state = pooled.state.clone();
+        ctx.db.active_ticket().id().update(ActiveTicket {
+            guest_id: g.id,
+            client_temp_id: format!("srv-{}-{}", g.id, idx),
+            seat_x: g.seat_x,
+            seat_z: g.seat_z,
+            seat_floor: g.seat_floor,
+            seat_at_bar: g.seat_at_bar,
+            ..pooled
+        });
+        log::info!(
+            "auto_place_next_course: guest {} course {} → REUSED pooled {} dish {} ({})",
+            g.id, idx, from_state, pid, recipe_id,
+        );
+        return Some(pid);
+    }
 
     // Phase H.37 — server-side ingredient consumption. Look up the
     // recipe's ingredient list and verify availability BEFORE
