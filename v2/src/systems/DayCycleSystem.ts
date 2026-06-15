@@ -3,6 +3,38 @@ import type { SaveGameState } from "../data/types";
 /** A rent cycle covers one in-game day (24h). */
 export const rentIntervalSeconds = 24 * 60 * 60;
 
+/** Phase 9.51 — named time-of-day phases, keyed to the same windows
+ * WorldScene.applyDayNight uses for the lighting (dawn 0–.083, daylight
+ * .083–.583, dusk .583–.667, night .667–1). `start` is the lower bound
+ * of the phase's progress range; `setTo` is the progress an admin
+ * "jump to this phase" control lands on — mid-phase, so the lighting
+ * reads unambiguously as that time of day. */
+export interface DayPhase {
+  key: string;
+  label: string;
+  icon: string;
+  start: number;
+  setTo: number;
+}
+export const DAY_PHASES: readonly DayPhase[] = [
+  { key: "dawn", label: "Dawn", icon: "🌅", start: 0.0, setTo: 0.04 },
+  { key: "morning", label: "Morning", icon: "🌤️", start: 0.083, setTo: 0.2 },
+  { key: "day", label: "Day", icon: "☀️", start: 0.33, setTo: 0.45 },
+  { key: "dusk", label: "Dusk", icon: "🌇", start: 0.583, setTo: 0.625 },
+  { key: "night", label: "Night", icon: "🌙", start: 0.667, setTo: 0.83 },
+];
+
+/** Which {@link DayPhase} a given [0,1) day progress falls in. Wraps
+ * out-of-range input so callers don't have to pre-clamp. */
+export function phaseForProgress(progress: number): DayPhase {
+  const p = (((progress % 1) + 1) % 1);
+  let cur = DAY_PHASES[0];
+  for (const ph of DAY_PHASES) {
+    if (p >= ph.start) cur = ph;
+  }
+  return cur;
+}
+
 export interface DayCycleTickResult {
   /** True on the frame where the in-game day timer crosses dayLengthSeconds. */
   dayEnded: boolean;
@@ -69,6 +101,23 @@ export class DayCycleSystem {
   setElapsedSeconds(seconds: number): void {
     if (!Number.isFinite(seconds)) return;
     this.elapsedSeconds = Math.max(0, Math.min(this.dayLengthSeconds - 0.001, seconds));
+  }
+
+  /** Real-time length of one in-game day, in seconds. */
+  getDayLengthSeconds(): number {
+    return this.dayLengthSeconds;
+  }
+
+  /** Phase 9.51 — admin time-of-day control: jump the day clock to a
+   * fractional progress in [0,1). The next Engine frame feeds this
+   * through applyDayNight (lamps, pavement lights, sun + shadows) and
+   * sfx.setDayProgress (music), so a single call retimes the whole
+   * scene. Returns the new within-day elapsed time in ms so the caller
+   * can push it to the server (syncDayClock) and make the jump stick. */
+  setProgress(progress01: number): number {
+    const p = Math.max(0, Math.min(0.9999, progress01));
+    this.setElapsedSeconds(p * this.dayLengthSeconds);
+    return Math.round(this.elapsedSeconds * 1000);
   }
 
   /**

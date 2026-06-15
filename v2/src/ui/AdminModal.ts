@@ -3,6 +3,7 @@ import { recipes } from "../data/recipes";
 import { STAFF_UPGRADE_MAX } from "../systems/StaffSystem";
 import type { SfxPlayer } from "./SfxPlayer";
 import type { SpacetimeClient } from "../cloud/SpacetimeClient";
+import { DAY_PHASES, phaseForProgress } from "../systems/DayCycleSystem";
 
 /** Same shape as the HUD's TimeControl — passed in by Engine so
  * the admin panel can host the speed buttons (moved here from the
@@ -248,6 +249,13 @@ export class AdminModal {
     void this.time;
     void this.buildSpeedSection;
 
+    // === Time of day (admin) — jump the world clock to dawn/day/dusk/
+    // night. Retimes lamps, pavement lights, the sun + shadows, and the
+    // music in one shot. Unlike the removed pause/2×/4× speed control
+    // this is a ONE-OFF jump pushed to the server (syncDayClock), so the
+    // clock keeps running real-time from there — no persistent desync. ===
+    body.appendChild(this.buildTimeOfDaySection());
+
     // === Money section ===
     body.appendChild(this.buildMoneySection());
 
@@ -315,6 +323,43 @@ export class AdminModal {
       const btn = this.actionButton(c.label, c.tone, () => { c.apply(); refreshActive(); });
       row.appendChild(btn);
       speedBtns.push({ btn, key: c.key });
+    }
+    refreshActive();
+    section.appendChild(row);
+    return section;
+  }
+
+  /** Phase 9.51 — admin time-of-day jump. One button per named phase;
+   * clicking retimes the whole scene (lamps, pavement lights, sun +
+   * shadows via applyDayNight, and music via sfx.setDayProgress) and
+   * pushes the new clock to the server so it sticks. The current phase
+   * is highlighted. */
+  private buildTimeOfDaySection(): HTMLElement {
+    const section = this.sectionShell("🌗 TIME OF DAY");
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", flexWrap: "wrap", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const btns: { btn: HTMLButtonElement; key: string }[] = [];
+    const refreshActive = (): void => {
+      const cur = phaseForProgress(this.game.day.getDayProgress()).key;
+      for (const b of btns) {
+        const active = b.key === cur;
+        b.btn.style.background = active ? "rgba(120, 200, 120, 0.32)" : "rgba(255,245,220,0.10)";
+        b.btn.style.borderColor = active ? "rgba(120, 200, 120, 0.60)" : "rgba(255,245,220,0.25)";
+        b.btn.style.fontWeight = active ? "700" : "600";
+      }
+    };
+    for (const ph of DAY_PHASES) {
+      const btn = this.actionButton(`${ph.icon} ${ph.label}`, "neutral", () => {
+        const ms = this.game.day.setProgress(ph.setTo);
+        this.cloud?.syncDayClock(ms);
+        refreshActive();
+      });
+      btn.style.flex = "1 1 auto";
+      btn.style.whiteSpace = "nowrap";
+      row.appendChild(btn);
+      btns.push({ btn, key: ph.key });
     }
     refreshActive();
     section.appendChild(row);

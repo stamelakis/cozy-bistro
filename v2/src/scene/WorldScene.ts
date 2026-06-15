@@ -1521,6 +1521,16 @@ export class WorldScene {
     this.sunLight.intensity = sunIntensity;
     this.sunLight.color.setHex(mixColors(0xaab8d6, 0xfff4d8, dayness));
 
+    // Phase 9.51 — swing the sun across the sky with the time of day so
+    // SHADOWS sweep + lengthen toward dawn/dusk instead of only dimming.
+    // Azimuth runs east→west over the day; height peaks at midday. Kept
+    // well inside the shadow frustum (±20) so shadows never clip. The
+    // sun's near-black night intensity already hides shadows then, so
+    // the low night position is invisible — it's the day arc that reads.
+    const sunAzimuth = (progress - 0.5) * Math.PI * 0.55; // ~-0.86 → +0.86 rad
+    const sunHeight = 7 + dayness * 11;                   // 7 (night) → 18 (noon)
+    this.sunLight.position.set(Math.sin(sunAzimuth) * 11, sunHeight, 6);
+
     // Ambient: warm bright during day, cool blue at night. Floor
     // dropped to 0.14 (was 0.32) so the city genuinely feels dark
     // beyond the lamps' pools of light. The night ambient still has

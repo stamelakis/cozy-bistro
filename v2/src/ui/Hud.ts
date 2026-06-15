@@ -1,5 +1,6 @@
 import type { Game } from "../game/Game";
 import { attachTooltip } from "./tooltip";
+import { phaseForProgress } from "../systems/DayCycleSystem";
 
 /** Minimal accessor the HUD needs — we go through a getter object so the
  * Engine can construct the HUD before the spawner exists (spawner is built
@@ -85,6 +86,9 @@ export class Hud {
   /** Span next to the online count showing 🚶 N incoming — walkers
    * currently heading for the player's plot from the shared city. */
   private incomingCountEl?: HTMLSpanElement;
+  /** Phase 9.51 — time-of-day chip in the title block (🌙 Night etc.),
+   * refreshed each HUD tick from the day clock. */
+  private timeOfDayEl?: HTMLElement;
   // P12: removed devOpen / devSection / toggleDev — the old expandable
   //      dev sub-menu was split into AdminModal (admin-only) + the
   //      always-visible player-actions row.
@@ -130,7 +134,11 @@ export class Hud {
       `<div style="font-size:10px;font-weight:600;letter-spacing:0.04em;opacity:0.75;margin-top:3px;">` +
         `<span style="color:#a8d4cc;">👥 ${onlineSpan} online</span>` +
         `<span style="color:#e8c89a;margin-left:10px;">🚶 ${incomingSpan} incoming</span>` +
-      `</div>`;
+      `</div>` +
+      // Phase 9.51 — live time-of-day chip. Reflects the same day clock
+      // the lighting follows, so the label always matches the sky.
+      `<div data-time-of-day style="font-size:11px;font-weight:700;letter-spacing:0.05em;` +
+        `margin-top:4px;color:#dfe8ef;">🌙 Night</div>`;
     Object.assign(t.style, {
       marginBottom: "8px", textAlign: "center", opacity: "0.95",
       padding: "6px 8px",
@@ -143,6 +151,7 @@ export class Hud {
     // instead of rebuilding the whole title each HUD tick.
     this.onlineCountEl = t.querySelector("[data-online-count]") as HTMLSpanElement;
     this.incomingCountEl = t.querySelector("[data-incoming-count]") as HTMLSpanElement;
+    this.timeOfDayEl = t.querySelector("[data-time-of-day]") as HTMLElement;
   }
 
   /** Visually-rich stat cards. Each card is a small chip with:
@@ -523,6 +532,12 @@ export class Hud {
     const wrappedMinutes = ((totalMinutesInDay % (24 * 60)) + 24 * 60) % (24 * 60);
     const clockH = String(Math.floor(wrappedMinutes / 60)).padStart(2, "0");
     const clockM = String(Math.floor(wrappedMinutes % 60)).padStart(2, "0");
+    // Phase 9.51 — time-of-day chip (🌙 Night), kept in step with the clock.
+    if (this.timeOfDayEl) {
+      const ph = phaseForProgress(progress);
+      const todText = `${ph.icon} ${ph.label} · ${clockH}:${clockM}`;
+      if (this.timeOfDayEl.textContent !== todText) this.timeOfDayEl.textContent = todText;
+    }
     const dishes = this.game.getDirtyDishCount();
     const rent = this.game.getDailyRent();
     const w = this.game.weather.getCurrent();
