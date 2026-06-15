@@ -2124,14 +2124,21 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
 
     let rating_raw = (base_x100 + 50) / 100; // round-half-up to nearest star
     let rating = rating_raw.clamp(1, 5) as u32;
-    // Phase 9.6 — dissatisfied visits pin the rating to 1★. The vibe
-    // math above scores the AMBIENCE; a guest who stormed out unserved
-    // (total_paid == 0) or was timed/forced out mid-meal (patience
-    // pinned to 0 — angry timeout or table sold under them) didn't
-    // care how nice the wallpaper was. Without this, a maxed-out
-    // restaurant collected 5★ from every angry walkout and LOST
-    // customers never dented the rating at all.
-    let rating = if g.total_paid_cents == 0 || g.patience_ms <= 0 { 1 } else { rating };
+    // Phase 9.6 / 9.53 — a guest who stormed out UNSERVED (never got a
+    // plate, total_paid == 0) is pinned to 1★: the vibe math scores the
+    // ambience, but they never tasted the food, so a maxed-out room
+    // shouldn't collect 5★ from angry walkouts.
+    //
+    // Phase 9.53 — but DON'T pin a guest who actually ate + paid. The
+    // old code also forced 1★ on `patience_ms <= 0`, which fired for
+    // any multi-course guest whose patience happened to hit 0 on a
+    // later course (a slow plate, table churn) — erasing an otherwise
+    // good meal. That single condition is why a restaurant serving 81%
+    // of its guests still read 1.0 avg / 500-of-500 one-star: nearly
+    // every paying customer tripped the patience pin. A served customer
+    // now gets the REAL satisfaction-based rating; only the truly
+    // unserved are forced to 1★.
+    let rating = if g.total_paid_cents == 0 { 1 } else { rating };
 
     // tipMultByRating: 1 → 0%, 2 → 0%, 3 → 5%, 4 → 15%, 5 → 30%.
     // Stored × 1000 (basis points scaled by 10) for integer math.
