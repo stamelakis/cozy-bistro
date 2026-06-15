@@ -472,12 +472,26 @@ pub fn restaurant_tick(
             && a.ticket_id.is_none() && a.take_order_guest_id.is_none()
             && a.wash_target_uid.is_empty())
         .count();
-    let ready_backlog = ctx.db.active_ticket().restaurant_id().filter(rid)
-        .any(|t| t.state == "ready");
-    // Both backlogs compete → take-orders get ceil-half (a single freed
-    // waiter still goes to an order, keeping the funnel moving; a pool
-    // splits evenly with delivery). No ready food → take orders freely.
-    let order_cap = if ready_backlog { (idle_waiter_count + 1) / 2 } else { usize::MAX };
+    let ready_count = ctx.db.active_ticket().restaurant_id().filter(rid)
+        .filter(|t| t.state == "ready").count();
+    let ordering_count = ctx.db.active_guest().restaurant_id().filter(rid)
+        .filter(|g| g.state == "ordering" && !g.seat_at_bar).count();
+    // Phase 9.44 — BACKLOG-WEIGHTED split. The 9.40 cap was ceil-half:
+    // with waiters freeing up one at a time (the normal busy case),
+    // ceil(1/2)=1 sent EVERY freed waiter to take-orders, so delivery
+    // never got one — cooked plates piled up undelivered forever and
+    // every customer left before eating (100% 1★). Now take-orders get a
+    // share of the idle pool PROPORTIONAL to the order backlog vs the
+    // combined backlog, so a single freed waiter goes to whichever side
+    // is actually deeper, and both sides drain together.
+    let order_cap = if ready_count == 0 {
+        usize::MAX // no food waiting → take orders freely
+    } else if ordering_count == 0 {
+        0 // no one waiting to order → all idle waiters deliver
+    } else {
+        let total = ordering_count + ready_count;
+        (idle_waiter_count * ordering_count + total / 2) / total // round
+    };
 
     // Phase H.34 — take-order dispatch. Walks idle waiters to
     // seated/ordering guests who don't yet have a waiter en route.
