@@ -3124,18 +3124,28 @@ export class GuestSpawner {
         });
         this.nextDirtyId += 1;
       }
-      // Phase H.B — Mirror to cloud so visitors (and post-H.D the
-      // host's own renderer) can see this pile. Server assigns the
-      // auto_inc id; we stash the returned cloud id by binding it
-      // to the local mesh handle below via cloudIdByLocal.
-      this.cloud?.addDirtyPile({
-        seatUid: seatId,
-        kind,
-        tier,
-        slotIndex: Math.min(startSlot + i, LEFTOVER_SLOTS.length - 1),
-        floor: g.seatFloor,
-        x, z,
-      });
+      // Phase H.B — Mirror to cloud so visitors (and the host's own
+      // renderer under Path B) can see this pile.
+      //
+      // Phase 9.45 — but ONLY under Path A. Under Path B the SERVER's
+      // settle_guest_dishes already writes one dirty_pile row per eaten
+      // course; firing addDirtyPile here too would DOUBLE the rows and,
+      // worse, if the local guest's seatId has diverged from the
+      // server's, plant a pile on a seat the server thinks is clean —
+      // making a good seat falsely unservable under strict cleaning.
+      // Keep the client out of the server-owned pile lifecycle: render
+      // from the dirty_pile subscription (DirtyPileVisualizer), never
+      // mutate it.
+      if (!this.serverOwnsGuestStates()) {
+        this.cloud?.addDirtyPile({
+          seatUid: seatId,
+          kind,
+          tier,
+          slotIndex: Math.min(startSlot + i, LEFTOVER_SLOTS.length - 1),
+          floor: g.seatFloor,
+          x, z,
+        });
+      }
     }
   }
 
@@ -3192,7 +3202,15 @@ export class GuestSpawner {
     // accumulate. By-seat lookup because the cloud's auto_inc id
     // isn't threaded through the local pickup machinery; see server
     // reducer doc on pickup_dirty_pile_by_seat for the race notes.
-    if (entry.seatId) {
+    //
+    // Phase 9.45 — Path A only. Under Path B the dirty_pile row is the
+    // server's: it's deleted exclusively by a waiter's tick_seat_clean
+    // trip. A client-side delete here would be an uncontrolled
+    // auto-clean — a seat freed without a waiter ever bussing it —
+    // which is precisely what strict mode forbids. (This branch is
+    // already dormant under Path B since dirtyTableMeshes stays empty,
+    // but gate it explicitly so a mode flip can't reopen the hole.)
+    if (entry.seatId && !this.serverOwnsGuestStates()) {
       this.cloud?.pickupDirtyPileBySeat(entry.seatId, entry.kind);
     }
     return entry.kind;
