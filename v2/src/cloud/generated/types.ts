@@ -478,6 +478,7 @@ export const StaffActor = __t.object("StaffActor", {
   errandPhase: __t.option(__t.string()),
   errandTripListCsv: __t.option(__t.string()),
   errandOffscreenUntilMicros: __t.i64(),
+  cleanSeatUid: __t.option(__t.string()),
 });
 export type StaffActor = __Infer<typeof StaffActor>;
 

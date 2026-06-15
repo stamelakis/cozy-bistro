@@ -276,6 +276,15 @@ interface StaffActor {
    * Cleared on completion / abandonment. Mutually exclusive with
    * washTrip and ticketId (the waiter is only ever doing one thing). */
   takeOrderRequest?: OrderRequest | null;
+  /** Waiter only (Phase 9.45) — seat_uid of the dirty seat this waiter
+   * is bussing on a server-dispatched STRICT clean trip. While set,
+   * movingToWork / working reinterpret to "walking to the dirty seat" /
+   * "clearing the plates"; completion is server-driven (the bridge's
+   * release case fires when staff_actor.clean_seat_uid clears). Purely
+   * cosmetic locomotion locally — the dirty_pile rows are server-
+   * canonical and vanish via subscription when the server deletes them.
+   * Mutually exclusive with washTrip / takeOrderRequest / ticketId. */
+  cleanSeatUid?: string | null;
   /** Last mirror fingerprint published to the cloud — a compact
    * "state|ticketId|targetX|targetZ" string. streamActorsToCloud
    * uses this to skip the mirror reducer call when nothing material
@@ -357,6 +366,14 @@ const CROSS_FLOOR_WAIT_SECONDS = 2.0;
  * the visible beat reads as a brief stop, and any longer makes the
  * customer's patience timer punish realistic staffing levels. */
 const TAKE_ORDER_DWELL_SECONDS = 1.5;
+
+/** Phase 9.45 — defensive cap on how long a waiter holds the bussing
+ * pose before self-releasing home, used ONLY if the server's clean-trip
+ * release never arrives (e.g. disconnect mid-trip). In normal operation
+ * the server clears clean_seat_uid first (after its 1.5 s dwell) and the
+ * bridge release fires well before this. Generous so it never pre-empts
+ * the authoritative completion. */
+const SEAT_CLEAN_FALLBACK_SECONDS = 6.0;
 
 /** Flip to true (or rebuild) to log every actor's per-frame movement
  * sample (`[Router/move] state now @ (x, y) target …`). Was on by
@@ -941,6 +958,7 @@ export class StaffRouter {
       replanAccum: 0,
       homeWorkWaitClock: 0,
       washTrip: null,
+      cleanSeatUid: null, // Phase 9.45 — not bussing at register
     };
     this.waiters.push(actor);
     this.mirrorActorRegister(actor);
@@ -1815,6 +1833,42 @@ export class StaffRouter {
         actor.character.action = "walk";
         this.planPath(actor);
         console.log(`[Router/Bridge] cloud-wash early-complete: waiter ${actor.memberId} (${trip.kind}, ${totalPieces} pieces)`);
+      }
+
+      // Phase 9.45 — server-driven STRICT clean trip. Same shape as the
+      // wash/take-order bridge cases. Server's try_dispatch_seat_clean
+      // picks an idle waiter + a dirty seat and sets staff_actor.clean_
+      // seat_uid + target=seat. Bridge adopts it: local waiter walks to
+      // the seat (movingToWork) and holds the bussing pose (working).
+      // The walk MUST be locally driven so the mirrored body position
+      // converges with the server's arrival check — otherwise the server
+      // would step the body while the local sim kept it idle at home and
+      // mirrored that back, freezing the trip.
+      if (row.cleanSeatUid != null && actor.cleanSeatUid == null
+          && actor.ticketId == null && actor.washTrip == null
+          && actor.takeOrderRequest == null && actor.state === "idle") {
+        actor.cleanSeatUid = row.cleanSeatUid;
+        actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+        actor.targetFloor = row.targetFloor;
+        actor.state = "movingToWork";
+        actor.clock = 0;
+        actor.character.action = "walk";
+        actor.homeWorkWaitClock = 0;
+        this.planPath(actor);
+        console.log(`[Router/Bridge] cloud-clean: waiter ${actor.memberId} → bus seat ${row.cleanSeatUid} (target ${row.targetX.toFixed(1)},${row.targetZ.toFixed(1)} F${row.targetFloor})`);
+      } else if (row.cleanSeatUid == null && actor.cleanSeatUid != null
+                 && (actor.state === "movingToWork" || actor.state === "working")) {
+        // Server finished bussing (deleted the pile rows + cleared the
+        // field). Release the local waiter to the home target the
+        // server picked.
+        actor.cleanSeatUid = null;
+        actor.target = new THREE.Vector2(row.targetX, row.targetZ);
+        actor.targetFloor = row.targetFloor;
+        actor.state = "returningHome";
+        actor.clock = 0;
+        actor.character.action = "walk";
+        this.planPath(actor);
+        console.log(`[Router/Bridge] cloud-clean done: waiter ${actor.memberId}`);
       }
     }
   }
@@ -3093,6 +3147,17 @@ export class StaffRouter {
             w.clock = 0;
             break;
           }
+          // Phase 9.45 — clean trip reinterprets movingToWork → "walking
+          // to the dirty seat". On arrival enter the bussing dwell;
+          // completion is server-driven (bridge release clears it). This
+          // MUST precede the serve-flow fallback below, which would send
+          // a ticket-less actor straight home.
+          if (w.cleanSeatUid) {
+            w.character.action = "idle"; // "clearing the table"
+            w.state = "working";
+            w.clock = 0;
+            break;
+          }
           // Wash trips reinterpret movingToWork — same shared walking
           // code, branch on whether we're heading to a dirty pickup or
           // to the wash station after picking up.
@@ -3272,6 +3337,26 @@ export class StaffRouter {
             w.character.action = "walk";
             w.clock = 0;
           }
+          break;
+        }
+        // Phase 9.45 — clean-trip bussing dwell. Completion is server-
+        // authoritative: the bridge's release case flips us to
+        // returningHome the moment the server clears clean_seat_uid
+        // (after deleting the pile rows). So under server dispatch we
+        // just hold the pose and wait; the SEAT_CLEAN_FALLBACK timer
+        // only fires if that release never arrives (disconnect), so a
+        // waiter can never freeze mid-bus.
+        if (w.cleanSeatUid) {
+          if (this.serverOwnsTicketDispatch() && w.clock < SEAT_CLEAN_FALLBACK_SECONDS) {
+            break;
+          }
+          w.cleanSeatUid = null;
+          w.target = w.home.clone();
+          w.targetFloor = w.homeFloor;
+          this.planPath(w);
+          w.state = "returningHome";
+          w.character.action = "walk";
+          w.clock = 0;
           break;
         }
         // Serve flow: walking the plate to the seat.

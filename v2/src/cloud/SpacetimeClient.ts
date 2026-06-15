@@ -111,6 +111,12 @@ export interface StaffActorRow {
    * / returningHome). Null when not on a trip. Phase 8.1 surfaces it
    * so visit-mode status bubbles can show "🛒 shopping" / "✨ home". */
   errandPhase: string | null;
+  /** Phase 9.45 — when the server dispatches a STRICT seat-clean trip,
+   * this holds the seat_uid of the dirty seat the waiter is bussing
+   * (null otherwise). The owner's bridge watches null→set to drive the
+   * local waiter to the seat, and set→null (server finished + deleted
+   * the pile rows) to release them home. */
+  cleanSeatUid: string | null;
 }
 
 /** Public shape of one active_guest row — one per live customer in a
@@ -1647,6 +1653,7 @@ export class SpacetimeClient {
           washPhase: a.washPhase,
           takeOrderGuestId: a.takeOrderGuestId ?? null,
           errandPhase: a.errandPhase ?? null,
+          cleanSeatUid: a.cleanSeatUid ?? null,
         });
       }
     } catch { /* table not wired yet */ }
@@ -1678,6 +1685,7 @@ export class SpacetimeClient {
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
       takeOrderGuestId: bigint | undefined;
       errandPhase: string | undefined;
+      cleanSeatUid: string | undefined;
     };
     const toClientRow = (r: ServerRow): StaffActorRow => ({
       memberId: r.memberId, role: r.role, state: r.state,
@@ -1689,6 +1697,7 @@ export class SpacetimeClient {
       washPhase: r.washPhase,
       takeOrderGuestId: r.takeOrderGuestId ?? null,
       errandPhase: r.errandPhase ?? null,
+      cleanSeatUid: r.cleanSeatUid ?? null,
     });
     try {
       if (handlers.onInsert) {
@@ -4244,6 +4253,7 @@ export class SpacetimeClient {
             washPhase: a.washPhase,
             takeOrderGuestId: a.takeOrderGuestId ?? null,
             errandPhase: a.errandPhase ?? null,
+            cleanSeatUid: a.cleanSeatUid ?? null,
           },
         });
       }

@@ -1327,6 +1327,14 @@ pub struct StaffActor {
     /// walkingFromRoadEdge. Zero otherwise.
     #[default(0i64)]
     pub errand_offscreen_until_micros: i64,
+
+    /// Phase 9.45 — Waiter only: seat_uid of the DIRTY seat this waiter is
+    /// walking over to clean (collect the leftover plates so the seat can
+    /// be reused), or None when not on a clean trip. Handled by a
+    /// dedicated tick_seat_clean leg (like the wash + errand legs). End-
+    /// of-struct + Option/None default keeps the publish additive.
+    #[default(None::<String>)]
+    pub clean_seat_uid: Option<String>,
 }
 
 /// Phase F — server-authoritative placed furniture. One row per item

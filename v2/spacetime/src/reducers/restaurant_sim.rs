@@ -373,33 +373,16 @@ pub fn restaurant_tick(
         tick_dishwasher_batch(ctx, &uid, rid, dt_ms);
     }
 
-    // Phase 9.23 — dirty-pile reaper. Piles (positioned table
-    // leftovers, inserted on settle for the host + visitors to SEE)
-    // have a genuinely independent lifecycle from the abstract
-    // dishware pool, so coupling their cleanup to pool washing alone
-    // left orphans whenever the dishwasher cleaned the pool without a
-    // wash trip. This bounds the total: leftovers accumulate as
-    // guests eat, then drain steadily as staff "clear tables" — keep
-    // only the most recent DIRTY_PILE_CAP, deleting oldest (lowest
-    // auto-inc id) first. Robust + self-healing (drains any orphan
-    // backlog), and reads correctly: a busy room shows a scatter of
-    // dirty dishes that get bussed over the following seconds.
-    const DIRTY_PILE_CAP: usize = 24;
-    /// Max piles cleared per tick so a big backlog drains visibly
-    /// over several seconds instead of vanishing in one frame.
-    const DIRTY_PILE_REAP_PER_TICK: usize = 3;
-    let pile_ids: Vec<u64> = ctx.db.dirty_pile()
-        .restaurant_id().filter(rid)
-        .map(|d| d.id)
-        .collect();
-    if pile_ids.len() > DIRTY_PILE_CAP {
-        let mut sorted = pile_ids;
-        sorted.sort_unstable(); // ascending = oldest first
-        let over = sorted.len() - DIRTY_PILE_CAP;
-        for id in sorted.into_iter().take(over.min(DIRTY_PILE_REAP_PER_TICK)) {
-            ctx.db.dirty_pile().id().delete(id);
-        }
-    }
+    // Phase 9.45 — the Phase 9.23 dirty-pile REAPER was removed here.
+    // It capped piles at 24 and deleted the oldest over the cap, which
+    // under strict cleaning would act as a silent auto-clean: seats
+    // freed without a waiter ever bussing them. The owner chose pure
+    // strict ("no auto-clean fallback"), and the reaper is unnecessary
+    // for safety — piles are now naturally bounded. A seat with piles
+    // is unservable (try_assign_seat_for skips it), so it can't be
+    // re-dirtied while it waits; per-seat piles cap at one guest's
+    // course count, total at seats × courses. Only a waiter seat-clean
+    // trip (tick_seat_clean) deletes pile rows.
 
     // Phase I (H.71) — continuous server-side guest spawning while
     // the owner is OFFLINE.  Closes the user-reported "I log in,
@@ -503,6 +486,14 @@ pub fn restaurant_tick(
     // backgrounded tab; the two-leg trip (pickup → seat) is encoded in
     // delivery_phase, which tick_staff_actor reads on arrival.
     auto_assign_ready_tickets(ctx, rid);
+
+    // Phase 9.45 — STRICT seat cleaning. Runs AFTER take-order +
+    // ready-delivery dispatch (those claim the waiters they need
+    // first), so only leftover-idle waiters get pulled into bussing
+    // dirty tables. This is the sole path that frees a dirtied seat —
+    // there is no auto-clean — so a seat stays unservable until a
+    // waiter buses it here.
+    try_dispatch_seat_clean(ctx, rid);
 
     // Phase H.35 — wash trip dispatch. Cosmetic for the offline case:
     // walks an idle waiter through a pseudo-pickup (any table) → wash
@@ -1429,6 +1420,18 @@ fn scan_restaurant_health(ctx: &ReducerContext, rid: u64) {
     let day_total = r.cloud_daily_served + r.cloud_daily_lost;
     if day_total >= 20 && r.cloud_daily_lost * 100 >= day_total * 35 {
         flags.push(format!("lost_spike:{}", r.cloud_daily_lost * 100 / day_total));
+    }
+    // Phase 9.45 — STRICT cleaning: distinct seats holding leftover
+    // plates. Each is UNSERVABLE until a waiter buses it, so a growing
+    // count means cleaning can't keep up with turnover (too few waiters
+    // for the churn) and effective seating capacity is shrinking. Flag
+    // once it's more than a couple so the owner sees the squeeze.
+    let mut dirty_seat_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for d in ctx.db.dirty_pile().restaurant_id().filter(rid) {
+        dirty_seat_uids.insert(d.seat_uid);
+    }
+    if dirty_seat_uids.len() > 2 {
+        flags.push(format!("dirty_seats:{}", dirty_seat_uids.len()));
     }
 
     let summary = if flags.is_empty() { None } else { Some(flags.join("|")) };
@@ -3594,26 +3597,18 @@ fn apply_pool_delta(
     source: &str,
 ) {
     if clean_delta == 0 && dirty_delta == 0 { return; }
-    // Phase 9.23 — pile lifecycle is coupled to the pool HERE, the
-    // single choke point every cleaning path flows through (wash
-    // trip AND dishwasher-batch flush). A dirty decrease means N
-    // pieces of this kind just got cleaned → remove up to N visible
-    // table piles of the same kind so the leftover meshes disappear.
-    // Centralising here (rather than in the wash trip) is what fixes
-    // the orphaned-pile accumulation: the dishwasher batch cleans the
-    // pool without ever running a wash trip.
-    if dirty_delta < 0 {
-        let want = (-dirty_delta) as usize;
-        let pile_ids: Vec<u64> = ctx.db.dirty_pile()
-            .restaurant_id().filter(restaurant_id)
-            .filter(|d| d.kind == kind)
-            .take(want)
-            .map(|d| d.id)
-            .collect();
-        for id in pile_ids {
-            ctx.db.dirty_pile().id().delete(id);
-        }
-    }
+    // Phase 9.45 — STRICT cleaning. Pile lifecycle is now DECOUPLED
+    // from the dishware pool. Pre-9.45 a dirty-pool decrease (wash trip
+    // OR dishwasher-batch flush) auto-deleted N table piles of the same
+    // kind — i.e. washing a plate magically bussed some table. That was
+    // the auto-clean fallback the owner explicitly rejected ("dirty
+    // plates must stay there ... unservable until a waiter cleans it").
+    // Table piles (dirty_pile rows) now clear ONLY when a waiter runs a
+    // dedicated seat-clean trip (try_dispatch_seat_clean + tick_seat_
+    // clean). The pool here just tracks abstract clean/dirty dish
+    // inventory for the wash economy; the two are independent counts
+    // that both originate from settle_guest_dishes. No pile deletion
+    // here anymore.
     let key = pool_key(restaurant_id, kind, tier);
     let existing = ctx.db.dishware_pool().key().find(key.clone());
     let (cur_clean, cur_dirty) = match &existing {
@@ -3986,6 +3981,94 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64, max_dispatch: usize) 
     }
 }
 
+/// Phase 9.45 — STRICT seat-cleaning dispatch. Sends idle waiters to
+/// bus tables that still have leftover plates on them (dirty_pile
+/// rows). Until a seat is bussed it stays unservable (try_assign_seat_
+/// for skips it), so this is the ONLY thing that frees a dirtied seat
+/// for re-use — there is no auto-clean fallback.
+///
+/// Unlike try_dispatch_wash_trip this is NOT gated on service demand:
+/// bussing IS service (a clean table = a seatable customer). Priority
+/// is instead enforced by tick ORDER — take-order + ready-delivery
+/// dispatch run earlier in the tick and claim the waiters they need,
+/// so seat-cleaning only ever picks up waiters still idle afterwards.
+///
+/// Dispatches as many trips as there are idle waiters × dirty seats
+/// this tick (one waiter per seat), greedily pairing the globally
+/// cheapest waiter→seat each round so a backlog drains in parallel.
+/// Seat coords come straight off the pile row (settle_guest_dishes
+/// stamps them with the seat's x/z/floor), so no furniture lookup.
+fn try_dispatch_seat_clean(ctx: &ReducerContext, rid: u64) {
+    let _ = ctx.db.restaurant().id().find(rid); // existence check
+
+    // Seats already being bussed by a waiter mid-trip — don't double
+    // assign. (clean_seat_uid is set for the whole walk + dwell, then
+    // cleared when the waiter heads home.)
+    let cleaning_in_flight: std::collections::HashSet<String> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
+        .filter_map(|a| a.clean_seat_uid.clone())
+        .collect();
+
+    // Distinct dirty seats → representative (x, z, floor). One seat can
+    // hold several piles (one per eaten course); we bus the whole seat
+    // in one trip, so collapse to distinct seat_uid.
+    let mut dirty_seats: std::collections::HashMap<String, (f32, f32, u32)> =
+        std::collections::HashMap::new();
+    for d in ctx.db.dirty_pile().restaurant_id().filter(rid) {
+        if cleaning_in_flight.contains(&d.seat_uid) { continue; }
+        dirty_seats.entry(d.seat_uid).or_insert((d.x, d.z, d.floor));
+    }
+    if dirty_seats.is_empty() { return; }
+
+    // Idle waiters not on any other trip (ticket carry, take-order,
+    // wash, errand, or an existing clean).
+    let mut idle_waiters: Vec<StaffActor> = ctx.db.staff_actor()
+        .restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter"
+            && a.state == "idle"
+            && a.ticket_id.is_none()
+            && a.take_order_guest_id.is_none()
+            && a.wash_target_uid.is_empty()
+            && a.errand_phase.is_none()
+            && a.clean_seat_uid.is_none())
+        .collect();
+    if idle_waiters.is_empty() { return; }
+
+    let mut seats: Vec<(String, f32, f32, u32)> = dirty_seats
+        .into_iter()
+        .map(|(uid, (x, z, f))| (uid, x, z, f))
+        .collect();
+
+    // Greedy global-nearest pairing, one assignment per round.
+    while !idle_waiters.is_empty() && !seats.is_empty() {
+        let mut best: Option<(usize, usize, f32)> = None; // (waiter_idx, seat_idx, dist)
+        for (wi, w) in idle_waiters.iter().enumerate() {
+            for (si, s) in seats.iter().enumerate() {
+                let d = staff_dist_to(w, s.1, s.2, s.3);
+                if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
+                    best = Some((wi, si, d));
+                }
+            }
+        }
+        let Some((wi, si, _)) = best else { break };
+        let (seat_uid, sx, sz, sf) = seats.swap_remove(si);
+        let actor = idle_waiters.swap_remove(wi);
+        log::info!(
+            "try_dispatch_seat_clean: waiter {} → bus seat {} ({:.2},{:.2}) floor {}",
+            actor.member_id, seat_uid, sx, sz, sf,
+        );
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "movingToWork".to_string(),
+            state_clock_ms: 0,
+            target_x: sx,
+            target_z: sz,
+            target_floor: sf,
+            clean_seat_uid: Some(seat_uid),
+            ..actor
+        });
+    }
+}
+
 /// Phase H.35 — Cosmetic wash trip dispatch for offline owners. Picks
 /// an idle waiter, a pseudo-pickup at any seat, and a wash station
 /// (dishwasher or sink). Sets wash_target_uid + wash_phase="pickup"
@@ -4234,6 +4317,99 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
             });
             return;
         }
+    }
+
+    // Mid-walk or mid-dwell — step + advance clock.
+    ctx.db.staff_actor().member_id().update(StaffActor {
+        x: new_x,
+        z: new_z,
+        state_clock_ms: new_clock,
+        ..a
+    });
+}
+
+/// Phase 9.45 — Per-tick state machine for a STRICT seat-clean trip.
+/// Single-leg (simpler than the wash trip): walk to the dirty seat,
+/// dwell briefly while "clearing plates," then delete every dirty_pile
+/// row at that seat (the dishes were already counted into the wash
+/// pool back in settle_guest_dishes — this only removes the visible
+/// table leftovers + the unservable marker) and return home. Branched
+/// to by tick_staff_actor whenever clean_seat_uid is set.
+fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
+    /// Dwell at the table while the waiter clears the plates. Three
+    /// 2 Hz ticks — long enough to read as bussing, short enough that
+    /// a backlog drains briskly.
+    const SEAT_CLEAN_DWELL_MS: i64 = 1_500;
+
+    let seat_uid = a.clean_seat_uid.clone().unwrap_or_default();
+
+    // Abort guard — if the seat is no longer dirty (e.g. the row was
+    // cleared out-of-band, or the restaurant was reset), don't walk to
+    // a clean table; release the waiter home. In normal play the seat
+    // stays dirty until WE delete it below (nothing else clears piles).
+    let still_dirty = ctx.db.dirty_pile().restaurant_id().filter(a.restaurant_id)
+        .any(|d| d.seat_uid == seat_uid);
+    if seat_uid.is_empty() || !still_dirty {
+        let (hx, hz, hf) = staff_home_target(ctx, &a);
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            state: "returningHome".to_string(),
+            state_clock_ms: 0,
+            target_x: hx,
+            target_z: hz,
+            target_floor: hf,
+            clean_seat_uid: None,
+            ..a
+        });
+        return;
+    }
+
+    let (new_x, new_z) = step_toward_target(
+        a.x, a.z, a.target_x, a.target_z,
+        actor_walk_speed(ctx, &a.role, &a.member_id),
+        dt_ms,
+    );
+    let arrived = (a.target_x - new_x).abs() < 0.01 && (a.target_z - new_z).abs() < 0.01;
+    let new_clock = a.state_clock_ms.saturating_add(dt_ms);
+
+    // movingToWork + arrived → start bussing (working, clock reset).
+    if a.state == "movingToWork" && arrived {
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            x: new_x,
+            z: new_z,
+            state: "working".to_string(),
+            state_clock_ms: 0,
+            ..a
+        });
+        return;
+    }
+
+    // working + dwell elapsed → clear the table, head home.
+    if a.state == "working" && new_clock >= SEAT_CLEAN_DWELL_MS {
+        let pile_ids: Vec<u64> = ctx.db.dirty_pile().restaurant_id().filter(a.restaurant_id)
+            .filter(|d| d.seat_uid == seat_uid)
+            .map(|d| d.id)
+            .collect();
+        let n = pile_ids.len();
+        for id in pile_ids {
+            ctx.db.dirty_pile().id().delete(id);
+        }
+        log::info!(
+            "tick_seat_clean: waiter {} bussed seat {} ({} pile rows cleared)",
+            a.member_id, seat_uid, n,
+        );
+        let (hx, hz, hf) = staff_home_target(ctx, &a);
+        ctx.db.staff_actor().member_id().update(StaffActor {
+            x: new_x,
+            z: new_z,
+            state: "returningHome".to_string(),
+            state_clock_ms: 0,
+            target_x: hx,
+            target_z: hz,
+            target_floor: hf,
+            clean_seat_uid: None,
+            ..a
+        });
+        return;
     }
 
     // Mid-walk or mid-dwell — step + advance clock.
@@ -4835,6 +5011,14 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     // state strings would otherwise be reinterpreted incorrectly.
     if a.errand_phase.is_some() {
         tick_errand_actor(ctx, a, dt_ms);
+        return;
+    }
+    // Phase 9.45 — same shape again: a waiter on a strict seat-clean
+    // trip runs the dedicated single-leg tick_seat_clean. clean_seat_
+    // uid is mutually exclusive with the wash/errand fields (dispatch
+    // sets only one), so the branch order is unambiguous.
+    if a.clean_seat_uid.is_some() {
+        tick_seat_clean(ctx, a, dt_ms);
         return;
     }
     // H.52 — waiter walk speed includes training multiplier.
@@ -6567,6 +6751,16 @@ fn try_assign_seat_for(
             taken_targets.push((other.target_x, other.target_z));
         }
     }
+    // Phase 9.45 — STRICT cleaning: a seat with leftover plates on it
+    // (one or more dirty_pile rows) is UNSERVABLE until a waiter buses
+    // it. Collect those seat_uids and treat them exactly like occupied
+    // seats below. This is what makes "dirty plates stay there and the
+    // seat is unservable until cleaned" real — without it, guests would
+    // be seated straight into a pile of someone else's dishes.
+    let dirty_uids: std::collections::HashSet<String> = ctx.db.dirty_pile()
+        .restaurant_id().filter(rid)
+        .map(|d| d.seat_uid)
+        .collect();
     // Phase 9.7 — prefer the REAL seat list the client mirrors into
     // seat_slot (one row per chair-at-table slot, uid in the client's
     // "{tableUid}#{slotIndex}" format). The legacy fallback below
@@ -6581,6 +6775,7 @@ fn try_assign_seat_for(
     for s in ctx.db.seat_slot().restaurant_id().filter(rid) {
         have_slots = true;
         if taken_uids.contains(&s.seat_uid) { continue; }
+        if dirty_uids.contains(&s.seat_uid) { continue; } // 9.45 — unservable while dirty
         let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
             let dx = s.x - tx;
             let dz = s.z - tz;
@@ -6600,6 +6795,7 @@ fn try_assign_seat_for(
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if !is_seat_providing_def(&f.def_id) { continue; }
         if taken_uids.contains(&f.uid) { continue; }
+        if dirty_uids.contains(&f.uid) { continue; } // 9.45 — unservable while dirty
         // Skip chairs another guest is walking toward (catches the
         // local-pick race).
         let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
@@ -7846,6 +8042,7 @@ pub fn register_staff_actor(
         errand_phase: None,
         errand_trip_list_csv: None,
         errand_offscreen_until_micros: 0,
+        clean_seat_uid: None, // Phase 9.45 — not cleaning at spawn
         spawned_at: ctx.timestamp,
     });
     Ok(())
@@ -7901,7 +8098,8 @@ pub fn update_staff_actor(
     let server_busy = a.ticket_id.is_some()
         || a.take_order_guest_id.is_some()
         || !a.assigned_stove_uid.is_empty()
-        || !a.wash_target_uid.is_empty();
+        || !a.wash_target_uid.is_empty()
+        || a.clean_seat_uid.is_some(); // 9.45 — mid seat-clean trip
     if server_busy {
         ctx.db.staff_actor().member_id().update(StaffActor { x, z, floor, ..a });
         return Ok(());

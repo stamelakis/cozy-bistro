@@ -3090,6 +3090,7 @@ export class Engine {
       case "undelivered":    return { text: `🍽️ ${val} plates cooked, waiting for a waiter`, severe: false };
       case "chef_hog":       return { text: `👨‍🍳 One chef is handling ${val}% of the cooking`, severe: false };
       case "lost_spike":     return { text: `💔 High walkout rate — ${val}% leaving angry`, severe: false };
+      case "dirty_seats":    return { text: `🍽️ ${val} seats need bussing — unservable until cleaned`, severe: false };
       default:               return { text: `${code} ${val}`, severe: false };
     }
   }
