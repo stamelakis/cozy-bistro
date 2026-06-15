@@ -979,6 +979,21 @@ export class WorldScene {
     this.placedLamps.splice(i, 1);
   }
 
+  /** Phase 9.49 — drop EVERY registered placed-lamp (returning pool
+   * lights to the pool, disposing bulbs). Used before re-registering
+   * after a cloud restore, which wipes + rebuilds all furniture models:
+   * the lamp entries from the earlier save-restore then point at
+   * detached models (their pool lights stranded off-scene), and the
+   * fresh cloud lamp models are unregistered — i.e. dark at night, the
+   * recurring "lights off on reload" bug. Reset here, re-register from
+   * the fresh items, and night illumination works again. */
+  clearAllLamps(): void {
+    // Snapshot models first — unregisterLamp mutates placedLamps as it
+    // splices, so iterating it directly would skip entries.
+    const models = this.placedLamps.map((lp) => lp.model);
+    for (const m of models) this.unregisterLamp(m);
+  }
+
   /** Walk every registered lamp and ramp its intensity + bulb emissive
    * with the current darkness. */
   private updateLamps(nightAmount: number): void {

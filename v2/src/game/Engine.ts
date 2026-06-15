@@ -2370,6 +2370,20 @@ export class Engine {
         // reverts" bug.  Sequencing here makes cloud authoritative.
         const saveDone = this.furnitureRestorePromise ?? Promise.resolve();
         void saveDone.then(() => this.registry.restoreFromCloud()).then(() => {
+          // Phase 9.49 — restoreFromCloud WIPED + rebuilt every furniture
+          // model as a fresh instance (it's authoritative on reload), so
+          // the lamps registered after the save-restore now point at
+          // detached models and the new cloud lamp models are
+          // unregistered — dark at night. This is the recurring "lights
+          // off when I reload at night" bug. Reset the lamp registry and
+          // re-register from the fresh cloud items so night illumination
+          // resumes. (The save-restore path does the same at the top of
+          // setupRunningGame; cloud restore never did.)
+          this.scene.clearAllLamps();
+          for (const it of this.registry.snapshotItems()) {
+            const def = getFurnitureDef(it.defId);
+            if (def?.category === "lamp") this.scene.registerLamp(it.model);
+          }
           this.registry.subscribeToCloudChanges();
         }).finally(() => {
           // Phase 9.5 — unblock the guest hydrate/bridge retry loop.
