@@ -519,6 +519,15 @@ pub struct Restaurant {
     /// the publish additive.
     #[default(None::<String>)]
     pub health_summary_csv: Option<String>,
+
+    /// Phase 9.54 — today's tip income in cents (the tip portion only,
+    /// NOT the meal price — that's in cloud_daily_revenue_cents which
+    /// folds both together). Bumped by accumulate_pending_visit_rollup
+    /// per served guest, reset to 0 on day rollover alongside the other
+    /// cloud_daily_* counters. Surfaced in the HUD's "TIPS" stat card.
+    /// End-of-struct + primitive default keeps the publish additive.
+    #[default(0i64)]
+    pub cloud_daily_tips_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

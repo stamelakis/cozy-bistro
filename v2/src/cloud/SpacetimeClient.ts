@@ -3826,6 +3826,11 @@ export class SpacetimeClient {
         if (cloudDailyExpenses !== this.game.economy.getDailyExpenses()) {
           this.game.economy.setDailyExpenses(cloudDailyExpenses);
         }
+        // Phase 9.54 — today's tips, for the HUD's TIPS card.
+        const cloudDailyTips = Number(newRow.cloudDailyTipsCents) / 100;
+        if (cloudDailyTips !== this.game.economy.getDailyTips()) {
+          this.game.economy.setDailyTips(cloudDailyTips);
+        }
         const cloudDailyServed = Number(newRow.cloudDailyServed);
         if (cloudDailyServed !== this.game.customers.getDailyServed()) {
           this.game.customers.setDailyServed(cloudDailyServed);

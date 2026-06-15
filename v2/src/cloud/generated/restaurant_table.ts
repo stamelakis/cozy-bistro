@@ -55,4 +55,5 @@ export default __t.row({
   cloudDailyServed: __t.u32().name("cloud_daily_served"),
   cloudDailyLost: __t.u32().name("cloud_daily_lost"),
   healthSummaryCsv: __t.option(__t.string()).name("health_summary_csv"),
+  cloudDailyTipsCents: __t.i64().name("cloud_daily_tips_cents"),
 });

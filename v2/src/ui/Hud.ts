@@ -200,11 +200,12 @@ export class Hud {
         tint: "rgba(180, 160, 220, 0.14)", accent: "#c8b5e8",
         tooltip: "Day counter. Each day ends when the in-game clock hits closing time " +
                  "and rolls a day-end summary (paying rent, wages, etc)." },
-      { key: "daytime", icon: "⏰", label: "IN GAME TIME",
-        tint: "rgba(220, 180, 130, 0.14)", accent: "#e8c89a",
-        tooltip: "Current in-game clock (24h). One full day cycle is ~12 real " +
-                 "minutes; the day rolls over at 06:00 with rent + wages deducted. " +
-                 "Tile turns orange after dusk so you know to close out orders." },
+      { key: "tips", icon: "🪙", label: "TIPS TODAY",
+        tint: "rgba(245, 215, 130, 0.14)", accent: "#f0d486",
+        tooltip: "Tips earned today (on top of the meal price). Customers tip on their " +
+                 "rating: 5★ adds 30%, 4★ adds 15%, 3★ adds 5%, and 1–2★ tip nothing — " +
+                 "so this is a live read on how happy your guests are. Resets at day end. " +
+                 "The in-game clock now lives in the header above." },
       // Customers in vs seats available — paired so the player sees
       // "we have 8 IN and 4 SEATS left = filling up" at a glance.
       { key: "guests", icon: "👥", label: "IN",
@@ -570,11 +571,11 @@ export class Hud {
     this.fields.guests.textContent = `${guests}`;
     this.fields.served.textContent = `${served}`;
     this.fields.lost.textContent = `${lost}`;
-    // In-game clock — orange tint past dusk (progress > 0.583, i.e.
-    // ~20:00) so the player knows the day's winding down and they
-    // should close out remaining orders.
-    this.fields.daytime.textContent = `${clockH}:${clockM}`;
-    this.fields.daytime.style.color = progress > 0.583 ? "#ff9a9a" : "#e8c89a";
+    // Tips today — the in-game clock moved to the header time-of-day
+    // chip (🌙 Night · HH:MM), so this slot now shows tip income, a
+    // live read on guest happiness (tips scale with rating).
+    const tips = Math.round(this.game.economy.getDailyTips());
+    this.fields.tips.textContent = `$${tips.toLocaleString()}`;
     // Dirty count / true total owned (clean + dirty + in-flight).
     // Without the in-flight term the denominator dropped by 1 each
     // time a customer started eating — the user (rightly) read that

@@ -11,6 +11,7 @@ export class EconomySystem {
   private transactionLog: TransactionLogEntry[] = [];
   private dailyRevenueTotal = 0;
   private dailyExpensesTotal = 0;
+  private dailyTipsTotal = 0; // Phase 9.54 — tip portion of today's revenue
 
   /** Phase I.5 (H.61) — cloud handle for periodic transaction-log
    * mirror.  Engine wires this on connect.  Push cadence is driven
@@ -154,6 +155,18 @@ export class EconomySystem {
     this.dailyExpensesTotal = Math.max(0, amount);
   }
 
+  /** Phase 9.54 — today's tip income (the tip portion only, already
+   * included inside dailyRevenue). Tracked separately so the HUD can
+   * show a TIPS card. Server-canonical: the cloud subscription adopts
+   * cloud_daily_tips_cents via setDailyTips on every despawn. */
+  getDailyTips(): number {
+    return this.dailyTipsTotal;
+  }
+
+  setDailyTips(amount: number): void {
+    this.dailyTipsTotal = Math.max(0, amount);
+  }
+
   /** Undo part of a prior expense without crediting it as new revenue (e.g. cancelled order refund). */
   refundDailyExpenses(amount: number): void {
     this.dailyExpensesTotal = Math.max(0, this.dailyExpensesTotal - amount);
@@ -162,6 +175,7 @@ export class EconomySystem {
   resetDailyTotals(): void {
     this.dailyRevenueTotal = 0;
     this.dailyExpensesTotal = 0;
+    this.dailyTipsTotal = 0;
   }
 
   getTransactionLog(): readonly TransactionLogEntry[] {

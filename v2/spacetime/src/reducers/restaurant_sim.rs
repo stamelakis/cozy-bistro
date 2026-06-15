@@ -668,6 +668,8 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
             r.cloud_daily_lost,
         )
     };
+    // Phase 9.54 — today's tips reset to 0 on rollover, like the others.
+    let new_daily_tips: i64 = if day_rolled { 0 } else { r.cloud_daily_tips_cents };
     // Path B — the history blob only changes when a day rolled; the
     // no-roll path moves the existing value through `..r` untouched
     // (no clone in the every-tick write).
@@ -679,6 +681,7 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         cloud_daily_expenses_cents: new_daily_exp,
         cloud_daily_served: new_daily_served,
         cloud_daily_lost: new_daily_lost,
+        cloud_daily_tips_cents: new_daily_tips,
         ..r
     };
     if let Some(json) = history_json {
@@ -2291,6 +2294,8 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         cloud_daily_revenue_cents: r.cloud_daily_revenue_cents.saturating_add(added_daily_revenue),
         cloud_daily_served: r.cloud_daily_served.saturating_add(added_daily_served),
         cloud_daily_lost: r.cloud_daily_lost.saturating_add(added_daily_lost),
+        // Phase 9.54 — today's tips (tip portion only) for the HUD card.
+        cloud_daily_tips_cents: r.cloud_daily_tips_cents.saturating_add(added_tip),
         ..r
     });
     log::info!(

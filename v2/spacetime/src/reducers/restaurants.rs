@@ -61,6 +61,8 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         cloud_daily_lost: 0,
         // Phase 9.42 — health badge summary; healthy until the scan finds something.
         health_summary_csv: None,
+        // Phase 9.54 — today's tip income starts at zero.
+        cloud_daily_tips_cents: 0,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,
