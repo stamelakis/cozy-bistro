@@ -1151,6 +1151,14 @@ export class StaffRouter {
         // anchors the actor's Y to the right slab from the get-go.
         a.currentFloor = toFloor;
         a.targetFloor = toFloor;
+        // Phase 9.55 — PUSH the new home_floor to the server. The server
+        // now dispatches staff strictly by assigned floor, so it must
+        // learn the reassignment or it'd keep this member glued to the
+        // old floor's work (or refuse them the new floor's). register_
+        // staff_actor's re-register branch updates home_floor + resets
+        // the row to idle on the new storey. Without this the whole
+        // "player moves staff between floors" contract is broken.
+        this.mirrorActorRegister(a);
       }
     }
   }

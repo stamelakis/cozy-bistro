@@ -1291,17 +1291,10 @@ pub fn consume_pending_day_advancement(
 /// more conservative about cross-floor assignments.
 const STAIR_TRAVERSAL_DIST: f32 = 15.0;
 
-/// Phase 9.41 — per-floor bias added when a candidate COOK STATION sits
-/// on a different floor than the ORDER (the guest's seat_floor). Large
-/// enough (>> any within-restaurant distance + chef stair commute) that
-/// a station on the order's own floor always beats one on another floor,
-/// so the order is cooked where it'll be delivered and the waiter doesn't
-/// cross floors to pick it up. Only when every station on the order's
-/// floor is occupied does the next-nearest floor win (the bias scales
-/// with floor distance, so it spills to an adjacent floor before a
-/// distant one). The chef may still commute across floors to reach the
-/// chosen station — that's the within-floor-tier tiebreaker.
-const SEAT_FLOOR_BIAS: f32 = 1000.0;
+// Phase 9.55 — the 9.41 SEAT_FLOOR_BIAS "soft preference" is gone.
+// Cross-floor cooking is now a hard NO (auto_claim_queued_tickets skips
+// any station not on the order's floor + any chef not assigned to it),
+// so a tunable bias is no longer needed.
 
 /// Distance from a staff actor to a target point, with a per-floor
 /// stair penalty applied. Used for picking the "nearest" candidate
@@ -1329,17 +1322,22 @@ fn pop_nearest_staff(
     tz: f32,
     t_floor: u32,
 ) -> Option<StaffActor> {
-    if pool.is_empty() { return None; }
-    let mut best_idx = 0usize;
-    let mut best_dist = staff_dist_to(&pool[0], tx, tz, t_floor);
-    for (i, a) in pool.iter().enumerate().skip(1) {
+    // Phase 9.55 — STRICT per-floor staffing. Only a staff member whose
+    // ASSIGNED floor (home_floor) is the work's floor is eligible — no
+    // autonomous cross-floor any more. The player moves staff between
+    // floors explicitly (the StaffPanel floor control), and that's the
+    // ONLY way a member ever serves another floor. A floor with no staff
+    // of the needed role simply doesn't get that service (its customers
+    // wait + leave) — the burden is on the player to staff each floor.
+    let mut best: Option<(usize, f32)> = None;
+    for (i, a) in pool.iter().enumerate() {
+        if a.home_floor != t_floor { continue; }
         let d = staff_dist_to(a, tx, tz, t_floor);
-        if d < best_dist {
-            best_dist = d;
-            best_idx = i;
+        if best.map_or(true, |(_, bd)| d < bd) {
+            best = Some((i, d));
         }
     }
-    Some(pool.swap_remove(best_idx))
+    best.map(|(idx, _)| pool.swap_remove(idx))
 }
 
 /// Phase 9.42 — Observability. Scans the restaurant for the anomaly
@@ -1537,17 +1535,20 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
             if def_provides(&f.def_id) != Some(ticket.appliance.as_str()) { continue; }
             if occupied.contains(&f.uid) { continue; }
-            // Phase 9.41 — strongly prefer a station on the ORDER's floor
-            // (ticket.seat_floor) so the cook + pickup + delivery all land
-            // on one floor; falls back to the nearest other floor only when
-            // this floor's stations are full. Keyed on the STATION's floor,
-            // NOT the chef's — the chef may commute across floors.
-            let station_floor_bias = (f.floor as i32 - ticket.seat_floor as i32)
-                .unsigned_abs() as f32 * SEAT_FLOOR_BIAS;
-            // Cheapest actor for this candidate station.
+            // Phase 9.55 — STRICT per-floor staffing (replaces the 9.41
+            // SEAT_FLOOR_BIAS "soft preference"). The dish is cooked on the
+            // ORDER's floor, full stop: skip every station on another floor.
+            // The CHEF must also be assigned to that floor (filter below).
+            // A chef may still move between free stations ON ITS OWN FLOOR
+            // (the player chose "keep station sharing"), but never crosses
+            // floors. If the order's floor has no chef or no free station,
+            // the order waits — the player staffs each floor they seat on.
+            if f.floor != ticket.seat_floor { continue; }
+            // Cheapest same-floor chef for this candidate station.
             let mut local_best: Option<(usize, f32)> = None;
             for (i, a) in pool.iter().enumerate() {
-                let d = staff_dist_to(a, f.x, f.z, f.floor) + station_floor_bias;
+                if a.home_floor != ticket.seat_floor { continue; }
+                let d = staff_dist_to(a, f.x, f.z, f.floor);
                 if local_best.map(|(_, bd)| d < bd).unwrap_or(true) {
                     local_best = Some((i, d));
                 }
@@ -4087,6 +4088,7 @@ fn try_dispatch_seat_clean(ctx: &ReducerContext, rid: u64) {
         let mut best: Option<(usize, usize, f32)> = None; // (waiter_idx, seat_idx, dist)
         for (wi, w) in idle_waiters.iter().enumerate() {
             for (si, s) in seats.iter().enumerate() {
+                if w.home_floor != s.3 { continue; } // 9.55 — strict per-floor
                 let d = staff_dist_to(w, s.1, s.2, s.3);
                 if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
                     best = Some((wi, si, d));
@@ -4191,6 +4193,7 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
     let mut best: Option<(usize, usize, f32)> = None; // (waiter_idx, station_idx, dist)
     for (wi, w) in idle_waiters.iter().enumerate() {
         for (si, s) in stations.iter().enumerate() {
+            if w.home_floor != s.floor { continue; } // 9.55 — strict per-floor
             let d = staff_dist_to(w, s.x, s.z, s.floor);
             if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
                 best = Some((wi, si, d));
