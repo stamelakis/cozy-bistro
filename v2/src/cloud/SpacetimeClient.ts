@@ -909,6 +909,20 @@ export class SpacetimeClient {
     }
   }
 
+  /** Anti-cheat B/C — fire the server-authoritative recurring starter
+   * grant. The server enforces the 3h cooldown + plot-size amount and
+   * credits cloud_money_cents; the client adopts via the restaurant
+   * subscription. Server-side no-op when the cooldown isn't due, so the
+   * client may call it on every enterGame. */
+  claimStarterGrant(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimStarterGrant({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] claimStarterGrant failed:", e);
+    }
+  }
+
   /** H.60 — Push the full rating-history snapshot (the rolling 1-5
    * vote list, capped at 500 entries / ~1KB) to Restaurant.  Fires
    * from ReputationSystem on every recordRating.  Idempotent

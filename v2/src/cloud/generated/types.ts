@@ -417,6 +417,7 @@ export const Restaurant = __t.object("Restaurant", {
   cloudDailyLost: __t.u32(),
   healthSummaryCsv: __t.option(__t.string()),
   cloudDailyTipsCents: __t.i64(),
+  lastGrantMicros: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

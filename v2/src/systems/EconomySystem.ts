@@ -1,4 +1,5 @@
 import type { SaveGameState, TransactionLogEntry } from "../data/types";
+import { isServerSim } from "../game/featureFlags";
 
 const maxTransactionLogEntries = 5000;
 
@@ -83,17 +84,27 @@ export class EconomySystem {
     if (!this.canAfford(amount)) {
       return false;
     }
-
-    this.money -= amount;
+    // Anti-cheat B/C — when the server owns money (isServerSim("money")),
+    // the local balance is a pure mirror of cloud_money_cents. The
+    // affordability check stays as an optimistic UI gate (re-checked
+    // authoritatively in the validated server reducer); the actual debit
+    // happens server-side and is adopted back via setMoney.
+    if (!isServerSim("money")) {
+      this.money -= amount;
+    }
     return true;
   }
 
   charge(amount: number): void {
-    this.money -= amount;
+    if (!isServerSim("money")) {
+      this.money -= amount;
+    }
   }
 
   earn(amount: number): void {
-    this.money += amount;
+    if (!isServerSim("money")) {
+      this.money += amount;
+    }
   }
 
   setMoney(amount: number): void {

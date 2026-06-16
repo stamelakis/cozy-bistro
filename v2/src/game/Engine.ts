@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { IsoCamera } from "../scene/IsoCamera";
 import { WorldScene } from "../scene/WorldScene";
 import { Game } from "./Game";
+import { isServerSim } from "./featureFlags";
 import { GuestSpawner } from "./GuestSpawner";
 import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
 import { getFurnitureDef } from "../data/furnitureCatalog";
@@ -2329,7 +2330,13 @@ export class Engine {
         const lastGrant = lastGrantStr ? parseInt(lastGrantStr, 10) : 0;
         const now = Date.now();
         const cooldownElapsed = (now - lastGrant) >= GRANT_COOLDOWN_MS;
-        if (didClaim || cooldownElapsed) {
+        if (isServerSim("money")) {
+          // Anti-cheat B/C — server-authoritative grant: the server owns
+          // the cooldown + plot-size amount and credits cloud_money_cents;
+          // the client adopts via the restaurant subscription. The reducer
+          // no-ops when not due, so no client bookkeeping is needed.
+          this.cloud.claimStarterGrant();
+        } else if (didClaim || cooldownElapsed) {
           this.game.economy.earnMoney(bonus, "grant");
           // Phase 9.3 — Eager-push the grant to cloud_money_cents.
           // The grant lands BEFORE the first money anchor (the

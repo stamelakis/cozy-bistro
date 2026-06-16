@@ -528,6 +528,13 @@ pub struct Restaurant {
     /// End-of-struct + primitive default keeps the publish additive.
     #[default(0i64)]
     pub cloud_daily_tips_cents: i64,
+    /// Anti-cheat B/C — server-side cooldown for the recurring starter
+    /// grant (claim_starter_grant). Unix micros of the last grant; 0 =
+    /// never granted, so the first claim always fires. Replaces the
+    /// client's localStorage 3h cooldown, which a cheater could reset to
+    /// mint grants repeatedly.
+    #[default(0i64)]
+    pub last_grant_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

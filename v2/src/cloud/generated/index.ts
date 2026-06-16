@@ -53,6 +53,7 @@ import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimDirtyPileReducer from "./claim_dirty_pile_reducer";
+import ClaimStarterGrantReducer from "./claim_starter_grant_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
 import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
@@ -724,6 +725,7 @@ const reducersSchema = __reducers(
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_dirty_pile", ClaimDirtyPileReducer),
+  __reducerSchema("claim_starter_grant", ClaimStarterGrantReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),

@@ -44,6 +44,14 @@ export interface ServerSimFlags {
   /** Phase F — placed furniture lives in placed_furniture table;
    * build / move / sell go through reducers. */
   furniture: boolean;
+  /** Anti-cheat B/C — the server is the SOLE authority for
+   * cloud_money_cents. When on, the client's EconomySystem is a pure
+   * mirror (never writes money locally); every income flow + spend goes
+   * through a server reducer and the client adopts the result. OFF until
+   * the cutover is built + tested — a cheater can't be stopped while ANY
+   * client still writes money, so this only protects after the default
+   * flips AND the server rejects bump_cloud_money. */
+  money: boolean;
 }
 
 const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
@@ -116,6 +124,11 @@ const DEFAULTS: ServerSimFlags = {
   // Phase H cutover step 1 — furniture flag flipped default-on
   // (post-H.35).
   furniture: true,
+  // Anti-cheat B/C — money cutover. OFF until built + tested. Test with
+  // ?serverSim=all (turns on all five sims AND money, matching production
+  // + the cutover). Flipping this true is the LAST build step, after the
+  // server is ready to reject client money writes.
+  money: false,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
@@ -132,20 +145,20 @@ function parseFlagList(raw: string | null | undefined): Partial<ServerSimFlags> 
   if (!raw) return {};
   const trimmed = raw.trim().toLowerCase();
   if (trimmed === "" || trimmed === "off" || trimmed === "none" || trimmed === "false") {
-    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false };
+    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false };
   }
   if (trimmed === "all" || trimmed === "on" || trimmed === "true") {
-    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true };
+    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true, money: true };
   }
   // Explicit list: start from all-off, then enable the listed
   // subsystems. Result: only the listed ones are on.
   const out: ServerSimFlags = {
-    guests: false, tickets: false, staff: false, dishware: false, furniture: false,
+    guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false,
   };
   for (const tok of trimmed.split(",")) {
     const key = tok.trim();
     if (key === "guests" || key === "tickets" || key === "staff"
-        || key === "dishware" || key === "furniture") {
+        || key === "dishware" || key === "furniture" || key === "money") {
       out[key] = true;
     }
   }

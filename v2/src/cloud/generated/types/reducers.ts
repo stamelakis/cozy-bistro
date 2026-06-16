@@ -25,6 +25,7 @@ import CancelRecipeUpgradeReducer from "../cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "../cancel_ticket_reducer";
 import ClaimBuildingReducer from "../claim_building_reducer";
 import ClaimDirtyPileReducer from "../claim_dirty_pile_reducer";
+import ClaimStarterGrantReducer from "../claim_starter_grant_reducer";
 import ClaimTicketReducer from "../claim_ticket_reducer";
 import ClearWaiterRestSpotReducer from "../clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "../consume_pending_day_advancement_reducer";
@@ -129,6 +130,7 @@ export type CancelRecipeUpgradeParams = __Infer<typeof CancelRecipeUpgradeReduce
 export type CancelTicketParams = __Infer<typeof CancelTicketReducer>;
 export type ClaimBuildingParams = __Infer<typeof ClaimBuildingReducer>;
 export type ClaimDirtyPileParams = __Infer<typeof ClaimDirtyPileReducer>;
+export type ClaimStarterGrantParams = __Infer<typeof ClaimStarterGrantReducer>;
 export type ClaimTicketParams = __Infer<typeof ClaimTicketReducer>;
 export type ClearWaiterRestSpotParams = __Infer<typeof ClearWaiterRestSpotReducer>;
 export type ConsumePendingDayAdvancementParams = __Infer<typeof ConsumePendingDayAdvancementReducer>;

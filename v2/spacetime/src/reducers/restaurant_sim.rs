@@ -13,7 +13,7 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_menu, active_ticket, auth_record, customer_archetype, dirty_pile,
+    active_guest, active_menu, active_ticket, auth_record, building, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, furniture_cost, hired_staff_member, ingredient_cost, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
@@ -3064,6 +3064,45 @@ pub fn set_furniture_cost(
     Ok(())
 }
 
+/// Anti-cheat B/C (income flow 1/5) — server-authoritative starter grant.
+/// Replaces the client's earnMoney+bump (Engine.enterGame / ExpandWidget)
+/// with a server credit on a server-enforced 3h cooldown, so a cheater
+/// can't reset the localStorage timer to mint grants. Amount is read from
+/// the owner's Building plot size (small/medium/large = $10/$15/$20).
+/// Idempotent within the cooldown window (silent no-op, not an error) so
+/// the client may call it on every enterGame.
+#[reducer]
+pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim the grant".into());
+    }
+    const GRANT_COOLDOWN_MICROS: i64 = 3 * 60 * 60 * 1_000_000; // 3 h
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_grant_micros != 0 && now - r.last_grant_micros < GRANT_COOLDOWN_MICROS {
+        return Ok(()); // not due yet — silent no-op
+    }
+    let bonus_cents: i64 = ctx.db.building().owner_identity().filter(ctx.sender)
+        .next()
+        .map(|b| match b.kind.as_str() {
+            "small" => 1000,
+            "large" => 2000,
+            _ => 1500,
+        })
+        .unwrap_or(1500);
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(bonus_cents),
+        last_grant_micros: now,
+        ..r
+    });
+    log::info!(
+        "claim_starter_grant: restaurant {} granted {} cents (kind-based)",
+        restaurant_id, bonus_cents,
+    );
+    Ok(())
+}
+
 /// Phase H.41 — Owner-only.  Called by the client on reconnect AFTER
 /// it has read Restaurant.pending_restock_cost_cents and debited the
 /// player's local money via forceSpendMoney("restock").  Resets the
@@ -5076,8 +5115,8 @@ fn apply_chef_speed(base_ms: i64, mult_x100: i32) -> i64 {
 
 /// Walk-speed multiplier (float) for a staff actor.  Chefs/barmen
 /// get no walk-speed bonus from training — their bonus is the
-/// chef_cook_multiplier on cook time.  Waiters get +10% speed per
-/// level, matching getWaiterSpeedMultiplier.  Unknown members
+/// chef_cook_multiplier on cook time.  Waiters get +3% speed per
+/// level (9.56), matching getWaiterSpeedMultiplier.  Unknown members
 /// default to 1.0× (no bonus).
 fn actor_speed_multiplier(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
     if role != "waiter" { return 1.0; }
