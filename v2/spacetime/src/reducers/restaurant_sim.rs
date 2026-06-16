@@ -6902,6 +6902,30 @@ fn try_assign_seat_for(
         .restaurant_id().filter(rid)
         .map(|d| d.seat_uid)
         .collect();
+    // Phase 9.57 — STAFFED-FLOORS gate. With strict per-floor staffing
+    // (9.55), a guest seated on a floor with no staff to serve them is
+    // doomed: no waiter to take the order, no cook to make it → they
+    // wait and walk out, with no recourse (nobody can cross to help).
+    // So don't seat on a floor that can't serve: it needs BOTH a waiter
+    // (takes + delivers) AND a cook (chef or barman, makes the food /
+    // drink). The player "opens" a floor to customers by staffing it —
+    // the same burden-on-the-player rule. Fallback: if NO floor is fully
+    // staffed (brand-new / totally-unstaffed restaurant) we DON'T refuse
+    // every guest — seat anywhere so the spawn flow isn't dead-ended.
+    let mut floor_has_waiter: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut floor_has_cook: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for a in ctx.db.staff_actor().restaurant_id().filter(rid) {
+        match a.role.as_str() {
+            "waiter" => { floor_has_waiter.insert(a.home_floor); }
+            "chef" | "barman" => { floor_has_cook.insert(a.home_floor); }
+            _ => {}
+        }
+    }
+    let served_floors: std::collections::HashSet<u32> = floor_has_waiter.iter()
+        .filter(|f| floor_has_cook.contains(f))
+        .copied()
+        .collect();
+    let restrict_floors = !served_floors.is_empty();
     // Phase 9.7 — prefer the REAL seat list the client mirrors into
     // seat_slot (one row per chair-at-table slot, uid in the client's
     // "{tableUid}#{slotIndex}" format). The legacy fallback below
@@ -6917,6 +6941,7 @@ fn try_assign_seat_for(
         have_slots = true;
         if taken_uids.contains(&s.seat_uid) { continue; }
         if dirty_uids.contains(&s.seat_uid) { continue; } // 9.45 — unservable while dirty
+        if restrict_floors && !served_floors.contains(&s.floor) { continue; } // 9.57 — unstaffed floor
         let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
             let dx = s.x - tx;
             let dz = s.z - tz;
@@ -6937,6 +6962,7 @@ fn try_assign_seat_for(
         if !is_seat_providing_def(&f.def_id) { continue; }
         if taken_uids.contains(&f.uid) { continue; }
         if dirty_uids.contains(&f.uid) { continue; } // 9.45 — unservable while dirty
+        if restrict_floors && !served_floors.contains(&f.floor) { continue; } // 9.57 — unstaffed floor
         // Skip chairs another guest is walking toward (catches the
         // local-pick race).
         let occupied_by_target = taken_targets.iter().any(|(tx, tz)| {
