@@ -1097,6 +1097,13 @@ export class Engine {
     this.game.registry = this.registry;
     // StaffPanel queries this to show "X working" badges.
     this.game.getStaffWorkingCount = (role) => {
+      // Phase 2 — the SERVER's staff_actor is the authority. The local
+      // router sim renders idle even when the server has the member
+      // working (drift grows across a session), so prefer the server's
+      // not-idle count; fall back to the local snapshot only when the
+      // cloud isn't ready (or for errand, which stays a local sim).
+      const srv = this.cloud?.getServerStaffWorkingCount(role);
+      if (srv != null) return srv;
       if (role === "chef") {
         return this.router?.snapshotStatus().filter((s) => s.role === "chef" && s.label).length ?? 0;
       }
@@ -1111,6 +1118,9 @@ export class Engine {
     // StaffPanel queries this for the "tickets queued" footer — keeps the
     // panel from looking "0 working" when there's actually work pending.
     this.game.getTicketStats = () => {
+      // Phase 2 — prefer the server's active_ticket tallies; local fallback.
+      const srv = this.cloud?.getServerTicketStats();
+      if (srv != null) return srv;
       const tickets = this.router?.tickets ?? [];
       let queued = 0, cooking = 0, ready = 0, delivering = 0;
       for (const t of tickets) {
@@ -1126,15 +1136,17 @@ export class Engine {
     // the router isn't ready yet (pre-staffReady) or the chef has
     // no work in their queue.
     this.game.getChefBacklog = (chefMemberId: string) => {
-      return this.router?.getChefBacklog?.(chefMemberId) ?? 0;
+      // Phase 2 — server active_ticket first, local router as fallback.
+      return this.cloud?.getServerChefBacklog(chefMemberId)
+        ?? this.router?.getChefBacklog?.(chefMemberId) ?? 0;
     };
     // Phase I (H.72) — same wiring for the other roles so StaffPanel
     // can render a per-member "currently working" badge across the
     // board.  Each accessor returns 0 when the router isn't ready
     // yet (pre-staffReady) — that's harmless since the badge then
     // just doesn't appear, matching the "idle" visual.
-    this.game.getBarmanBacklog = (id: string) => this.router?.getBarmanBacklog?.(id) ?? 0;
-    this.game.getWaiterBacklog = (id: string) => this.router?.getWaiterBacklog?.(id) ?? 0;
+    this.game.getBarmanBacklog = (id: string) => this.cloud?.getServerBarmanBacklog(id) ?? this.router?.getBarmanBacklog?.(id) ?? 0;
+    this.game.getWaiterBacklog = (id: string) => this.cloud?.getServerWaiterBacklog(id) ?? this.router?.getWaiterBacklog?.(id) ?? 0;
     this.game.getErrandBacklog = (id: string) => this.errand?.getHelperWorkload?.(id) ?? 0;
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);

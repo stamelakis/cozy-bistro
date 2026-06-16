@@ -228,6 +228,7 @@ export interface ActiveTicketRow {
 }
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
+import { isServerSim } from "../game/featureFlags";
 
 /** Base prefix for the stored auth token.  The actual storage key is
  * `<TOKEN_KEY_BASE>:<host-slug>` so each SpacetimeDB host gets its
@@ -4284,6 +4285,97 @@ export class SpacetimeClient {
       }
     } catch { /* table not wired yet */ }
     return m;
+  }
+
+  // ── Phase 2 — server-truth readouts for StaffPanel + HUD ──────────
+  // The local StaffRouter sim renders the server's dispatch decisions but
+  // re-derives its own timing, so its actors drift idle-looking the longer
+  // a session runs (the "staff look idle but the server has them working"
+  // bug). These read the SERVER's staff_actor + active_ticket — the
+  // authority — and return null when the cloud / subscription / flag isn't
+  // ready so the caller falls back to the local sim.
+
+  /** Members of `role` the SERVER counts as busy (state != "idle"). Only
+   * chef/waiter/barman are server-authoritative (errand is still a local
+   * sim) → null for anything else so the local count stands. */
+  getServerStaffWorkingCount(role: string): number | null {
+    if (role !== "chef" && role !== "waiter" && role !== "barman") return null;
+    if (!isServerSim("staff") || !this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      let n = 0;
+      for (const a of this.conn.db.staff_actor.iter()) {
+        if (a.restaurantId !== rid || a.role !== role) continue;
+        if (a.state !== "idle") n += 1;
+      }
+      return n;
+    } catch { return null; }
+  }
+
+  /** Ticket-state tallies for my restaurant, mapped to the panel's
+   * vocabulary (the server says waitingChef / pickedUp where the panel
+   * says queued / delivering). */
+  getServerTicketStats(): { queued: number; cooking: number; ready: number; delivering: number } | null {
+    if (!isServerSim("tickets") || !this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      let queued = 0, cooking = 0, ready = 0, delivering = 0;
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId !== rid) continue;
+        switch (t.state) {
+          case "queued": case "waitingChef": queued += 1; break;
+          case "cooking": cooking += 1; break;
+          case "ready": ready += 1; break;
+          case "delivering": case "pickedUp": delivering += 1; break;
+        }
+      }
+      return { queued, cooking, ready, delivering };
+    } catch { return null; }
+  }
+
+  /** A chef's in-flight cook load (non-bar tickets the server has on
+   * them). Returns 0 legitimately when they hold none; null only when the
+   * cloud isn't ready. */
+  getServerChefBacklog(memberId: string): number | null {
+    return this.serverCookBacklog(memberId, false);
+  }
+
+  /** A barman's in-flight load (bar tickets on them). */
+  getServerBarmanBacklog(memberId: string): number | null {
+    return this.serverCookBacklog(memberId, true);
+  }
+
+  private serverCookBacklog(memberId: string, bar: boolean): number | null {
+    if (!isServerSim("tickets") || !this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      let n = 0;
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId !== rid || t.assignedChefId !== memberId) continue;
+        if (bar !== (t.appliance === "bar")) continue;
+        if (t.state === "queued" || t.state === "waitingChef" || t.state === "cooking") n += 1;
+      }
+      return n;
+    } catch { return null; }
+  }
+
+  /** A waiter's concurrent task count straight off their staff_actor row:
+   * a delivery ticket + a take-order + a wash trip (max 3). Null when not
+   * registered server-side → local fallback. */
+  getServerWaiterBacklog(memberId: string): number | null {
+    if (!isServerSim("staff") || !this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      for (const a of this.conn.db.staff_actor.iter()) {
+        if (a.restaurantId !== rid || a.memberId !== memberId) continue;
+        let n = 0;
+        if (a.ticketId != null) n += 1;
+        if (a.takeOrderGuestId != null) n += 1;
+        if (a.washTargetUid && a.washTargetUid !== "") n += 1;
+        return n;
+      }
+      return null;
+    } catch { return null; }
   }
 
   /** Find the restaurant_id that belongs to the given owner identity
