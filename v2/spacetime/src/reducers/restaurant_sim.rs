@@ -13,7 +13,7 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_menu, active_ticket, customer_archetype, dirty_pile,
+    active_guest, active_menu, active_ticket, auth_record, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
@@ -2479,6 +2479,12 @@ pub fn set_recipe_ingredients(
             return Ok(()); // idempotent
         }
     }
+    // Phase A1 — admin gate (global catalog; see set_recipe_meta). A
+    // legit re-seed of identical data returns Ok above; an actual change
+    // to the shared catalog is the admin's call.
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Recipe catalog changes are admin-only".into());
+    }
     let row = RecipeIngredients { recipe_id, ingredients };
     if existing.is_some() {
         ctx.db.recipe_ingredients().recipe_id().update(row);
@@ -2517,6 +2523,18 @@ pub fn set_recipe_meta(
             && r.tier == tier {
             return Ok(()); // idempotent
         }
+    }
+    // Phase A1 — admin gate. recipe_meta is GLOBAL and feeds
+    // total_paid_cents (sales income) for EVERY restaurant, yet this
+    // reducer accepted a price from any authenticated client — a
+    // cross-player money-print / grief hole. A legit client re-seeding
+    // the SAME values returned Ok above (idempotent); only an actual
+    // CHANGE to the shared catalog reaches here, and that's the admin's
+    // (Dunnin's) call, not any player's.
+    let caller_is_admin = ctx.db.auth_record().identity().filter(ctx.sender)
+        .any(|a| a.is_admin);
+    if !caller_is_admin {
+        return Err("Recipe catalog changes are admin-only".into());
     }
     let row = RecipeMeta {
         recipe_id,
@@ -2824,6 +2842,12 @@ pub fn set_customer_archetype(
             return Ok(()); // idempotent
         }
     }
+    // Phase A1 — admin gate (global catalog; see set_recipe_meta).
+    // tip_mult_x100 feeds tip income, so an ungated change was a
+    // cross-player money lever. An idempotent re-seed passes above.
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Customer archetype catalog is admin-only".into());
+    }
     let row = CustomerArchetypeDef {
         archetype_id,
         weight,
@@ -2986,6 +3010,13 @@ pub fn set_ingredient_cost(
     let existing = ctx.db.ingredient_cost().ingredient_id().find(ingredient_id.clone());
     if let Some(r) = &existing {
         if r.cost_cents == cost_cents { return Ok(()); } // idempotent
+    }
+    // Phase A1 — admin gate (global catalog; see set_recipe_meta).
+    // Ingredient costs feed both restock spend and the recipe sell
+    // price, so an ungated change was a money lever. Idempotent re-seed
+    // passes above.
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Ingredient cost catalog is admin-only".into());
     }
     let row = IngredientCost { ingredient_id, cost_cents };
     if existing.is_some() {
