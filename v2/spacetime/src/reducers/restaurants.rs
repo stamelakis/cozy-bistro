@@ -65,6 +65,9 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         cloud_daily_tips_cents: 0,
         // Anti-cheat B/C — starter-grant cooldown; 0 = first claim fires.
         last_grant_micros: 0,
+        last_low_balance_grant_micros: 0,
+        last_recycle_micros: 0,
+        cumulative_achievement_cents: 0,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.
         cached_style_x100: 0,

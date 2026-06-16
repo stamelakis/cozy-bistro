@@ -535,6 +535,20 @@ pub struct Restaurant {
     /// mint grants repeatedly.
     #[default(0i64)]
     pub last_grant_micros: i64,
+    /// Anti-cheat B/C — once-per-day low-balance grant cooldown (Unix
+    /// micros of the last claim; 0 = never). Server-enforced so a cheater
+    /// can't reset the client's localStorage day-key to re-claim.
+    #[default(0i64)]
+    pub last_low_balance_grant_micros: i64,
+    /// Anti-cheat B/C — recycle rate-limit (Unix micros of last claim);
+    /// bounds claim_recycle spam to the legit ~9s trash-expiry rate.
+    #[default(0i64)]
+    pub last_recycle_micros: i64,
+    /// Anti-cheat B/C — lifetime achievement income (cents). claim_
+    /// achievement is client-driven (unlock condition is client-side), so
+    /// it's bounded by a lifetime cap tracked here.
+    #[default(0i64)]
+    pub cumulative_achievement_cents: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

@@ -3103,6 +3103,107 @@ pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(
     Ok(())
 }
 
+/// Anti-cheat B/C (income flow 2/5) — low-balance safety-net grant.
+/// Replaces ExpandWidget's earnMoney+localStorage with a server credit
+/// gated on the SERVER's balance read + a 24h cooldown, so a cheater
+/// can't reset the day-key or fake a low balance to mint $500/claim.
+#[reducer]
+pub fn claim_low_balance_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim the grant".into());
+    }
+    const THRESHOLD_CENTS: i64 = 50_000; // $500 — matches STARTER_GRANT_THRESHOLD
+    const AMOUNT_CENTS: i64 = 50_000;    // $500 — matches STARTER_GRANT_AMOUNT
+    const COOLDOWN_MICROS: i64 = 24 * 60 * 60 * 1_000_000; // ~once per day
+    if r.cloud_money_cents >= THRESHOLD_CENTS {
+        return Ok(()); // not broke — silent no-op
+    }
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_low_balance_grant_micros != 0
+        && now - r.last_low_balance_grant_micros < COOLDOWN_MICROS {
+        return Ok(()); // already claimed today
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(AMOUNT_CENTS),
+        last_low_balance_grant_micros: now,
+        ..r
+    });
+    Ok(())
+}
+
+/// Anti-cheat B/C (income flow 3/5) — admin money adjust. The AdminModal
+/// dev buttons (Dunnin only) now route here instead of earnMoney/
+/// forceSpendMoney. Admin-gated so a regular player can't credit
+/// themselves; delta may be negative (debit).
+#[reducer]
+pub fn admin_adjust_money(ctx: &ReducerContext, restaurant_id: u64, delta_cents: i64) -> Result<(), String> {
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Admin only".into());
+    }
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
+        ..r
+    });
+    Ok(())
+}
+
+/// Anti-cheat B/C (income flow 4/5) — recycle reward. The client's
+/// TrashSpawner auto-recycles an expired piece (~every 9s) for $2; when
+/// the money flag is on it calls this instead of earnMoney. Rate-limited
+/// to 8s server-side so a spammer can't beat the legit expiry rate.
+#[reducer]
+pub fn claim_recycle(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim recycle".into());
+    }
+    const RECYCLE_REWARD_CENTS: i64 = 200; // $2 — matches client RECYCLE_REWARD
+    const MIN_INTERVAL_MICROS: i64 = 8_000_000; // 8 s (< 9 s spawn interval)
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_recycle_micros != 0 && now - r.last_recycle_micros < MIN_INTERVAL_MICROS {
+        return Ok(()); // too soon — silent no-op
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(RECYCLE_REWARD_CENTS),
+        last_recycle_micros: now,
+        ..r
+    });
+    Ok(())
+}
+
+/// Anti-cheat B/C (income flow 5/5) — achievement reward. The unlock
+/// condition is client-side and can't be verified server-side, so the
+/// reward is client-provided but BOUNDED: clamped per-claim and capped
+/// over the restaurant's lifetime (cumulative_achievement_cents), so a
+/// cheater can mint at most CUMULATIVE_CAP this way (~the sum of all real
+/// achievement rewards).
+#[reducer]
+pub fn claim_achievement(ctx: &ReducerContext, restaurant_id: u64, reward_cents: i64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim an achievement".into());
+    }
+    const PER_CLAIM_CAP_CENTS: i64 = 500_000;     // $5,000 per achievement
+    const CUMULATIVE_CAP_CENTS: i64 = 10_000_000; // $100k lifetime ceiling
+    let amount = reward_cents.clamp(0, PER_CLAIM_CAP_CENTS);
+    if amount == 0 || r.cumulative_achievement_cents >= CUMULATIVE_CAP_CENTS {
+        return Ok(());
+    }
+    let credited = amount.min(CUMULATIVE_CAP_CENTS - r.cumulative_achievement_cents);
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(credited),
+        cumulative_achievement_cents: r.cumulative_achievement_cents.saturating_add(credited),
+        ..r
+    });
+    Ok(())
+}
+
 /// Phase H.41 — Owner-only.  Called by the client on reconnect AFTER
 /// it has read Restaurant.pending_restock_cost_cents and debited the
 /// player's local money via forceSpendMoney("restock").  Resets the
