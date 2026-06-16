@@ -1608,6 +1608,22 @@ pub struct RecipeMeta {
     pub tier: u32,
 }
 
+/// Phase A2 (anti-cheat) — server-side furniture cost catalog. The
+/// validated place_furniture reducer (Phase B) reads this to price-check
+/// a purchase instead of trusting the client's local spend. cost_cents
+/// is the already-scaled price (client's scaledCost = base × tier^1.4,
+/// snapped up to $10), in cents. Client seeds at boot from
+/// src/data/furnitureCatalog.ts via set_furniture_cost; an idempotent
+/// re-seed is open, but a CHANGE is admin-gated (catalog data, like
+/// recipe_meta).
+#[table(name = furniture_cost, public)]
+pub struct FurnitureCost {
+    #[primary_key]
+    pub def_id: String,
+    /// Scaled purchase price in cents.
+    pub cost_cents: i64,
+}
+
 /// Phase H.53 — Per-restaurant per-recipe upgrade level.  Mirrors
 /// CookingSystem.recipeUpgradeLevels[recipeId] on the client.  When
 /// missing, server defaults to level 1 (base values from recipe_meta

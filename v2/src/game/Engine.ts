@@ -1413,7 +1413,7 @@ export class Engine {
       // The per-restaurant recipe_level mirror is gated separately
       // since it's owner-specific state — H.43 reconciles those on
       // every connect via the drain path, not via this seed loop.
-      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed";
+      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v2"; // v2: + furniture_cost (Phase A2)
       const CATALOG_SEED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
       const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY);
       const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw, 10) : 0;
@@ -1469,6 +1469,15 @@ export class Engine {
         void import("../data/ingredients").then(({ INGREDIENT_COSTS }) => {
           for (const [id, dollars] of Object.entries(INGREDIENT_COSTS)) {
             this.cloud.setIngredientCost(id, Math.round(dollars * 100));
+          }
+        });
+        // Phase A2 (anti-cheat) — seed furniture_cost so the server can
+        // price-check furniture purchases (Phase B). scaledCost is the
+        // displayed buy price; ×100 → cents. Only the admin's seed lands
+        // (set_furniture_cost gates changes); non-admin re-seeds no-op.
+        void import("../data/furnitureCatalog").then(({ furnitureCatalog, scaledCost }) => {
+          for (const def of furnitureCatalog) {
+            this.cloud.setFurnitureCost(def.id, Math.round(scaledCost(def) * 100));
           }
         });
         localStorage.setItem(LAST_CATALOG_SEED_KEY, String(Date.now()));

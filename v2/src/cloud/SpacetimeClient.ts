@@ -2452,6 +2452,23 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase A2 (anti-cheat) — seed one furniture def's scaled cost (cents)
+   * so the validated place_furniture reducer can price-check a purchase.
+   * Idempotent server-side; a CHANGE is admin-only. */
+  setFurnitureCost(defId: string, costCents: number): void {
+    if (!this.conn) return;
+    if (!defId) return;
+    if (!Number.isFinite(costCents) || costCents < 0) return;
+    try {
+      this.conn.reducers.setFurnitureCost({
+        defId,
+        costCents: BigInt(Math.round(costCents)),
+      });
+    } catch (e) {
+      console.warn("[Cloud] setFurnitureCost failed:", e);
+    }
+  }
+
   /** H.41 — Read the restaurant's accrued auto-shop debt.  Caller is
    * Engine.onSubscriptionReady; returns cents that should be debited
    * via game.economy.forceSpendMoney("restock") before firing

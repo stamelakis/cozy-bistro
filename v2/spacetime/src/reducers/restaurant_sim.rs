@@ -14,12 +14,12 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_menu, active_ticket, auth_record, customer_archetype, dirty_pile,
-    dishware_pool, dishwasher_batch, hired_staff_member, ingredient_cost, pantry_stock,
+    dishware_pool, dishwasher_batch, furniture_cost, hired_staff_member, ingredient_cost, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, staff_actor, weather_state,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
@@ -3023,6 +3023,43 @@ pub fn set_ingredient_cost(
         ctx.db.ingredient_cost().ingredient_id().update(row);
     } else {
         ctx.db.ingredient_cost().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase A2 (anti-cheat) — seed the furniture cost catalog. The client
+/// seeds at boot from furnitureCatalog.ts (scaledCost per def); the
+/// validated place_furniture reducer (Phase B) reads these to price-check
+/// a purchase. Idempotent re-seed is open to any client; an actual CHANGE
+/// is admin-only (Dunnin), since a player must not set the prices that
+/// gate their own purchases.
+#[reducer]
+pub fn set_furniture_cost(
+    ctx: &ReducerContext,
+    def_id: String,
+    cost_cents: i64,
+) -> Result<(), String> {
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero { return Err("Must be authenticated".into()); }
+    if def_id.is_empty() || def_id.len() > 64 {
+        return Err("def_id must be 1-64 chars".into());
+    }
+    if cost_cents < 0 {
+        return Err("cost_cents cannot be negative".into());
+    }
+    let existing = ctx.db.furniture_cost().def_id().find(def_id.clone());
+    if let Some(r) = &existing {
+        if r.cost_cents == cost_cents { return Ok(()); } // idempotent
+    }
+    // Admin gate (see set_recipe_meta). Idempotent re-seed passes above.
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Furniture cost catalog changes are admin-only".into());
+    }
+    let row = FurnitureCost { def_id, cost_cents };
+    if existing.is_some() {
+        ctx.db.furniture_cost().def_id().update(row);
+    } else {
+        ctx.db.furniture_cost().insert(row);
     }
     Ok(())
 }

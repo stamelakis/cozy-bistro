@@ -104,6 +104,7 @@ import SetCloudRatingHistoryReducer from "./set_cloud_rating_history_reducer";
 import SetCloudTransactionLogReducer from "./set_cloud_transaction_log_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetErrandStateReducer from "./set_errand_state_reducer";
+import SetFurnitureCostReducer from "./set_furniture_cost_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
@@ -155,6 +156,7 @@ import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
+import FurnitureCostRow from "./furniture_cost_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
@@ -404,6 +406,17 @@ const tablesSchema = __schema({
       { name: 'friendship_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, FriendshipRow),
+  furniture_cost: __table({
+    name: 'furniture_cost',
+    indexes: [
+      { accessor: 'def_id', name: 'furniture_cost_def_id_idx_btree', algorithm: 'btree', columns: [
+        'defId',
+      ] },
+    ],
+    constraints: [
+      { name: 'furniture_cost_def_id_key', constraint: 'unique', columns: ['defId'] },
+    ],
+  }, FurnitureCostRow),
   hired_staff_member: __table({
     name: 'hired_staff_member',
     indexes: [
@@ -762,6 +775,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_cloud_transaction_log", SetCloudTransactionLogReducer),
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_errand_state", SetErrandStateReducer),
+  __reducerSchema("set_furniture_cost", SetFurnitureCostReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),

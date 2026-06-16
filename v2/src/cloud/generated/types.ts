@@ -219,6 +219,12 @@ export const Friendship = __t.object("Friendship", {
 });
 export type Friendship = __Infer<typeof Friendship>;
 
+export const FurnitureCost = __t.object("FurnitureCost", {
+  defId: __t.string(),
+  costCents: __t.i64(),
+});
+export type FurnitureCost = __Infer<typeof FurnitureCost>;
+
 export const HiredStaffMember = __t.object("HiredStaffMember", {
   memberId: __t.string(),
   restaurantId: __t.u64(),
