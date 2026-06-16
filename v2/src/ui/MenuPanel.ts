@@ -294,7 +294,7 @@ export class MenuPanel {
    * `refreshTabs` never touch the click handler or the button identity,
    * so a tap can't race with a re-render. */
   private buildTabs(): void {
-    const baseProfits = [3, 4, 5, 6, 7];
+    const baseProfits = ([1, 2, 3, 4, 5] as const).map((t) => this.game.getTierBaseProfit(t));
     for (let t = 1; t <= 5; t += 1) {
       const tier = t as LuxuryTier;
       const btn = document.createElement("button");
@@ -335,7 +335,7 @@ export class MenuPanel {
    * under their pointer. */
   private refreshTabs(): void {
     const playerTier = this.game.getLuxuryTier();
-    const baseProfits = [3, 4, 5, 6, 7];
+    const baseProfits = ([1, 2, 3, 4, 5] as const).map((t) => this.game.getTierBaseProfit(t));
     for (let i = 0; i < this.tabBtns.length; i += 1) {
       const tier = (i + 1) as LuxuryTier;
       const locked = tier > playerTier;

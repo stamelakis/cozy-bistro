@@ -190,7 +190,7 @@ export class UpgradeModal {
   private renderTabs(): void {
     this.tabs.innerHTML = "";
     const playerTier = this.game.getLuxuryTier();
-    const baseProfits = [3, 4, 5, 6, 7];
+    const baseProfits = ([1, 2, 3, 4, 5] as const).map((t) => this.game.getTierBaseProfit(t));
     for (let t = 1; t <= 5; t += 1) {
       const tier = t as LuxuryTier;
       const locked = tier > playerTier;
@@ -349,21 +349,21 @@ export class UpgradeModal {
                                         next: (lv: number) => string }> = {
       chef: {
         emoji: "🧑‍🍳", label: "Chef", stat: "cook speed",
-        current: (lv) => `Cooks at ${100 - 10 * lv}% of base time`,
-        next: (lv) => `→ ${100 - 10 * (lv + 1)}% (-10% cook time)`,
+        current: (lv) => `Cooks at ${100 - 3 * lv}% of base time`,
+        next: (lv) => `→ ${100 - 3 * (lv + 1)}% (-3% cook time)`,
       },
       waiter: {
         emoji: "🍽️", label: "Waiter", stat: "serve speed",
-        current: (lv) => `Walks at ${100 + 10 * lv}% of base speed`,
-        next: (lv) => `→ ${100 + 10 * (lv + 1)}% (+10% serve speed)`,
+        current: (lv) => `Walks at ${100 + 3 * lv}% of base speed`,
+        next: (lv) => `→ ${100 + 3 * (lv + 1)}% (+3% serve speed)`,
       },
       barman: {
         // Same training curve as the chef — training shaves drink mix
         // time the same way it shaves cook time. The visual + label is
         // bar-themed so the player doesn't confuse training screens.
         emoji: "🍸", label: "Barman", stat: "mix speed",
-        current: (lv) => `Mixes at ${100 - 10 * lv}% of base time`,
-        next: (lv) => `→ ${100 - 10 * (lv + 1)}% (-10% mix time)`,
+        current: (lv) => `Mixes at ${100 - 3 * lv}% of base time`,
+        next: (lv) => `→ ${100 - 3 * (lv + 1)}% (-3% mix time)`,
       },
       errand: {
         emoji: "📦", label: "Errand Helper", stat: "carry capacity",
