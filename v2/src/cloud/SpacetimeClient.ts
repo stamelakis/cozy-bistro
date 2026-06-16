@@ -4266,6 +4266,26 @@ export class SpacetimeClient {
     return out;
   }
 
+  /** Map of member_id → the server's CURRENT home_floor for every
+   * staff_actor in the subscription cache. The client (StaffSystem)
+   * is the source of truth for floor assignment, but the server's row
+   * can drift stale if a re-register was ever missed (e.g. a pre-9.55
+   * assignment, or a dropped reducer call). StaffRouter's home_floor
+   * self-heal (Phase 9.59) reads this every ~1 s and re-pushes any
+   * idle actor whose server floor no longer matches the player's
+   * assignment, so the strict per-floor dispatch always uses the
+   * floors the player actually set. */
+  getServerHomeFloorMap(): Map<string, number> {
+    const m = new Map<string, number>();
+    if (!this.conn) return m;
+    try {
+      for (const a of this.conn.db.staff_actor.iter()) {
+        m.set(a.memberId, a.homeFloor);
+      }
+    } catch { /* table not wired yet */ }
+    return m;
+  }
+
   /** Find the restaurant_id that belongs to the given owner identity
    * (passed as a hex string). Used by VisitMode to wire live-state
    * subscriptions on the visited host's rid. Returns null when no

@@ -2168,6 +2168,12 @@ export class StaffRouter {
     this.cloudActorAccum += dt;
     const periodicFire = this.cloudActorAccum >= 1.0;
     if (periodicFire) this.cloudActorAccum = 0;
+    // Phase 9.59 — snapshot the server's home_floor for every actor once
+    // per periodic pass so the loop can self-heal any that drifted from
+    // the player's assignment (cheap O(actors), built once not per-actor).
+    const serverFloors = periodicFire && this.cloud
+      ? this.cloud.getServerHomeFloorMap()
+      : null;
     for (const pool of [this.chefs, this.waiters, this.barmen]) {
       for (const a of pool) {
         const fingerprint = `${a.state}|${a.ticketId ?? ""}|${a.target.x.toFixed(2)}|${a.target.y.toFixed(2)}`;
@@ -2176,9 +2182,40 @@ export class StaffRouter {
           a.lastMirrorFingerprint = fingerprint;
           continue;
         }
-        if (periodicFire) this.mirrorActorUpdate(a);
+        if (periodicFire) {
+          this.mirrorActorUpdate(a);
+          this.healHomeFloorIfStale(a, serverFloors);
+        }
       }
     }
+  }
+
+  /** Per-member cooldown (ms epoch) so the self-heal doesn't re-push every
+   * 1 s tick during the ~100 ms the server takes to apply a correction. */
+  private homeFloorHealAt = new Map<string, number>();
+
+  /** Phase 9.59 — home_floor self-heal. The player's StaffSystem floor
+   * assignment is canonical; the server's staff_actor.home_floor must
+   * match it or the strict per-floor dispatch (9.55) routes work to the
+   * wrong floor — the exact "I set 3/3 but the server thinks 4/2" drift.
+   * If an IDLE actor's server floor differs, re-register to correct it
+   * (the register branch resets the row to idle on the right storey,
+   * harmless for an already-idle actor). Idle-only so an actor mid-cook
+   * or mid-delivery is never disturbed — it heals when it next goes idle. */
+  private healHomeFloorIfStale(
+    a: StaffActor,
+    serverFloors: Map<string, number> | null,
+  ): void {
+    if (!serverFloors || a.state !== "idle") return;
+    const sf = serverFloors.get(a.memberId);
+    if (sf == null || sf === a.homeFloor) return;
+    const now = Date.now();
+    if (now < (this.homeFloorHealAt.get(a.memberId) ?? 0)) return;
+    this.homeFloorHealAt.set(a.memberId, now + 4000);
+    this.mirrorActorRegister(a);
+    console.log(
+      `[Sync] home_floor self-heal: ${a.role} ${a.memberId} server F${sf} → assigned F${a.homeFloor}`,
+    );
   }
 
   private mirrorActorRegister(a: StaffActor): void {
