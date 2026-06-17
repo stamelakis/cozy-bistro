@@ -3809,7 +3809,17 @@ export class Engine {
     // when zoomed in). Only writes the flag when it CHANGES — three.js
     // clears the shadow render target on every state flip otherwise.
     const presetWantsShadows = GRAPHICS_PRESETS[this.currentQuality].sunShadows;
-    const desiredSunShadow = presetWantsShadows && zoomPercent >= 0.45;
+    // Anti-freeze — the sun shadow map is a SECOND full render pass over
+    // every shadow-caster. Focusing an upper storey reveals all floors
+    // below at once, so on a big multi-floor restaurant that pass can spike
+    // a low-end GPU (1050 Ti) past its driver watchdog → device reset →
+    // permanent freeze. Cap shadows to the lowest storeys, where only a
+    // floor or two is visible; higher up, shadows are barely legible amid
+    // the cutaway anyway. (Tighten SHADOW_MAX_STOREY to 0 if a 2-floor view
+    // still trips it.)
+    const SHADOW_MAX_STOREY = 1;
+    const desiredSunShadow = presetWantsShadows && zoomPercent >= 0.45
+      && this.scene.getFocusedStorey() <= SHADOW_MAX_STOREY;
     if (desiredSunShadow !== this.sunShadowOn) {
       this.sunShadowOn = desiredSunShadow;
       this.scene.setSunShadowsEnabled(desiredSunShadow);
