@@ -1645,6 +1645,19 @@ pub struct FurnitureCost {
     pub cost_cents: i64,
 }
 
+/// Anti-cheat B/C — global money-cutover switch. Single row (id = 1).
+/// When `active`, bump_cloud_money rejects POSITIVE deltas and
+/// set_cloud_money is locked, making the server the SOLE +money authority
+/// (income reducers credit; the client adopts). Flipped by the admin-gated
+/// set_money_cutover_active reducer — instant + reversible (no re-publish),
+/// so a live cutover can be rolled back if anything misbehaves.
+#[table(name = money_cutover, public)]
+pub struct MoneyCutover {
+    #[primary_key]
+    pub id: u32,
+    pub active: bool,
+}
+
 /// Phase H.53 — Per-restaurant per-recipe upgrade level.  Mirrors
 /// CookingSystem.recipeUpgradeLevels[recipeId] on the client.  When
 /// missing, server defaults to level 1 (base values from recipe_meta

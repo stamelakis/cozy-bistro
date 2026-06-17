@@ -84,24 +84,27 @@ export class EconomySystem {
     if (!this.canAfford(amount)) {
       return false;
     }
-    // Anti-cheat B/C — when the server owns money (isServerSim("money")),
-    // the local balance is a pure mirror of cloud_money_cents. The
-    // affordability check stays as an optimistic UI gate (re-checked
-    // authoritatively in the validated server reducer); the actual debit
-    // happens server-side and is adopted back via setMoney.
-    if (!isServerSim("money")) {
-      this.money -= amount;
-    }
+    // Anti-cheat B/C — spends stay client-side even when the server owns
+    // money: the debit is applied locally and pushed as a NEGATIVE delta
+    // (bump_cloud_money), which the lockdown still allows. Only the +money
+    // side is server-authoritative (income reducers) and locked down (the
+    // server rejects positive bumps), so the leaderboard balance is
+    // bounded by real, server-credited income.
+    this.money -= amount;
     return true;
   }
 
   charge(amount: number): void {
-    if (!isServerSim("money")) {
-      this.money -= amount;
-    }
+    // Anti-cheat B/C — rent / salary / restock debits stay client-side
+    // (negative delta), same rationale as spend().
+    this.money -= amount;
   }
 
   earn(amount: number): void {
+    // Anti-cheat B/C — when the server owns money, ALL income is credited
+    // server-side (income reducers) and adopted via setMoney, so the client
+    // must NOT earn locally — that would double-count and produce a
+    // positive bump the server now rejects. Legacy path earns locally.
     if (!isServerSim("money")) {
       this.money += amount;
     }
@@ -140,6 +143,39 @@ export class EconomySystem {
       : reason === "salary" ? "Staff salary (offline)"
       : "Forced charge";
     this.recordTransaction(label, -amount);
+  }
+
+  // ── Anti-cheat B/C — income flows route through these helpers so the
+  // money-flag gate + the server reducer call live in ONE place. When the
+  // server owns money, credit via the validated/bounded server reducer
+  // (the client adopts the result through the restaurant subscription, so
+  // earnMoney would double-count); otherwise earn locally (legacy path).
+  // Sales/tips/sell-refunds are NOT here — they're already server-credited
+  // under serverOwnsGuestStates/furniture and the client skips them.
+
+  /** Low-balance safety-net grant (ExpandWidget). amount = legacy $ value. */
+  grantLowBalance(amount: number): void {
+    if (isServerSim("money")) { this.cloud?.claimLowBalanceGrant(); }
+    else { this.earnMoney(amount, "grant"); }
+  }
+
+  /** Achievement cash reward (Engine onUnlock). amount = cashReward in $. */
+  rewardAchievement(amount: number): void {
+    if (isServerSim("money")) { this.cloud?.claimAchievement(Math.round(amount * 100)); }
+    else { this.earnMoney(amount, "achievement"); }
+  }
+
+  /** Trash recycle reward (TrashSpawner). amount = legacy $ value. */
+  rewardRecycle(amount: number): void {
+    if (isServerSim("money")) { this.cloud?.claimRecycle(); }
+    else { this.earnMoney(amount, "refund"); }
+  }
+
+  /** Admin money adjust (AdminModal dev buttons). delta may be negative. */
+  adminAdjust(delta: number): void {
+    if (isServerSim("money")) { this.cloud?.adminAdjustMoney(Math.round(delta * 100)); }
+    else if (delta >= 0) { this.earnMoney(delta, "payment"); }
+    else { this.forceSpendMoney(-delta, "charge"); }
   }
 
   getDailyRevenue(): number {

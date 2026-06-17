@@ -68,7 +68,7 @@ export class TrashSpawner {
       if (this.elapsed - p.bornAt >= TRASH_LIFETIME_SECONDS) {
         this.scene.remove(p.mesh);
         this.pieces.splice(i, 1);
-        this.game.economy.earnMoney(RECYCLE_REWARD, "refund");
+        this.game.economy.rewardRecycle(RECYCLE_REWARD);
       }
     }
   }

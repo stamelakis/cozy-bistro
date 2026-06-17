@@ -57,4 +57,7 @@ export default __t.row({
   healthSummaryCsv: __t.option(__t.string()).name("health_summary_csv"),
   cloudDailyTipsCents: __t.i64().name("cloud_daily_tips_cents"),
   lastGrantMicros: __t.i64().name("last_grant_micros"),
+  lastLowBalanceGrantMicros: __t.i64().name("last_low_balance_grant_micros"),
+  lastRecycleMicros: __t.i64().name("last_recycle_micros"),
+  cumulativeAchievementCents: __t.i64().name("cumulative_achievement_cents"),
 });

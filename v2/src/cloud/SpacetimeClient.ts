@@ -923,6 +923,49 @@ export class SpacetimeClient {
     }
   }
 
+  /** Anti-cheat B/C (income 2/5) — low-balance grant. Server checks the
+   * balance + 24h cooldown; no-ops when not due. */
+  claimLowBalanceGrant(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimLowBalanceGrant({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] claimLowBalanceGrant failed:", e);
+    }
+  }
+
+  /** Anti-cheat B/C (income 3/5) — admin money adjust (Dunnin only).
+   * deltaCents may be negative (debit). */
+  adminAdjustMoney(deltaCents: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.adminAdjustMoney({ restaurantId: this.restaurantId, deltaCents: BigInt(deltaCents) });
+    } catch (e) {
+      console.warn("[Cloud] adminAdjustMoney failed:", e);
+    }
+  }
+
+  /** Anti-cheat B/C (income 4/5) — recycle reward ($2, 8s-rate-limited). */
+  claimRecycle(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimRecycle({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] claimRecycle failed:", e);
+    }
+  }
+
+  /** Anti-cheat B/C (income 5/5) — achievement reward. Server clamps
+   * per-claim + caps lifetime. rewardCents = client cashReward × 100. */
+  claimAchievement(rewardCents: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimAchievement({ restaurantId: this.restaurantId, rewardCents: BigInt(rewardCents) });
+    } catch (e) {
+      console.warn("[Cloud] claimAchievement failed:", e);
+    }
+  }
+
   /** H.60 — Push the full rating-history snapshot (the rolling 1-5
    * vote list, capped at 500 entries / ~1KB) to Restaurant.  Fires
    * from ReputationSystem on every recordRating.  Idempotent

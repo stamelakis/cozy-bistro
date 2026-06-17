@@ -941,7 +941,7 @@ export class Engine {
     this.game.achievements.onUnlock = (a) => {
       const reward = a.cashReward ?? 0;
       if (reward > 0) {
-        this.game.economy.earnMoney(reward, "achievement");
+        this.game.economy.rewardAchievement(reward);
       }
       const label = reward > 0
         ? `🏆 ${a.name} · +$${reward.toLocaleString("en-US")}`

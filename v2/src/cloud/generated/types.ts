@@ -252,6 +252,12 @@ export const LeaderboardEntry = __t.object("LeaderboardEntry", {
 });
 export type LeaderboardEntry = __Infer<typeof LeaderboardEntry>;
 
+export const MoneyCutover = __t.object("MoneyCutover", {
+  id: __t.u32(),
+  active: __t.bool(),
+});
+export type MoneyCutover = __Infer<typeof MoneyCutover>;
+
 export const PantryStock = __t.object("PantryStock", {
   key: __t.string(),
   restaurantId: __t.u64(),
@@ -418,6 +424,9 @@ export const Restaurant = __t.object("Restaurant", {
   healthSummaryCsv: __t.option(__t.string()),
   cloudDailyTipsCents: __t.i64(),
   lastGrantMicros: __t.i64(),
+  lastLowBalanceGrantMicros: __t.i64(),
+  lastRecycleMicros: __t.i64(),
+  cumulativeAchievementCents: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

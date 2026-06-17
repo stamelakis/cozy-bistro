@@ -98,7 +98,7 @@ export class ExpandWidget {
       // Re-verify both conditions on click (UI might be stale).
       if (this.game.economy.getMoney() >= STARTER_GRANT_THRESHOLD) return;
       if (this.hasClaimedGrantToday()) return;
-      this.game.economy.earnMoney(STARTER_GRANT_AMOUNT, "grant");
+      this.game.economy.grantLowBalance(STARTER_GRANT_AMOUNT);
       try { localStorage.setItem(GRANT_STORAGE_KEY, todayLocalDateString()); } catch { /* ignore */ }
       this.update();
     };

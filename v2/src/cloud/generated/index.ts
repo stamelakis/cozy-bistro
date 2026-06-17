@@ -35,6 +35,7 @@ import {
 
 // Import all reducer arg schemas
 import AddDirtyPileReducer from "./add_dirty_pile_reducer";
+import AdminAdjustMoneyReducer from "./admin_adjust_money_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
@@ -51,8 +52,11 @@ import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
 import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
+import ClaimAchievementReducer from "./claim_achievement_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimDirtyPileReducer from "./claim_dirty_pile_reducer";
+import ClaimLowBalanceGrantReducer from "./claim_low_balance_grant_reducer";
+import ClaimRecycleReducer from "./claim_recycle_reducer";
 import ClaimStarterGrantReducer from "./claim_starter_grant_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
 import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
@@ -112,6 +116,7 @@ import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
 import SetHiredStaffMemberReducer from "./set_hired_staff_member_reducer";
 import SetIngredientCostReducer from "./set_ingredient_cost_reducer";
 import SetMemberTrainingDeadlineReducer from "./set_member_training_deadline_reducer";
+import SetMoneyCutoverActiveReducer from "./set_money_cutover_active_reducer";
 import SetPantryTargetReducer from "./set_pantry_target_reducer";
 import SetPlayerNameReducer from "./set_player_name_reducer";
 import SetPreparedServingReducer from "./set_prepared_serving_reducer";
@@ -161,6 +166,7 @@ import FurnitureCostRow from "./furniture_cost_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
+import MoneyCutoverRow from "./money_cutover_table";
 import PantryStockRow from "./pantry_stock_table";
 import PantryTargetRow from "./pantry_target_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
@@ -460,6 +466,17 @@ const tablesSchema = __schema({
       { name: 'leaderboard_entry_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, LeaderboardEntryRow),
+  money_cutover: __table({
+    name: 'money_cutover',
+    indexes: [
+      { accessor: 'id', name: 'money_cutover_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'money_cutover_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MoneyCutoverRow),
   pantry_stock: __table({
     name: 'pantry_stock',
     indexes: [
@@ -707,6 +724,7 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("add_dirty_pile", AddDirtyPileReducer),
+  __reducerSchema("admin_adjust_money", AdminAdjustMoneyReducer),
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
@@ -723,8 +741,11 @@ const reducersSchema = __reducers(
   __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
   __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
+  __reducerSchema("claim_achievement", ClaimAchievementReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_dirty_pile", ClaimDirtyPileReducer),
+  __reducerSchema("claim_low_balance_grant", ClaimLowBalanceGrantReducer),
+  __reducerSchema("claim_recycle", ClaimRecycleReducer),
   __reducerSchema("claim_starter_grant", ClaimStarterGrantReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
@@ -784,6 +805,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_hired_staff_member", SetHiredStaffMemberReducer),
   __reducerSchema("set_ingredient_cost", SetIngredientCostReducer),
   __reducerSchema("set_member_training_deadline", SetMemberTrainingDeadlineReducer),
+  __reducerSchema("set_money_cutover_active", SetMoneyCutoverActiveReducer),
   __reducerSchema("set_pantry_target", SetPantryTargetReducer),
   __reducerSchema("set_player_name", SetPlayerNameReducer),
   __reducerSchema("set_prepared_serving", SetPreparedServingReducer),

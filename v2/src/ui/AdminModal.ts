@@ -385,13 +385,13 @@ export class AdminModal {
     const fmt = (n: number) => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${n}`;
     for (const delta of MONEY_DELTAS) {
       row.appendChild(this.actionButton(`+${fmt(delta)}`, "good", () => {
-        this.game.economy.earnMoney(delta, "payment");
+        this.game.economy.adminAdjust(delta);
         this.refreshStats();
       }));
     }
     for (const delta of MONEY_DELTAS) {
       row.appendChild(this.actionButton(`-${fmt(delta)}`, "danger", () => {
-        this.game.economy.forceSpendMoney(delta, "charge");
+        this.game.economy.adminAdjust(-delta);
         this.refreshStats();
       }));
     }

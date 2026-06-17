@@ -18,12 +18,12 @@ use crate::tables::{
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, seat_slot, staff_actor, weather_state,
+    restaurant_tick_state, seat_slot, staff_actor, weather_state, money_cutover,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    SeatSlot, StaffActor,
+    SeatSlot, StaffActor, MoneyCutover,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -895,6 +895,32 @@ fn split_top_level_json_items(inner: &str) -> Vec<&str> {
     items
 }
 
+/// Anti-cheat B/C — read the global money-cutover switch (single row,
+/// id = 1). Defaults false (no row) so the cutover stays OFF until an
+/// admin flips it via set_money_cutover_active.
+fn money_cutover_active(ctx: &ReducerContext) -> bool {
+    ctx.db.money_cutover().id().find(1u32).map(|m| m.active).unwrap_or(false)
+}
+
+/// Anti-cheat B/C — flip the global money-cutover switch. Admin-only
+/// (Dunnin). When active, bump_cloud_money rejects positive deltas and
+/// set_cloud_money is locked. Instant + reversible (no re-publish) so a
+/// live cutover can be rolled back. Flip via the CLI:
+///   spacetime call dunnin set_money_cutover_active true
+#[reducer]
+pub fn set_money_cutover_active(ctx: &ReducerContext, active: bool) -> Result<(), String> {
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Admin only".into());
+    }
+    if ctx.db.money_cutover().id().find(1u32).is_some() {
+        ctx.db.money_cutover().id().update(MoneyCutover { id: 1, active });
+    } else {
+        ctx.db.money_cutover().insert(MoneyCutover { id: 1, active });
+    }
+    log::info!("[anti-cheat] money_cutover active = {}", active);
+    Ok(())
+}
+
 /// Phase H.32 — Client pushes its absolute current money in cents.
 /// Observational mirror only — does NOT make the server authoritative
 /// for the economy. The intent is to give other clients (visit mode,
@@ -912,6 +938,12 @@ pub fn set_cloud_money(
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
     if r.owner != ctx.sender {
         return Err("Only the owner can set cloud money".into());
+    }
+    // Anti-cheat B/C — absolute money writes are locked once the cutover is
+    // active (this path is already dead client-side; the guard also no-ops
+    // a modded client's set_cloud_money(huge)).
+    if money_cutover_active(ctx) {
+        return Err("set_cloud_money is locked (server owns money)".into());
     }
     if r.cloud_money_cents == money_cents {
         return Ok(());
@@ -944,6 +976,13 @@ pub fn bump_cloud_money(
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
     if r.owner != ctx.sender {
         return Err("Only the owner can bump cloud money".into());
+    }
+    // Anti-cheat B/C — once the money cutover is active the server is the
+    // SOLE +money authority (income reducers). Reject POSITIVE deltas so a
+    // modded client can't mint money via bump_cloud_money(+x). Negative
+    // deltas (client-side spends / rent / salary) still flow through.
+    if delta_cents > 0 && money_cutover_active(ctx) {
+        return Err("positive money writes are locked (server owns income)".into());
     }
     if delta_cents == 0 {
         return Ok(());
