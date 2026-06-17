@@ -246,6 +246,11 @@ export class Engine {
    * shader pre-warm (see tick) fires a single time as the player nears the
    * 0.40 threshold, not every frame. Reset when they zoom back in past 0.60. */
   private exteriorPrewarmArmed = false;
+  /** Anti-freeze — true while the WebGL context is lost (GPU device reset).
+   * The tick skips its body while set so we don't render into a dead
+   * context; cleared on webglcontextrestored. */
+  private contextLost = false;
+  private gpuResetBanner: HTMLElement | null = null;
   /** Multiplier applied to dt before sim updates. 1 = real-time, 2 = 2x, etc.
    * Rendering is unaffected (so paused still re-renders camera moves). */
   private timeScale = 1;
@@ -336,6 +341,29 @@ export class Engine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.setClearColor(0xd8c4a3);
     container.appendChild(this.renderer.domElement);
+
+    // Anti-freeze — WebGL context-loss recovery. On an overloaded / low-end
+    // GPU (e.g. a GTX 1050 Ti asked to render every floor's furniture +
+    // shadows + lights at once on a high-floor reveal) the driver watchdog
+    // can reset the device, losing the WebGL context. WITHOUT a handler the
+    // render loop keeps firing into a dead context and the canvas freezes
+    // FOREVER while the page stays alive ("frozen until I close it").
+    // preventDefault lets the browser attempt a restore; we pause rendering
+    // and show a banner so the player isn't stranded on a frozen frame.
+    this.renderer.domElement.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      console.error(
+        "[Engine] WebGL CONTEXT LOST — GPU device reset (driver watchdog / TDR). "
+        + "Render paused; the page is still alive. THIS is the 'frozen forever' cause.",
+      );
+      this.contextLost = true;
+      this.showGpuResetBanner();
+    }, false);
+    this.renderer.domElement.addEventListener("webglcontextrestored", () => {
+      console.warn("[Engine] WebGL context restored — resuming render.");
+      this.contextLost = false;
+      this.hideGpuResetBanner();
+    }, false);
 
     this.scene = new WorldScene();
     this.camera = new IsoCamera(container.clientWidth, container.clientHeight);
@@ -3482,9 +3510,41 @@ export class Engine {
     this.camera.resize(w, h);
   }
 
+  /** Anti-freeze — persistent banner shown when the WebGL context is lost
+   * (see the webglcontextlost handler in the constructor). Offers a reload
+   * because a lost context can't always be auto-restored on a low-end GPU. */
+  private showGpuResetBanner(): void {
+    if (this.gpuResetBanner) return;
+    const b = document.createElement("div");
+    b.textContent = "⚠️ Graphics device was reset (GPU overloaded) — the game paused.";
+    Object.assign(b.style, {
+      position: "fixed", top: "0", left: "0", right: "0", padding: "10px 16px",
+      zIndex: "100000", background: "rgba(130, 24, 24, 0.96)", color: "#fff",
+      font: "13px system-ui, sans-serif", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    const btn = document.createElement("button");
+    btn.textContent = "Reload";
+    Object.assign(btn.style, {
+      marginLeft: "12px", padding: "3px 12px", cursor: "pointer", font: "inherit",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = () => window.location.reload();
+    b.appendChild(btn);
+    document.body.appendChild(b);
+    this.gpuResetBanner = b;
+  }
+
+  private hideGpuResetBanner(): void {
+    this.gpuResetBanner?.remove();
+    this.gpuResetBanner = null;
+  }
+
   private tick = (): void => {
     if (!this.running) return;
     requestAnimationFrame(this.tick);
+    // Anti-freeze — while the WebGL context is lost, rendering into it is a
+    // silent no-op; skip the frame body. rAF stays scheduled above, so the
+    // loop auto-resumes the instant the context is restored.
+    if (this.contextLost) return;
 
     // Phase I — FPS cap gate.  When fpsCap is non-null, skip this
     // whole tick body (including the renderer.render call) if we
