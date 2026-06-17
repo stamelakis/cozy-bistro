@@ -903,32 +903,30 @@ export class WorldScene {
     const sy = model.scale.y || 1;
     const sz = model.scale.z || 1;
 
-    // Phase I (perf) — try to claim a pool light first.  Re-parenting
-    // an existing light DOESN'T change the scene's active-light count
-    // (Three.js traverses to count, both parents are in the scene),
-    // so no shader recompile.  Falls back to constructing a fresh
-    // light only if the pool is exhausted (>= 16 placed lamps).
+    // Anti-freeze — the lamp's POINT LIGHT stays parented to worldRoot
+    // (always visible), NOT under the lamp model. The model lives in a
+    // per-floor storey group; re-parenting the light there dropped it from
+    // the scene's active-light count whenever that floor was hidden, so
+    // REVEALING a furnished upper floor jumped the count back up and forced
+    // Three.js to recompile EVERY lit material — the multi-minute main-
+    // thread stall on a low-end GPU. Kept in worldRoot at the lamp's world
+    // centre (worldRoot is translation-only, so world − worldRoot.position
+    // gives its local pos), the active-light count never changes with the
+    // focused floor, so no recompile fires. Only the bulb mesh (below)
+    // parents under the model so it hides/shows with the lamp.
+    const lightWorldPos = worldCentre.clone().sub(this.worldRoot.position);
     let light: THREE.PointLight;
     const poolEntry = this.placedLampLightPool.find((e) => !e.inUse);
     if (poolEntry) {
       poolEntry.inUse = true;
       light = poolEntry.light;
-      // Detach from worldRoot (the pool's idle parent) before
-      // re-attaching to the lamp model.  Object3D.add() handles
-      // re-parenting automatically (removes from previous parent),
-      // but we set the position FIRST so the brief one-frame world
-      // matrix update reads the right placement.
-      light.position.copy(localCentre);
-      model.add(light);
+      light.position.copy(lightWorldPos); // stays in worldRoot (its idle home)
     } else {
-      // Pool exhausted — construct a fresh light.  This adds an extra
-      // active light to the scene, which triggers a shader recompile
-      // on the next render.  Acceptable: the player has already placed
-      // 16+ lamps so they're past the eager-iteration phase.
+      // Pool exhausted (>16 lamps) — fresh light, also kept in worldRoot.
       light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
-      light.position.copy(localCentre);
       light.castShadow = false;
-      model.add(light);
+      light.position.copy(lightWorldPos);
+      this.worldRoot.add(light);
     }
     // A tiny emissive sphere makes the bulb itself visibly "lit" at
     // night even when the player can't see the cone of illumination.
