@@ -242,6 +242,10 @@ export class Engine {
    * the same flag (which would otherwise force three.js to clear
    * the shadow render target every frame). */
   private sunShadowOn = false;
+  /** Anti-perf — armed once per zoom-out pass so the anticipatory exterior
+   * shader pre-warm (see tick) fires a single time as the player nears the
+   * 0.40 threshold, not every frame. Reset when they zoom back in past 0.60. */
+  private exteriorPrewarmArmed = false;
   /** Multiplier applied to dt before sim updates. 1 = real-time, 2 = 2x, etc.
    * Rendering is unaffected (so paused still re-renders camera moves). */
   private timeScale = 1;
@@ -3720,6 +3724,20 @@ export class Engine {
     // see-through interior view returns. Driven from the same frame
     // tick as the wall ghost rule so they always agree.
     const zoomPercent = this.camera.getZoomPercent();
+    // Anti-perf — anticipatory shader pre-warm. The exterior flip at 0.40
+    // reveals every storey + roof at once; compiling their programs on that
+    // frame stalls the main thread ("the whole game freezes"). So as the
+    // player zooms OUT past 0.55, kick off an async (non-blocking) compile
+    // of that still-hidden geometry in the background — by the time they
+    // cross 0.40 it's warm and the flip is instant. Fire once per pass
+    // (armed at 0.55, re-armed past 0.60) so we don't traverse the scene
+    // every frame; the compile is a cache no-op once warm.
+    if (zoomPercent < 0.55 && !this.exteriorPrewarmArmed) {
+      this.exteriorPrewarmArmed = true;
+      this.scene.precompileShaders(this.renderer, this.camera.threeCamera);
+    } else if (zoomPercent > 0.60) {
+      this.exteriorPrewarmArmed = false;
+    }
     const exterior = zoomPercent < 0.40;
     this.scene.setExteriorMode(exterior);
     this.sfx.setExteriorMuted(exterior);

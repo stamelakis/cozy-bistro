@@ -4536,12 +4536,16 @@ export class WorldScene {
    * feel when clicking floor buttons.
    *
    * Workaround: briefly flip every storey + balcony + roof visible,
-   * call `renderer.compile`, then restore the original visibility.
-   * The compile call is synchronous and traverses all visible objects,
-   * compiling each material's program against the camera's current
-   * settings. After this, every storey reveal is instant. Cheap to
-   * call once at startup; safe to call again later if new materials
-   * are added (re-compiling already-compiled programs is a no-op). */
+   * gather their materials, restore visibility, and let the GPU build the
+   * programs in the BACKGROUND via renderer.compileAsync (three r152+'s
+   * KHR_parallel_shader_compile path) so the main thread never blocks.
+   * Materials are gathered synchronously while flipped-visible, then
+   * visibility is restored before the next render, so nothing flickers on
+   * screen even though the programs finish compiling a few ms later.
+   * Called once at startup AND anticipatorily as the player zooms out
+   * toward the exterior threshold (Engine.tick), so the "reveal every
+   * storey at once" exterior flip is already warm; re-compiling an
+   * already-compiled program is a cache no-op, so re-firing is cheap. */
   precompileShaders(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
     // Snapshot current visibility of everything we'll flip.
     type Snap = { obj: THREE.Object3D; visible: boolean };
@@ -4559,13 +4563,19 @@ export class WorldScene {
     flip(this.buildingRoof);
     for (const b of this.parisBalconies) flip(b);
     try {
-      renderer.compile(this.threeScene, camera);
+      // Async compile: gathers materials now (synchronously, while the
+      // storeys above are flipped visible) but lets the GPU driver build
+      // the programs in parallel, off the main thread. Restore happens
+      // right below, before any render, so the flip is never seen.
+      void renderer.compileAsync(this.threeScene, camera).catch((e) => {
+        console.warn("[WorldScene] async precompile failed:", e);
+      });
     } catch (e) {
-      // Hard to imagine compile failing, but a partial compile leaves
-      // valid programs in the cache so the next render still works.
+      // Hard to imagine the synchronous gather failing, but a partial
+      // compile leaves valid programs cached so the next render works.
       console.warn("[WorldScene] precompile failed:", e);
     }
-    // Restore exactly what was visible before.
+    // Restore exactly what was visible before (synchronous — pre-render).
     for (const s of snaps) s.obj.visible = s.visible;
   }
 
