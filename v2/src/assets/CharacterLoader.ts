@@ -76,11 +76,41 @@ export class CharacterLoader {
     return root;
   }
 
+  /** Anti-perf — one shared MeshStandardMaterial per characterId, built
+   * lazily and cached for the process lifetime. Characters spawn + despawn
+   * constantly (guests, pedestrians), and the old code allocated a FRESH
+   * material on every spawn that no despawn path disposed. That leaked GPU
+   * memory and — worse — forced a synchronous shader compile the first time
+   * each new material was rendered, so changing to a higher floor (which
+   * reveals every accumulated character at once) stalled the main thread
+   * harder the longer the session ran. There are only a handful of
+   * characterIds and nothing mutates a character's material per-instance,
+   * so sharing is safe and caps the shader-program count to the asset set. */
+  private static readonly materialCache = new Map<string, THREE.MeshStandardMaterial>();
+
+  private static sharedMaterial(characterId: string): THREE.MeshStandardMaterial {
+    let mat = CharacterLoader.materialCache.get(characterId);
+    if (!mat) {
+      mat = new THREE.MeshStandardMaterial({
+        vertexColors: false,
+        color: TINT_BY_ID[characterId] ?? DEFAULT_TINT,
+        roughness: 0.78,
+        metalness: 0.0,
+        // TripoSR meshes are single-sided but the back face is often the
+        // "hollow" side — render both sides so we don't see through them.
+        side: THREE.DoubleSide,
+      });
+      CharacterLoader.materialCache.set(characterId, mat);
+    }
+    return mat;
+  }
+
   /** Replace whatever material the GLB ships with by a clean solid-tint
-   * MeshStandardMaterial. Strips vertex colors so the noisy TripoSR splotch
-   * doesn't leak through — the geometry alone reads the character. */
+   * MeshStandardMaterial (shared per characterId — see materialCache).
+   * Strips vertex colors so the noisy TripoSR splotch doesn't leak through
+   * — the geometry alone reads the character. */
   private patchMaterials(root: THREE.Object3D, characterId: string): void {
-    const tint = TINT_BY_ID[characterId] ?? DEFAULT_TINT;
+    const mat = CharacterLoader.sharedMaterial(characterId);
     root.traverse((obj) => {
       if (!(obj instanceof THREE.Mesh)) return;
       const geom = obj.geometry as THREE.BufferGeometry;
@@ -89,16 +119,7 @@ export class CharacterLoader {
       if (geom.getAttribute("color")) {
         geom.deleteAttribute("color");
       }
-      obj.material = new THREE.MeshStandardMaterial({
-        vertexColors: false,
-        color: tint,
-        roughness: 0.78,
-        metalness: 0.0,
-        // TripoSR meshes are single-sided but the back face is often the
-        // "hollow" side — render both sides so we don't see through them
-        // from unusual angles.
-        side: THREE.DoubleSide,
-      });
+      obj.material = mat;
       obj.castShadow = true;
       obj.receiveShadow = true;
     });

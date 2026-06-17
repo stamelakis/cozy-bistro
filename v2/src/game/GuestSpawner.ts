@@ -2991,7 +2991,13 @@ export class GuestSpawner {
     // to call when the ticket already completed (returns false) or was
     // never created (g.ticketId null) — cancelTicket finds-by-guestId.
     this.router.cancelTicket(g.id);
-    this.scene.remove(g.character.root);
+    // Anti-perf — remove from the ACTUAL parent, not the scene root. Guests
+    // that climbed stairs / sat upstairs were reparented into an upper-floor
+    // storey group; `this.scene.remove` only detaches direct children, so it
+    // was a no-op for them and their meshes piled up inside that group —
+    // exactly the group a floor change makes visible. parent?.remove handles
+    // ground-floor (parent = scene) and upper floors (parent = group) alike.
+    g.character.root.parent?.remove(g.character.root);
     this.animator.remove(g.character.root);
     if (g.waiting) {
       // Waiting-overflow guests free their yellow chair, not a real seat.
