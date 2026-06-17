@@ -7588,8 +7588,13 @@ pub fn spawn_guest(
 /// Idempotent — re-marking a leaving guest is a no-op.
 #[reducer]
 pub fn mark_guest_leaving(ctx: &ReducerContext, guest_id: u64) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     // Auth — only the owning restaurant's client can transition its
     // own guests.
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
@@ -7632,8 +7637,13 @@ pub fn set_guest_waiting_chair(
     chair_uid: String,
     timeout_ms: i64,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
@@ -7672,8 +7682,13 @@ pub fn set_guest_reserved_tiers(
     guest_id: u64,
     tiers_csv: String,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
@@ -7706,8 +7721,13 @@ pub fn mark_guest_dishes_settled(
     ctx: &ReducerContext,
     guest_id: u64,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
@@ -7840,8 +7860,13 @@ pub fn set_guest_order(
     prices_csv: String,
     satisfactions_csv: String,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
@@ -8075,8 +8100,13 @@ pub fn update_guest_position(
     target_floor: u32,
     state: String,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
@@ -8170,8 +8200,13 @@ pub fn place_order(
     seat_floor: u32,
     seat_at_bar: bool,
 ) -> Result<(), String> {
-    let g = ctx.db.active_guest().id().find(guest_id)
-        .ok_or_else(|| format!("Guest {guest_id} not found"))?;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else {
+        // Anti-spam — a guest that already despawned (left, or patience ran
+        // out) before this client-mirror reducer landed is a NORMAL race,
+        // not an error. No-op gracefully; returning Err here surfaced as a
+        // flood of uncaught SenderError "Guest <id> not found" on the client.
+        return Ok(());
+    };
     let r = ctx.db.restaurant().id().find(g.restaurant_id)
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
