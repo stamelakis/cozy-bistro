@@ -304,6 +304,9 @@ export class SpacetimeClient {
   private conn: DbConnection | null = null;
   private restaurantId: bigint | null = null;
   private identity: Identity | null = null;
+  /** Set before a deliberate teardown so the auto-reconnect handler
+   * doesn't fight an intentional disconnect (logout / page unload). */
+  private intentionalDisconnect = false;
   private saveDebounce: number | null = null;
   /** Engine wires this to GuestSpawner so cloudSaveNow can publish
    * the live restaurant-open state + functional-seat count. Optional
@@ -3561,7 +3564,10 @@ export class SpacetimeClient {
         this.identity = identity;
         this.afterConnect(conn, identity);
       })
-      .onDisconnect(() => console.warn("[SpacetimeDB] disconnected"))
+      .onDisconnect(() => {
+        console.warn("[SpacetimeDB] disconnected");
+        this.handleUnexpectedDisconnect();
+      })
       .onConnectError((_ctx: ErrorContext, err: Error) => {
         console.error("[SpacetimeDB] connect error", err);
         // If the server rejected our stored token (auth failed,
@@ -3579,6 +3585,47 @@ export class SpacetimeClient {
     } catch (e) {
       console.error("[SpacetimeDB] failed to build connection", e);
     }
+  }
+
+  /** Auto-recover from a dropped connection. The common cause here is the
+   * tab being frozen long enough (a heavy shader compile on a floor
+   * change) that the server's heartbeat times us out — afterwards the
+   * client is connected to nothing, so the server-driven guests + staff
+   * freeze while client-side timers keep ticking. A page reload cleanly
+   * re-runs the whole connect → subscribe → adopt-state flow, which is far
+   * safer than splicing a fresh socket into live game state. Guarded
+   * against reload loops: if we already reloaded for this within the last
+   * few seconds (a real outage, not a one-off freeze), show a manual
+   * Reconnect button instead of thrashing. */
+  private handleUnexpectedDisconnect(): void {
+    if (this.intentionalDisconnect) return;
+    const KEY = "cozy-bistro.lastReconnectReload";
+    let lastReload = 0;
+    try { lastReload = parseInt(sessionStorage.getItem(KEY) ?? "0", 10) || 0; } catch { /* ignore */ }
+    const now = Date.now();
+    const banner = document.createElement("div");
+    Object.assign(banner.style, {
+      position: "fixed", top: "0", left: "0", right: "0", padding: "10px 16px",
+      zIndex: "100001", background: "rgba(40, 70, 120, 0.96)", color: "#fff",
+      font: "13px system-ui, sans-serif", textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+    if (now - lastReload < 8000) {
+      // Reloaded very recently — likely a genuine outage. Don't loop.
+      banner.textContent = "⚠️ Lost connection to the server.";
+      const btn = document.createElement("button");
+      btn.textContent = "Reconnect";
+      Object.assign(btn.style, {
+        marginLeft: "10px", padding: "3px 12px", cursor: "pointer", font: "inherit",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => window.location.reload();
+      banner.appendChild(btn);
+      document.body.appendChild(banner);
+      return;
+    }
+    banner.textContent = "Connection lost — reconnecting…";
+    document.body.appendChild(banner);
+    try { sessionStorage.setItem(KEY, String(now)); } catch { /* ignore */ }
+    window.setTimeout(() => window.location.reload(), 1500);
   }
 
   /** Whether the player's identity token is persisted across browser
