@@ -471,6 +471,7 @@ export class FurnitureRegistry {
     // floor 0, a storey group for upper floors). model.removeFromParent
     // is a no-op if it's already detached.
     item.model.removeFromParent();
+    this.disposeIfProc(item);
     this.items.splice(idx, 1);
     this.surfaceExtentCache.delete(item.uid);
     this.mirrorFurnitureSell(item.uid);
@@ -568,6 +569,7 @@ export class FurnitureRegistry {
       // main scene and was silently no-op'ing for upper-floor items
       // — sell appeared to work (refund paid) but the mesh stayed.
       child.model.removeFromParent();
+      this.disposeIfProc(child);
       this.items.splice(cIdx, 1);
       // 100% refund for undo-of-place (vs the 50% sell refund) — the
       // player gets back exactly what they paid, which is the scaled
@@ -578,6 +580,7 @@ export class FurnitureRegistry {
     // Re-find the host's index since the splices above shifted entries.
     const finalIdx = this.items.findIndex((it) => it.uid === uid);
     if (finalIdx >= 0) {
+      this.disposeIfProc(this.items[finalIdx]);
       this.items[finalIdx].model.removeFromParent();
       this.items.splice(finalIdx, 1);
     }
@@ -592,6 +595,27 @@ export class FurnitureRegistry {
     this.mirrorFurnitureSell(uid);
     const def = getFurnitureDef(item.defId);
     return { defId: item.defId, refund: (def ? scaledCost(def) : 0) + totalChildRefund };
+  }
+
+  /** Free GPU buffers for a removed item's model — but ONLY for
+   * procedurally-built (`proc:`) models. GLB-backed models share their
+   * geometry + materials with ModelLoader's per-path cache (every clone
+   * reuses the cached source's buffers), so disposing those would corrupt
+   * every other live instance of the same model. `proc:` models are built
+   * fresh per placement (ModelLoader does NOT cache them), so once the model
+   * is detached nothing else references its buffers — skipping dispose
+   * leaked them on every place-then-sell of decor/walls/appliances. Undo of
+   * a sell/place reloads a fresh model (see BuildMenu), so this is safe. */
+  private disposeIfProc(item: PlacedFurnitureItem): void {
+    const def = getFurnitureDef(item.defId);
+    if (!def || !def.modelPath.startsWith("proc:")) return;
+    item.model.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.geometry) mesh.geometry.dispose();
+      const mat = mesh.material as THREE.Material | THREE.Material[] | undefined;
+      if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+      else if (mat) mat.dispose();
+    });
   }
 
   /** Read-only snapshot of every placed item (used by BuildMenu auto-arrange

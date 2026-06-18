@@ -3855,7 +3855,24 @@ pub fn sell_dishware(
     let sold = count.min(clean).min(i32::MAX as u32);
     if sold == 0 { return Ok(()); } // nothing clean at this tier
     apply_pool_delta(ctx, restaurant_id, &kind, tier, -(sold as i32), 0, "sell");
-    let refund_cents = unit_price_cents.max(0).saturating_mul(sold as i64) / 2;
+    // Anti-cheat: price the refund from the SERVER catalog, NEVER the
+    // client-supplied unit_price_cents — that value credits cloud_money_cents
+    // directly, so a modded client could pass i64::MAX to mint money. Mirrors
+    // the client dishwareCatalog (PLATE_SETS/GLASS_SETS: round(cost/setSize*100)).
+    let server_unit_cents: i64 = match (kind.as_str(), tier) {
+        ("plate", 1) => 300,  ("plate", 2) => 900,  ("plate", 3) => 2250,
+        ("plate", 4) => 5500, ("plate", 5) => 12500,
+        ("glass", 1) => 200,  ("glass", 2) => 600,  ("glass", 3) => 1750,
+        ("glass", 4) => 4500, ("glass", 5) => 10500,
+        _ => 0,
+    };
+    if unit_price_cents != server_unit_cents {
+        log::warn!(
+            "sell_dishware: ignoring client unit_price {} (server {} for {} t{}), restaurant {}",
+            unit_price_cents, server_unit_cents, kind, tier, restaurant_id,
+        );
+    }
+    let refund_cents = server_unit_cents.saturating_mul(sold as i64) / 2;
     if refund_cents > 0 {
         ctx.db.restaurant().id().update(Restaurant {
             cloud_money_cents: r.cloud_money_cents.saturating_add(refund_cents),
@@ -3864,7 +3881,7 @@ pub fn sell_dishware(
     }
     log::info!(
         "sell_dishware: restaurant {} sold {} clean {} t{} for {} cents (50% of {} c/piece)",
-        restaurant_id, sold, kind, tier, refund_cents, unit_price_cents.max(0),
+        restaurant_id, sold, kind, tier, refund_cents, server_unit_cents,
     );
     Ok(())
 }
