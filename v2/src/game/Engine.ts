@@ -3709,11 +3709,16 @@ export class Engine {
     this.trash?.update(dt);
     // After all movement, run a personal-space pass so walking guests
     // + pedestrians don't stack on top of each other.
-    if (dt > 0 && (this.spawner || this.pedestrians || this.sharedPedestrians)) {
+    if (dt > 0 && (this.spawner || this.pedestrians || this.sharedPedestrians || this.router)) {
       const actors: MovableActor[] = [];
       if (this.spawner) actors.push(...this.spawner.snapshotMovable());
       if (this.pedestrians) actors.push(...this.pedestrians.snapshotMovable());
       if (this.sharedPedestrians) actors.push(...this.sharedPedestrians.snapshotMovable());
+      // Staff were historically left OUT of the separation pass, so idle
+      // waiters/chefs/barmen (which never re-walk once parked) stacked
+      // permanently on their shared rest spot — a visible "blob" on the floor.
+      // Working (at-station) staff come back pinned so they aren't shoved off.
+      if (this.router) actors.push(...this.router.snapshotMovable());
       PersonalSpace.apply(actors, dt);
       // Re-pin every indoor staff member's XZ back inside the
       // building walls AFTER the PersonalSpace push — without this

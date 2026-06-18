@@ -1245,6 +1245,19 @@ export class StaffRouter {
     return removed.character;
   }
 
+  /** Personal-space snapshot so idle / walking staff get pushed apart like
+   * guests do. Without this, idle waiters/chefs/barmen — which never re-walk
+   * once parked on their shared rest spot — stack permanently into a visible
+   * "blob" on the floor. WORKING staff come back pinned: they're anchored at a
+   * station/seat for a task and must not be shoved off it. */
+  snapshotMovable(): { character: AnimatedCharacter; pinned: boolean }[] {
+    const out: { character: AnimatedCharacter; pinned: boolean }[] = [];
+    for (const a of this.chefs) out.push({ character: a.character, pinned: a.state === "working" });
+    for (const a of this.waiters) out.push({ character: a.character, pinned: a.state === "working" });
+    for (const a of this.barmen) out.push({ character: a.character, pinned: a.state === "working" });
+    return out;
+  }
+
   getChefCount(): number { return this.chefs.length; }
   getWaiterCount(): number { return this.waiters.length; }
   getBarmanCount(): number { return this.barmen.length; }
