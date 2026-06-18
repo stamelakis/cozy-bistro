@@ -126,7 +126,7 @@ interface PerimeterWallState {
  * the construct-a-new-light path (one shader recompile per extra
  * lamp).  Bumping this costs ~3 KB of GPU buffer per extra light +
  * grows the per-pixel shader cost slightly (proportional to N). */
-const PLACED_LAMP_POOL_SIZE = 16;
+const PLACED_LAMP_POOL_SIZE = 6;
 
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
@@ -804,7 +804,7 @@ export class WorldScene {
   // we attach to it. updateLamps() walks the list every frame and
   // ramps the intensity with how dark the sky is. Cap is enforced
   // implicitly by the player's furniture budget.
-  private placedLamps: { model: THREE.Object3D; light: THREE.PointLight; bulb: THREE.Mesh }[] = [];
+  private placedLamps: { model: THREE.Object3D; bulb: THREE.Mesh; pos: THREE.Vector3 }[] = [];
 
   /** Phase I (perf) — pool of pre-allocated PointLights for placed
    * lamps.  See the comment in addLighting() for the rationale (avoids
@@ -845,7 +845,7 @@ export class WorldScene {
    * to keep the shader cheap; the bulbs themselves give the visual
    * presence of light at distance. */
   private streetLampLightPool: THREE.PointLight[] = [];
-  private static readonly STREET_LAMP_POOL_SIZE = 16;
+  private static readonly STREET_LAMP_POOL_SIZE = 6;
   /** Cached camera position from the last light-pool reposition. Skip
    * the re-sort when the camera hasn't moved enough to change which
    * lamps are closest. */
@@ -903,33 +903,20 @@ export class WorldScene {
     const sy = model.scale.y || 1;
     const sz = model.scale.z || 1;
 
-    // Anti-freeze — the lamp's POINT LIGHT stays parented to worldRoot
-    // (always visible), NOT under the lamp model. The model lives in a
-    // per-floor storey group; re-parenting the light there dropped it from
-    // the scene's active-light count whenever that floor was hidden, so
-    // REVEALING a furnished upper floor jumped the count back up and forced
-    // Three.js to recompile EVERY lit material — the multi-minute main-
-    // thread stall on a low-end GPU. Kept in worldRoot at the lamp's world
-    // centre (worldRoot is translation-only, so world − worldRoot.position
-    // gives its local pos), the active-light count never changes with the
-    // focused floor, so no recompile fires. Only the bulb mesh (below)
-    // parents under the model so it hides/shows with the lamp.
+    // Anti-freeze — placed lamps do NOT each get a dedicated PointLight.
+    // The scene's ACTIVE point-light count drives shader compilation; with
+    // dozens of lamps the lit-material shader grew so large that any change
+    // to the count (e.g. a floor reveal) recompiled every material — a
+    // multi-minute main-thread stall on a low-end GPU. Instead a small
+    // FIXED pool (placedLampLightPool, PLACED_LAMP_POOL_SIZE lights) follows
+    // the camera and lights only the nearest few lamps — exactly the trick
+    // the street lamps already use. updatePlacedLampLights() does that
+    // per-frame assignment; here we just record the lamp's world position
+    // (worldRoot is translation-only, so world − worldRoot.position is its
+    // local pos) as a candidate. The glowing BULB mesh is still per-lamp and
+    // parents under the model, so EVERY lamp reads as "on" and hides/shows
+    // with its floor — only the cast-light halo is budgeted to the nearest.
     const lightWorldPos = worldCentre.clone().sub(this.worldRoot.position);
-    let light: THREE.PointLight;
-    const poolEntry = this.placedLampLightPool.find((e) => !e.inUse);
-    if (poolEntry) {
-      poolEntry.inUse = true;
-      light = poolEntry.light;
-      light.position.copy(lightWorldPos); // stays in worldRoot (its idle home)
-    } else {
-      // Pool exhausted (>16 lamps) — fresh light, also kept in worldRoot.
-      light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
-      light.castShadow = false;
-      light.position.copy(lightWorldPos);
-      this.worldRoot.add(light);
-    }
-    // A tiny emissive sphere makes the bulb itself visibly "lit" at
-    // night even when the player can't see the cone of illumination.
     const bulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.08, 10, 10),
       new THREE.MeshStandardMaterial({
@@ -942,10 +929,10 @@ export class WorldScene {
     // the parent lamp is stretched 8x vertically by fitFurniture.
     bulb.scale.set(1 / sx, 1 / sy, 1 / sz);
     model.add(bulb);
-    this.placedLamps.push({ model, light, bulb });
-    // Apply current darkness immediately so newly placed lamps come on
-    // at the right brightness instead of waiting a frame.
-    this.applyLampIntensity(light, bulb, this.currentNightAmount);
+    this.placedLamps.push({ model, bulb, pos: lightWorldPos });
+    // Light the bulb immediately at the current darkness; the cast light
+    // (if this lamp is among the nearest) lands on the next frame.
+    this.applyBulbGlow(bulb, this.currentNightAmount);
   }
 
   /** Remove a lamp from the active list (sell mode, undo, etc.). The
@@ -955,25 +942,13 @@ export class WorldScene {
     const i = this.placedLamps.findIndex((lp) => lp.model === model);
     if (i < 0) return;
     const lp = this.placedLamps[i];
-    model.remove(lp.light);
+    // Only the bulb belongs to the lamp now — the cast lights are a shared
+    // camera-following pool (updatePlacedLampLights), not per-lamp, so
+    // there's nothing to release. Next frame's pool assignment simply has
+    // one fewer candidate.
     model.remove(lp.bulb);
     lp.bulb.geometry.dispose();
     (lp.bulb.material as THREE.Material).dispose();
-    // Phase I (perf) — return the light to the pool so the next
-    // registerLamp can reuse it.  If this light wasn't from the pool
-    // (placement past PLACED_LAMP_POOL_SIZE), dispose it; that drops
-    // the scene's active-light count and triggers a shader recompile
-    // on the next render — same cost as the original out-of-pool
-    // path on the way in.
-    const poolEntry = this.placedLampLightPool.find((e) => e.light === lp.light);
-    if (poolEntry) {
-      poolEntry.inUse = false;
-      lp.light.intensity = 0;
-      lp.light.position.set(0, -100, 0); // park idle below ground
-      this.worldRoot.add(lp.light);      // back to idle parent
-    } else {
-      lp.light.dispose();
-    }
     this.placedLamps.splice(i, 1);
   }
 
@@ -996,18 +971,67 @@ export class WorldScene {
    * with the current darkness. */
   private updateLamps(nightAmount: number): void {
     this.currentNightAmount = nightAmount;
+    // Bulb glow for EVERY lamp (so all read as "on" at night); the actual
+    // cast lights are budgeted to the nearest few by updatePlacedLampLights.
     for (const lp of this.placedLamps) {
-      this.applyLampIntensity(lp.light, lp.bulb, nightAmount);
+      this.applyBulbGlow(lp.bulb, nightAmount);
     }
   }
-  private applyLampIntensity(light: THREE.PointLight, bulb: THREE.Mesh, nightAmount: number): void {
-    // Up to 1.8 intensity at full night — bright enough to read the
-    // floor under each lamp but not so bright that an indoor scene
-    // turns into floodlit daylight when the player drops a dozen lamps.
-    light.intensity = nightAmount * 1.8;
+
+  /** Ramp a lamp BULB's emissive glow with darkness. Every placed lamp
+   * gets this; the cast PointLight is handled separately by the
+   * camera-following pool (updatePlacedLampLights). */
+  private applyBulbGlow(bulb: THREE.Mesh, nightAmount: number): void {
     const bulbMat = bulb.material as THREE.MeshStandardMaterial;
     bulbMat.emissiveIntensity = nightAmount * 1.4;
     bulbMat.opacity = Math.min(1, nightAmount * 1.5);
+  }
+
+  /** Camera-following cast-light pool for placed lamps — mirrors
+   * updateStreetLamps. Each frame it lights only the PLACED_LAMP_POOL_SIZE
+   * lamps nearest the camera; every other lamp keeps its glowing bulb but
+   * casts no halo. This keeps the scene's active point-light count small
+   * AND constant, so the lit-material shader stays cheap to compile — the
+   * fix for the multi-minute floor-reveal stall. Called from Engine.tick. */
+  updatePlacedLampLights(cameraPos: THREE.Vector3): void {
+    const pool = this.placedLampLightPool;
+    if (pool.length === 0) return;
+    const nightAmount = this.currentNightAmount;
+    if (nightAmount < 0.05 || this.placedLamps.length === 0) {
+      for (const e of pool) e.light.intensity = 0;
+      return;
+    }
+    // worldRoot is translation-only; compare distances in its local space.
+    const cx = cameraPos.x - this.worldRoot.position.x;
+    const cz = cameraPos.z - this.worldRoot.position.z;
+    const POOL = pool.length;
+    const closestI: number[] = new Array(POOL).fill(-1);
+    const closestD: number[] = new Array(POOL).fill(Infinity);
+    let worstSlot = 0;
+    for (let i = 0; i < this.placedLamps.length; i += 1) {
+      const p = this.placedLamps[i].pos;
+      const ddx = p.x - cx;
+      const ddz = p.z - cz;
+      const d = ddx * ddx + ddz * ddz;
+      if (d < closestD[worstSlot]) {
+        closestI[worstSlot] = i;
+        closestD[worstSlot] = d;
+        let w = 0;
+        for (let k = 1; k < POOL; k += 1) if (closestD[k] > closestD[w]) w = k;
+        worstSlot = w;
+      }
+    }
+    const peak = nightAmount * 1.8;
+    for (let s = 0; s < POOL; s += 1) {
+      const light = pool[s].light;
+      const idx = closestI[s];
+      if (idx >= 0) {
+        light.position.copy(this.placedLamps[idx].pos);
+        light.intensity = peak;
+      } else {
+        light.intensity = 0;
+      }
+    }
   }
 
   /** Build the city's street lamp grid — one Parisian cast-iron post
