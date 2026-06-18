@@ -956,6 +956,23 @@ export class SpacetimeClient {
     }
   }
 
+  /** Admin-only — flip the server money cutover (the anti-cheat
+   * positive-bump rejection). The server rejects this unless the caller's
+   * identity is is_admin (Dunnin's game account), so exposing it via a
+   * console hook is safe — a non-admin caller just gets "Admin only". */
+  setMoneyCutoverActive(active: boolean): void {
+    if (!this.conn) {
+      console.warn("[Cloud] setMoneyCutoverActive: not connected");
+      return;
+    }
+    try {
+      this.conn.reducers.setMoneyCutoverActive({ active });
+      console.info(`[Cloud] requested money_cutover_active = ${active}`);
+    } catch (e) {
+      console.warn("[Cloud] setMoneyCutoverActive failed:", e);
+    }
+  }
+
   /** Anti-cheat B/C (income 4/5) — recycle reward ($2, 8s-rate-limited). */
   claimRecycle(): void {
     if (!this.conn || this.restaurantId == null) return;

@@ -400,6 +400,12 @@ export class Engine {
     // parallel with the local save; if the network is down the game
     // continues working from localStorage.
     this.cloud = new SpacetimeClient(this.game, this.saver);
+    // Admin console hook — lets Dunnin flip the money cutover from their
+    // authenticated session (the CLI publish identity isn't the in-game
+    // admin). Server-side admin-gated, so harmless to expose: a non-admin
+    // call is rejected. From the browser console: cozyMoneyCutover(true).
+    (window as unknown as Record<string, unknown>).cozyMoneyCutover =
+      (active: boolean) => this.cloud?.setMoneyCutoverActive(active);
     this.cloud.setWasFreshStart(wasFreshStart);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
