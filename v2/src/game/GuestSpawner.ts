@@ -2342,7 +2342,21 @@ export class GuestSpawner {
         // whole dining room "wandering to the door while the kitchen
         // works". The server's own grace logic despawns genuinely
         // seatless guests.
-        if (this.serverOwnsGuestStates()) continue;
+        if (this.serverOwnsGuestStates()) {
+          // Seat not resolvable yet (uid unknown, or furniture still
+          // restoring). Don't evict — the server keeps the meal running. But if
+          // the guest is anchored AND sitting at the room ORIGIN (the (0,0) the
+          // server can default seat coords to), hide it so it doesn't render as
+          // a "blob" dead-centre on the floor; it pops back the instant its seat
+          // resolves (snapped below). A guest at a VALID spot with a merely-
+          // unresolvable uid stays visible — and a real central-table seat
+          // always resolves, so legitimate diners are never hidden.
+          if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
+            g.character._keepHidden =
+              Math.abs(g.character.groundPos.x) < 1.0 && Math.abs(g.character.groundPos.y) < 1.0;
+          }
+          continue;
+        }
         // Local-sim mode: table sold under them. Walk them out
         // gracefully. Reconcile any reserved plates BEFORE the walk
         // so the dishware inventory doesn't silently drift down —
@@ -2381,6 +2395,13 @@ export class GuestSpawner {
       if (g.state === "seated" || g.state === "waitingForFood" || g.state === "eating") {
         if (g.currentFloor !== g.seatFloor) g.currentFloor = g.seatFloor;
         this.reparentCharacter?.(g.character, g.seatFloor);
+        // Snap the body onto the RESOLVED seat. A server-imported guest can be
+        // carrying a bogus (0,0) body position (the server's seat default, or a
+        // watchdog target); without this it sits dead-centre on the floor as a
+        // "blob" until it next moves. Un-hide it if it was hidden above for
+        // being mislaid at the origin.
+        g.character.groundPos.copy(g.seatPos);
+        if (g.character._keepHidden) g.character._keepHidden = false;
       }
       if (g.state === "walkingIn" && g.passedDoor) {
         // Only re-plan when the seat ACTUALLY moved. The previous
