@@ -276,14 +276,12 @@ export class WorldScene {
     if (this.stationEffects.size > 0) {
       this.stationEffectPhase += dt;
       const flick = 0.85 + Math.sin(this.stationEffectPhase * 22) * 0.1 + Math.random() * 0.1;
-      const flameLightInt = 1.6 + Math.sin(this.stationEffectPhase * 18) * 0.3;
       for (const e of this.stationEffects.values()) {
         if (!e.group.visible) continue;
         switch (e.variant) {
           case "gas":
           case "electric": {
             if (e.flameMesh) e.flameMesh.scale.setScalar(flick);
-            if (e.flameLight) e.flameLight.intensity = flameLightInt;
             break;
           }
           case "toaster": {
@@ -294,9 +292,6 @@ export class WorldScene {
               if (mat && "emissiveIntensity" in mat) {
                 mat.emissiveIntensity = 1.6 + Math.sin(this.stationEffectPhase * 7) * 0.6;
               }
-            }
-            if (e.flameLight) {
-              e.flameLight.intensity = 0.6 + Math.sin(this.stationEffectPhase * 7) * 0.3;
             }
             break;
           }
@@ -327,16 +322,10 @@ export class WorldScene {
             }
             break;
           }
-          case "microwave": {
-            // Soft inside-light pulse — currently no recipe gates on
-            // microwave but the effect is here so the system is
-            // complete and players who pre-emptively buy one see it
-            // light up if a chef ever uses it.
-            if (e.flameLight) {
-              e.flameLight.intensity = 0.5 + Math.sin(this.stationEffectPhase * 3) * 0.2;
-            }
+          case "microwave":
+            // Emissive-only now (no cast light); nothing to animate until
+            // a microwave recipe + glow mesh is added.
             break;
-          }
         }
       }
     }
@@ -516,29 +505,18 @@ export class WorldScene {
     // air. ~0.65 m below the top puts it just under a typical hood,
     // close to where a real range bulb hangs.
     const SRC_Y = -0.65;
-    // Source-to-target distance of 1.5 m, cone half-angle ~70° so the
-    // light pool fans out wide enough to cover the whole stove tile +
-    // a bit of the chef in front of it. Penumbra softens the cone
-    // edge so the floor doesn't get a sharp circle.
-    const light = new THREE.SpotLight(0xfff0c8, 6.0, 3.0, Math.PI / 2.6, 0.55, 1.4);
-    light.position.set(0, SRC_Y, 0);
-    // SpotLight aims at light.target.position. Target lives directly
-    // below the source so the cone points straight down; we add it to
-    // the group so Three.js considers it part of the scene graph
-    // (a SpotLight whose target isn't in the scene aims at the origin
-    // and behaves erratically when the group itself moves).
-    light.target.position.set(0, SRC_Y - 1.5, 0);
-    group.add(light);
-    group.add(light.target);
-    // Small visible bulb so the player can see the source. Sits at
-    // the same Y as the spotlight origin, but isn't itself a light —
-    // just a self-lit sphere.
+    // Perf: no SpotLight. A cast light here would add a NUM_SPOT_LIGHTS
+    // axis to every lit material's shader AND swing the active light
+    // count whenever a hood switches on (cooking) or its floor is
+    // revealed — a full recompile each time (minutes on a 1050 Ti).
+    // The self-lit bulb carries the visual; emissive is boosted so it
+    // still reads as a lit range-hood bulb.
     const bulb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.04, 12, 12),
+      new THREE.SphereGeometry(0.05, 12, 12),
       new THREE.MeshStandardMaterial({
         color: 0xfff8e0,
         emissive: 0xfff0c8,
-        emissiveIntensity: 1.8,
+        emissiveIntensity: 2.6,
       }),
     );
     bulb.position.set(0, SRC_Y, 0);
@@ -569,10 +547,11 @@ export class WorldScene {
       }),
     );
     group.add(flameMesh);
-    const flameLight = new THREE.PointLight(palette.light, 1.2, 2.5, 2);
-    flameLight.position.set(0, 0.05, 0);
-    group.add(flameLight);
-    return { group, variant, flameMesh, flameLight };
+    // Perf: no dedicated PointLight. A cast light here would change the
+    // scene's active light count every time a stove starts/stops cooking,
+    // forcing a full shader recompile (minutes on a 1050 Ti). The emissive
+    // flameMesh carries the visual; the animator pulses its scale.
+    return { group, variant, flameMesh };
   }
 
   /** Toaster glow — a thin red plane on top of the slot, pulsing as
@@ -595,10 +574,9 @@ export class WorldScene {
     // Lie flat looking up; sits a hair above the toaster's top.
     flameMesh.rotation.x = -Math.PI / 2;
     group.add(flameMesh);
-    const flameLight = new THREE.PointLight(0xff8866, 0.7, 1.5, 2);
-    flameLight.position.set(0, 0.05, 0);
-    group.add(flameLight);
-    return { group, variant: "toaster" as const, flameMesh, flameLight };
+    // Perf: emissive-only (see buildStoveFlameEffect). The animator pulses
+    // the mesh's emissiveIntensity so it still reads as "heating".
+    return { group, variant: "toaster" as const, flameMesh };
   }
 
   /** Coffee steam — three small white spheres that rise + fade in
@@ -652,10 +630,12 @@ export class WorldScene {
   private buildMicrowaveGlowEffect() {
     const group = new THREE.Group();
     group.visible = false;
-    const flameLight = new THREE.PointLight(0xffcc66, 0.5, 1.2, 2);
-    flameLight.position.set(0, 0.02, 0);
-    group.add(flameLight);
-    return { group, variant: "microwave" as const, flameLight };
+    // Perf: emissive-only effects only. The microwave glow was a lone
+    // cast PointLight with no companion mesh; no recipe currently gates
+    // on a microwave, so it never fired. Dropping the light keeps the
+    // scene's active light count constant (no recompile). If a microwave
+    // recipe is added later, give it an emissive mesh like the toaster.
+    return { group, variant: "microwave" as const };
   }
 
   /** Pin an effect group to a station model's measured top. Same
@@ -716,16 +696,15 @@ export class WorldScene {
     // user notices when placing lights.
     //
     // With the pool: lights are created ONCE at boot (paying the
-    // recompile cost during the loading screen, when nobody sees it).
-    // registerLamp re-parents an existing pool light under the lamp
-    // model instead of constructing a new one — re-parenting doesn't
-    // change the active-light count, so no recompile.  Placement
-    // becomes instant.
-    //
-    // Pool size 16 covers the typical restaurant layout (player
-    // rarely places more lamps than this).  Past the pool's capacity
-    // we fall back to the old construct-a-new-light path, accepting
-    // one recompile per additional lamp.
+    // recompile cost during the loading screen, when nobody sees it)
+    // and never added/removed again, so the active-light count is
+    // constant and nothing recompiles at runtime.  Each frame
+    // updatePlacedLampLights() repositions this fixed pool onto the
+    // lamps nearest the camera (mirrors updateStreetLamps), so only
+    // nearby lamps cast light while every lamp keeps its glowing bulb.
+    // Pool size is intentionally small (see PLACED_LAMP_POOL_SIZE) to
+    // keep the compiled shader tiny — the single biggest factor in
+    // how long that one-time boot compile takes on a weak GPU.
     for (let i = 0; i < PLACED_LAMP_POOL_SIZE; i += 1) {
       const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
       light.castShadow = false;

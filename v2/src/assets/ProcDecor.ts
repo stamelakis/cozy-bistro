@@ -105,9 +105,9 @@ function neonSign(): THREE.Group {
   );
   back.position.set(0, yOff, 0.02);
   g.add(back);
-  const light = new THREE.PointLight(0xff3a8a, 0.6, 3, 2);
-  light.position.set(0, yOff, -0.15);
-  g.add(light);
+  // Perf: emissive-only. The tube material above is emissive, so the sign
+  // glows without a cast PointLight (which would swing the scene's active
+  // light count on every floor reveal → shader recompile on weak GPUs).
   return g;
 }
 
@@ -490,15 +490,14 @@ function aquarium(): THREE.Group {
     new THREE.BoxGeometry(1.7, 0.45, 0.5),
     new THREE.MeshStandardMaterial({
       color: 0x4a90b0, roughness: 0.3,
-      emissive: 0x2a6080, emissiveIntensity: 0.5,
+      emissive: 0x2a6080, emissiveIntensity: 0.85,
       transparent: true, opacity: 0.6, depthWrite: false,
     }),
   );
   water.position.y = 0.85;
   g.add(water);
-  const innerLight = new THREE.PointLight(0x6fb8d8, 0.8, 3, 2);
-  innerLight.position.set(0, 1.0, 0);
-  g.add(innerLight);
+  // Perf: emissive-only — the water mesh's emissive (bumped above) carries
+  // the glow without a cast PointLight that would swing the active count.
   // Top trim.
   const trim = new THREE.Mesh(
     new THREE.BoxGeometry(1.78, 0.06, 0.58),
@@ -599,9 +598,8 @@ function dessertDisplay(): THREE.Group {
     g.add(t);
   }
   // Internal warm light + cakes.
-  const inner = new THREE.PointLight(0xffd99c, 0.5, 1.5, 2);
-  inner.position.set(0, 1.0, 0);
-  g.add(inner);
+  // Perf: emissive-only — cakes read fine under ambient + lamp light
+  // without a dedicated cast PointLight (which would swing the count).
   const cakeColors = [0xf2c4a8, 0xf5d894, 0xd68a78, 0xa2c4c8];
   for (let i = 0; i < 4; i += 1) {
     const cake = new THREE.Mesh(
