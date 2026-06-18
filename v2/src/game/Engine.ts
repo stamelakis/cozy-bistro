@@ -7,6 +7,7 @@ import { GuestSpawner } from "./GuestSpawner";
 import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { disposeObject3D } from "../assets/disposeObject3D";
+import type { TestCharHandle } from "../scene/TestCharacter";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { SharedPedestrians } from "./SharedPedestrians";
 import { TrashSpawner } from "./TrashSpawner";
@@ -252,6 +253,8 @@ export class Engine {
    * context; cleared on webglcontextrestored. */
   private contextLost = false;
   private gpuResetBanner: HTMLElement | null = null;
+  /** DEBUG — skinned FBX test character spawned via window.cozyTestChar(). */
+  private testChar: TestCharHandle | null = null;
   /** Multiplier applied to dt before sim updates. 1 = real-time, 2 = 2x, etc.
    * Rendering is unaffected (so paused still re-renders camera moves). */
   private timeScale = 1;
@@ -407,6 +410,24 @@ export class Engine {
     // call is rejected. From the browser console: cozyMoneyCutover(true).
     (window as unknown as Record<string, unknown>).cozyMoneyCutover =
       (active: boolean) => this.cloud?.setMoneyCutoverActive(active);
+    // Debug console hook — spawn a skinned FBX test character to evaluate a
+    // new rigged character in-scene. cozyTestChar() spawns + auto-cycles his
+    // clips; the returned handle (also window.cozyTestCharHandle) exposes
+    // .setAnim(name) / .cycle() / .dispose(). NOT part of normal play.
+    (window as unknown as Record<string, unknown>).cozyTestChar = async (): Promise<unknown> => {
+      if (this.testChar) { console.info("[cozyTestChar] already spawned — see cozyTestCharHandle"); return this.testChar; }
+      const { spawnTestCharacter } = await import("../scene/TestCharacter");
+      const handle = await spawnTestCharacter(
+        this.scene.worldRoot,
+        new THREE.Vector3(0, 0, 0), // restaurant-local origin (plot centre)
+        import.meta.env.BASE_URL ?? "/",
+      );
+      this.testChar = handle;
+      (window as unknown as Record<string, unknown>).cozyTestCharHandle = handle;
+      console.info("[cozyTestChar] spawned at plot centre. clips:", handle.clipNames());
+      console.info("[cozyTestChar] cozyTestCharHandle.setAnim('walking'|'sittingIdle'|'standToSit'|'sitToStand') / .cycle() / .moveTo(x,z) / .dispose()");
+      return handle;
+    };
     this.cloud.setWasFreshStart(wasFreshStart);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());
@@ -3765,6 +3786,7 @@ export class Engine {
     // ramps inside applyDayNight via the shared bulb material.
     this.scene.updateStreetLamps(this.camera.threeCamera.position);
     this.scene.updatePlacedLampLights(this.camera.threeCamera.position);
+    this.testChar?.update(rawDt); // debug FBX test character (cozyTestChar)
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);
