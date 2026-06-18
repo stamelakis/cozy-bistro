@@ -19,11 +19,12 @@ const FILES: { name: string; file: string }[] = [
   { name: "sitToStand",  file: "sit-to-stand.fbx" },
 ];
 
-// Mixamo characters are authored facing +Z; the game's facingY convention
-// + the static GLBs face +X. Rotate the inner mesh so its forward aligns,
-// then CharacterAnimator's facingY drives it exactly like a static guest.
-// (Flip the sign if he ends up walking sideways/backwards — easy to tune.)
-const FORWARD_OFFSET = Math.PI / 2;
+// The game's static GLBs (and the mover's `facingY = atan2(-dx, -dz)`) use
+// FORWARD = -Z. This Mixamo character's forward is +Z (its walk root motion
+// travels +Z), i.e. the opposite, so rotate the inner mesh by π to flip +Z
+// onto -Z. Then CharacterAnimator's facingY drives it exactly like a static
+// guest and he faces his direction of travel.
+const FORWARD_OFFSET = Math.PI;
 
 /**
  * Drives one guest's AnimationMixer from the game's action enum:
@@ -108,6 +109,23 @@ export class SkinnedCharacterLoader {
         const clips = fbxs
           .map((fbx, i) => { const c = fbx.animations[0]; if (c) c.name = FILES[i].name; return c; })
           .filter((c): c is THREE.AnimationClip => !!c);
+        // The Mixamo clips carry ROOT MOTION: the Hips translate ~1.75 m
+        // forward per walk cycle. The engine drives the character's XZ
+        // position itself (via groundPos), so that root motion fights it —
+        // the body lurches forward then snaps back each cycle, drifting off
+        // the path and clipping through stairs / furniture. Pin the Hips X/Z
+        // to their first-frame value so every clip plays IN PLACE
+        // horizontally; keep Y (the vertical bob, and the sit-down drop the
+        // sit clips legitimately need).
+        for (const clip of clips) {
+          for (const t of clip.tracks) {
+            if (/Hips\.position$/i.test(t.name)) {
+              const v = t.values;
+              const x0 = v[0], z0 = v[2];
+              for (let i = 0; i < v.length; i += 3) { v[i] = x0; v[i + 2] = z0; }
+            }
+          }
+        }
         return { base: mesh, clips, feetLift };
       })();
     }
