@@ -74,6 +74,9 @@ const VARIANTS: &[&str] = &[
 /// repeatedly).
 #[reducer]
 pub fn pedestrian_tick(ctx: &ReducerContext, _schedule: PedestrianTickSchedule) -> Result<(), String> {
+    if ctx.sender != ctx.identity() {
+        return Err("pedestrian_tick is scheduler-only".into());
+    }
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     // Pass 1 — despawn expired pedestrians. Collect the whole row
     // (not just the id) so the arrival-handoff step below can read

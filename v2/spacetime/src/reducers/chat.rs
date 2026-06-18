@@ -107,6 +107,9 @@ pub fn bootstrap_chat_schedule(ctx: &ReducerContext) -> Result<(), String> {
 /// oldest. Cheap — runs every 5 minutes via the schedule row.
 #[reducer]
 pub fn chat_cleanup(ctx: &ReducerContext, _schedule: ChatCleanupSchedule) -> Result<(), String> {
+    if ctx.sender != ctx.identity() {
+        return Err("chat_cleanup is scheduler-only".into());
+    }
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let cutoff = now_micros - RETENTION_MICROS;
 

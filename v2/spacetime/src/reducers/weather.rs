@@ -27,6 +27,9 @@ const WEATHER_OPTIONS: &[(&str, u32)] = &[
 /// single weather_state row.
 #[reducer]
 pub fn weather_roll(ctx: &ReducerContext, _schedule: WeatherSchedule) -> Result<(), String> {
+    if ctx.sender != ctx.identity() {
+        return Err("weather_roll is scheduler-only".into());
+    }
     let kind = pick_weighted(ctx);
     upsert_weather(ctx, kind);
     log::info!("weather_roll → {}", kind);

@@ -66,6 +66,12 @@ pub fn bootstrap_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
 /// schedule rows.
 #[reducer]
 pub fn reset_sim_schedules(ctx: &ReducerContext) -> Result<(), String> {
+    // Admin-only: this wipes EVERY restaurant's tick schedules + state.
+    // Without the gate any client could call it to stall the whole
+    // server's simulation (cross-player DoS).
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Admin only".into());
+    }
     let schedule_ids: Vec<u64> = ctx.db.restaurant_tick_schedule().iter()
         .map(|s| s.id)
         .collect();
@@ -275,6 +281,13 @@ pub fn restaurant_tick(
     ctx: &ReducerContext,
     schedule: RestaurantTickSchedule,
 ) -> Result<(), String> {
+    // Scheduler-only: a scheduled reducer is still a public RPC. The
+    // scheduler invokes it with sender == the module's own identity, so
+    // reject any other sender — otherwise a modded client could call it to
+    // fast-forward its own (or grief another player's) simulation.
+    if ctx.sender != ctx.identity() {
+        return Err("restaurant_tick is scheduler-only".into());
+    }
     let rid = schedule.restaurant_id;
     let now = ctx.timestamp;
 
@@ -3107,7 +3120,7 @@ pub fn set_furniture_cost(
 /// Replaces the client's earnMoney+bump (Engine.enterGame / ExpandWidget)
 /// with a server credit on a server-enforced 3h cooldown, so a cheater
 /// can't reset the localStorage timer to mint grants. Amount is read from
-/// the owner's Building plot size (small/medium/large = $10/$15/$20).
+/// the owner's Building plot size (small/medium/large = $1,000/$1,500/$2,000).
 /// Idempotent within the cooldown window (silent no-op, not an error) so
 /// the client may call it on every enterGame.
 #[reducer]
@@ -3125,11 +3138,11 @@ pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(
     let bonus_cents: i64 = ctx.db.building().owner_identity().filter(ctx.sender)
         .next()
         .map(|b| match b.kind.as_str() {
-            "small" => 1000,
-            "large" => 2000,
-            _ => 1500,
+            "small" => 100_000,  // $1,000
+            "large" => 200_000,  // $2,000
+            _ => 150_000,        // $1,500 (medium)
         })
-        .unwrap_or(1500);
+        .unwrap_or(150_000);
     ctx.db.restaurant().id().update(Restaurant {
         cloud_money_cents: r.cloud_money_cents.saturating_add(bonus_cents),
         last_grant_micros: now,
