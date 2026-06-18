@@ -383,6 +383,10 @@ const SEAT_CLEAN_FALLBACK_SECONDS = 6.0;
  * picked up, etc.) still fire so you can trace ticket flow without it. */
 const DEBUG_ROUTER_LOGS = false;
 const ARRIVAL_THRESHOLD = 0.18;
+/** Take-order trips stop this far from the guest's seat so the waiter ends up
+ * standing BESIDE the seated guest (and turns to face them) instead of walking
+ * right onto / inside them. ~0.75 m ≈ one body-width of clearance. */
+const ORDER_STAND_DISTANCE = 0.75;
 
 /** Shared geometry/material so all waiters reuse the same allocation. */
 let sharedPlateGeo: THREE.CylinderGeometry | undefined;
@@ -3183,12 +3187,20 @@ export class StaffRouter {
       }
       case "movingToWork": {
         this.moveActor(w, dt);
-        if (this.distance(w.character.groundPos, w.target) < ARRIVAL_THRESHOLD) {
+        // Take-order trips stop SHORT of the seat (ORDER_STAND_DISTANCE) so the
+        // waiter stands BESIDE the seated guest rather than walking onto / into
+        // them; every other trip arrives right at the target tile.
+        const arriveDist = w.takeOrderRequest ? ORDER_STAND_DISTANCE : ARRIVAL_THRESHOLD;
+        if (this.distance(w.character.groundPos, w.target) < arriveDist) {
           // Take-order trip reinterprets movingToWork → "walking to
-          // seated guest". On arrival we just enter the dwell state;
-          // working handles the timer + callback.
+          // seated guest". On arrival, turn to face the guest (the seat is
+          // w.target; GLB forward = -Z), then enter the dwell state; working
+          // handles the timer + callback.
           if (w.takeOrderRequest) {
-            w.character.action = "idle"; // "standing at the table"
+            const dx = w.target.x - w.character.groundPos.x;
+            const dz = w.target.y - w.character.groundPos.y;
+            if (dx * dx + dz * dz > 1e-6) w.character.facingY = Math.atan2(-dx, -dz);
+            w.character.action = "idle"; // "standing beside the guest"
             w.state = "working";
             w.clock = 0;
             break;
