@@ -161,6 +161,22 @@ fn is_waiting_state(s: &str) -> bool {
     matches!(s, "waiting" | "waitingForSeat")
 }
 
+/// True for guest states the server's state machine actually models and
+/// drives. Used to REJECT client-mirrored LOCAL-only render states
+/// (returningFromToilet, walkingToToilet, atToilet, walkingToSink, atSink,
+/// walkingToWait) in update_guest_position — adopting one would strand the
+/// row in a state tick_guest_state can't advance, and the unknown-state
+/// watchdog would then force-leave the guest (e.g. a seated guest despawned
+/// mid-meal seconds after a cross-floor wash). Also drives that watchdog so
+/// the accept-list and the leave-list stay in lockstep.
+fn server_models_guest_state(s: &str) -> bool {
+    matches!(s,
+        "walkingIn" | "seated" | "ordering" | "waitingForFood"
+        | "eating" | "wcWalking" | "wcSitting" | "wcWashing")
+        || is_waiting_state(s)
+        || is_leaving_state(s)
+}
+
 /// Phase 6.2 — server-side weather tip multiplier, in x100 units.
 /// Mirrors the WEATHER_KINDS catalog in src/game/WeatherSystem.ts
 /// (sunny / cloudy = 1.0×, festival = 1.25×, etc.). Used by
@@ -5645,11 +5661,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
     // with id series thousands older than the live crowd). Anything
     // the server's state machine doesn't own gets walked out; the
     // standard leaving flow settles + despawns them.
-    const SERVER_STATES: [&str; 9] = [
-        "walkingIn", "waiting", "seated", "ordering", "waitingForFood",
-        "eating", "wcWalking", "wcSitting", "wcWashing",
-    ];
-    if !is_leaving_state(&g.state) && !SERVER_STATES.contains(&g.state.as_str()) {
+    if !server_models_guest_state(&g.state) {
         log::info!(
             "tick_guest_state: guest {} in unknown state '{}' — flipping to leaving",
             g.id, g.state,
@@ -6467,7 +6479,7 @@ pub(crate) fn try_spawn_arrival_guest(
                 // Cap concurrent waiters so the doorway doesn't mob.
                 let waiting_now = ctx.db.active_guest()
                     .restaurant_id().filter(restaurant_id)
-                    .filter(|g| g.state == "waiting")
+                    .filter(|g| is_waiting_state(&g.state))
                     .count();
                 if waiting_now >= 4 {
                     return false;
@@ -6729,10 +6741,10 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     let h: u64 = (now_micros as u64).wrapping_mul(rid.wrapping_add(1));
     let variant = VARIANTS[(h as usize) % VARIANTS.len()];
 
-    // Restaurant-local door anchor is (0, 0) by convention — the
-    // client's WorldScene puts the front door at origin so a guest
-    // appearing here walks naturally to a seat.
-    let spawned = try_spawn_arrival_guest(ctx, rid, variant, 0.0, 0.0);
+    // Restaurant-local door anchor — NOT (0,0) (that's the room centre, which
+    // popped offline walk-ins in mid-room). The door is the southern wall at
+    // local (0, ~5.45), matching ERRAND_DOOR_INTERIOR_Z + the door_z default.
+    let spawned = try_spawn_arrival_guest(ctx, rid, variant, 0.0, 5.45);
     if spawned {
         ctx.db.restaurant().id().update(Restaurant {
             last_guest_spawn_micros: now_micros,
@@ -8163,7 +8175,13 @@ pub fn update_guest_position(
         // Keep the canonical waiting state too, so the client's
         // "waitingForSeat" mirror can't overwrite it and break promotion.
         | "waiting" | "waitingForSeat");
-    let new_state = if server_owned_state && state != "leaving" {
+    // Only ADOPT a mirrored state the server actually models. The client also
+    // renders local-only states (returningFromToilet, atToilet, walkingToWait,
+    // ...) and mirrors them up verbatim; adopting one strands the row where the
+    // watchdog then force-leaves a still-seated guest (cross-floor WC despawn).
+    let new_state = if (server_owned_state && state != "leaving")
+        || !server_models_guest_state(&state)
+    {
         g.state.clone()
     } else {
         state
@@ -8528,9 +8546,25 @@ pub fn register_staff_actor(
     }
     let existing = ctx.db.staff_actor().member_id().find(member_id.clone());
     if let Some(prev) = existing {
-        // Re-register — refresh metadata + reset state. Useful when
-        // the player rehires the same member after a fire/refresh
-        // round-trip, or when an old session's row lingered.
+        // Don't reset a SERVER-BUSY actor on re-register. The client's
+        // healHomeFloorIfStale re-registers whenever the LOCAL actor looks
+        // idle at home, but the server row can be mid ticket/cook/wash/clean;
+        // a blind reset orphaned the task (chef stops cooking, ticket stalls).
+        // Mirror update_staff_actor's server_busy guard: if busy, only refresh
+        // home/role and leave the in-flight task to the server to finish.
+        let prev_busy = prev.ticket_id.is_some()
+            || prev.take_order_guest_id.is_some()
+            || !prev.assigned_stove_uid.is_empty()
+            || !prev.wash_target_uid.is_empty()
+            || prev.clean_seat_uid.is_some();
+        if prev_busy {
+            ctx.db.staff_actor().member_id().update(StaffActor {
+                role, home_floor, home_x, home_z,
+                ..prev
+            });
+            return Ok(());
+        }
+        // Idle actor — full reset is fine (rehire / lingering old row).
         ctx.db.staff_actor().member_id().update(StaffActor {
             role, home_floor, home_x, home_z,
             state: "idle".to_string(),

@@ -147,19 +147,18 @@ fn try_arrival_handoff(ctx: &ReducerContext, p: &Pedestrian, now_micros: i64) {
     // in the current single-restaurant model; we iterate because
     // Restaurant.owner is indexed but not unique.
     let Some(rest) = ctx.db.restaurant().iter().find(|r| r.owner == b.owner_identity) else { return; };
-    // Phase 9.5 — door anchor is restaurant-LOCAL (0, 0) by
-    // convention (matches try_server_spawn_guest + the client's
-    // WorldScene door placement). p.end_x/end_z are WORLD street
-    // coordinates of the plot door — passing them here spawned the
-    // guest tens of units outside the restaurant's local space, so
-    // the owner watched walk-ins materialise across the map and
-    // wander toward their seats from the wrong coordinate frame.
+    // Door anchor is restaurant-LOCAL. NOT p.end_x/end_z (those are WORLD
+    // street coords — passing them spawned the guest tens of units across the
+    // map). And NOT (0,0): that's the room CENTRE, which made server walk-ins
+    // pop in mid-room and head to their seat from the wrong spot. The real
+    // door is the southern wall at local (0, ~5.45) — matching the door mesh,
+    // ERRAND_DOOR_INTERIOR_Z, and the active_guest.door_z column default.
     crate::reducers::restaurant_sim::try_spawn_arrival_guest(
         ctx,
         rest.id,
         &p.variant,
         0.0,
-        0.0,
+        5.45,
     );
 }
 

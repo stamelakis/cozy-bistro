@@ -881,17 +881,18 @@ export class StaffRouter {
       }
       // ---- State machine ----
       const cloudState = row.state;
-      if (cloudState === "idle" || cloudState === "movingToWork"
-          || cloudState === "working" || cloudState === "returningHome") {
-        actor.state = cloudState;
-      } else {
-        actor.state = "idle"; // unknown state defaults safe
-      }
+      const knownState = cloudState === "idle" || cloudState === "movingToWork"
+          || cloudState === "working" || cloudState === "returningHome";
+      actor.state = knownState ? cloudState : "idle"; // unknown defaults safe
       // ---- Work assignment ----
-      actor.ticketId = row.ticketId != null
+      // An actor forced to idle from an UNKNOWN cloud state must not keep a
+      // stale ticket / stove binding — that left an idle actor "holding" a
+      // ticket on reconnect, which can read as busy and stall dispatch. Only
+      // adopt bindings for a recognised state.
+      actor.ticketId = (knownState && row.ticketId != null)
         ? `cloud-tk-${row.ticketId}`
         : null;
-      if (row.assignedStoveUid && (actor.role === "chef" || actor.role === "barman")) {
+      if (knownState && row.assignedStoveUid && (actor.role === "chef" || actor.role === "barman")) {
         actor.assignedStoveUid = row.assignedStoveUid;
       }
       // ---- Wash trip ----
