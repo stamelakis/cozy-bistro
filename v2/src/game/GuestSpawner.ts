@@ -234,6 +234,13 @@ interface ActiveGuest {
   variantId: string; // "guest-v0".."guest-v6"
   state: GuestState;
   character: AnimatedCharacter;
+  /** Anti-stuck watchdog bookkeeping: how long (ms) the guest has sat in one
+   * spot while in a state that should be MOVING, and the last position it was
+   * seen moving from. Lets tickStuckRecovery re-plan a wedged path so the guest
+   * gets moving again instead of standing on the floor as a statue. */
+  _stuckMs?: number;
+  _stuckX?: number;
+  _stuckZ?: number;
   /** True once a walkingIn guest has reached the door INTERIOR — their
    * target then flips to the seat. (Set after passing through the door
    * inward.) */
@@ -1100,13 +1107,14 @@ export class GuestSpawner {
       if (localOwnsPatience) this.tickPatience(g, dt);
       else this.tickPatienceDisplay(g, dt);
       this.tickGuest(g, dt);
+      this.tickStuckRecovery(g, dt);
       // Remove guest if they finished walking out — OR if they've been
       // trying to leave for an absurd amount of time (got stuck in a
       // crowd, target unreachable, etc.). Without this safety, a stuck
       // walker holds their seat in `occupiedSeats` forever and the
       // restaurant slowly seizes up.
       const stuckLeaving =
-        (g.state === "walkingOut" || g.state === "walkingToDoor" || g.state === "exitingDoor") && g.stateClock > 30;
+        (g.state === "walkingOut" || g.state === "walkingToDoor" || g.state === "exitingDoor") && g.stateClock > 8;
       if (stuckLeaving ||
           (g.state === "walkingOut" && this.distanceToTarget(g) < ARRIVAL_THRESHOLD)) {
         this.despawnGuest(i);
@@ -3368,6 +3376,37 @@ export class GuestSpawner {
     // group rather than scene root; remove from its actual parent.
     entry.mesh.parent?.remove(entry.mesh);
     disposeDirtyPiece(entry.mesh);
+  }
+
+  /** Anti-stuck watchdog. A guest in a should-be-MOVING state that hasn't
+   * actually moved for a few seconds is wedged — usually a stale or now-blocked
+   * queued path. Re-plan it periodically so it gets going again instead of
+   * standing on the floor as a statue (and, if walkingIn, holding its seat). We
+   * deliberately do NOT force-route it out from here: that would fight the
+   * server-owned guest state under the cutover. Anything a re-plan can't rescue
+   * is cleared by the leaving-watchdog (now 8 s) or the server's patience. */
+  private tickStuckRecovery(g: ActiveGuest, dt: number): void {
+    const movingState =
+      g.state === "walkingIn" || g.state === "walkingToWait" ||
+      g.state === "walkingToToilet" || g.state === "walkingToSink" ||
+      g.state === "returningFromToilet" || g.state === "walkingToDoor" ||
+      g.state === "exitingDoor" || g.state === "walkingOut";
+    if (!movingState) { g._stuckMs = 0; return; }
+    const x = g.character.groundPos.x, z = g.character.groundPos.y;
+    if (g._stuckX === undefined ||
+        Math.hypot(x - g._stuckX, z - (g._stuckZ ?? 0)) > 0.06) {
+      // Moved this interval — not stuck. Remember where, reset the clock.
+      g._stuckMs = 0; g._stuckX = x; g._stuckZ = z;
+      return;
+    }
+    const prev = g._stuckMs ?? 0;
+    g._stuckMs = prev + dt * 1000;
+    // Every ~3 s wedged, re-plan toward the current target — that clears the
+    // common cause (a stale / now-blocked queued path); moveToward picks the
+    // fresh path up next frame. Safe: no state change, no despawn.
+    if (Math.floor(g._stuckMs / 3000) > Math.floor(prev / 3000)) {
+      this.planPath(g);
+    }
   }
 
   private tickGuest(g: ActiveGuest, dt: number): void {
