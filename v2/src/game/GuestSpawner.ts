@@ -1970,8 +1970,13 @@ export class GuestSpawner {
       seatAtBar: row.seatAtBar,
       platePos: new THREE.Vector2(row.plateX || row.seatX, row.plateZ || row.seatZ),
       target: new THREE.Vector2(row.targetX, row.targetZ),
-      passedDoor: state !== "walkingIn", // assume past door once seated/etc.
-      passedExterior: state !== "walkingIn",
+      // A server-spawned guest that already has a seat is, per the server,
+      // already inside heading to it — treat it as past the door. Otherwise
+      // the (ungated) walkingIn handler walks it to the seat, then BACK to the
+      // client door anchor (0,5) — which differs from the server's (0,0) —
+      // then forward again, reading as a guest "idling inside" by the doorway.
+      passedDoor: state !== "walkingIn" || !!row.seatUid,
+      passedExterior: state !== "walkingIn" || !!row.seatUid,
       stateClock: Number(row.stateClockMs) / 1000,
       order,
       orderIndex: row.orderIndex,
@@ -3054,12 +3059,24 @@ export class GuestSpawner {
    * previous plate (e.g. between courses) so we don't accumulate. */
   private showPlateForGuest(g: ActiveGuest): void {
     this.removePlateForGuest(g.id);
+    // Resolve the guest's table surface FIRST. If it isn't registered yet
+    // (offscreen, mid furniture-restore, or a server-assigned seat whose
+    // furniture hasn't landed locally), DEFER the plate rather than dropping
+    // it at the 0.76 fallback height where it floats with no surface beneath
+    // it — the next course/show resolves it once the table is present.
+    let topY: number | null = null;
+    if (this.registry && g.seatId) {
+      const hashIdx = g.seatId.indexOf("#");
+      const tableUid = hashIdx >= 0 ? g.seatId.substring(0, hashIdx) : g.seatId;
+      topY = this.registry.getTableTopY(tableUid);
+    }
+    if (topY === null) return;
     if (!GuestSpawner.plateGeo) {
       GuestSpawner.plateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
       GuestSpawner.plateMat = new THREE.MeshStandardMaterial({ color: 0xfaf2e2, roughness: 0.4 });
     }
     const plate = new THREE.Mesh(GuestSpawner.plateGeo, GuestSpawner.plateMat!);
-    plate.position.set(g.platePos.x, this.getTableTopForGuest(g), g.platePos.y);
+    plate.position.set(g.platePos.x, topY, g.platePos.y);
     plate.castShadow = true;
     plate.receiveShadow = true;
     // Add a small food-color blob on top so it doesn't read as "empty plate".
@@ -3319,10 +3336,12 @@ export class GuestSpawner {
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD && g.waiting) {
           g.character.groundPos.copy(g.waiting.chairPos);
-          // Yellow chairs aren't ideally oriented; flip the chair's rotation
-          // through the seat-direction relation so the guest faces "outward"
-          // from the chair (good enough — they're just waiting).
-          g.character.facingY = Math.PI - g.waiting.chairFacingY;
+          // A seated guest faces OUT of the chair: the chair back is at -Z by
+          // default, so the customer faces chairRotY + π (the same +π relation
+          // as chairRotForSlot). The old `π - chairFacingY` only happened to
+          // match for N/S chairs and seated guests at E/W-rotated chairs
+          // exactly backwards.
+          g.character.facingY = g.waiting.chairFacingY + Math.PI;
           g.character.action = "sit";
           g.state = "waitingForSeat";
           g.stateClock = 0;

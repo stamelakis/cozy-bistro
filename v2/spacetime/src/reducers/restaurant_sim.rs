@@ -7109,7 +7109,11 @@ fn avg_rating_x100(ctx: &ReducerContext, rid: u64) -> i64 {
 fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
     let Some(g) = ctx.db.active_guest()
         .restaurant_id().filter(rid)
-        .find(|g| g.state == "waiting")
+        // Accept both names: the client mirrors its local "waitingForSeat"
+        // back over the server's "waiting" (see is_waiting_state / H.19), so
+        // matching only the literal "waiting" left promoted-able guests
+        // stranded outside forever even with the dining room empty.
+        .find(|g| is_waiting_state(&g.state))
     else { return };
     let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id))
     else { return };
@@ -8155,7 +8159,10 @@ pub fn update_guest_position(
     // OUT of a server-owned state except to a genuine "leaving"; the
     // position/target still update either way.
     let server_owned_state = matches!(g.state.as_str(),
-        "ordering" | "wcWalking" | "wcSitting" | "wcWashing");
+        "ordering" | "wcWalking" | "wcSitting" | "wcWashing"
+        // Keep the canonical waiting state too, so the client's
+        // "waitingForSeat" mirror can't overwrite it and break promotion.
+        | "waiting" | "waitingForSeat");
     let new_state = if server_owned_state && state != "leaving" {
         g.state.clone()
     } else {
