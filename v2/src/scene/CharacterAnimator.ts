@@ -184,6 +184,23 @@ export class CharacterAnimator {
       }
       if (!c.root.visible) c.root.visible = true;
 
+      // Skinned guests must keep their mixer advancing on EVERY visible
+      // frame, so they are handled BEFORE the frustum cull. The cull below
+      // skips the per-frame pose for off-frustum characters — harmless for a
+      // static mesh (it just holds its sculpted pose) but fatal for a skinned
+      // one, which then freezes at mixer time 0 = its BIND POSE (the arms-out
+      // T-pose). Skinned guests are a small minority (customers in/near the
+      // restaurant), so we skip the cull for them and always tick. This also
+      // sidesteps the cull sphere being mis-placed for reparented upper-floor
+      // characters: it is centred on `baseY`, which is 0 for a skinned guest,
+      // so the sphere sits at ground level even when the body renders a storey
+      // up — that false-cull is exactly what froze on-screen skinned guests in
+      // a T-pose when the camera focused the upper floor.
+      if (c.skeletal) {
+        c.skeletal.update(dt, c.action);
+        continue;
+      }
+
       if (cull) {
         // Sphere centred on the character's torso (groundPos + ~0.45 m
         // up the body) so a tall character isn't false-culled when
@@ -195,14 +212,7 @@ export class CharacterAnimator {
         );
         if (!this.frustum.intersectsSphere(this.cullSphere)) continue;
       }
-      if (c.skeletal) {
-        // Skinned guest: the mixer poses the body, so skip the procedural
-        // pose. Position/facing/visibility were already applied above, the
-        // same as for a static character.
-        c.skeletal.update(dt, c.action);
-      } else {
-        this.tickCharacter(c);
-      }
+      this.tickCharacter(c);
     }
   }
 
