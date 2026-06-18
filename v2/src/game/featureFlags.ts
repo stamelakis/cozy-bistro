@@ -124,11 +124,14 @@ const DEFAULTS: ServerSimFlags = {
   // Phase H cutover step 1 — furniture flag flipped default-on
   // (post-H.35).
   furniture: true,
-  // Anti-cheat B/C — money cutover. OFF until built + tested. Test with
-  // ?serverSim=all (turns on all five sims AND money, matching production
-  // + the cutover). Flipping this true is the LAST build step, after the
-  // server is ready to reject client money writes.
-  money: false,
+  // Anti-cheat B/C — money cutover, FLIPPED ON 2026-06-18. Income is
+  // server-credited (sales/tips via the rollup; grants/achievement/recycle/
+  // furniture-refund via dedicated reducers), the client's earn() no-ops,
+  // spends post as negative cloud_money bumps, and the server
+  // (money_cutover_active) rejects positive bumps so a modded client can't
+  // mint money. Rollback: set this back to false AND
+  // `spacetime call dunnin set_money_cutover_active false`.
+  money: true,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
