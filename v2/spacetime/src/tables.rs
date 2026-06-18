@@ -1643,6 +1643,12 @@ pub struct FurnitureCost {
     pub def_id: String,
     /// Scaled purchase price in cents.
     pub cost_cents: i64,
+    /// Sell-back value in cents — the client's full refund formula incl.
+    /// stat bonuses. sell_furniture credits this under the money cutover
+    /// (falls back to cost_cents/2 if not yet reseeded). #[default(0)] for
+    /// the migration of existing rows.
+    #[default(0i64)]
+    pub refund_cents: i64,
 }
 
 /// Anti-cheat B/C — global money-cutover switch. Single row (id = 1).

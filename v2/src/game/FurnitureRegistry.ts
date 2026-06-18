@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { ModelLoader } from "../assets/ModelLoader";
-import { getFurnitureDef, scaledCost, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
+import { furnitureRefundValue, getFurnitureDef, scaledCost, type FurnitureDef, type SeatSlot } from "../data/furnitureCatalog";
 import { fitFurniture, placementY, snapToAdjacentWall } from "../assets/fitFurniture";
 import { isServerSim } from "./featureFlags";
 
@@ -477,18 +477,10 @@ export class FurnitureRegistry {
     this.mirrorFurnitureSell(item.uid);
     const def = getFurnitureDef(item.defId);
     if (!def) return { defId: item.defId, refund: 0 };
-    // Mirror of 2D's value formula, scaled down to roughly 50%-of-cost-plus-stats.
-    // Uses scaledCost (tier-multiplied) instead of raw def.cost so a T5
-    // fridge the player paid $20k for refunds half of $20k, not half of
-    // the unscaled $3k base — without this, selling late-game gear was
-    // a wealth-destroying trap.
-    const refund = Math.floor(
-      scaledCost(def) * 0.5
-      + (def.style ?? 0) * 4
-      + (def.comfort ?? 0) * 3
-      + (def.ratingBonus ?? 0) * 200
-      + (def.attractionBonus ?? 0) * 2
-    );
+    // Sell-back value — see furnitureRefundValue. The identical formula is
+    // seeded server-side (furniture_cost.refund_cents) so the money cutover
+    // credits the same amount the client shows here.
+    const refund = furnitureRefundValue(def);
     return { defId: item.defId, refund };
   }
 

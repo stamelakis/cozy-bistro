@@ -13,4 +13,5 @@ import {
 export default {
   defId: __t.string(),
   costCents: __t.i64(),
+  refundCents: __t.i64(),
 };

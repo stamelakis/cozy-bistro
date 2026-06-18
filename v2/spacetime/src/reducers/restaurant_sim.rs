@@ -3090,24 +3090,25 @@ pub fn set_furniture_cost(
     ctx: &ReducerContext,
     def_id: String,
     cost_cents: i64,
+    refund_cents: i64,
 ) -> Result<(), String> {
     let zero = spacetimedb::Identity::__dummy();
     if ctx.sender == zero { return Err("Must be authenticated".into()); }
     if def_id.is_empty() || def_id.len() > 64 {
         return Err("def_id must be 1-64 chars".into());
     }
-    if cost_cents < 0 {
-        return Err("cost_cents cannot be negative".into());
+    if cost_cents < 0 || refund_cents < 0 {
+        return Err("costs cannot be negative".into());
     }
     let existing = ctx.db.furniture_cost().def_id().find(def_id.clone());
     if let Some(r) = &existing {
-        if r.cost_cents == cost_cents { return Ok(()); } // idempotent
+        if r.cost_cents == cost_cents && r.refund_cents == refund_cents { return Ok(()); } // idempotent
     }
     // Admin gate (see set_recipe_meta). Idempotent re-seed passes above.
     if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
         return Err("Furniture cost catalog changes are admin-only".into());
     }
-    let row = FurnitureCost { def_id, cost_cents };
+    let row = FurnitureCost { def_id, cost_cents, refund_cents };
     if existing.is_some() {
         ctx.db.furniture_cost().def_id().update(row);
     } else {
@@ -8877,6 +8878,27 @@ pub fn sell_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
             target_floor: 0,
             ..g
         });
+    }
+    // Anti-cheat — under the money cutover the client's earn() no-ops, so
+    // credit the server-authoritative sell-back here, priced from the
+    // furniture_cost catalog (seeded from the client's exact refund
+    // formula). Falls back to half the scaled cost until refund_cents is
+    // reseeded by an admin load. Off-cutover this is skipped — the client
+    // credits locally as before. NOTE: undo-of-place also routes through
+    // sell_furniture, so under the cutover an undo refunds the 50% sell
+    // value, not the full purchase price.
+    if money_cutover_active(ctx) {
+        let refund_cents = ctx.db.furniture_cost().def_id().find(existing.def_id.clone())
+            .map(|c| if c.refund_cents > 0 { c.refund_cents } else { c.cost_cents / 2 })
+            .unwrap_or(0);
+        if refund_cents > 0 {
+            if let Some(rr) = ctx.db.restaurant().id().find(existing.restaurant_id) {
+                ctx.db.restaurant().id().update(Restaurant {
+                    cloud_money_cents: rr.cloud_money_cents.saturating_add(refund_cents),
+                    ..rr
+                });
+            }
+        }
     }
     Ok(())
 }

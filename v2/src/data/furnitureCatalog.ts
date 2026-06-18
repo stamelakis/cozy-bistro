@@ -951,3 +951,19 @@ export function scaledCost(def: FurnitureDef): number {
   const raw = def.cost * Math.pow(tier, TIER_PRICE_EXPONENT);
   return Math.ceil(raw / 10) * 10;
 }
+
+/** Sell-back value for a placed item, in dollars: ~50% of the scaled
+ * purchase price plus small bonuses for premium stats (so selling a
+ * high-rating item isn't a wealth-destroying trap). Single source of
+ * truth — FurnitureRegistry uses it for the live refund, and Engine
+ * seeds furniture_cost.refund_cents from it so sell_furniture credits the
+ * identical amount under the money cutover. */
+export function furnitureRefundValue(def: FurnitureDef): number {
+  return Math.floor(
+    scaledCost(def) * 0.5
+    + (def.style ?? 0) * 4
+    + (def.comfort ?? 0) * 3
+    + (def.ratingBonus ?? 0) * 200
+    + (def.attractionBonus ?? 0) * 2
+  );
+}

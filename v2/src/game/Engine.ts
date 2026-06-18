@@ -1508,9 +1508,13 @@ export class Engine {
         // price-check furniture purchases (Phase B). scaledCost is the
         // displayed buy price; ×100 → cents. Only the admin's seed lands
         // (set_furniture_cost gates changes); non-admin re-seeds no-op.
-        void import("../data/furnitureCatalog").then(({ furnitureCatalog, scaledCost }) => {
+        void import("../data/furnitureCatalog").then(({ furnitureCatalog, scaledCost, furnitureRefundValue }) => {
           for (const def of furnitureCatalog) {
-            this.cloud.setFurnitureCost(def.id, Math.round(scaledCost(def) * 100));
+            this.cloud.setFurnitureCost(
+              def.id,
+              Math.round(scaledCost(def) * 100),
+              Math.round(furnitureRefundValue(def) * 100),
+            );
           }
         });
         localStorage.setItem(LAST_CATALOG_SEED_KEY, String(Date.now()));

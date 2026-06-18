@@ -2523,14 +2523,16 @@ export class SpacetimeClient {
   /** Phase A2 (anti-cheat) — seed one furniture def's scaled cost (cents)
    * so the validated place_furniture reducer can price-check a purchase.
    * Idempotent server-side; a CHANGE is admin-only. */
-  setFurnitureCost(defId: string, costCents: number): void {
+  setFurnitureCost(defId: string, costCents: number, refundCents: number): void {
     if (!this.conn) return;
     if (!defId) return;
     if (!Number.isFinite(costCents) || costCents < 0) return;
+    if (!Number.isFinite(refundCents) || refundCents < 0) return;
     try {
       this.conn.reducers.setFurnitureCost({
         defId,
         costCents: BigInt(Math.round(costCents)),
+        refundCents: BigInt(Math.round(refundCents)),
       });
     } catch (e) {
       console.warn("[Cloud] setFurnitureCost failed:", e);

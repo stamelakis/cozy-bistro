@@ -222,6 +222,7 @@ export type Friendship = __Infer<typeof Friendship>;
 export const FurnitureCost = __t.object("FurnitureCost", {
   defId: __t.string(),
   costCents: __t.i64(),
+  refundCents: __t.i64(),
 });
 export type FurnitureCost = __Infer<typeof FurnitureCost>;
 

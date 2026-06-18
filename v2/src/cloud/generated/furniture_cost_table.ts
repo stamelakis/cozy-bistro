@@ -13,4 +13,5 @@ import {
 export default __t.row({
   defId: __t.string().primaryKey().name("def_id"),
   costCents: __t.i64().name("cost_cents"),
+  refundCents: __t.i64().name("refund_cents"),
 });
