@@ -428,6 +428,18 @@ export class Engine {
       console.info("[cozyTestChar] cozyTestCharHandle.setAnim('walking'|'sittingIdle'|'standToSit'|'sitToStand') / .cycle() / .moveTo(x,z) / .dispose()");
       return handle;
     };
+    // Debug — spawn ONE rigged guest through the REAL skinned-guest path
+    // (SkinnedCharacterLoader + SkeletalController + the CharacterAnimator
+    // fork) to eyeball "the new face" without waiting for the ~1-in-6 hash
+    // to land on a live server guest. cozySkinnedGuestHandle.setSit(bool) /
+    // .dispose(). NOT part of normal play.
+    (window as unknown as Record<string, unknown>).cozySkinnedGuest = async (): Promise<unknown> => {
+      if (!this.spawner) { console.warn("[cozySkinnedGuest] spawner not ready — start/load a restaurant first"); return null; }
+      const handle = await this.spawner.debugSpawnSkinned(0, 2);
+      (window as unknown as Record<string, unknown>).cozySkinnedGuestHandle = handle;
+      console.info("[cozySkinnedGuest] spawned a rigged guest at local (0,2). cozySkinnedGuestHandle.setSit(true|false) / .dispose()");
+      return handle;
+    };
     this.cloud.setWasFreshStart(wasFreshStart);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());

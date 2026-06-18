@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { SkeletalController } from "./SkinnedCharacter";
 
 /**
  * Procedural pseudo-animation for static (un-rigged) character meshes.
@@ -30,6 +31,11 @@ export interface AnimatedCharacter {
   phase: number;
   /** Optional: seat Y offset when action = sit (chair seat above floor). */
   seatHeight?: number;
+  /** Present only for SKINNED characters (the rigged new guest). When set,
+   * CharacterAnimator drives this mixer/controller from the action instead
+   * of applying its procedural whole-body pose. Position/facing/visibility
+   * still come from the animator, exactly like a static character. */
+  skeletal?: SkeletalController;
   // Internal: cached base scale so breathing oscillates around it.
   _baseScale?: number;
   // Internal: cached "feet at floor" Y offset captured when the character
@@ -189,7 +195,14 @@ export class CharacterAnimator {
         );
         if (!this.frustum.intersectsSphere(this.cullSphere)) continue;
       }
-      this.tickCharacter(c);
+      if (c.skeletal) {
+        // Skinned guest: the mixer poses the body, so skip the procedural
+        // pose. Position/facing/visibility were already applied above, the
+        // same as for a static character.
+        c.skeletal.update(dt, c.action);
+      } else {
+        this.tickCharacter(c);
+      }
     }
   }
 

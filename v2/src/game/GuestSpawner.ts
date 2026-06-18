@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { disposeObject3D } from "../assets/disposeObject3D";
 import { CharacterLoader } from "../assets/CharacterLoader";
+import { SkinnedCharacterLoader, type SkeletalController } from "../scene/SkinnedCharacter";
 import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
@@ -451,6 +452,19 @@ interface ActiveGuest {
 
 const GUEST_VARIANT_IDS = ["guest-v0", "guest-v1", "guest-v2", "guest-v3", "guest-v4", "guest-v5", "guest-v6"];
 
+/** "A new face in town" — the new RIGGED guest is a deterministic ~1-in-6 of
+ * all guests, keyed by guest id so it's stable per-guest across frames and
+ * reloads. Purely a client-side render choice: functionally a normal customer
+ * (orders, sits, eats, pays), just drawn with the skinned/skeletal character
+ * instead of a static one. Tune NEW_FACE_EVERY to change how often he shows. */
+const NEW_FACE_EVERY = 6;
+function isNewFaceGuest(id: string | number | bigint): boolean {
+  const s = String(id);
+  let h = 2166136261 >>> 0; // FNV-1a
+  for (let i = 0; i < s.length; i += 1) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return h % NEW_FACE_EVERY === 0;
+}
+
 /** Interior anchor of the front door — guests step onto this cell
  * either right after passing through the door from outside, or right
  * before stepping out. */
@@ -777,6 +791,8 @@ function recipeFoodColor(recipe: RecipeDefinition): number {
 export class GuestSpawner {
   private readonly scene: THREE.Scene;
   private readonly characterLoader: CharacterLoader;
+  /** Loader for the new RIGGED guest (skeletal animation). */
+  private readonly skinnedLoader = new SkinnedCharacterLoader(import.meta.env.BASE_URL ?? "/");
   private readonly animator: CharacterAnimator;
   private readonly game: Game;
   private readonly router: StaffRouter;
@@ -879,9 +895,37 @@ export class GuestSpawner {
   ) {
     this.scene = scene;
     this.characterLoader = characterLoader;
+    // Warm the rigged-guest FBX in the background so the first new-face
+    // customer doesn't stall on the download mid-spawn (non-blocking).
+    this.skinnedLoader.prewarm();
     this.animator = animator;
     this.game = game;
     this.router = router;
+  }
+
+  /** DEBUG: drop one skinned guest at a restaurant-LOCAL (x,z) and walk it in
+   * place, exercising the REAL rigged-guest path (loader → SkeletonUtils
+   * clone → CharacterAnimator fork → SkeletalController) so you can eyeball
+   * "the new face" without waiting for the ~1-in-6 id hash to land on a live
+   * server guest. window hook: cozySkinnedGuest(). Returns a disposer + a sit
+   * toggle. NOT part of normal play. */
+  async debugSpawnSkinned(x = 0, z = 0): Promise<{ dispose: () => void; setSit: (sit: boolean) => void }> {
+    const inst = await this.skinnedLoader.createInstance();
+    this.scene.add(inst.root);
+    const character: AnimatedCharacter = {
+      root: inst.root,
+      groundPos: new THREE.Vector2(x, z),
+      facingY: 0,
+      action: "walk",
+      phase: 0,
+      seatHeight: 0,
+      skeletal: inst.controller,
+    };
+    this.animator.add(character);
+    return {
+      dispose: () => { inst.controller.stop(); inst.root.parent?.remove(inst.root); this.animator.remove(inst.root); },
+      setSit: (sit: boolean) => { character.action = sit ? "sit" : "walk"; },
+    };
   }
 
   /** Plan a guest's walking path from current pos to current target.
@@ -1914,9 +1958,19 @@ export class GuestSpawner {
   private async importCloudGuest(
     row: import("../cloud/SpacetimeClient").HydratableGuestRow,
   ): Promise<void> {
-    const variant = (row.variant && GUEST_VARIANT_IDS.includes(row.variant))
-      ? row.variant : "guest-v0";
-    const model = await this.characterLoader.load(variant);
+    // Skinned rendering is keyed purely on the guest-id hash, so the variant
+    // string stays a real catalog id — we never leak "newface" into the
+    // server's guest row (Option A: client-side render choice only).
+    const newFace = isNewFaceGuest(row.id);
+    const variant = (row.variant && GUEST_VARIANT_IDS.includes(row.variant)) ? row.variant : "guest-v0";
+    let model: THREE.Object3D;
+    let skeletal: SkeletalController | undefined;
+    if (newFace) {
+      const inst = await this.skinnedLoader.createInstance();
+      model = inst.root; skeletal = inst.controller;
+    } else {
+      model = await this.characterLoader.load(variant);
+    }
     this.scene.add(model);
 
     const archetype = archetypeFromId(row.archetype);
@@ -1927,8 +1981,9 @@ export class GuestSpawner {
 
     // Seat height from action.  Toilet / sink seats use a lower
     // value but we don't differentiate here — that's a Phase I.2
-    // fidelity issue.  0.62 matches the dining chair surface.
-    const seatHeight = isSitting ? 0.62 : 0;
+    // fidelity issue.  0.62 matches the dining chair surface. Skinned
+    // guests sit via their own clip, so they take no lift.
+    const seatHeight = (isSitting && !newFace) ? 0.62 : 0;
 
     const character: AnimatedCharacter = {
       root: model,
@@ -1937,6 +1992,7 @@ export class GuestSpawner {
       action,
       phase: Math.random() * 5,
       seatHeight,
+      skeletal,
     };
     this.animator.add(character);
 
@@ -2622,12 +2678,19 @@ export class GuestSpawner {
     // otherwise pick at random from the catalog. variantHint is
     // validated against the known list so a bad hint doesn't crash
     // the loader.
-    const variantId = (variantHint && GUEST_VARIANT_IDS.includes(variantHint))
-      ? variantHint
-      : pick(GUEST_VARIANT_IDS);
     const id = `guest-${this.nextGuestNum++}`;
+    // Skinned render is keyed on the id hash; variant stays a real catalog id.
+    const newFace = isNewFaceGuest(id);
+    const variantId = (variantHint && GUEST_VARIANT_IDS.includes(variantHint)) ? variantHint : pick(GUEST_VARIANT_IDS);
     try {
-      const model = await this.characterLoader.load(variantId);
+      let model: THREE.Object3D;
+      let skeletal: SkeletalController | undefined;
+      if (newFace) {
+        const inst = await this.skinnedLoader.createInstance();
+        model = inst.root; skeletal = inst.controller;
+      } else {
+        model = await this.characterLoader.load(variantId);
+      }
       this.scene.add(model);
       // Pick a random X along the pavement so they appear to arrive
       // from up the street rather than popping into existence right
@@ -2644,8 +2707,10 @@ export class GuestSpawner {
         facingY: Math.PI, // into the room — reverted to original value
         action: "walk",
         phase: Math.random() * 5,
-        // Seat surface height (Kenney chair at S_CHAIR=1.7).
-        seatHeight: 0.62,
+        // Seat surface height (Kenney chair at S_CHAIR=1.7). Skinned guests
+        // sit via their own clip, so they take no lift.
+        seatHeight: newFace ? 0 : 0.62,
+        skeletal,
       };
       this.animator.add(character);
 
@@ -3020,6 +3085,7 @@ export class GuestSpawner {
     // was a no-op for them and their meshes piled up inside that group —
     // exactly the group a floor change makes visible. parent?.remove handles
     // ground-floor (parent = scene) and upper floors (parent = group) alike.
+    g.character.skeletal?.stop();
     g.character.root.parent?.remove(g.character.root);
     this.animator.remove(g.character.root);
     if (g.waiting) {
