@@ -35,6 +35,23 @@ pub fn submit_leaderboard(
     if score < 0 {
         return Err("Score must be non-negative".into());
     }
+    // Anti-cheat — reject implausible scores so a modded client can't pin a
+    // leaderboard with i64::MAX. These caps sit far above any legitimate day,
+    // so real submissions are never rejected; they just kill the "submit a
+    // huge number" exploit. (A tighter per-day clamp against the server's own
+    // cloud_daily_* counters is possible if finer validation is ever wanted.
+    // fastest_max_tier is a TIME — lower is better — so it has no upper cap.)
+    let max_score: i64 = match category.as_str() {
+        "daily_revenue" => 1_000_000_000,    // $10,000,000/day in cents
+        "daily_served" => 100_000,           // servings in a single day
+        "lifetime_served" => 1_000_000_000,  // lifetime servings
+        "best_rating_day" => 1_000,          // rating ×100 (5.00 is the real max)
+        "biggest_tip_meal" => 100_000_000,   // $1,000,000 tip in cents
+        _ => i64::MAX,
+    };
+    if score > max_score {
+        return Err(format!("Score {score} is implausibly high for {category}"));
+    }
     ctx.db.leaderboard_entry().insert(LeaderboardEntry {
         id: 0, // auto_inc
         player: ctx.sender,

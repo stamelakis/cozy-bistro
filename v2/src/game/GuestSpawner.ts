@@ -597,15 +597,6 @@ function parseTiersCsv(csv: string): number[] {
   return out;
 }
 
-/** Fallback table-surface height. The live code path looks up the
- * actual placed-table model's bounding-box top via
- * registry.getTableTopY so dining tables (0.75m), coffee tables
- * (0.42m), and bar counters (0.92m) all get their plates and dirty
- * leftovers sitting ON the actual surface. This constant only kicks
- * in when the registry isn't wired or the table can't be found —
- * picked to match a standard 0.75m dining table plus a sliver of
- * plate thickness. */
-const TABLE_HEIGHT_Y = 0.76;
 
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
@@ -3064,12 +3055,7 @@ export class GuestSpawner {
     // furniture hasn't landed locally), DEFER the plate rather than dropping
     // it at the 0.76 fallback height where it floats with no surface beneath
     // it — the next course/show resolves it once the table is present.
-    let topY: number | null = null;
-    if (this.registry && g.seatId) {
-      const hashIdx = g.seatId.indexOf("#");
-      const tableUid = hashIdx >= 0 ? g.seatId.substring(0, hashIdx) : g.seatId;
-      topY = this.registry.getTableTopY(tableUid);
-    }
+    const topY = this.getTableTopForGuest(g);
     if (topY === null) return;
     if (!GuestSpawner.plateGeo) {
       GuestSpawner.plateGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.02, 18);
@@ -3118,7 +3104,10 @@ export class GuestSpawner {
    * course jitter so multi-course customers leave a clearly-stacked
    * mess instead of one z-fighting blob. */
   private spawnLeftoversForGuest(g: ActiveGuest): void {
+    // Defer if the table isn't resolvable (same as showPlateForGuest) so the
+    // dirty pieces don't float at a fallback height with no surface under them.
     const tableTop = this.getTableTopForGuest(g);
+    if (tableTop === null) return;
     // Customer-local frame.
     //   facing direction (= direction customer looks, towards table) is
     //   (-sin facingY, -cos facingY). Rotating that 90° CW gives the
@@ -3924,19 +3913,17 @@ export class GuestSpawner {
    * table. Looks up the actual placed table model so dining tables
    * (0.75m), coffee tables (0.42m), bar counters (0.92m) all get
    * their dishes resting on the actual top instead of at a single
-   * hard-coded height. Falls back to the legacy 0.76m if the table
-   * can't be found (rare — guest is either offscreen or the slot
-   * was deleted out from under them). */
-  private getTableTopForGuest(g: ActiveGuest): number {
+   * hard-coded height. Returns null when the table can't be resolved
+   * (offscreen, mid-restore, or a server seat whose furniture hasn't
+   * landed locally) so callers DEFER the plate rather than floating it. */
+  private getTableTopForGuest(g: ActiveGuest): number | null {
     if (this.registry && g.seatId) {
       const hashIdx = g.seatId.indexOf("#");
-      if (hashIdx >= 0) {
-        const tableUid = g.seatId.substring(0, hashIdx);
-        const top = this.registry.getTableTopY(tableUid);
-        if (top !== null) return top;
-      }
+      const tableUid = hashIdx >= 0 ? g.seatId.substring(0, hashIdx) : g.seatId;
+      const top = this.registry.getTableTopY(tableUid);
+      if (top !== null) return top;
     }
-    return TABLE_HEIGHT_Y;
+    return null;
   }
 
   /** Kick off the (next) course: reserve a clean plate / glass,

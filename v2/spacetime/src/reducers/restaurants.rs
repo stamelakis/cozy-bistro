@@ -264,6 +264,17 @@ pub fn record_visit(ctx: &ReducerContext, host: Identity) -> Result<(), String> 
     if host == ctx.sender { return Ok(()); }
     let zero = Identity::__dummy();
     if host == zero { return Ok(()); }
+    // Throttle — at most one visit row per visitor→host per 60s, so a modded
+    // client can't spam the host with "👀 X is visiting" toasts (or bloat the
+    // table between the 10-min cleanups). visit_event is small + cleaned
+    // regularly, so the scan is cheap.
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    const VISIT_COOLDOWN_MICROS: i64 = 60_000_000; // 60s
+    let recently = ctx.db.visit_event().iter().any(|v| {
+        v.visitor == ctx.sender && v.host == host
+            && now - v.visited_at.to_micros_since_unix_epoch() < VISIT_COOLDOWN_MICROS
+    });
+    if recently { return Ok(()); }
     ctx.db.visit_event().insert(VisitEvent {
         id: 0, // auto_inc
         visitor: ctx.sender,
