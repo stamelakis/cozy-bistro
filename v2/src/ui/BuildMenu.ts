@@ -109,6 +109,9 @@ export class BuildMenu {
    * to a different cell — blocks a double-click from charging twice and
    * stacking two items before the first one registers. */
   private lastPlacedKey: string | null = null;
+  /** Bumped each startPlacing call; if a slow GLB load resolves after a newer
+   * call superseded it, the stale ghost is discarded instead of orphaned. */
+  private placeGen = 0;
   /** Rotation (radians around Y) applied to the preview/placed model.
    * Press R while placing to rotate 90°. */
   private rotationY = 0;
@@ -710,8 +713,11 @@ export class BuildMenu {
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     if (this.moveMode) this.toggleMoveMode();
     this.cancelPlacing();
+    const gen = ++this.placeGen;
     this.placingDef = def;
-    this.preview = await this.makeGhostPreview(def);
+    const ghost = await this.makeGhostPreview(def);
+    if (gen !== this.placeGen) return; // superseded by a newer startPlacing — drop this orphan
+    this.preview = ghost;
     if (!this.preview) {
       this.placingDef = null;
       return;

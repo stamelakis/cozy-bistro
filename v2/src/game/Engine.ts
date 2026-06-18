@@ -6,6 +6,7 @@ import { isServerSim } from "./featureFlags";
 import { GuestSpawner } from "./GuestSpawner";
 import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
 import { getFurnitureDef } from "../data/furnitureCatalog";
+import { disposeObject3D } from "../assets/disposeObject3D";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { SharedPedestrians } from "./SharedPedestrians";
 import { TrashSpawner } from "./TrashSpawner";
@@ -1116,8 +1117,14 @@ export class Engine {
       if (!hasSavedFurniture) {
         this.registry.registerExisting(this.scene.demoPlacements);
       } else {
+        // The save is the source of truth — discard the demo placements.
+        // Most are GLB-backed (shared cache; must NOT dispose), but the demo
+        // front door is a proc model with unique geo+mat — free that one.
         for (const dp of this.scene.demoPlacements) {
           this.scene.threeScene.remove(dp.model);
+          if (getFurnitureDef(dp.defId)?.modelPath.startsWith("proc:")) {
+            disposeObject3D(dp.model);
+          }
         }
       }
       // Apply tier visibility so locked sections show their marker.
@@ -3869,7 +3876,9 @@ export class Engine {
     }
 
     // HUD only needs ~5 Hz; updating every frame is wasteful DOM work.
-    this.hudAccumulator += dt;
+    // Drive off rawDt, not the paused-scaled dt — money/camera readouts must
+    // still refresh while paused (admin pause sets dt=0, which froze them).
+    this.hudAccumulator += rawDt;
     if (this.hudAccumulator >= 0.2) {
       this.hud.update();
       this.staffPanel.update();

@@ -795,6 +795,9 @@ export class WorldScene {
    * darkness).  registerLamp claims a free slot; unregisterLamp
    * releases it. */
   private placedLampLightPool: { light: THREE.PointLight; inUse: boolean }[] = [];
+  // Reused each frame in updatePlacedLampLights to avoid a per-frame array alloc.
+  private placedLampClosestI: number[] = [];
+  private placedLampClosestD: number[] = [];
   /** Footprints of every procedurally-placed scenery house in the city
    * (populated by addCityScenery). The scatter passes that follow
    * (grass blades, wildflowers, trees, rocks) consult this list via
@@ -986,8 +989,11 @@ export class WorldScene {
     const cx = cameraPos.x - this.worldRoot.position.x;
     const cz = cameraPos.z - this.worldRoot.position.z;
     const POOL = pool.length;
-    const closestI: number[] = new Array(POOL).fill(-1);
-    const closestD: number[] = new Array(POOL).fill(Infinity);
+    // Reuse instance arrays instead of allocating two new arrays every frame.
+    const closestI = this.placedLampClosestI;
+    const closestD = this.placedLampClosestD;
+    closestI.length = POOL; closestD.length = POOL;
+    closestI.fill(-1); closestD.fill(Infinity);
     let worstSlot = 0;
     for (let i = 0; i < this.placedLamps.length; i += 1) {
       const p = this.placedLamps[i].pos;

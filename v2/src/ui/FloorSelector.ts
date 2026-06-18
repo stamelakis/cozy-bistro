@@ -24,6 +24,7 @@ export class FloorSelector {
   private readonly camera: IsoCamera;
   private readonly buttons: HTMLButtonElement[] = [];
   private readonly contentLabels: HTMLElement[] = [];
+  private refreshTimer: number | null = null;
   /** Optional notifier fired after a focus change (BuildMenu uses this
    * to teleport its active placement preview to the new floor). */
   onFocusChanged?: () => void;
@@ -119,7 +120,16 @@ export class FloorSelector {
     // moves a table — and we'd rather not thread every furniture event
     // through here. Refreshing the per-floor labels every 1.5s keeps
     // them current cheaply (just a registry scan + DOM string assign).
-    setInterval(() => this.update(), 1500);
+    this.refreshTimer = window.setInterval(() => this.update(), 1500);
+  }
+
+  /** Stop the periodic label refresh — call on teardown / HMR so the
+   * interval doesn't leak (or double-fire if the selector is recreated). */
+  dispose(): void {
+    if (this.refreshTimer != null) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
   }
 
   /** Switch focus to the given storey. Safe to call repeatedly with
