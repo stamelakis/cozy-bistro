@@ -1470,7 +1470,7 @@ export class StaffRouter {
    * connection — disconnected mode falls back to local sim so the
    * kitchen still works offline. */
   private serverOwnsTicketDispatch(): boolean {
-    return isServerSim("tickets") && this.cloud != null;
+    return isServerSim("tickets") && this.cloud?.isConnectionLive() === true;
   }
 
   /** Find a local ticket by its server-side auto-inc id. Returns

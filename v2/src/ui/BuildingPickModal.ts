@@ -97,8 +97,11 @@ export class BuildingPickModal {
       } as Partial<CSSStyleDeclaration>);
       return el;
     };
-    legend.appendChild(legendCard("🏠", "Small", "×0.6", "+$6,000", "8×8 interior (later)", "#9bd4ff"));
-    legend.appendChild(legendCard("🏢", "Medium", "×1.0", "+$4,000", "10×10 interior (now)", "#f0d484"));
+    // Starter-cash amounts MUST match Engine.enterGame's grant
+    // (small $1,000 / medium $1,500 / large $2,000) — the UI used to
+    // advertise inverted $6k/$4k/$2k that the code never paid.
+    legend.appendChild(legendCard("🏠", "Small", "×0.6", "+$1,000", "8×8 interior (later)", "#9bd4ff"));
+    legend.appendChild(legendCard("🏢", "Medium", "×1.0", "+$1,500", "10×10 interior (now)", "#f0d484"));
     legend.appendChild(legendCard("🏛️", "Large", "×1.4", "+$2,000", "12×12 interior (later)", "#f4a878"));
     card.appendChild(legend);
 
@@ -297,7 +300,7 @@ export class BuildingPickModal {
       tradeoff.style.fontSize = "10px";
       tradeoff.style.opacity = "0.75";
       const rentText = b.kind === "small" ? "Rent ×0.6" : b.kind === "large" ? "Rent ×1.4" : "Rent ×1.0";
-      const bonusText = b.kind === "small" ? "+$6,000 starter" : b.kind === "medium" ? "+$4,000 starter" : "+$2,000 starter";
+      const bonusText = b.kind === "small" ? "+$1,000 starter" : b.kind === "medium" ? "+$1,500 starter" : "+$2,000 starter";
       tradeoff.textContent = `${rentText} · ${bonusText}`;
       cardEl.appendChild(tradeoff);
 

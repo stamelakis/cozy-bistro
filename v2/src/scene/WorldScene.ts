@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { disposeObject3D } from "../assets/disposeObject3D";
 import { mergeGeometries as mergeBufferGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
@@ -410,6 +411,7 @@ export class WorldScene {
       if (!live.has(uid)) {
         const f = this.stationEffects.get(uid)!;
         this.threeScene.remove(f.group);
+        disposeObject3D(f.group); // free the effect's fresh geo + materials
         this.stationEffects.delete(uid);
       }
     }

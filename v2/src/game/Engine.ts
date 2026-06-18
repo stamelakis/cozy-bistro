@@ -3617,8 +3617,11 @@ export class Engine {
       // every reload — half of the 100k → 3.4M doubling loop.
       if (lastSynced !== null) {
         const deltaCents = localCents - lastSynced;
-        if (deltaCents !== 0) {
-          this.cloud.bumpCloudMoneyCents(deltaCents);
+        // Only advance the synced baseline if the bump actually reached the
+        // server. If the socket is down (conn nulled on disconnect) the bump
+        // no-ops and returns false — advancing the baseline anyway would
+        // silently drop this delta on the next reload re-anchor (lost money).
+        if (deltaCents !== 0 && this.cloud.bumpCloudMoneyCents(deltaCents)) {
           this.game.economy.noteSyncedCents(localCents);
         }
       }

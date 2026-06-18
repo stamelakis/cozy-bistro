@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { disposeObject3D } from "../assets/disposeObject3D";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
@@ -145,6 +146,13 @@ const DISH_BUILDERS: Record<DishKind, DishBuilder> = {
  * outside the function so spawning N plates doesn't reallocate. */
 let sharedDirtyPlateGeo: THREE.CylinderGeometry | undefined;
 let sharedDirtyPlateMat: THREE.MeshStandardMaterial | undefined;
+
+/** Free a bussed dirty piece's GPU resources. Plate pieces reuse the
+ * shared base geo+mat (kept), so only the fresh crumb mound is freed;
+ * glasses are all-fresh and fully freed. Prevents a per-customer leak. */
+function disposeDirtyPiece(mesh: THREE.Object3D): void {
+  disposeObject3D(mesh, new Set([sharedDirtyPlateGeo, sharedDirtyPlateMat]));
+}
 
 /** Layout pattern for leftover pieces piling up at a seat.
  *
@@ -1015,7 +1023,7 @@ export class GuestSpawner {
     // The cooldown still advances so when serverOwnsGuestSpawn is
     // off (admin override / future flag) the original cadence
     // applies; only the spawn call itself is gated.
-    const serverOwnsGuestSpawn = isServerSim("guests") && this.cloud != null;
+    const serverOwnsGuestSpawn = isServerSim("guests") && this.cloud?.isConnectionLive() === true;
     if (this.restaurantOpen && this.spawnCooldown <= 0 && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
       if (!serverOwnsGuestSpawn) {
         void this.spawnGuest();
@@ -1425,7 +1433,7 @@ export class GuestSpawner {
   /** True when the server is the sole owner of guest state transitions
    * (mirrors the chef/waiter gating pattern from Phase 1). */
   private serverOwnsGuestStates(): boolean {
-    return isServerSim("guests") && this.cloud != null;
+    return isServerSim("guests") && this.cloud?.isConnectionLive() === true;
   }
 
   private guestServerBridgeAttached = false;
@@ -1465,7 +1473,22 @@ export class GuestSpawner {
         if (!this.cloud) return;
         const hydratable = this.cloud.getHydratableGuest(row.id);
         if (!hydratable) {
-          console.warn(`[Spawner/Bridge] onInsert: row ${row.id} not in cache`);
+          // The slim subscription row can land a tick before the indexed
+          // row getHydratableGuest reads — dropping here left a paid,
+          // server-spawned customer invisible for the rest of the session.
+          // Retry once shortly after; the dedup guard above prevents a
+          // double import if the row resolves in the meantime.
+          window.setTimeout(() => {
+            if (!this.cloud || this.findLocalGuestByServerId(row.id)) return;
+            const late = this.cloud.getHydratableGuest(row.id);
+            if (!late) {
+              console.warn(`[Spawner/Bridge] onInsert: row ${row.id} never resolved (dropped)`);
+              return;
+            }
+            if (late.clientTempId && this.guests.some((g) => g.id === late.clientTempId)) return;
+            void this.importCloudGuest(late).catch((e) =>
+              console.warn("[Spawner/Bridge] importCloudGuest (deferred) failed:", e));
+          }, 150);
           return;
         }
         if (hydratable.clientTempId
@@ -1875,7 +1898,11 @@ export class GuestSpawner {
       this.spawnCooldown = 0;
       const liveGuests = this.guests.length;
       const seats = this.countAvailableSeats() + liveGuests;
-      const target = Math.min(3, Math.max(0, Math.floor(seats / 2) - liveGuests));
+      // Under server-authoritative spawning the server fills the room on
+      // its own clock — a local burst here races it into over-capacity and
+      // a doubled arrival rate, so skip the burst in that mode.
+      const serverSpawns = isServerSim("guests") && this.cloud?.isConnectionLive() === true;
+      const target = serverSpawns ? 0 : Math.min(3, Math.max(0, Math.floor(seats / 2) - liveGuests));
       let burstSpawned = 0;
       for (let i = 0; i < target; i += 1) {
         if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) break;
@@ -2549,7 +2576,7 @@ export class GuestSpawner {
     // This was the LAST client-side guest spawn path — firing it
     // would double-spawn against the server's conversion within a
     // couple of seconds.
-    if (isServerSim("guests") && this.cloud != null) return;
+    if (isServerSim("guests") && this.cloud?.isConnectionLive() === true) return;
     // Legacy local-sim path (flag off / cloud absent only).
     if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
     void this.spawnGuest(variantHint);
@@ -3061,7 +3088,9 @@ export class GuestSpawner {
     // (post the per-floor parenting fix above) or the legacy
     // scene root if the spawner wasn't wired with getStoreyMount.
     plate.parent?.remove(plate);
-    // Children (the food sphere) are auto-removed with the parent.
+    // Free the per-serve food mound (fresh geo+mat); keep the SHARED plate
+    // base (plateGeo/plateMat) that every served plate reuses.
+    disposeObject3D(plate, new Set([GuestSpawner.plateGeo, GuestSpawner.plateMat]));
     this.tablePlates.delete(guestId);
   }
 
@@ -3204,6 +3233,7 @@ export class GuestSpawner {
     // Post per-floor-parenting fix the mesh might live in a storey
     // group rather than scene root; remove from its actual parent.
     entry.mesh.parent?.remove(entry.mesh);
+    disposeDirtyPiece(entry.mesh);
     // Phase H.B — Drain ONE matching cloud row so the mirror doesn't
     // accumulate. By-seat lookup because the cloud's auto_inc id
     // isn't threaded through the local pickup machinery; see server
@@ -3244,6 +3274,7 @@ export class GuestSpawner {
     // Post per-floor-parenting fix the mesh might live in a storey
     // group rather than scene root; remove from its actual parent.
     entry.mesh.parent?.remove(entry.mesh);
+    disposeDirtyPiece(entry.mesh);
   }
 
   private tickGuest(g: ActiveGuest, dt: number): void {

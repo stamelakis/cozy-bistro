@@ -105,6 +105,10 @@ export class BuildMenu {
    * by onClick. Lets the quality tint, snap pose and click placement stay
    * in lockstep (no chance of clicking before the tint updates). */
   private currentPlan: PlacementPlan | null = null;
+  /** Cell key of the most recent placement, cleared when the cursor moves
+   * to a different cell — blocks a double-click from charging twice and
+   * stacking two items before the first one registers. */
+  private lastPlacedKey: string | null = null;
   /** Rotation (radians around Y) applied to the preview/placed model.
    * Press R while placing to rotate 90°. */
   private rotationY = 0;
@@ -644,6 +648,11 @@ export class BuildMenu {
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("click", this.onClick);
     window.addEventListener("keydown", (e) => {
+      // Don't hijack typing in a text field (e.g. the restaurant-name or
+      // login modal): R would rotate the hidden ghost and Esc would cancel
+      // placement instead of doing what the focused field expects.
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
       if (e.key === "Escape") {
         // Cancel order matters: if mid-carry, restore original first so
         // toggleMoveMode doesn't re-trigger restore against a stale state.
@@ -1059,6 +1068,11 @@ export class BuildMenu {
     if (!this.preview || !this.placingDef) return;
     const plan = this.computePlacementPlan(this.placingDef, point);
     this.currentPlan = plan;
+    // Clear the double-place guard once the cursor moves to a different
+    // cell (jitter on the same cell keeps it — see onClick).
+    if (this.lastPlacedKey && `${plan.x},${plan.z},${this.currentFloor()}` !== this.lastPlacedKey) {
+      this.lastPlacedKey = null;
+    }
     // Apply the plan's pose to the preview so the user sees the snap.
     // placementY picks the right Y for each placement kind: floor at 0,
     // wall items at chest height, ceiling items hanging from y=3 so
@@ -1691,7 +1705,7 @@ export class BuildMenu {
       // no front-wall cut).
       if (itemDef?.category === "door" && !itemDef.id.startsWith("window")) this.onDoorRemoved?.(itemModel);
       if (itemDef?.id.startsWith("window")) this.onWindowRemoved?.(itemModel);
-      this.game.economy.earnMoney(removed.refund, "payment");
+      this.game.economy.earnMoney(removed.refund, "refund");
       this.pushUndo({ kind: "sell", defId: snapshot.defId, x: snapshot.x, z: snapshot.z, rotY: snapshot.rotY, refundPaid: removed.refund, floor: snapshot.floor });
       this.flashRoot(`Sold for $${removed.refund}`, "success");
       return;
@@ -1785,11 +1799,19 @@ export class BuildMenu {
       this.flashRoot("Cell already occupied", "error");
       return;
     }
+    // Double-place guard: a physical double-click fires two click events
+    // with no pointermove between them, so currentPlan stays "ok" and the
+    // not-yet-registered first item isn't seen as occupying the cell —
+    // without this the player is charged twice and two items stack. Set
+    // synchronously below; cleared when the cursor moves (onPointerMove).
+    const placeKey = `${plan.x},${plan.z},${this.currentFloor()}`;
+    if (this.lastPlacedKey === placeKey) return;
     const purchasePrice = scaledCost(def);
     if (!this.game.economy.spendMoney(purchasePrice, "decor")) {
       this.flashRoot("Not enough money", "error");
       return;
     }
+    this.lastPlacedKey = placeKey;
     // Bake the preview into the scene using the plan's final pose (which
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;

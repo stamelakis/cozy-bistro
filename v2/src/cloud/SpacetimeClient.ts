@@ -307,6 +307,12 @@ export class SpacetimeClient {
   /** Set before a deliberate teardown so the auto-reconnect handler
    * doesn't fight an intentional disconnect (logout / page unload). */
   private intentionalDisconnect = false;
+  /** Flips true once the socket drops unexpectedly (stays true until the
+   * page reloads). The server-ownership gates consult isConnectionLive()
+   * so the local sim resumes during the reconnect window instead of
+   * leaving guests/staff frozen. Kept separate from `conn` so startup
+   * (conn not yet established) still defers to the server as before. */
+  private connectionLost = false;
   private saveDebounce: number | null = null;
   /** Engine wires this to GuestSpawner so cloudSaveNow can publish
    * the live restaurant-open state + functional-seat count. Optional
@@ -899,16 +905,18 @@ export class SpacetimeClient {
    * tip the server added between syncs, but a delta just adds on
    * top. Caller is responsible for computing the delta against a
    * stable baseline (EconomySystem.lastSyncedCents). No-op for 0. */
-  bumpCloudMoneyCents(deltaCents: number): void {
-    if (!this.conn || this.restaurantId == null) return;
-    if (deltaCents === 0) return;
+  bumpCloudMoneyCents(deltaCents: number): boolean {
+    if (!this.conn || this.restaurantId == null) return false;
+    if (deltaCents === 0) return false;
     try {
       this.conn.reducers.bumpCloudMoney({
         restaurantId: this.restaurantId,
         deltaCents: BigInt(deltaCents),
       });
+      return true;
     } catch (e) {
       console.warn("[Cloud] bumpCloudMoneyCents failed:", e);
+      return false;
     }
   }
 
@@ -3599,6 +3607,13 @@ export class SpacetimeClient {
    * Reconnect button instead of thrashing. */
   private handleUnexpectedDisconnect(): void {
     if (this.intentionalDisconnect) return;
+    // The socket is dead. Drop it + flag the loss so reducer wrappers
+    // cleanly no-op and the server-ownership gates fall back to local sim
+    // during the reconnect window — otherwise guests/staff freeze in place
+    // (the server can't push and the gates still think it owns them) until
+    // the reload lands, or indefinitely on the manual-reconnect path below.
+    this.connectionLost = true;
+    this.conn = null;
     const KEY = "cozy-bistro.lastReconnectReload";
     let lastReload = 0;
     try { lastReload = parseInt(sessionStorage.getItem(KEY) ?? "0", 10) || 0; } catch { /* ignore */ }
@@ -3626,6 +3641,13 @@ export class SpacetimeClient {
     document.body.appendChild(banner);
     try { sessionStorage.setItem(KEY, String(now)); } catch { /* ignore */ }
     window.setTimeout(() => window.location.reload(), 1500);
+  }
+
+  /** False after an unexpected disconnect (until the page reloads). The
+   * server-ownership gates consult this so the local sim takes over the
+   * reconnect window instead of leaving guests/staff frozen. */
+  isConnectionLive(): boolean {
+    return !this.connectionLost;
   }
 
   /** Whether the player's identity token is persisted across browser
