@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import type { SkeletalController } from "./SkinnedCharacter";
 
 /**
  * Procedural pseudo-animation for static (un-rigged) character meshes.
@@ -16,6 +15,15 @@ import type { SkeletalController } from "./SkinnedCharacter";
  * gameplay. Real rigged animation is a polish-phase swap.
  */
 export type CharacterAction = "idle" | "walk" | "sit" | "carry";
+
+/** A rigged-character controller the animator drives instead of applying its
+ * procedural pose. Both SkinnedCharacter's SkeletalController (the FBX "new
+ * face" guy) and RiggedCharacter's RiggedController (the GLB cast) satisfy this
+ * structurally, so the animator stays decoupled from either concrete class. */
+export interface SkeletalDriver {
+  update(dt: number, action: CharacterAction): void;
+  stop(): void;
+}
 
 export interface AnimatedCharacter {
   root: THREE.Object3D;
@@ -35,7 +43,7 @@ export interface AnimatedCharacter {
    * CharacterAnimator drives this mixer/controller from the action instead
    * of applying its procedural whole-body pose. Position/facing/visibility
    * still come from the animator, exactly like a static character. */
-  skeletal?: SkeletalController;
+  skeletal?: SkeletalDriver;
   // Internal: cached base scale so breathing oscillates around it.
   _baseScale?: number;
   // Internal: cached "feet at floor" Y offset captured when the character

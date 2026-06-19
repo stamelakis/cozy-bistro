@@ -440,6 +440,16 @@ export class Engine {
       console.info("[cozySkinnedGuest] spawned a rigged guest at local (0,2). cozySkinnedGuestHandle.setSit(true|false) / .dispose()");
       return handle;
     };
+    // Debug — spawn ONE of the new rigged GLB models by id to eyeball scale,
+    // facing, and animation: cozyRiggedChar("businessman" | "chef" | "teengirl"
+    // | "waiter" | "oldman" | ...). cozyRiggedCharHandle.setSit(bool)/.dispose().
+    (window as unknown as Record<string, unknown>).cozyRiggedChar = async (modelId = "businessman"): Promise<unknown> => {
+      if (!this.spawner) { console.warn("[cozyRiggedChar] spawner not ready — start/load a restaurant first"); return null; }
+      const handle = await this.spawner.debugSpawnRigged(modelId, 0, 2);
+      (window as unknown as Record<string, unknown>).cozyRiggedCharHandle = handle;
+      console.info(`[cozyRiggedChar] spawned '${modelId}' at local (0,2). cozyRiggedCharHandle.setSit(true|false) / .dispose()`);
+      return handle;
+    };
     this.cloud.setWasFreshStart(wasFreshStart);
     this.cloud.connect();
     window.addEventListener("beforeunload", () => this.cloud.cloudSaveNow());

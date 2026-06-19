@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import { disposeObject3D } from "../assets/disposeObject3D";
 import { CharacterLoader } from "../assets/CharacterLoader";
-import { SkinnedCharacterLoader, type SkeletalController } from "../scene/SkinnedCharacter";
-import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
+import { SkinnedCharacterLoader } from "../scene/SkinnedCharacter";
+import { riggedCustomerForKey, sharedRiggedLoader } from "../scene/RiggedCharacter";
+import { CharacterAnimator, type AnimatedCharacter, type SkeletalDriver } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
 import type { StaffRouter } from "./StaffRouter";
 import { isServerSim } from "./featureFlags";
@@ -800,6 +801,9 @@ export class GuestSpawner {
   private readonly characterLoader: CharacterLoader;
   /** Loader for the new RIGGED guest (skeletal animation). */
   private readonly skinnedLoader = new SkinnedCharacterLoader(import.meta.env.BASE_URL ?? "/");
+  /** Shared rigged-GLB loader (singleton) — same cache the pedestrian + staff
+   * renderers use, so each model file is fetched once. */
+  readonly riggedLoader = sharedRiggedLoader;
   private readonly animator: CharacterAnimator;
   private readonly game: Game;
   private readonly router: StaffRouter;
@@ -918,6 +922,28 @@ export class GuestSpawner {
    * toggle. NOT part of normal play. */
   async debugSpawnSkinned(x = 0, z = 0): Promise<{ dispose: () => void; setSit: (sit: boolean) => void }> {
     const inst = await this.skinnedLoader.createInstance();
+    this.scene.add(inst.root);
+    const character: AnimatedCharacter = {
+      root: inst.root,
+      groundPos: new THREE.Vector2(x, z),
+      facingY: 0,
+      action: "walk",
+      phase: 0,
+      seatHeight: 0,
+      skeletal: inst.controller,
+    };
+    this.animator.add(character);
+    return {
+      dispose: () => { inst.controller.stop(); inst.root.parent?.remove(inst.root); this.animator.remove(inst.root); },
+      setSit: (sit: boolean) => { character.action = sit ? "sit" : "walk"; },
+    };
+  }
+
+  /** DEBUG: drop one RIGGED GLB model at (x,z) to eyeball scale, facing, and
+   * animation (and confirm the meshopt-compressed GLB rig survived) before the
+   * cast is wired into the real spawners. window hook: cozyRiggedChar(id). */
+  async debugSpawnRigged(modelId: string, x = 0, z = 2): Promise<{ dispose: () => void; setSit: (sit: boolean) => void }> {
+    const inst = await this.riggedLoader.createInstance(modelId);
     this.scene.add(inst.root);
     const character: AnimatedCharacter = {
       root: inst.root,
@@ -1972,12 +1998,21 @@ export class GuestSpawner {
     const newFace = isNewFaceGuest(row.id);
     const variant = (row.variant && GUEST_VARIANT_IDS.includes(row.variant)) ? row.variant : "guest-v0";
     let model: THREE.Object3D;
-    let skeletal: SkeletalController | undefined;
+    let skeletal: SkeletalDriver | undefined;
     if (newFace) {
       const inst = await this.skinnedLoader.createInstance();
       model = inst.root; skeletal = inst.controller;
     } else {
-      model = await this.characterLoader.load(variant);
+      // Every other guest is now a rigged GLB customer (one of 8, picked by a
+      // hash of the guest id) — replacing the old static placeholder meshes.
+      // Falls back to the static placeholder if a rigged GLB fails to load.
+      try {
+        const inst = await this.riggedLoader.createInstance(riggedCustomerForKey(String(row.id)));
+        model = inst.root; skeletal = inst.controller;
+      } catch (e) {
+        console.warn("[GuestSpawner] rigged customer load failed; using placeholder:", e);
+        model = await this.characterLoader.load(variant);
+      }
     }
     this.scene.add(model);
 
@@ -1991,7 +2026,8 @@ export class GuestSpawner {
     // value but we don't differentiate here — that's a Phase I.2
     // fidelity issue.  0.62 matches the dining chair surface. Skinned
     // guests sit via their own clip, so they take no lift.
-    const seatHeight = (isSitting && !newFace) ? 0.62 : 0;
+    // Skeletal guests (all of them now) sit via their own clip → no chair lift.
+    const seatHeight = skeletal ? 0 : (isSitting ? 0.62 : 0);
 
     const character: AnimatedCharacter = {
       root: model,
@@ -2713,12 +2749,13 @@ export class GuestSpawner {
     const variantId = (variantHint && GUEST_VARIANT_IDS.includes(variantHint)) ? variantHint : pick(GUEST_VARIANT_IDS);
     try {
       let model: THREE.Object3D;
-      let skeletal: SkeletalController | undefined;
+      let skeletal: SkeletalDriver | undefined;
       if (newFace) {
         const inst = await this.skinnedLoader.createInstance();
         model = inst.root; skeletal = inst.controller;
       } else {
-        model = await this.characterLoader.load(variantId);
+        const inst = await this.riggedLoader.createInstance(riggedCustomerForKey(id));
+        model = inst.root; skeletal = inst.controller;
       }
       this.scene.add(model);
       // Pick a random X along the pavement so they appear to arrive
@@ -2738,7 +2775,7 @@ export class GuestSpawner {
         phase: Math.random() * 5,
         // Seat surface height (Kenney chair at S_CHAIR=1.7). Skinned guests
         // sit via their own clip, so they take no lift.
-        seatHeight: newFace ? 0 : 0.62,
+        seatHeight: skeletal ? 0 : 0.62,
         skeletal,
       };
       this.animator.add(character);

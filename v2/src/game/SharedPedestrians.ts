@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { CharacterLoader } from "../assets/CharacterLoader";
-import { CharacterAnimator, type AnimatedCharacter } from "../scene/CharacterAnimator";
+import { CharacterAnimator, type AnimatedCharacter, type SkeletalDriver } from "../scene/CharacterAnimator";
+import { sharedRiggedLoader, riggedCustomerForKey } from "../scene/RiggedCharacter";
 
 /** Server-side row shape returned by SpacetimeClient.listPedestrians. */
 export interface ServerPedestrian {
@@ -142,7 +143,17 @@ export class SharedPedestrians {
     const key = sp.id.toString();
     this.loading.add(key);
     try {
-      const model = await this.loader.load(sp.variant);
+      // Rigged GLB customer (one of 8, by id hash) — replaces the static mesh;
+      // falls back to the static placeholder if a rigged GLB fails to load.
+      let model: THREE.Object3D;
+      let controller: SkeletalDriver | undefined;
+      try {
+        const inst = await sharedRiggedLoader.createInstance(riggedCustomerForKey(key));
+        model = inst.root; controller = inst.controller;
+      } catch (e) {
+        console.warn("[SharedPedestrians] rigged customer load failed; using placeholder:", e);
+        model = await this.loader.load(sp.variant);
+      }
       // Server might have removed the row while the GLB was loading —
       // bail without parenting if so.
       if (this.loading.has(key) === false) return;
@@ -163,6 +174,7 @@ export class SharedPedestrians {
         facingY,
         action: "walk",
         phase: Math.random() * 5,
+        skeletal: controller,
       };
       this.animator.add(animated);
       this.rendered.set(key, {
