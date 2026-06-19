@@ -26,6 +26,15 @@ export const RIGGED_STAFF_IDS = {
   errand: "errandboy",
 } as const;
 
+/** Rigged model id for a staff role, or undefined when there's no model yet
+ * (the barman keeps the placeholder for now). */
+export function riggedStaffModel(role: string): string | undefined {
+  return role === "chef" ? RIGGED_STAFF_IDS.chef
+    : role === "waiter" ? RIGGED_STAFF_IDS.waiter
+    : role === "errand" ? RIGGED_STAFF_IDS.errand
+    : undefined;
+}
+
 // Tuning (verified in-engine on the businessman model). The GLBs are ~2 m tall
 // at scale 1; 0.9 lands them ~1.8 m, matching the furniture. These are Mixamo
 // rigs that face +Z, so π flips that onto the game's "facingY 0 = -Z" forward

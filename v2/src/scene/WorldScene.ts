@@ -4,7 +4,8 @@ import { mergeGeometries as mergeBufferGeometries } from "three/examples/jsm/uti
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
 import { getFurnitureDef } from "../data/furnitureCatalog";
-import { CharacterAnimator, type AnimatedCharacter, type CharacterAction } from "./CharacterAnimator";
+import { CharacterAnimator, type AnimatedCharacter, type CharacterAction, type SkeletalDriver } from "./CharacterAnimator";
+import { sharedRiggedLoader, riggedStaffModel } from "./RiggedCharacter";
 import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 import { TextureService } from "./TextureService";
@@ -4679,7 +4680,17 @@ export class WorldScene {
     // Stagger each new hire 0.6 units further along the kitchen line.
     const x = base.x + offsetSlot * 0.6;
     try {
-      const model = await this.characterLoader.load(role);
+      // Staff now use their rigged GLB models (chef/waiter/errand); the barman
+      // has no model yet, so it keeps the placeholder.
+      const staffModel = riggedStaffModel(role);
+      let model: THREE.Object3D;
+      let skeletal: SkeletalDriver | undefined;
+      if (staffModel) {
+        const inst = await sharedRiggedLoader.createInstance(staffModel);
+        model = inst.root; skeletal = inst.controller;
+      } else {
+        model = await this.characterLoader.load(role);
+      }
       const animated: AnimatedCharacter = {
         root: model,
         groundPos: new THREE.Vector2(x, base.z),
@@ -4687,6 +4698,7 @@ export class WorldScene {
         action: base.action,
         phase: Math.random() * 5,
         seatHeight: 0.5,
+        skeletal,
       };
       // Lift the model's Y by the home-floor's slab so an upper-floor
       // chef stands ON Floor 1+ instead of floating at y=0. Parent it
@@ -4759,7 +4771,15 @@ export class WorldScene {
 
     await Promise.all(staff.map(async (c) => {
       try {
-        const model = await this.characterLoader.load(c.id);
+        const staffModel = riggedStaffModel(c.id);
+        let model: THREE.Object3D;
+        let skeletal: SkeletalDriver | undefined;
+        if (staffModel) {
+          const inst = await sharedRiggedLoader.createInstance(staffModel);
+          model = inst.root; skeletal = inst.controller;
+        } else {
+          model = await this.characterLoader.load(c.id);
+        }
         const animated: AnimatedCharacter = {
           root: model,
           groundPos: new THREE.Vector2(c.x, c.z),
@@ -4767,6 +4787,7 @@ export class WorldScene {
           action: c.action,
           phase: Math.random() * 5,
           seatHeight: 0.5,
+          skeletal,
         };
         this.threeScene.add(model);
         this.animator.add(animated);
