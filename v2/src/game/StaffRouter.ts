@@ -2134,6 +2134,14 @@ export class StaffRouter {
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
+    // Rigged staff play their WORK gesture (cook / mix / serve at a station)
+    // ONLY while actually working — the RiggedController keys off action
+    // "carry", so set it from the authoritative state here (after the ticks)
+    // rather than threading it through every state-machine branch. Moving and
+    // idle keep their walk/idle action → the walk clip.
+    for (const c of this.chefs) if (c.state === "working") c.character.action = "carry";
+    for (const b of this.barmen) if (b.state === "working") b.character.action = "carry";
+    for (const w of this.waiters) if (w.state === "working") w.character.action = "carry";
     this.recoverStalledTickets(dt);
     this.logHeartbeatIfDue(dt);
     this.streamActorsToCloud(dt);

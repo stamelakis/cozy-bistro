@@ -18,20 +18,20 @@ export const RIGGED_CUSTOMER_IDS = [
   "bohemiangirl", "bohemianboy", "teenboy", "teengirl",
 ] as const;
 
-/** Staff role → model id. Barman intentionally omitted for now (stays the old
- * placeholder until a model is provided). */
+/** Staff role → model id. */
 export const RIGGED_STAFF_IDS = {
   chef: "chef",
   waiter: "waiter",
   errand: "errandboy",
+  barman: "barman",
 } as const;
 
-/** Rigged model id for a staff role, or undefined when there's no model yet
- * (the barman keeps the placeholder for now). */
+/** Rigged model id for a staff role, or undefined when there's no model. */
 export function riggedStaffModel(role: string): string | undefined {
   return role === "chef" ? RIGGED_STAFF_IDS.chef
     : role === "waiter" ? RIGGED_STAFF_IDS.waiter
     : role === "errand" ? RIGGED_STAFF_IDS.errand
+    : role === "barman" ? RIGGED_STAFF_IDS.barman
     : undefined;
 }
 
@@ -109,9 +109,10 @@ export class RiggedController {
   update(dt: number, action: CharacterAction): void {
     this.mixer.update(dt);
     if (!this.hasSit) {
-      // Staff / any model without a sit cycle: walk when moving, otherwise the
-      // work gesture (or just walk-in-place if it has none).
-      this.fadeTo(action === "walk" ? "walk" : (this.hasWork ? "work" : "walk"), true);
+      // Staff: the work gesture (cook / mix / serve at a station) plays ONLY
+      // while actually working — StaffRouter sets action "carry" for that.
+      // Moving or idle plays the walk clip (these models have no idle clip).
+      this.fadeTo(action === "carry" && this.hasWork ? "work" : "walk", true);
       return;
     }
     const wantSit = action === "sit";
