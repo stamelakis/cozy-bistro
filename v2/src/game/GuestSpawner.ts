@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { disposeObject3D } from "../assets/disposeObject3D";
 import { CharacterLoader } from "../assets/CharacterLoader";
-import { SkinnedCharacterLoader } from "../scene/SkinnedCharacter";
 import { riggedCustomerForKey, sharedRiggedLoader } from "../scene/RiggedCharacter";
 import { CharacterAnimator, type AnimatedCharacter, type SkeletalDriver } from "../scene/CharacterAnimator";
 import type { Game } from "./Game";
@@ -799,8 +798,6 @@ function recipeFoodColor(recipe: RecipeDefinition): number {
 export class GuestSpawner {
   private readonly scene: THREE.Scene;
   private readonly characterLoader: CharacterLoader;
-  /** Loader for the new RIGGED guest (skeletal animation). */
-  private readonly skinnedLoader = new SkinnedCharacterLoader(import.meta.env.BASE_URL ?? "/");
   /** Shared rigged-GLB loader (singleton) — same cache the pedestrian + staff
    * renderers use, so each model file is fetched once. */
   readonly riggedLoader = sharedRiggedLoader;
@@ -906,9 +903,6 @@ export class GuestSpawner {
   ) {
     this.scene = scene;
     this.characterLoader = characterLoader;
-    // Warm the rigged-guest FBX in the background so the first new-face
-    // customer doesn't stall on the download mid-spawn (non-blocking).
-    this.skinnedLoader.prewarm();
     this.animator = animator;
     this.game = game;
     this.router = router;
@@ -921,7 +915,7 @@ export class GuestSpawner {
    * server guest. window hook: cozySkinnedGuest(). Returns a disposer + a sit
    * toggle. NOT part of normal play. */
   async debugSpawnSkinned(x = 0, z = 0): Promise<{ dispose: () => void; setSit: (sit: boolean) => void }> {
-    const inst = await this.skinnedLoader.createInstance();
+    const inst = await this.riggedLoader.createInstance("newface");
     this.scene.add(inst.root);
     const character: AnimatedCharacter = {
       root: inst.root,
@@ -2000,7 +1994,7 @@ export class GuestSpawner {
     let model: THREE.Object3D;
     let skeletal: SkeletalDriver | undefined;
     if (newFace) {
-      const inst = await this.skinnedLoader.createInstance();
+      const inst = await this.riggedLoader.createInstance("newface");
       model = inst.root; skeletal = inst.controller;
     } else {
       // Every other guest is now a rigged GLB customer (one of 8, picked by a
@@ -2751,7 +2745,7 @@ export class GuestSpawner {
       let model: THREE.Object3D;
       let skeletal: SkeletalDriver | undefined;
       if (newFace) {
-        const inst = await this.skinnedLoader.createInstance();
+        const inst = await this.riggedLoader.createInstance("newface");
         model = inst.root; skeletal = inst.controller;
       } else {
         const inst = await this.riggedLoader.createInstance(riggedCustomerForKey(id));
