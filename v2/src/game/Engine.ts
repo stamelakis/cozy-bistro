@@ -642,10 +642,11 @@ export class Engine {
     this.sidebar.addSeparator();
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
-      isOpen: () => this.spawner?.restaurantOpen ?? true,
+      isOpen: () => this.game.restaurantOpen,
       setOpen: (open: boolean) => {
+        if (this.game.restaurantOpen === open) return;
+        this.game.restaurantOpen = open;
         if (!this.spawner) return;
-        if (this.spawner.restaurantOpen === open) return;
         this.spawner.restaurantOpen = open;
         // Phase 6.3 — push the new open/closed flag to the cloud
         // immediately. Otherwise player_save.restaurant_open stays at
@@ -3628,6 +3629,9 @@ export class Engine {
     // Scale the sim dt by the player's time control. Cap the scaled value
     // so 4x on a slow frame doesn't simulate a big jump.
     const dt = this.paused ? 0 : Math.min(rawDt * this.timeScale, 0.25);
+    // Keep the spawner's open flag in step with the game's (the authority,
+    // restored from save) — the spawner reads it to gate guest spawning.
+    if (this.spawner) this.spawner.restaurantOpen = this.game.restaurantOpen;
     this.game.update(dt);
     // H.30 — periodic yoke of the cloud's day clock to local. Uses
     // rawDt (real seconds, ignores pause / timeScale) so the cloud

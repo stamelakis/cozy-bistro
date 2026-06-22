@@ -326,6 +326,7 @@ export class SaveSystem {
       money: this.game.economy.getMoney(),
       reputation: this.game.reputation.getReputation(),
       dayNumber: this.game.day.getDayNumber(),
+      restaurantOpen: this.game.restaurantOpen,
       unlockedRecipeIds: this.game.cooking.getUnlockedRecipeIdsSnapshot(),
       menuRecipeIds: this.game.cooking.getMenuRecipeIdsSnapshot(),
       recipeUpgradeLevels: this.game.cooking.getRecipeUpgradeLevelsSnapshot(),

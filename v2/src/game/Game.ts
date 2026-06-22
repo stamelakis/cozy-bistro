@@ -171,6 +171,11 @@ export class Game {
   private autoShopClock = 0;
   /** Set false to disable auto-shop (player will have to manage stock manually). */
   autoShopEnabled = true;
+  /** Whether the restaurant is OPEN for business. When CLOSED, rent + staff
+   * wages are PAUSED (and no guests spawn). Persisted in the save blob +
+   * mirrored to player_save.restaurant_open so the server's offline rent /
+   * salary ticks pause too. The Engine syncs this to the spawner each frame. */
+  restaurantOpen = true;
   /** Per-ingredient target stock level the auto-shop refills toward.
    * Player adjustable via PantryModal +/- buttons. */
   private stockTarget: number = DEFAULT_STOCK_TARGET;
@@ -439,17 +444,23 @@ export class Game {
     // for save compat but not draining it here.
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
-    const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
-    if (payroll.charge > 0) {
-      const couldPay = this.economy.getMoney() >= payroll.charge;
-      this.economy.forceSpendMoney(payroll.charge, "charge"); // floors at $0
-      if (!couldPay) {
-        // No-negative-money: payroll couldn't be covered → BENCH all active
-        // staff (they keep upgrades, stop drawing wages + vanish from the
-        // restaurant). The player takes the $500 grant and reactivates at will.
-        const benched = this.staff.deactivateAllActive();
-        for (const m of benched) this.onStaffMemberFired?.(m.id, m.role);
+    if (this.restaurantOpen) {
+      const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
+      if (payroll.charge > 0) {
+        const couldPay = this.economy.getMoney() >= payroll.charge;
+        this.economy.forceSpendMoney(payroll.charge, "charge"); // floors at $0
+        if (!couldPay) {
+          // No-negative-money: payroll couldn't be covered → BENCH all active
+          // staff (they keep upgrades, stop drawing wages + vanish from the
+          // restaurant). The player takes the $500 grant and reactivates at will.
+          const benched = this.staff.deactivateAllActive();
+          for (const m of benched) this.onStaffMemberFired?.(m.id, m.role);
+        }
       }
+    } else {
+      // Restaurant CLOSED — wages are PAUSED. Reset the accumulator so
+      // reopening doesn't bill a lump sum for the whole closed gap.
+      this.staff.resetSalaryTick();
     }
     // Tick any in-flight staff training. Deadlines are wall-clock so
     // we always pass Date.now() through inside tickTraining; this
@@ -604,6 +615,9 @@ export class Game {
     if (typeof save.autoShopEnabled === "boolean") {
       this.autoShopEnabled = save.autoShopEnabled;
     }
+    if (typeof save.restaurantOpen === "boolean") {
+      this.restaurantOpen = save.restaurantOpen;
+    }
   }
 
   /** Public for H.30 — SpacetimeClient.applyPendingDayAdvancement
@@ -624,7 +638,7 @@ export class Game {
     // dayNumber here is the day that JUST ENDED, so the first rent
     // payment lands on the rollover from day RENT_GRACE_DAYS to day
     // RENT_GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free).
-    if (chargeRent && dayNumber > RENT_GRACE_DAYS) {
+    if (chargeRent && dayNumber > RENT_GRACE_DAYS && this.restaurantOpen) {
       this.economy.forceSpendMoney(this.getDailyRent(), "rent");
     }
     const revenue = this.economy.getDailyRevenue();

@@ -614,6 +614,9 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         .unwrap_or(false);
     let save = ctx.db.player_save().identity().find(r.owner);
     let base_day_number = save.as_ref().map(|s| s.day_number).unwrap_or(1);
+    // Rent pauses while the restaurant is CLOSED (player toggle, mirrored to
+    // player_save.restaurant_open + eagerly pushed on change).
+    let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
     let luxury_tier = save.as_ref().map(|s| s.luxury_tier as usize).unwrap_or(1).min(5).max(1);
     let rent_per_day_cents = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
 
@@ -640,7 +643,7 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         // pending bump represents another day completed since then.
         let ended_day = base_day_number.saturating_add(pending).saturating_sub(1);
         // Charge rent IFF offline AND day > GRACE.
-        if !owner_online && ended_day > RENT_GRACE_DAYS {
+        if !owner_online && ended_day > RENT_GRACE_DAYS && restaurant_open {
             rent_to_charge_cents = rent_to_charge_cents.saturating_add(rent_per_day_cents);
         }
         // Path B — append this day's history record just BEFORE the
@@ -3770,6 +3773,10 @@ pub fn consume_pending_salary(
 fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
     if r.cloud_base_payroll_per_min_cents <= 0 { return; }
+    // Staff wages pause while the restaurant is CLOSED (player toggle).
+    let open = ctx.db.player_save().identity().find(r.owner)
+        .map(|s| s.restaurant_open).unwrap_or(true);
+    if !open { return; }
     let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let owner_online = ctx.db.player().identity().find(r.owner)
         .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < SALARY_OFFLINE_THRESHOLD_MICROS)

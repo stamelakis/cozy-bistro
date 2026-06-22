@@ -628,6 +628,9 @@ export class Hud {
     if (this.openCloseBtn) {
       this.openCloseBtn.textContent = open ? "🟢 OPEN — click to close" : "🔴 CLOSED — click to open";
       this.openCloseBtn.style.background = open ? "rgba(120, 200, 120, 0.18)" : "rgba(200, 120, 120, 0.18)";
+      this.openCloseBtn.title = open
+        ? "OPEN: guests arrive and you pay rent + staff wages. Click to CLOSE — that PAUSES rent and wages (and guests stop coming) until you reopen. Survives reloads."
+        : "CLOSED: no guests, and rent + staff wages are PAUSED. Click to reopen for business.";
     }
     const activeKey = this.time.isPaused() ? "pause" : String(this.time.getTimeScale());
     for (const [key, btn] of Object.entries(this.speedBtns)) {
