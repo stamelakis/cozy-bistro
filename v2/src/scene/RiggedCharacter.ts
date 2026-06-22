@@ -149,6 +149,14 @@ export class RiggedController {
     }
   }
 
+  /** True while a one-shot transition (sit-down / stand-up) is mid-play, so the
+   * mover holds the body still — otherwise it slides across the floor while the
+   * character is getting up or down. Loops (walk/idle/work/seated) aren't
+   * transitions. */
+  isTransitioning(): boolean {
+    return this.phase === "sittingDown" || this.phase === "standingUp";
+  }
+
   stop(): void { this.mixer.stopAllAction(); }
 }
 

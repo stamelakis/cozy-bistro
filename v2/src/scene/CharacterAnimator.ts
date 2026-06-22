@@ -17,12 +17,15 @@ import * as THREE from "three";
 export type CharacterAction = "idle" | "walk" | "sit" | "carry";
 
 /** A rigged-character controller the animator drives instead of applying its
- * procedural pose. Both SkinnedCharacter's SkeletalController (the FBX "new
- * face" guy) and RiggedCharacter's RiggedController (the GLB cast) satisfy this
- * structurally, so the animator stays decoupled from either concrete class. */
+ * procedural pose. RiggedCharacter's RiggedController (the GLB cast) satisfies
+ * this structurally, so the animator stays decoupled from the concrete class. */
 export interface SkeletalDriver {
   update(dt: number, action: CharacterAction): void;
   stop(): void;
+  /** True while a one-shot transition (sit-down / stand-up) is playing, so the
+   * mover holds position instead of sliding the body through it. Optional —
+   * drivers with no transitions can omit it. */
+  isTransitioning?(): boolean;
 }
 
 export interface AnimatedCharacter {

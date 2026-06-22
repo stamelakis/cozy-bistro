@@ -3891,6 +3891,16 @@ export class GuestSpawner {
   }
 
   private moveToward(g: ActiveGuest, dt: number): void {
+    // Hold position while a one-shot transition (sit-down / stand-up) is
+    // playing — otherwise the guest slides across the floor mid-stand-up
+    // ("walking while standing up"). Keep action="walk" so the rigged
+    // controller runs its stand-up → walk sequence; just don't advance the
+    // body until it finishes. Static-mesh guests have no skeletal driver, so
+    // they're never gated.
+    if (g.character.skeletal?.isTransitioning?.()) {
+      g.character.action = "walk";
+      return;
+    }
     const pos = g.character.groundPos;
     // Defensive: plan a path on the fly if nothing's queued and we
     // still have ground to cover. Normally planPath() has run at the
