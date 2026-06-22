@@ -49,7 +49,8 @@ function normalizeClip(name: string): string {
   if (n.includes("walk")) return "walk";
   if (n.includes("standtosit")) return "standToSit";
   if (n.includes("sittostand")) return "sitToStand";
-  if (n.includes("sit")) return "sittingIdle";
+  if (n.includes("sit")) return "sittingIdle"; // Sitting / Sitting_Idle (seated)
+  if (n.includes("idle")) return "idle"; // standing idle (the new stand-idle clip)
   return "work"; // Using_A_Fax_Machine / Pick_Fruit / any other gesture
 }
 
@@ -64,9 +65,11 @@ export function riggedCustomerForKey(key: string): string {
 /**
  * Drives one instance's AnimationMixer from the game's action enum. Adapts to
  * the clips the model actually has:
- *   customers (sit cycle): walk loop; sit → standToSit→sittingIdle; rise →
- *                          sitToStand→walk. (No standing-idle clip → idle = walk.)
- *   staff (work gesture):  walk when moving, work gesture otherwise.
+ *   customers (sit cycle): walk when moving, stand-idle when still; sit →
+ *                          standToSit→sittingIdle; rise → sitToStand.
+ *   staff / NPCs:          work gesture while working, walk when moving,
+ *                          stand-idle when still.
+ * Models with no stand-idle clip fall back to the walk loop when still.
  */
 export class RiggedController {
   private readonly actions = new Map<string, THREE.AnimationAction>();
@@ -74,6 +77,7 @@ export class RiggedController {
   private currentName = "";
   private readonly hasSit: boolean;
   private readonly hasWork: boolean;
+  private readonly hasIdle: boolean;
   private phase: "up" | "sittingDown" | "sitting" | "standingUp" = "up";
   private transitionLeft = 0;
 
@@ -84,7 +88,14 @@ export class RiggedController {
     for (const c of clips) this.actions.set(c.name, mixer.clipAction(c));
     this.hasSit = this.actions.has("standToSit") && this.actions.has("sittingIdle");
     this.hasWork = this.actions.has("work");
-    this.fadeTo(this.hasWork ? "work" : "walk", true);
+    this.hasIdle = this.actions.has("idle");
+    this.fadeTo(this.standClip(), true);
+  }
+
+  /** Clip to play when standing still: the new stand-idle if the model has it,
+   * else the walk loop (older models without an idle clip). */
+  private standClip(): string {
+    return this.hasIdle ? "idle" : "walk";
   }
 
   private dur(name: string): number {
@@ -109,17 +120,20 @@ export class RiggedController {
   update(dt: number, action: CharacterAction): void {
     this.mixer.update(dt);
     if (!this.hasSit) {
-      // Staff: the work gesture (cook / mix / serve at a station) plays ONLY
-      // while actually working — StaffRouter sets action "carry" for that.
-      // Moving or idle plays the walk clip (these models have no idle clip).
-      this.fadeTo(action === "carry" && this.hasWork ? "work" : "walk", true);
+      // Staff / standing NPCs: the work gesture (cook / mix / serve at a
+      // station) plays only while working (StaffRouter sets action "carry");
+      // walking plays the walk loop; standing still plays the stand-idle clip.
+      const clip = action === "carry" && this.hasWork ? "work"
+        : action === "walk" ? "walk"
+        : this.standClip();
+      this.fadeTo(clip, true);
       return;
     }
     const wantSit = action === "sit";
     switch (this.phase) {
       case "up":
         if (wantSit) { this.fadeTo("standToSit", false); this.phase = "sittingDown"; this.transitionLeft = this.dur("standToSit"); }
-        else this.fadeTo("walk", true);
+        else this.fadeTo(action === "walk" ? "walk" : this.standClip(), true);
         break;
       case "sittingDown":
         this.transitionLeft -= dt;
