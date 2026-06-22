@@ -10,10 +10,10 @@ import { getRecipeLuxuryTier } from "../systems/CookingSystem";
  * Layout: title bar showing "Tier N/5", expand button, separator, boost
  * button. Tooltip on the unlocks preview.
  */
-/** Persistent localStorage key for the "once per real day" starter
- * grant cooldown. Value is the YYYY-MM-DD calendar date on which
- * the player last claimed; the button is hidden until the calendar
- * date changes (player's local timezone). */
+/** Persistent localStorage key for the once-per-GAME-day starter grant
+ * cooldown. Value is the game-day NUMBER on which the player last claimed;
+ * the button re-enables once the in-game day rolls over (the server resets
+ * the authoritative cooldown on rollover too, in tick_day_clock). */
 const GRANT_STORAGE_KEY = "cozy-bistro.last-starter-grant-day";
 
 /** Amount of the hardship subsidy the starter-grant button hands out. */
@@ -99,7 +99,7 @@ export class ExpandWidget {
       if (this.game.economy.getMoney() >= STARTER_GRANT_THRESHOLD) return;
       if (this.hasClaimedGrantToday()) return;
       this.game.economy.grantLowBalance(STARTER_GRANT_AMOUNT);
-      try { localStorage.setItem(GRANT_STORAGE_KEY, todayLocalDateString()); } catch { /* ignore */ }
+      try { localStorage.setItem(GRANT_STORAGE_KEY, String(this.game.day.getDayNumber())); } catch { /* ignore */ }
       this.update();
     };
     this.root.appendChild(this.grantBtn);
@@ -107,11 +107,11 @@ export class ExpandWidget {
     this.update();
   }
 
-  /** True iff the player already claimed today's starter grant. */
+  /** True iff the player already claimed the grant on the current GAME day. */
   private hasClaimedGrantToday(): boolean {
     try {
       const last = localStorage.getItem(GRANT_STORAGE_KEY);
-      return last === todayLocalDateString();
+      return last === String(this.game.day.getDayNumber());
     } catch { return false; }
   }
 
@@ -176,32 +176,22 @@ export class ExpandWidget {
       this.grantBtn.disabled = false;
       this.grantBtn.style.opacity = "1";
       this.grantBtn.style.cursor = "pointer";
-      this.grantBtn.title = "Free starter grant — one per real day, only while broke.";
+      this.grantBtn.title = "Free starter grant — one per GAME day, only while broke.";
     } else if (claimed) {
-      this.grantBtn.textContent = `💸 Starter grant — claimed today`;
+      this.grantBtn.textContent = `💸 Starter grant — claimed this day`;
       this.grantBtn.disabled = true;
       this.grantBtn.style.opacity = "0.5";
       this.grantBtn.style.cursor = "not-allowed";
-      this.grantBtn.title = "Already claimed today. Try again tomorrow.";
+      this.grantBtn.title = "Already claimed this game day — available again next day.";
     } else {
       // Not broke. Show the threshold so the player knows the rule.
       this.grantBtn.textContent = `💸 Starter grant — need < $${STARTER_GRANT_THRESHOLD}`;
       this.grantBtn.disabled = true;
       this.grantBtn.style.opacity = "0.5";
       this.grantBtn.style.cursor = "not-allowed";
-      this.grantBtn.title = `Free grant kicks in when your balance drops below $${STARTER_GRANT_THRESHOLD}. Once per real day.`;
+      this.grantBtn.title = `Free grant kicks in when your balance drops below $${STARTER_GRANT_THRESHOLD}. Once per game day.`;
     }
   }
-}
-
-/** Today's date in the player's local timezone as YYYY-MM-DD.
- * Used as the storage value for the once-per-day grant cooldown. */
-function todayLocalDateString(): string {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = (d.getMonth() + 1).toString().padStart(2, "0");
-  const dd = d.getDate().toString().padStart(2, "0");
-  return `${y}-${m}-${dd}`;
 }
 
 /** mm:ss formatter shared with the boost button. Floor seconds (not

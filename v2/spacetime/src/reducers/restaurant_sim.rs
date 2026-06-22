@@ -711,6 +711,11 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         cloud_daily_served: new_daily_served,
         cloud_daily_lost: new_daily_lost,
         cloud_daily_tips_cents: new_daily_tips,
+        // Starter grant resets every GAME day (not real day): clearing the
+        // last-claim stamp on rollover makes the $500 low-balance grant
+        // claimable again next day (claim_low_balance_grant's cooldown
+        // check treats 0 as "never claimed").
+        last_low_balance_grant_micros: if day_rolled { 0 } else { r.last_low_balance_grant_micros },
         ..r
     };
     if let Some(json) = history_json {
