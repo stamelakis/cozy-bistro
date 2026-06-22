@@ -282,7 +282,7 @@ export class StaffPanel {
       const info = this.workloadBadgeInfo(role, m.id);
       return info?.count ?? 0;
     };
-    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}`).join(",");
+    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}/D${m.isDeactivated ? 1 : 0}`).join(",");
     if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
       return;
     }
@@ -406,27 +406,48 @@ export class StaffPanel {
       // choose WHO to let go, not "whoever the LIFO picks". Wears the
       // member's name in the tooltip + severance cost so misclicks
       // self-correct.
-      const fire = document.createElement("button");
-      fire.textContent = "−";
-      const severance = this.game.staff.getStaffFireCost(role);
-      const trainingLvl = this.game.getMemberUpgradeLevel(member.id);
-      fire.title = `Fire ${member.name} (L${trainingLvl} ${role}) — costs $${severance} severance`;
-      Object.assign(fire.style, {
-        width: "16px", height: "18px", padding: "0",
-        marginLeft: "4px",
-        fontSize: "12px", fontWeight: "700",
-        background: "rgba(200, 120, 120, 0.22)",
-        color: "#fff5dc",
-        border: "1px solid rgba(255, 180, 180, 0.45)",
-        borderRadius: "3px",
-        cursor: "pointer",
-        font: "inherit",
-        lineHeight: "1",
-      } as Partial<CSSStyleDeclaration>);
-      fire.onclick = () => {
-        if (this.game.fireStaffMember(member.id)) this.update();
-      };
-      row.appendChild(fire);
+      if (member.isDeactivated) {
+        // No-negative-money: benched member — grey the whole row + offer a
+        // free Reactivate (↺) in place of Fire. Reactivating just resumes
+        // their wages; they kept every upgrade.
+        row.style.opacity = "0.5";
+        const reactivate = document.createElement("button");
+        reactivate.textContent = "↺ rehire";
+        reactivate.title = `Reactivate ${member.name} (Lv${member.upgradeLevel | 0} ${role}) — free, resumes wages`;
+        Object.assign(reactivate.style, {
+          height: "18px", padding: "0 6px", marginLeft: "4px",
+          fontSize: "10px", fontWeight: "700",
+          background: "rgba(120, 200, 120, 0.30)", color: "#eaffea",
+          border: "1px solid rgba(150, 230, 150, 0.55)", borderRadius: "3px",
+          cursor: "pointer", font: "inherit", lineHeight: "1", whiteSpace: "nowrap",
+        } as Partial<CSSStyleDeclaration>);
+        reactivate.onclick = () => {
+          if (this.game.reactivateStaffMember(member.id)) this.update();
+        };
+        row.appendChild(reactivate);
+      } else {
+        const fire = document.createElement("button");
+        fire.textContent = "−";
+        const severance = this.game.staff.getStaffFireCost(role);
+        const trainingLvl = this.game.getMemberUpgradeLevel(member.id);
+        fire.title = `Fire ${member.name} (L${trainingLvl} ${role}) — costs $${severance} severance`;
+        Object.assign(fire.style, {
+          width: "16px", height: "18px", padding: "0",
+          marginLeft: "4px",
+          fontSize: "12px", fontWeight: "700",
+          background: "rgba(200, 120, 120, 0.22)",
+          color: "#fff5dc",
+          border: "1px solid rgba(255, 180, 180, 0.45)",
+          borderRadius: "3px",
+          cursor: "pointer",
+          font: "inherit",
+          lineHeight: "1",
+        } as Partial<CSSStyleDeclaration>);
+        fire.onclick = () => {
+          if (this.game.fireStaffMember(member.id)) this.update();
+        };
+        row.appendChild(fire);
+      }
       hostEl.appendChild(row);
     }
   }

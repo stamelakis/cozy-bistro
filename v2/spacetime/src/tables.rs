@@ -1740,6 +1740,14 @@ pub struct HiredStaffMember {
     /// storage).  Migration-safe primitive default.
     #[default(0i64)]
     pub training_completes_at_micros: i64,
+
+    /// No-negative-money: true when the member was BENCHED (not fired)
+    /// because the restaurant hit $0. Benched members keep their
+    /// upgrade_level, don't render in-world, and don't draw payroll. The
+    /// owner reactivates them for free via set_hired_staff_member(.., false).
+    /// Migration-safe primitive default — existing rows stay active.
+    #[default(false)]
+    pub is_deactivated: bool,
 }
 
 /// Phase H.38 — static customer archetype catalog. One row per

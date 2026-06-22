@@ -2275,6 +2275,7 @@ export class SpacetimeClient {
     role: string;
     name: string;
     upgradeLevel: number;
+    isDeactivated?: boolean;
   }): void {
     if (!this.conn || this.restaurantId == null) return;
     if (!args.memberId) return;
@@ -2285,6 +2286,7 @@ export class SpacetimeClient {
         role: args.role,
         name: args.name,
         upgradeLevel: Math.max(0, Math.round(args.upgradeLevel)),
+        isDeactivated: args.isDeactivated ?? false,
       });
     } catch (e) {
       console.warn("[Cloud] setHiredStaffMember failed:", e);

@@ -17,4 +17,5 @@ export default __t.row({
   name: __t.string(),
   upgradeLevel: __t.u32().name("upgrade_level"),
   trainingCompletesAtMicros: __t.i64().name("training_completes_at_micros"),
+  isDeactivated: __t.bool().name("is_deactivated"),
 });

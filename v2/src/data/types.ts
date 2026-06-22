@@ -145,6 +145,10 @@ export interface HiredStaffMember {
    * before the multi-storey expansion. Players reassign via the
    * StaffPanel floor selector once an upper storey is unlocked. */
   homeFloor?: number;
+  /** No-negative-money: true when BENCHED — the restaurant hit $0 and
+   * couldn't pay wages. Benched members keep upgradeLevel but don't render
+   * in-world or draw payroll; the owner reactivates them for free. */
+  isDeactivated?: boolean;
 }
 
 export interface AdminSettings {

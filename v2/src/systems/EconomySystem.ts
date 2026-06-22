@@ -90,14 +90,14 @@ export class EconomySystem {
     // side is server-authoritative (income reducers) and locked down (the
     // server rejects positive bumps), so the leaderboard balance is
     // bounded by real, server-credited income.
-    this.money -= amount;
+    this.money = Math.max(0, this.money - amount); // no-negative-money: clamp at $0
     return true;
   }
 
   charge(amount: number): void {
     // Anti-cheat B/C — rent / salary / restock debits stay client-side
     // (negative delta), same rationale as spend().
-    this.money -= amount;
+    this.money = Math.max(0, this.money - amount); // no-negative-money: clamp at $0
   }
 
   earn(amount: number): void {

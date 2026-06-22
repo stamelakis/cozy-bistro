@@ -3419,9 +3419,15 @@ export class Engine {
     // Game.hireStaff already appended the new member record. Grab the
     // tail of the roster so we have the auto-generated name + id.
     const members = this.game.staff.getMembers(role);
-    const member = members[members.length - 1];
+    // Spawn for the first ACTIVE member of this role that has no world actor
+    // yet — covers both a fresh hire (the new active member) and a
+    // reactivation (an un-benched member whose actor was despawned). Benched
+    // members are skipped so they stay invisible.
+    const hasActor = (id: string) =>
+      !!(this.router?.findCharacterByMemberId(id) || this.errand?.findCharacterByMemberId(id));
+    const member = members.find((m) => !m.isDeactivated && !hasActor(m.id));
     if (!member) {
-      console.warn(`[Engine] handleStaffHired: no roster member found for ${role}`);
+      console.warn(`[Engine] handleStaffHired: no spawnable roster member for ${role}`);
       return;
     }
     // Spawn the model first so we know its actual world pose for the toast.

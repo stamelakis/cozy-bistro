@@ -233,6 +233,7 @@ export const HiredStaffMember = __t.object("HiredStaffMember", {
   name: __t.string(),
   upgradeLevel: __t.u32(),
   trainingCompletesAtMicros: __t.i64(),
+  isDeactivated: __t.bool(),
 });
 export type HiredStaffMember = __Infer<typeof HiredStaffMember>;
 

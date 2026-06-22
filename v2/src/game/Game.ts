@@ -441,7 +441,15 @@ export class Game {
     // a millisecond timestamp and internally rate-limits its own charges.
     const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
     if (payroll.charge > 0) {
-      this.economy.forceSpendMoney(payroll.charge, "charge");
+      const couldPay = this.economy.getMoney() >= payroll.charge;
+      this.economy.forceSpendMoney(payroll.charge, "charge"); // floors at $0
+      if (!couldPay) {
+        // No-negative-money: payroll couldn't be covered → BENCH all active
+        // staff (they keep upgrades, stop drawing wages + vanish from the
+        // restaurant). The player takes the $500 grant and reactivates at will.
+        const benched = this.staff.deactivateAllActive();
+        for (const m of benched) this.onStaffMemberFired?.(m.id, m.role);
+      }
     }
     // Tick any in-flight staff training. Deadlines are wall-clock so
     // we always pass Date.now() through inside tickTraining; this
@@ -1341,6 +1349,16 @@ export class Game {
     const removed = this.staff.removeStaffById(memberId);
     if (!removed) return false;
     this.onStaffMemberFired?.(memberId, role);
+    return true;
+  }
+
+  /** No-negative-money: reactivate a BENCHED staff member (free — they kept
+   * their upgrades). Un-benches them in the roster + respawns their world
+   * actor. Returns true on success, false if the id isn't a benched member. */
+  reactivateStaffMember(memberId: string): boolean {
+    const member = this.staff.reactivateMember(memberId);
+    if (!member) return false;
+    this.onStaffHired?.(member.role, this.staff.getStaffCount(member.role) - 1);
     return true;
   }
 

@@ -110,6 +110,7 @@ export class StaffSystem {
         role: m.role,
         name: m.name,
         upgradeLevel: m.upgradeLevel,
+        isDeactivated: !!m.isDeactivated,
       });
       pushed += 1;
     }
@@ -200,6 +201,7 @@ export class StaffSystem {
         role: member.role,
         name: member.name,
         upgradeLevel: member.upgradeLevel,
+        isDeactivated: false,
       });
     }
     return member;
@@ -233,6 +235,48 @@ export class StaffSystem {
       this.cloud.deleteHiredStaffMember(removed.id);
     }
     return removed;
+  }
+
+  /** No-negative-money: number of members currently active (not benched). */
+  getActiveCount(): number {
+    let n = 0;
+    for (const m of this.members) if (!m.isDeactivated) n += 1;
+    return n;
+  }
+
+  /** Bench EVERY active member — the restaurant hit $0 and can't pay wages.
+   * They keep their upgradeLevel but stop rendering + drawing payroll;
+   * mirrors each to cloud. Returns the benched members so the caller can
+   * despawn their world actors. */
+  deactivateAllActive(): HiredStaffMember[] {
+    const benched: HiredStaffMember[] = [];
+    for (const m of this.members) {
+      if (m.isDeactivated) continue;
+      m.isDeactivated = true;
+      benched.push(m);
+      if (!this.suppressStaffMirror && this.cloud) {
+        this.cloud.setHiredStaffMember({
+          memberId: m.id, role: m.role, name: m.name,
+          upgradeLevel: m.upgradeLevel, isDeactivated: true,
+        });
+      }
+    }
+    return benched;
+  }
+
+  /** Reactivate a benched member (free — they kept their upgrades). Returns
+   * the member so the caller can respawn its world actor, or null. */
+  reactivateMember(id: string): HiredStaffMember | null {
+    const m = this.getMember(id);
+    if (!m || !m.isDeactivated) return null;
+    m.isDeactivated = false;
+    if (!this.suppressStaffMirror && this.cloud) {
+      this.cloud.setHiredStaffMember({
+        memberId: m.id, role: m.role, name: m.name,
+        upgradeLevel: m.upgradeLevel, isDeactivated: false,
+      });
+    }
+    return m;
   }
 
   queueFiring(role: StaffRole): void {
@@ -503,6 +547,7 @@ export class StaffSystem {
   getTotalPayrollPerMinute(basePerStaff: number): number {
     let total = 0;
     for (const m of this.members) {
+      if (m.isDeactivated) continue; // benched members aren't paid
       total += basePerStaff + (m.upgradeLevel ?? 0);
     }
     return total;
@@ -515,7 +560,7 @@ export class StaffSystem {
   getRolePayrollPerMinute(role: StaffRole, basePerStaff: number): number {
     let total = 0;
     for (const m of this.members) {
-      if (m.role !== role) continue;
+      if (m.role !== role || m.isDeactivated) continue;
       total += basePerStaff + (m.upgradeLevel ?? 0);
     }
     return total;

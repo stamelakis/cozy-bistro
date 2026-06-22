@@ -705,7 +705,7 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     let mut updated = Restaurant {
         day_elapsed_ms: elapsed,
         pending_days_advanced: pending,
-        cloud_money_cents: r.cloud_money_cents.saturating_sub(rent_to_charge_cents),
+        cloud_money_cents: r.cloud_money_cents.saturating_sub(rent_to_charge_cents).max(0),
         cloud_daily_revenue_cents: new_daily_rev,
         cloud_daily_expenses_cents: new_daily_exp,
         cloud_daily_served: new_daily_served,
@@ -1017,7 +1017,7 @@ pub fn bump_cloud_money(
         return Ok(());
     }
     ctx.db.restaurant().id().update(Restaurant {
-        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
+        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents).max(0),
         ..r
     });
     Ok(())
@@ -3214,7 +3214,7 @@ pub fn admin_adjust_money(ctx: &ReducerContext, restaurant_id: u64, delta_cents:
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
     ctx.db.restaurant().id().update(Restaurant {
-        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
+        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents).max(0),
         ..r
     });
     Ok(())
@@ -3357,7 +3357,7 @@ fn try_restock_pantry(
     if accrued_cents > 0 {
         if let Some(r) = ctx.db.restaurant().id().find(restaurant_id) {
             let new_total = r.pending_restock_cost_cents.saturating_add(accrued_cents);
-            let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(accrued_cents);
+            let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(accrued_cents).max(0);
             // Phase 7.6 — track restock expense in today's daily total.
             let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(accrued_cents);
             ctx.db.restaurant().id().update(Restaurant {
@@ -3774,6 +3774,7 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let mut headcount: i64 = 0;
     let mut levels_sum: i64 = 0;
     for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
+        if m.is_deactivated { continue; } // benched members don't draw payroll
         headcount += 1;
         levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
     }
@@ -3799,18 +3800,17 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let total = r.pending_salary_remainder_x.saturating_add(micros_cents);
     let whole_cents = total / MICROS_PER_MINUTE;
     let new_remainder = total % MICROS_PER_MINUTE;
-    let new_pending = r.pending_salary_cost_cents.saturating_add(whole_cents);
-    // Phase 7.5 — Also deduct from cloud_money_cents so the live cloud
-    // balance reflects the salary paid during this offline window.
-    // The foreground client's applyPendingSalary drain (in Engine.ts)
-    // checks for this Phase 7.5 marker and skips the local forceSpend
-    // — Phase 7.2's setMoney(cloud) on rollup drain already adopted
-    // the salary-deducted value, and forceSpending again would visibly
-    // drop cash twice on reload (the very jolt we're trying to kill).
-    let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(whole_cents);
-    // Phase 7.6 — Track salary in cloud_daily_expenses_cents so today's
-    // expense total stays accurate while the owner is offline.
-    let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(whole_cents);
+    // No-negative-money — never let payroll push the balance below $0.
+    // Pay only what's on hand; if that can't cover payroll, BENCH every
+    // active member (is_deactivated = true) so they stop drawing wages and
+    // the owner returns to a deactivated roster instead of a debt. Pending /
+    // daily-expense track only the amount actually paid.
+    let on_hand = r.cloud_money_cents.max(0);
+    let pay = whole_cents.min(on_hand);
+    let benched = pay < whole_cents;
+    let new_pending = r.pending_salary_cost_cents.saturating_add(pay);
+    let new_cloud_money_cents = (on_hand - pay).max(0);
+    let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(pay);
     ctx.db.restaurant().id().update(Restaurant {
         pending_salary_cost_cents: new_pending,
         pending_salary_remainder_x: new_remainder,
@@ -3819,6 +3819,17 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
         cloud_daily_expenses_cents: new_cloud_daily_expenses,
         ..r
     });
+    if benched {
+        for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
+            if !m.is_deactivated {
+                ctx.db.hired_staff_member().member_id().update(HiredStaffMember {
+                    is_deactivated: true,
+                    ..m
+                });
+            }
+        }
+        log::info!("tick_offline_salary: restaurant {rid} hit $0 — benched all active staff");
+    }
 }
 
 /// bulk-sync paths (mirrorAllPools after hydrate / admin reset).
@@ -4928,7 +4939,7 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     // for rent / salary.
     if total_cost_cents > 0 {
         ctx.db.restaurant().id().update(Restaurant {
-            cloud_money_cents: r.cloud_money_cents.saturating_sub(total_cost_cents),
+            cloud_money_cents: r.cloud_money_cents.saturating_sub(total_cost_cents).max(0),
             ..r
         });
     }
@@ -8460,6 +8471,7 @@ pub fn set_hired_staff_member(
     role: String,
     name: String,
     upgrade_level: u32,
+    is_deactivated: bool,
 ) -> Result<(), String> {
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
@@ -8474,7 +8486,8 @@ pub fn set_hired_staff_member(
         if m.restaurant_id == restaurant_id
             && m.role == role
             && m.name == name
-            && m.upgrade_level == upgrade_level {
+            && m.upgrade_level == upgrade_level
+            && m.is_deactivated == is_deactivated {
             return Ok(()); // idempotent
         }
     }
@@ -8492,6 +8505,7 @@ pub fn set_hired_staff_member(
         name,
         upgrade_level,
         training_completes_at_micros: preserved_training_completes_at,
+        is_deactivated,
     };
     if existing.is_some() {
         ctx.db.hired_staff_member().member_id().update(row);

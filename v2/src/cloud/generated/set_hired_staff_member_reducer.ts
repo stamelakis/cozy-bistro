@@ -16,4 +16,5 @@ export default {
   role: __t.string(),
   name: __t.string(),
   upgradeLevel: __t.u32(),
+  isDeactivated: __t.bool(),
 };
