@@ -40,6 +40,7 @@ import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import AdminSetMoneyReducer from "./admin_set_money_reducer";
 import AdminSetWeatherReducer from "./admin_set_weather_reducer";
 import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
@@ -729,6 +730,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("admin_set_money", AdminSetMoneyReducer),
   __reducerSchema("admin_set_weather", AdminSetWeatherReducer),
   __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),

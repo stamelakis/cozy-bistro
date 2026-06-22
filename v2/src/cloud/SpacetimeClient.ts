@@ -956,6 +956,18 @@ export class SpacetimeClient {
     }
   }
 
+  /** Dev override — SET the server balance to an exact value (admin-gated,
+   * not floored). Routes the AdminModal "set money" control server-side so
+   * it isn't instantly reversed by the cloud_money_cents adoption. */
+  adminSetMoney(amountCents: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.adminSetMoney({ restaurantId: this.restaurantId, amountCents: BigInt(amountCents) });
+    } catch (e) {
+      console.warn("[Cloud] adminSetMoney failed:", e);
+    }
+  }
+
   /** Admin-only — flip the server money cutover (the anti-cheat
    * positive-bump rejection). The server rejects this unless the caller's
    * identity is is_admin (Dunnin's game account), so exposing it via a

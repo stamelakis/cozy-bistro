@@ -178,6 +178,16 @@ export class EconomySystem {
     else { this.forceSpendMoney(-delta, "charge"); }
   }
 
+  /** Dev override — SET money to an exact value. Under the cutover this
+   * dictates cloud_money_cents server-side (admin-gated, bypasses the $0
+   * floor + the income lockdown); otherwise sets local money. The AdminModal
+   * "Set" control uses this — the old local setMoney was reversed by the
+   * cloud adoption. "Dev tools dictate all." */
+  adminSetMoney(amount: number): void {
+    if (isServerSim("money")) { this.cloud?.adminSetMoney(Math.round(amount * 100)); }
+    else { this.setMoney(amount); }
+  }
+
   getDailyRevenue(): number {
     return this.dailyRevenueTotal;
   }

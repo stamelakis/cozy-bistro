@@ -3208,9 +3208,10 @@ pub fn claim_low_balance_grant(ctx: &ReducerContext, restaurant_id: u64) -> Resu
 }
 
 /// Anti-cheat B/C (income flow 3/5) — admin money adjust. The AdminModal
-/// dev buttons (Dunnin only) now route here instead of earnMoney/
-/// forceSpendMoney. Admin-gated so a regular player can't credit
-/// themselves; delta may be negative (debit).
+/// dev +/- buttons (Dunnin only) route here. Admin-gated so a regular
+/// player can't credit themselves; delta may be negative. DEV OVERRIDE —
+/// NOT floored at $0: the no-negative-money floor is for gameplay debits,
+/// not the dev tool ("dev tools dictate all").
 #[reducer]
 pub fn admin_adjust_money(ctx: &ReducerContext, restaurant_id: u64, delta_cents: i64) -> Result<(), String> {
     if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
@@ -3219,7 +3220,26 @@ pub fn admin_adjust_money(ctx: &ReducerContext, restaurant_id: u64, delta_cents:
     let r = ctx.db.restaurant().id().find(restaurant_id)
         .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
     ctx.db.restaurant().id().update(Restaurant {
-        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents).max(0),
+        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
+        ..r
+    });
+    Ok(())
+}
+
+/// Dev override — admin SETS the exact balance, server-authoritative. "Dev
+/// tools dictate all": lets the dev (Dunnin) set/recover any balance directly,
+/// bypassing the no-negative floor AND the income lockdown. Admin-gated.
+/// The AdminModal "set money" control routes here (the old client-only
+/// setMoney was instantly reversed by the cloud_money_cents adoption).
+#[reducer]
+pub fn admin_set_money(ctx: &ReducerContext, restaurant_id: u64, amount_cents: i64) -> Result<(), String> {
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Admin only".into());
+    }
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: amount_cents,
         ..r
     });
     Ok(())

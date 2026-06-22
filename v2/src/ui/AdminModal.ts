@@ -418,7 +418,7 @@ export class AdminModal {
     const setBtn = this.actionButton("Set", "neutral", () => {
       const v = Number(input.value);
       if (!Number.isFinite(v) || v < 0) return;
-      this.game.economy.setMoney(Math.round(v));
+      this.game.economy.adminSetMoney(Math.round(v));
       this.refreshStats();
     });
     setRow.appendChild(setBtn);
