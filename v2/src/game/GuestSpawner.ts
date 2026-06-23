@@ -641,6 +641,14 @@ const TIME_AT_SINK = 3.0;
  * physically lower; using the chair height would make the guest hover
  * above the bowl. */
 const TOILET_SIT_HEIGHT = 0.42;
+/** Extra vertical lift for a guest seated at a BAR STOOL. The rigged sit clip
+ * is authored for a standard dining chair, so on the taller bar stool
+ * (furnitureCatalog `bar-stool` / `bar-stool-sq` targetHeight 0.75) a guest
+ * sinks below the seat. Applied to skeletal guests only (they sit via the
+ * clip; CharacterAnimator adds it to root.y while action === "sit"). Normal
+ * chairs/benches sit at the clip baseline (lift 0). Tune here if the perch
+ * reads high or low. */
+const BAR_STOOL_LIFT = 0.2;
 /** Flip to true (or rebuild after editing) to log every guest's
  * spawn/WC/sink/wash transition. Off in production — the per-tick
  * volume is too high for normal play. */
@@ -2021,7 +2029,7 @@ export class GuestSpawner {
     // fidelity issue.  0.62 matches the dining chair surface. Skinned
     // guests sit via their own clip, so they take no lift.
     // Skeletal guests (all of them now) sit via their own clip → no chair lift.
-    const seatHeight = skeletal ? 0 : (isSitting ? 0.62 : 0);
+    const seatHeight = skeletal ? (row.seatAtBar ? BAR_STOOL_LIFT : 0) : (isSitting ? 0.62 : 0);
 
     const character: AnimatedCharacter = {
       root: model,
@@ -2768,8 +2776,9 @@ export class GuestSpawner {
         action: "walk",
         phase: Math.random() * 5,
         // Seat surface height (Kenney chair at S_CHAIR=1.7). Skinned guests
-        // sit via their own clip, so they take no lift.
-        seatHeight: skeletal ? 0 : 0.62,
+        // sit via their own clip, so they take no lift on a normal chair —
+        // but a bar stool sits taller, so bar seats get BAR_STOOL_LIFT.
+        seatHeight: skeletal ? (available?.atBar ? BAR_STOOL_LIFT : 0) : 0.62,
         skeletal,
       };
       this.animator.add(character);

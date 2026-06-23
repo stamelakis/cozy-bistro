@@ -208,6 +208,14 @@ export class CharacterAnimator {
       // up — that false-cull is exactly what froze on-screen skinned guests in
       // a T-pose when the camera focused the upper floor.
       if (c.skeletal) {
+        // Tall seats (bar stools) sit higher than the rigged sit clip is
+        // authored for, so without a lift a seated guest sinks below the
+        // stool. seatHeight is 0 for a normal chair (the clip already lands
+        // right) and the bar-stool lift for a bar seat; apply it only while
+        // actually seated. root.position.y was set to baseY above; procedural
+        // guests get the equivalent via the "sit" case in tickCharacter, which
+        // the skeletal path skips.
+        if (c.action === "sit" && c.seatHeight) c.root.position.y += c.seatHeight;
         c.skeletal.update(dt, c.action);
         continue;
       }

@@ -711,7 +711,10 @@ export class ErrandRouter {
           this.planPath(h);
           h.state = "walkingFromRoadEdge";
           h.clock = 0;
-          h.character.action = "carry";
+          // WALK back to the drop-off — don't play the deposit gesture
+          // ("carry" → the Pick_Fruit work clip) the whole way in. The
+          // gesture belongs AT the counter; see the atCounter case below.
+          h.character.action = "walk";
         }
         break;
       }
@@ -743,7 +746,11 @@ export class ErrandRouter {
         if (this.distance(h.character.groundPos, h.target) < ARRIVAL_THRESHOLD) {
           h.state = "atCounter";
           h.clock = 0;
-          h.character.action = "idle";
+          // Reached the cupboard — NOW play the deposit gesture ("carry" →
+          // the Pick_Fruit work clip) through the COUNTER_DWELL. Previously
+          // this stood idle here while the gesture had already played during
+          // the walk in — i.e. depositing before arriving.
+          h.character.action = "carry";
         }
         break;
       }

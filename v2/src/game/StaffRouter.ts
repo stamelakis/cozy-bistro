@@ -2135,13 +2135,25 @@ export class StaffRouter {
     for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
     // Rigged staff play their WORK gesture (cook / mix / serve at a station)
-    // ONLY while actually working — the RiggedController keys off action
-    // "carry", so set it from the authoritative state here (after the ticks)
-    // rather than threading it through every state-machine branch. Moving and
-    // idle keep their walk/idle action → the walk clip.
-    for (const c of this.chefs) if (c.state === "working") c.character.action = "carry";
-    for (const b of this.barmen) if (b.state === "working") b.character.action = "carry";
-    for (const w of this.waiters) if (w.state === "working") w.character.action = "carry";
+    // ONLY while actually AT the station working — the RiggedController keys
+    // off action "carry". Set it from the authoritative state here (after the
+    // ticks) rather than threading it through every branch, but respect two
+    // things the old blanket "working → carry" got wrong:
+    //   • A "working" actor still FAR from its target is in TRANSIT — a waiter
+    //     carrying a plate to the seat — so it must WALK, not mime the serve
+    //     gesture the whole way ("serving on the way to the customer"). Only
+    //     gesture once arrived at the target tile.
+    //   • A dwell the tick deliberately marked "idle" (take-order beside the
+    //     guest, table-bussing) must KEEP idle so it plays the stand-idle clip
+    //     instead of miming work while standing still.
+    const stampWork = (a: StaffActor): void => {
+      if (a.state !== "working" || a.character.action === "idle") return;
+      a.character.action =
+        this.distance(a.character.groundPos, a.target) > ARRIVAL_THRESHOLD ? "walk" : "carry";
+    };
+    for (const c of this.chefs) stampWork(c);
+    for (const b of this.barmen) stampWork(b);
+    for (const w of this.waiters) stampWork(w);
     this.recoverStalledTickets(dt);
     this.logHeartbeatIfDue(dt);
     this.streamActorsToCloud(dt);
