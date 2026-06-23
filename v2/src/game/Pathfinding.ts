@@ -285,6 +285,33 @@ export class Pathfinding {
     }
     return { cells, edges };
   }
+
+  /** Snap (x,z) to the nearest tile centre on `floor` that isn't blocked by
+   * furniture/walls, searching outward in rings up to `maxRadius` tiles.
+   * Returns the input unchanged when it's already on a clear tile (or nothing
+   * clear is found nearby). Used by the staff idle-spot pickers so staff don't
+   * stand inside objects. */
+  snapToClear(x: number, z: number, floor = 0, maxRadius = 4): { x: number; z: number } {
+    const { cells } = this.computeBlocked(floor);
+    const blocked = (cx: number, cz: number): boolean => cells.has(`${cx},${cz}`);
+    const rx = Math.round(x), rz = Math.round(z);
+    if (!blocked(rx, rz)) return { x, z };
+    for (let r = 1; r <= maxRadius; r++) {
+      let best: { x: number; z: number } | null = null;
+      let bestD = Infinity;
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dz = -r; dz <= r; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue; // current ring only
+          const cx = rx + dx, cz = rz + dz;
+          if (blocked(cx, cz)) continue;
+          const d = (cx - x) * (cx - x) + (cz - z) * (cz - z);
+          if (d < bestD) { bestD = d; best = { x: cx, z: cz }; }
+        }
+      }
+      if (best) return best;
+    }
+    return { x, z };
+  }
 }
 
 /** Key for the edge between two 4-neighbour cells. We tag horizontal

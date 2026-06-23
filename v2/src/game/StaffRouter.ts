@@ -674,7 +674,20 @@ export class StaffRouter {
    *      empty of cooking gear.
    * In every case a small random jitter is added so multiple idle
    * chefs don't stack on the exact same tile. */
+  /** Nudge an idle/home spot off any furniture or wall it landed on so staff
+   * don't stand inside objects. Snaps to the nearest clear nav-grid tile;
+   * no-op without a pathfinder or when the spot is already clear. */
+  private snapIdleClear(v: THREE.Vector2, floor: number): THREE.Vector2 {
+    if (!this.pathfind) return v;
+    const s = this.pathfind.snapToClear(v.x, v.y, floor);
+    v.set(s.x, s.z);
+    return v;
+  }
+
   private pickChefIdleSpot(c: StaffActor): THREE.Vector2 {
+    return this.snapIdleClear(this.pickChefIdleSpotRaw(c), c.homeFloor);
+  }
+  private pickChefIdleSpotRaw(c: StaffActor): THREE.Vector2 {
     const jitter = (v: THREE.Vector2): THREE.Vector2 => {
       v.x += (Math.random() - 0.5) * 1.2;
       v.y += (Math.random() - 0.5) * 0.8;
@@ -2872,6 +2885,9 @@ export class StaffRouter {
    * centroid-aware "inside" picker so the barman lands BEHIND the
    * bar instead of on the customer side. */
   private pickBarmanIdleSpot(b: StaffActor): THREE.Vector2 {
+    return this.snapIdleClear(this.pickBarmanIdleSpotRaw(b), b.homeFloor);
+  }
+  private pickBarmanIdleSpotRaw(b: StaffActor): THREE.Vector2 {
     const jitter = (v: THREE.Vector2): THREE.Vector2 => {
       v.x += (Math.random() - 0.5) * 1.2;
       v.y += (Math.random() - 0.5) * 0.8;
@@ -3054,6 +3070,10 @@ export class StaffRouter {
    * Returns the {pos, floor} pair callers feed into target +
    * targetFloor + planPath. */
   private pickWaiterIdleSpot(w: StaffActor): { pos: THREE.Vector2; floor: number } {
+    const r = this.pickWaiterIdleSpotRaw(w);
+    return { pos: this.snapIdleClear(r.pos, r.floor), floor: r.floor };
+  }
+  private pickWaiterIdleSpotRaw(w: StaffActor): { pos: THREE.Vector2; floor: number } {
     // Phase I (H.68) — player-pinned rest spot.  Reads the current
     // cloud value (null if unset).  When set, ALL waiters target the
     // same spot; small per-waiter jitter avoids them landing on the

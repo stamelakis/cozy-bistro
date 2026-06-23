@@ -212,7 +212,11 @@ export class ErrandRouter {
   private pickIdleSpot(): THREE.Vector2 {
     const x = this.counterPos.x + (Math.random() - 0.5) * 2 * IDLE_ZONE_HALF_X;
     const z = this.counterPos.y + (Math.random() - 0.5) * 2 * IDLE_ZONE_HALF_Z;
-    return new THREE.Vector2(x, z);
+    const v = new THREE.Vector2(x, z);
+    // Keep the helper out of furniture/walls — the loiter box around the
+    // counter can overlap a placed item. Snap to the nearest clear nav tile.
+    if (this.pathfind) { const s = this.pathfind.snapToClear(v.x, v.y, 0); v.set(s.x, s.z); }
+    return v;
   }
 
   /** Pop one helper out of the pool. Prefers an idle helper so we don't

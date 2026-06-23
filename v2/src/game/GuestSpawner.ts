@@ -641,6 +641,12 @@ const TIME_AT_SINK = 3.0;
  * physically lower; using the chair height would make the guest hover
  * above the bowl. */
 const TOILET_SIT_HEIGHT = 0.42;
+/** Seconds a guest may spend walking to a WC fixture before the local sim
+ * gives up and walks them back to the seat. Longer than any normal in-
+ * restaurant walk (including a cross-floor stair climb) so it only fires for
+ * a genuinely unreachable fixture — see the walkingToToilet/walkingToSink
+ * rescue. The server owns the wc_completed outcome regardless. */
+const WC_WALK_GIVEUP = 15;
 /** Extra vertical lift for a guest seated at a BAR STOOL. The rigged sit clip
  * is authored for a standard dining chair, so on the taller bar stool
  * (furnitureCatalog `bar-stool` / `bar-stool-sq` targetHeight 0.75) a guest
@@ -1832,7 +1838,16 @@ export class GuestSpawner {
     // condition naturally rate-limits itself: after firing, g.state
     // becomes walkingToSink and the OR clause is false on subsequent
     // ticks.
-    const onToiletSide = g.state === "atToilet" || g.state === "walkingToToilet";
+    // Require the local guest to have ACTUALLY arrived at the toilet
+    // (atToilet) before advancing to the sink. The old version also accepted
+    // walkingToToilet — and because the server's position model straight-
+    // lines to the fixture (ignoring walls) and finishes the WC faster than
+    // the client can route there, that teleported the guest on to the
+    // sink/seat while it was still walking, so it "used the toilet from its
+    // chair" without ever arriving. A guest that genuinely can't reach the
+    // fixture is rescued by the WC_WALK_GIVEUP fallback in the walk handlers,
+    // so waiting for real arrival here can't strand it.
+    const onToiletSide = g.state === "atToilet";
     if (onToiletSide && row.state === "wcWashing") {
       this.sfx?.toiletFlush();
       if (g.originalSeatHeight !== undefined) {
@@ -1851,12 +1866,35 @@ export class GuestSpawner {
       this.planPath(g);
     }
 
+    // Catch-up: the server finished the WHOLE trip (seated) while the local
+    // guest only just reached the toilet — there's no sink leg to walk to
+    // (the row now targets the seat), so flush + head straight back rather
+    // than holding at the bowl. Without this, requiring atToilet above could
+    // strand a guest whose server-side wash elapsed before it arrived.
+    if (g.state === "atToilet" && row.state === "seated") {
+      this.sfx?.toiletFlush();
+      if (g.originalSeatHeight !== undefined) {
+        g.character.seatHeight = g.originalSeatHeight;
+        g.originalSeatHeight = undefined;
+      }
+      g.usedToilet = true;
+      g.toiletAttemptComplete = true;
+      g.target = (g.returnSeatPos ?? g.seatPos).clone();
+      g.returnSeatPos = undefined;
+      g.state = "returningFromToilet";
+      g.stateClock = 0;
+      g.character.action = "walk";
+      this.planPath(g);
+    }
+
     // wcWashing → seated: server's "done washing, return to seat".
     // Local guest is at (or near) the sink. Flag washedHands, restore
     // walking pose, head back to the dining seat. Same mid-walk
     // robustness as above — include walkingToSink in the local-side
     // check so a race doesn't strand the guest.
-    const onSinkSide = g.state === "atSink" || g.state === "walkingToSink";
+    // Same "require real arrival" rule as the toilet leg above — was
+    // atSink || walkingToSink, which skipped the wash for the same race.
+    const onSinkSide = g.state === "atSink";
     if (onSinkSide && row.state === "seated") {
       g.washedHands = true;
       g.washAttemptComplete = true;
@@ -3661,6 +3699,23 @@ export class GuestSpawner {
         break;
       }
       case "walkingToToilet": {
+        // Rescue: can't reach the toilet within WC_WALK_GIVEUP (walled off /
+        // unreachable) — walk back to the seat rather than forever. The
+        // server still drives the wc_completed outcome.
+        if (g.stateClock > WC_WALK_GIVEUP) {
+          if (g.toiletUid) { this.reservedToilets.delete(g.toiletUid); g.toiletUid = undefined; }
+          if (g.originalSeatHeight !== undefined) {
+            g.character.seatHeight = g.originalSeatHeight;
+            g.originalSeatHeight = undefined;
+          }
+          g.target = (g.returnSeatPos ?? g.seatPos).clone();
+          g.returnSeatPos = undefined;
+          g.state = "returningFromToilet";
+          g.stateClock = 0;
+          g.character.action = "walk";
+          this.planPath(g);
+          break;
+        }
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
           // Snap the guest ONTO the toilet (not just the in-front
@@ -3742,6 +3797,17 @@ export class GuestSpawner {
         break;
       }
       case "walkingToSink": {
+        // Same unreachable-fixture rescue as walkingToToilet.
+        if (g.stateClock > WC_WALK_GIVEUP) {
+          if (g.sinkUid) { this.reservedSinks.delete(g.sinkUid); g.sinkUid = undefined; }
+          g.target = (g.returnSeatPos ?? g.seatPos).clone();
+          g.returnSeatPos = undefined;
+          g.state = "returningFromToilet";
+          g.stateClock = 0;
+          g.character.action = "walk";
+          this.planPath(g);
+          break;
+        }
         this.moveToward(g, dt);
         if (this.distanceToTarget(g) < ARRIVAL_THRESHOLD) {
           // Snap the guest exactly to the sink stand position and
