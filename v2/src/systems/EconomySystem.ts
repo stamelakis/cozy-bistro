@@ -100,6 +100,17 @@ export class EconomySystem {
     this.money = Math.max(0, this.money - amount); // no-negative-money: clamp at $0
   }
 
+  /** Apply an authoritative server-driven money delta (the cloud_money_cents
+   * adoption). UNLIKE earn(), this is NOT a no-op under the money cutover —
+   * the value originates server-side, so positive deltas (tips, revenue, the
+   * admin +$ buttons, the "Set" control, the $500 grant) MUST land. earn()'s
+   * cutover guard exists only to stop LOCAL gameplay from double-counting
+   * server income; the adoption is the server's own value, so it bypasses it.
+   * Floors at $0. */
+  adoptCloudDelta(deltaDollars: number): void {
+    this.money = Math.max(0, this.money + deltaDollars);
+  }
+
   earn(amount: number): void {
     // Anti-cheat B/C — when the server owns money, ALL income is credited
     // server-side (income reducers) and adopted via setMoney, so the client

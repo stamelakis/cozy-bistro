@@ -3925,11 +3925,15 @@ export class SpacetimeClient {
             // the server-side log (log::info lines) and not the local
             // ledger UI.
             const deltaDollars = deltaCents / 100;
-            if (deltaDollars > 0) {
-              this.game.economy.earn(deltaDollars);
-            } else {
-              this.game.economy.charge(-deltaDollars);
-            }
+            // Adopt the authoritative server delta DIRECTLY. earn() is a
+            // no-op under the money cutover (it stops LOCAL gameplay from
+            // double-counting server income), so routing the positive branch
+            // through it silently DROPPED every server-side increase here —
+            // the admin +$ buttons, the "Set" control, the $500 grant, and
+            // live tips/revenue — while debits (charge, unguarded) still
+            // applied. That is the "dev tools only subtract" bug. This value
+            // IS the server's, so adoptCloudDelta bypasses the cutover guard.
+            this.game.economy.adoptCloudDelta(deltaDollars);
             this.game.economy.noteSyncedCents(cloudCents);
             // Phase 9.17 — make server-originated money VISIBLE in
             // the ledger. The Phase 7.7 "log nothing" decision left

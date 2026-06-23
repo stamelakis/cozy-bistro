@@ -354,8 +354,15 @@ pub fn restaurant_tick(
         .map(|g| g.id)
         .collect();
     let has_guests = !guest_ids.is_empty();
+    // Closed-restaurant guest eject (inside tick_guest_state) needs the open
+    // flag. The toggle lives on the owner's player_save, eagerly mirrored to
+    // the server on every change; default to open if the save isn't loaded.
+    let restaurant_open = ctx.db.restaurant().id().find(rid)
+        .and_then(|r| ctx.db.player_save().identity().find(r.owner))
+        .map(|s| s.restaurant_open)
+        .unwrap_or(true);
     for guest_id in guest_ids {
-        tick_guest_state(ctx, guest_id, dt_ms);
+        tick_guest_state(ctx, guest_id, dt_ms, restaurant_open);
     }
 
     // Phase C.1 — same pattern for tickets. Iterate this restaurant's
@@ -5688,7 +5695,7 @@ fn compute_dt_ms(now: Timestamp, previous_tick_at: Option<Timestamp>) -> i64 {
 /// driven by CLIENT REDUCERS (assign_guest_seat, place_guest_order,
 /// deliver_guest_course, etc.) — added below. tick_guest_state only
 /// owns the timer-driven half.
-fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
+fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_open: bool) {
     let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return };
 
     // === Despawn path: leaving state has its own dwell timer ===
@@ -5742,6 +5749,31 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
             target_x: g.seat_x,
             target_z: g.seat_z,
             target_floor: g.seat_floor,
+            ..g
+        });
+        return;
+    }
+
+    // === Closed-restaurant eject ===
+    // Once the player closes up, the kitchen + waiters pause, so a guest
+    // who's seated / ordering / waiting / eating can never be served and
+    // would sit forever — the "customers stuck in a closed restaurant" bug.
+    // Flip every not-already-leaving guest straight to the exit. order_recipes
+    // is CLEARED so accumulate_pending_visit_rollup (course_count == 0) skips
+    // the rating — closing for the day must not tank the player's stars, and
+    // the patience_ms = 0 set here would otherwise pin the visit to 1★. Dish
+    // settling keys off reserved_dish_tiers (unaffected); the leaving-dwell
+    // flow below runs the ticket / dish / staff cascade + despawns them over
+    // the next few ticks.
+    if !restaurant_open && !is_leaving_state(&g.state) {
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state: "leaving".to_string(),
+            state_clock_ms: 0,
+            patience_ms: 0,
+            order_recipes: String::new(),
+            target_x: 0.0,
+            target_z: 0.0,
+            target_floor: 0,
             ..g
         });
         return;
@@ -6209,6 +6241,17 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64) {
         // tick or two than send a paying customer home with a
         // forgotten order. The local sim's own eating→leaving still
         // fires at the matching time.
+        //
+        // Watchdog (stuck-eating fix): that guard waits for the order
+        // CSV to mirror — but if it NEVER arrives (client dropped mid-
+        // order, or the mirror was lost), the guest eats forever, and
+        // eating also freezes patience (Phase 9.52) so nothing else times
+        // them out. THESE were the customers frozen at a table for ages.
+        // Cap the wait at 3× the meal: an empty CSV that long is never
+        // coming, so send them home instead of stranding them.
+        "eating" if g.order_recipes.is_empty()
+            && new_clock >= EATING_DURATION_MS.saturating_mul(3) =>
+            Some(("leaving".to_string(), 0)),
         "eating" if new_clock >= EATING_DURATION_MS && !g.order_recipes.is_empty() => {
             let total_courses = g.order_recipes
                 .split(',')
