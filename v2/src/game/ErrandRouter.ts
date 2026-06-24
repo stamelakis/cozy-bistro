@@ -862,25 +862,27 @@ function isWalkingState(s: ErrandState): boolean {
   );
 }
 
-/** Map ErrandState → AnimatedCharacter action for the hydrate path.
- * Mirrors the per-state action setters in tickHelper.  Empty-handed
- * legs play "walk"; loaded legs ("carry") apply once the helper has
- * the goods.  Stationary states ("idle"/"atCounter"/"offscreen") use
- * "idle" (offscreen also has visible=false, so the pose doesn't show). */
+/** Map ErrandState → AnimatedCharacter action for the hydrate / server-driven
+ * path. MUST mirror tickHelper's per-state action setters — this is what a
+ * VISITOR / cutover session uses when the local tickHelper is skipped. ALL
+ * walking legs (out to the shop AND back in with the goods) play "walk"; the
+ * deposit gesture ("carry" → the Pick_Fruit work clip) plays ONLY at the
+ * counter during the dwell. Previously the walk-back legs played "carry", so a
+ * visitor saw the helper miming the hand-over the whole way in. */
 function errandPoseFor(s: ErrandState): "walk" | "carry" | "idle" {
   switch (s) {
     case "walkingToDoor":
     case "exitingDoor":
     case "walkingToRoadEdge":
     case "returningHome":
-      return "walk";
     case "walkingFromRoadEdge":
     case "enteringDoor":
     case "walkingToCounter":
+      return "walk";
+    case "atCounter":
       return "carry";
     case "idle":
     case "offscreen":
-    case "atCounter":
       return "idle";
   }
 }

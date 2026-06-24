@@ -1820,8 +1820,28 @@ export class GuestSpawner {
       // stairs. row.targetFloor carries the server's fixture floor.
       if (g.willWashOnly) {
         g.sinkFloor = row.targetFloor;
+        // Face the basin on arrival (atSink reads g.sinkRotY). The server only
+        // sends the stand spot, so find the sink whose stand spot matches it.
+        const sink = this.registry?.getBathroomSinks().find((s) =>
+          s.floor === row.targetFloor
+          && Math.hypot(s.standPos.x - row.targetX, s.standPos.y - row.targetZ) < 1.0);
+        if (sink) g.sinkRotY = sink.rotY;
       } else {
         g.toiletFloor = row.targetFloor;
+        // CRITICAL: the server only sends the in-front STAND spot (target_x/z),
+        // NOT the bowl. Without g.toiletCenter the atToilet handler can't snap
+        // the guest ONTO the toilet, so a server/visitor-driven guest sits in
+        // FRONT of it (the "wrong place in the WC" bug). Find the toilet whose
+        // stand spot matches the target and set its centre + facing so the
+        // atToilet snap lands on the bowl.
+        const toilet = this.registry?.getToilets().find((t) =>
+          t.floor === row.targetFloor
+          && Math.hypot(t.standPos.x - row.targetX, t.standPos.y - row.targetZ) < 1.0);
+        if (toilet) {
+          g.toiletCenter = new THREE.Vector2(toilet.x, toilet.z);
+          g.toiletRotY = toilet.rotY;
+          g.toiletUid = toilet.uid;
+        }
       }
       g.state = g.willWashOnly ? "walkingToSink" : "walkingToToilet";
       g.stateClock = 0;
@@ -2075,10 +2095,16 @@ export class GuestSpawner {
     // guests sit via their own clip, so they take no lift.
     // Skeletal guests (all of them now) sit via their own clip → no chair lift.
     const seatHeight = skeletal ? (row.seatAtBar ? BAR_STOOL_LIFT : 0) : (isSitting ? 0.62 : 0);
+    // A seated guest must render AT its seat, not at the server's BODY x/z —
+    // for a fresh server walk-in that body coord is still the door spawn spot,
+    // so a just-seated guest would otherwise appear sitting in the doorway
+    // until refreshSeatedGuestPoses resolves the seat (gated on furniture load).
+    const atSeat = !!row.seatUid
+      && (state === "seated" || state === "waitingForFood" || state === "eating");
 
     const character: AnimatedCharacter = {
       root: model,
-      groundPos: new THREE.Vector2(row.x, row.z),
+      groundPos: new THREE.Vector2(atSeat ? row.seatX : row.x, atSeat ? row.seatZ : row.z),
       facingY: row.seatFacingY ?? 0,
       action,
       phase: Math.random() * 5,
