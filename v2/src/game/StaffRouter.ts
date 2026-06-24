@@ -2200,8 +2200,17 @@ export class StaffRouter {
       a.stuckClock = 0;
       a.lastStuckPos = undefined;
       if (this.pathfind) {
-        const s = this.pathfind.snapToClear(a.character.groundPos.x, a.character.groundPos.y, a.currentFloor);
-        a.character.groundPos.set(s.x, s.z);
+        const sp = this.pathfind.snapToClear(a.character.groundPos.x, a.character.groundPos.y, a.currentFloor);
+        a.character.groundPos.set(sp.x, sp.z);
+        // Re-validate the DESTINATION too, not just the body — otherwise the
+        // actor loops: snapped off the furniture, then re-planned straight
+        // back onto it because its TARGET is itself a blocked cell. The usual
+        // culprit is the home spot (set once at hire, never re-checked) with a
+        // chair/table later placed on it. Snap home + target onto clear tiles.
+        const sh = this.pathfind.snapToClear(a.home.x, a.home.y, a.homeFloor);
+        a.home.set(sh.x, sh.z);
+        const st = this.pathfind.snapToClear(a.target.x, a.target.y, a.targetFloor);
+        a.target.set(st.x, st.z);
       }
       this.planPath(a);
     };
