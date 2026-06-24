@@ -748,6 +748,16 @@ export class StaffRouter {
       a.path = [{ x: a.target.x, z: a.target.y, floor: a.targetFloor }];
       return;
     }
+    // Keep the DESTINATION off furniture. A target on a blocked cell — most
+    // often a staff home spot the player later dropped an appliance/chair onto
+    // (homes are fixed at hire, never re-checked; e.g. a waiter home at
+    // (3.9,-1) with a coffee machine at (4,-1)) — is unreachable: the actor
+    // walks up, can't path onto the cell, and stalls there playing the walk
+    // loop ("stands in the chair / coffee machine"). Snap the target onto the
+    // nearest clear tile first. Reachable targets (seats, station fronts) are
+    // already clear, so this is a no-op for them.
+    const st = this.pathfind.snapToClear(a.target.x, a.target.y, a.targetFloor);
+    a.target.set(st.x, st.z);
     a.path = this.pathfind.findMultiFloorPath(
       { x: a.character.groundPos.x, z: a.character.groundPos.y, floor: a.currentFloor },
       { x: a.target.x, z: a.target.y, floor: a.targetFloor },
