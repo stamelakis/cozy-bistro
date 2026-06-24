@@ -694,9 +694,20 @@ export class StaffRouter {
    * don't stand inside objects. Snaps to the nearest clear nav-grid tile;
    * no-op without a pathfinder or when the spot is already clear. */
   private snapIdleClear(v: THREE.Vector2, floor: number): THREE.Vector2 {
-    if (!this.pathfind) return v;
-    const s = this.pathfind.snapToClear(v.x, v.y, floor);
-    v.set(s.x, s.z);
+    // Keep idle spots INSIDE the building. The nav grid treats cells BEYOND the
+    // walls as clear (no furniture out there), so a station near a wall + a
+    // crowded interior could otherwise snap a staffer OUTSIDE — and the server
+    // then walks them to that out-of-bounds target (seen live: an idle waiter
+    // at x=7.25 targeting x=8.1, past INTERIOR_MAX_X=5.2). Clamp the anchor
+    // before the snap AND the result after it.
+    const cx = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, v.x));
+    const cz = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, v.y));
+    if (!this.pathfind) { v.set(cx, cz); return v; }
+    const s = this.pathfind.snapToClear(cx, cz, floor);
+    v.set(
+      Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, s.x)),
+      Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, s.z)),
+    );
     return v;
   }
 
@@ -762,7 +773,14 @@ export class StaffRouter {
     // nearest clear tile first. Reachable targets (seats, station fronts) are
     // already clear, so this is a no-op for them.
     const st = this.pathfind.snapToClear(a.target.x, a.target.y, a.targetFloor);
-    a.target.set(st.x, st.z);
+    // ...and keep the target INSIDE the building. The snap can land beyond a
+    // wall (the nav grid has no cells out there, so empty outdoor tiles read as
+    // "clear"); a target outside walks the staffer onto the street / in through
+    // a wall. Same 10x10 footprint on every floor.
+    a.target.set(
+      Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, st.x)),
+      Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, st.z)),
+    );
     a.path = this.pathfind.findMultiFloorPath(
       { x: a.character.groundPos.x, z: a.character.groundPos.y, floor: a.currentFloor },
       { x: a.target.x, z: a.target.y, floor: a.targetFloor },
@@ -913,7 +931,13 @@ export class StaffRouter {
         continue;
       }
       // ---- Body position + floor ----
-      actor.character.groundPos.set(row.x, row.z);
+      // Clamp the hydrated body into the building — a stale server row can
+      // carry an out-of-bounds x/z, and without this the staffer renders
+      // OUTSIDE on reload, then walks in through the wall to its next task.
+      actor.character.groundPos.set(
+        Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, row.x)),
+        Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, row.z)),
+      );
       actor.currentFloor = row.floor;
       actor.target.set(row.targetX, row.targetZ);
       actor.targetFloor = row.targetFloor;
@@ -2271,7 +2295,10 @@ export class StaffRouter {
       a.lastStuckPos = undefined;
       if (this.pathfind) {
         const sp = this.pathfind.snapToClear(a.character.groundPos.x, a.character.groundPos.y, a.currentFloor);
-        a.character.groundPos.set(sp.x, sp.z);
+        a.character.groundPos.set(
+          Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, sp.x)),
+          Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, sp.z)),
+        );
         // Re-validate the DESTINATION too, not just the body — otherwise the
         // actor loops: snapped off the furniture, then re-planned straight
         // back onto it because its TARGET is itself a blocked cell. The usual
