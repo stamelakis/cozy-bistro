@@ -201,6 +201,11 @@ const WASH_BATCH_RADIUS = 4.0;
  * walking toward its target before we assume it clipped onto furniture (a
  * chair/table it can't path off) and snap it back onto a clear tile + re-plan. */
 const STAFF_STUCK_SECONDS = 2.5;
+/** Body-collision radius for the per-frame furniture push-out. Smaller than a
+ * half-tile (0.5) so a staffer standing a full tile in front of its station
+ * isn't shoved off it, but large enough that the body never visibly overlaps
+ * an item. */
+const STAFF_BODY_RADIUS = 0.35;
 
 interface StaffActor {
   character: AnimatedCharacter;
@@ -1058,16 +1063,71 @@ export class StaffRouter {
    * Cheap: just three array walks with two compare-and-assign
    * branches per actor; safe to call every frame. */
   clampAllStaffToInterior(): void {
+    // Cache the blocked-cell set per floor so computeBlocked runs at most once
+    // per occupied storey per frame, not once per actor.
+    const blockedByFloor = new Map<number, Set<string>>();
+    const blockedFor = (floor: number): Set<string> | undefined => {
+      if (!this.pathfind) return undefined;
+      let s = blockedByFloor.get(floor);
+      if (!s) { s = this.pathfind.blockedCells(floor); blockedByFloor.set(floor, s); }
+      return s;
+    };
     const clampOne = (a: StaffActor): void => {
       const p = a.character.groundPos;
       if (p.x < INTERIOR_MIN_X) p.x = INTERIOR_MIN_X;
       else if (p.x > INTERIOR_MAX_X) p.x = INTERIOR_MAX_X;
       if (p.y < INTERIOR_MIN_Z) p.y = INTERIOR_MIN_Z;
       else if (p.y > INTERIOR_MAX_Z) p.y = INTERIOR_MAX_Z;
+      // HARD furniture constraint — eject the body from any item it overlaps.
+      const cells = blockedFor(a.currentFloor);
+      if (cells) this.pushOutOfCells(p, cells);
     };
     for (const a of this.chefs) clampOne(a);
     for (const a of this.waiters) clampOne(a);
     for (const a of this.barmen) clampOne(a);
+  }
+
+  /** Push a body circle (STAFF_BODY_RADIUS) OUT of any blocked furniture cells
+   * it overlaps — circle-vs-AABB resolution, 2 relaxation passes so a body
+   * wedged in a corner between two cells settles outside both. The pathfinder
+   * routes around blocked CELLS, but the body has radius and personal-space
+   * separation can shove a staffer into a counter/table; this runs every frame
+   * AFTER both (via clampAllStaffToInterior) so they're never left standing in
+   * an item. Walking along the path (cell centres, 0.5 from any blocked edge)
+   * doesn't trigger it, so it doesn't fight normal movement. */
+  private pushOutOfCells(p: THREE.Vector2, cells: Set<string>): void {
+    if (cells.size === 0) return;
+    const r = STAFF_BODY_RADIUS;
+    for (let pass = 0; pass < 2; pass++) {
+      const cx0 = Math.round(p.x), cz0 = Math.round(p.y);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const cx = cx0 + dx, cz = cz0 + dz;
+          if (!cells.has(`${cx},${cz}`)) continue;
+          // Closest point on the 1x1 cell AABB to the body centre.
+          const nx = Math.max(cx - 0.5, Math.min(p.x, cx + 0.5));
+          const nz = Math.max(cz - 0.5, Math.min(p.y, cz + 0.5));
+          const ox = p.x - nx, oz = p.y - nz;
+          const d2 = ox * ox + oz * oz;
+          if (d2 >= r * r) continue; // not overlapping this cell
+          if (d2 > 1e-6) {
+            const d = Math.sqrt(d2);
+            const push = (r - d) / d;
+            p.x += ox * push;
+            p.y += oz * push;
+          } else {
+            // Centre is inside the cell — eject along the shallowest edge.
+            const left = p.x - (cx - 0.5), right = (cx + 0.5) - p.x;
+            const down = p.y - (cz - 0.5), upp = (cz + 0.5) - p.y;
+            if (Math.min(left, right) <= Math.min(down, upp)) {
+              p.x += left < right ? -(left + r) : (right + r);
+            } else {
+              p.y += down < upp ? -(down + r) : (upp + r);
+            }
+          }
+        }
+      }
+    }
   }
 
   removeChef(): AnimatedCharacter | null {

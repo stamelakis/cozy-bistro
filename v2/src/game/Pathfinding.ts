@@ -291,6 +291,14 @@ export class Pathfinding {
    * Returns the input unchanged when it's already on a clear tile (or nothing
    * clear is found nearby). Used by the staff idle-spot pickers so staff don't
    * stand inside objects. */
+  /** The set of "x,z" integer cells blocked by furniture/walls on `floor`,
+   * exposed for the staff body push-out — the cell-based pathfinder and the
+   * personal-space separation can't guarantee a body circle stays out of an
+   * item, so the StaffRouter resolves against these cells every frame. */
+  blockedCells(floor = 0): Set<string> {
+    return this.computeBlocked(floor).cells;
+  }
+
   snapToClear(x: number, z: number, floor = 0, maxRadius = 4): { x: number; z: number } {
     const { cells } = this.computeBlocked(floor);
     const blocked = (cx: number, cz: number): boolean => cells.has(`${cx},${cz}`);
