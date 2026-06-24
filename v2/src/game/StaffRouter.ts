@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { isServerSim } from "./featureFlags";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 import { recipes } from "../data/recipes";
 
@@ -3151,22 +3151,27 @@ export class StaffRouter {
       );
       return { pos, floor: rest.floor };
     }
-    if (w.currentFloor === w.homeFloor) {
-      // Already on the right floor — stay put. The returningHome
-      // arrival check trips on the first tick and they go straight to
-      // idle without walking anywhere.
-      return { pos: w.character.groundPos.clone(), floor: w.homeFloor };
+    // Idle by the SERVICE area so the waiter waits next to its next pickup:
+    // anchor at a bar counter on the home floor (stands by the barman), else
+    // any cook station, else a stove. Jitter spreads multiple waiters; the
+    // wrapper then snaps the result to the nearest FREE tile, so they land on
+    // the closest open tiles around the bar/kitchen — NOT inside it, and not
+    // on the old fixed z=-1 spawn home an appliance may have been placed on.
+    // The returningHome state machine handles any stair descent to homeFloor.
+    const floor = w.homeFloor;
+    const station =
+      this.getCookStations?.().find((s) => s.provides === "bar" && s.floor === floor)
+      ?? this.getCookStations?.().find((s) => s.floor === floor)
+      ?? this.getStoves?.().find((s) => s.floor === floor);
+    if (station) {
+      const pos = new THREE.Vector2(
+        station.x + (Math.random() - 0.5) * 1.8,
+        station.z + (Math.random() - 0.5) * 1.8,
+      );
+      return { pos, floor };
     }
-    // Cross-floor return — head to the stair landing on home floor.
-    // Floor 0's stair anchor is the BOTTOM tile; every upper floor
-    // shares the same TOP tile geometry (the stairwell column lives
-    // at the same X/Z on every storey).
-    const landing = w.homeFloor === 0 ? STAIR_BOTTOM_TILE : STAIR_TOP_TILE;
-    const pos = new THREE.Vector2(
-      landing.x + (Math.random() - 0.5) * 1.6,
-      landing.z + (Math.random() - 0.5) * 1.6,
-    );
-    return { pos, floor: w.homeFloor };
+    // No stations on this floor — stay where we are (snapped to a clear tile).
+    return { pos: w.character.groundPos.clone(), floor };
   }
 
   /** Shared "begin take-order trip" transition — claim the request
@@ -3381,7 +3386,7 @@ export class StaffRouter {
           // Serve flow: arrived at the chef pickup.
           const ticket = this.tickets.find((t) => t.id === w.ticketId);
           if (!ticket) {
-            w.target = w.home.clone();
+            w.target = this.pickWaiterIdleSpot(w).pos;
             w.targetFloor = w.homeFloor;
             this.planPath(w);
             w.state = "returningHome";
@@ -3434,7 +3439,7 @@ export class StaffRouter {
             const reqIdx = this.orderRequests.findIndex((o) => o.guestId === req.guestId);
             if (reqIdx >= 0) this.orderRequests.splice(reqIdx, 1);
             w.takeOrderRequest = null;
-            w.target = w.home.clone();
+            w.target = this.pickWaiterIdleSpot(w).pos;
             w.targetFloor = w.homeFloor;
             this.planPath(w);
             w.state = "returningHome";
@@ -3501,7 +3506,7 @@ export class StaffRouter {
             }
             if (w.heldPlate) w.heldPlate.visible = false;
             w.washTrip = null;
-            w.target = w.home.clone();
+            w.target = this.pickWaiterIdleSpot(w).pos;
             w.targetFloor = w.homeFloor;
             this.planPath(w);
             w.state = "returningHome";
@@ -3522,7 +3527,7 @@ export class StaffRouter {
             break;
           }
           w.cleanSeatUid = null;
-          w.target = w.home.clone();
+          w.target = this.pickWaiterIdleSpot(w).pos;
           w.targetFloor = w.homeFloor;
           this.planPath(w);
           w.state = "returningHome";
@@ -3539,7 +3544,7 @@ export class StaffRouter {
             this.mirrorTicketDeliver(ticket);
           }
           if (w.heldPlate) w.heldPlate.visible = false;
-          w.target = w.home.clone();
+          w.target = this.pickWaiterIdleSpot(w).pos;
           w.targetFloor = w.homeFloor;
           this.planPath(w);
           w.state = "returningHome";
@@ -3729,7 +3734,7 @@ export class StaffRouter {
       w.washTrip = null;
     }
     if (w.heldPlate) w.heldPlate.visible = false;
-    w.target = w.home.clone();
+    w.target = this.pickWaiterIdleSpot(w).pos;
     w.targetFloor = w.homeFloor;
     this.planPath(w);
     w.state = "returningHome";
