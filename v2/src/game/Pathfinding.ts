@@ -295,7 +295,20 @@ export class Pathfinding {
     const { cells } = this.computeBlocked(floor);
     const blocked = (cx: number, cz: number): boolean => cells.has(`${cx},${cz}`);
     const rx = Math.round(x), rz = Math.round(z);
-    if (!blocked(rx, rz)) return { x, z };
+    if (!blocked(rx, rz)) {
+      // On a clear tile — but the body has radius, so a spot pushed toward a
+      // blocked 4-neighbour still clips into that furniture/wall (idle staff
+      // were grazing the edge of a table/station they stand beside). If the
+      // offset reaches a blocked neighbour, snap to the tile centre for full
+      // clearance; otherwise keep the jittered spot.
+      const R = 0.15;
+      const clips =
+        (x - rx > R && blocked(rx + 1, rz)) ||
+        (x - rx < -R && blocked(rx - 1, rz)) ||
+        (z - rz > R && blocked(rx, rz + 1)) ||
+        (z - rz < -R && blocked(rx, rz - 1));
+      return clips ? { x: rx, z: rz } : { x, z };
+    }
     for (let r = 1; r <= maxRadius; r++) {
       let best: { x: number; z: number } | null = null;
       let bestD = Infinity;

@@ -641,6 +641,13 @@ const TIME_AT_SINK = 3.0;
  * physically lower; using the chair height would make the guest hover
  * above the bowl. */
 const TOILET_SIT_HEIGHT = 0.42;
+/** Rigged-guest toilet sit DELTA (off the clip's chair-height sit, which
+ * CharacterAnimator adds to root.y). The bowl sits below a chair, so a rigged
+ * guest drops by this much. The absolute TOILET_SIT_HEIGHT above is for the
+ * legacy procedural sit only — applied as a delta it would LIFT a rigged
+ * guest off the bowl (the "wrong place in the bathroom" bug). Tune if the
+ * perch looks high/low. */
+const TOILET_SIT_LIFT = -0.2;
 /** Seconds a guest may spend walking to a WC fixture before the local sim
  * gives up and walks them back to the seat. Longer than any normal in-
  * restaurant walk (including a cross-floor stair climb) so it only fires for
@@ -3732,7 +3739,11 @@ export class GuestSpawner {
           if (g.originalSeatHeight === undefined) {
             g.originalSeatHeight = g.character.seatHeight;
           }
-          g.character.seatHeight = TOILET_SIT_HEIGHT;
+          // Rigged guests sit via their clip and seatHeight is a DELTA added
+          // to root.y, so the absolute TOILET_SIT_HEIGHT would lift them OFF
+          // the bowl — use the negative bowl delta. Legacy procedural guests
+          // keep the absolute lower height.
+          g.character.seatHeight = g.character.skeletal ? TOILET_SIT_LIFT : TOILET_SIT_HEIGHT;
           g.character.action = "sit";
           g.state = "atToilet";
           g.stateClock = 0;
