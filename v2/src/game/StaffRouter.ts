@@ -197,6 +197,11 @@ const WASH_MAX_CARRY = 4;
  * waiter scooping nearby plates, not teleporting them. */
 const WASH_BATCH_RADIUS = 4.0;
 
+/** Seconds a staff actor may stall (no real movement) while it SHOULD be
+ * walking toward its target before we assume it clipped onto furniture (a
+ * chair/table it can't path off) and snap it back onto a clear tile + re-plan. */
+const STAFF_STUCK_SECONDS = 2.5;
+
 interface StaffActor {
   character: AnimatedCharacter;
   /** Which pool this actor belongs to. Used by moveActor to apply the
@@ -256,6 +261,12 @@ interface StaffActor {
    * a waiter mid-delivery follows their original waypoints straight
    * through a newly-placed wall or table. */
   replanAccum: number;
+  /** Stuck-recovery: the last position where the actor made real movement
+   * progress, plus seconds stalled since. When it stalls while it should be
+   * walking (clipped onto furniture, can't path off the blocked cell it's
+   * standing in), snap it onto a clear tile + re-plan. */
+  lastStuckPos?: THREE.Vector2;
+  stuckClock?: number;
   /** Chef only: uid of the stove this chef is currently reserving while
    * cooking. Released on finish/abandon/fire so another chef can take
    * it. null between cooks. */
@@ -2167,6 +2178,36 @@ export class StaffRouter {
     for (const c of this.chefs) stampWork(c);
     for (const b of this.barmen) stampWork(b);
     for (const w of this.waiters) stampWork(w);
+    // Stuck-staff recovery. An actor that should be walking toward its target
+    // but hasn't made progress for a few seconds has clipped onto furniture
+    // (e.g. a chair) — pathfinding can't route off a blocked start cell, so it
+    // just plays the walk loop in place, facing a wall. Snap it onto the
+    // nearest clear tile + re-plan. (Actors AT their target — a chef cooking,
+    // an idle waiter — stand still legitimately and are skipped.)
+    const recoverStuck = (a: StaffActor): void => {
+      if (this.distance(a.character.groundPos, a.target) <= ARRIVAL_THRESHOLD) {
+        a.stuckClock = 0;
+        a.lastStuckPos = undefined;
+        return;
+      }
+      if (!a.lastStuckPos || this.distance(a.character.groundPos, a.lastStuckPos) > 0.1) {
+        a.lastStuckPos = (a.lastStuckPos ?? new THREE.Vector2()).copy(a.character.groundPos);
+        a.stuckClock = 0;
+        return;
+      }
+      a.stuckClock = (a.stuckClock ?? 0) + dt;
+      if (a.stuckClock < STAFF_STUCK_SECONDS) return;
+      a.stuckClock = 0;
+      a.lastStuckPos = undefined;
+      if (this.pathfind) {
+        const s = this.pathfind.snapToClear(a.character.groundPos.x, a.character.groundPos.y, a.currentFloor);
+        a.character.groundPos.set(s.x, s.z);
+      }
+      this.planPath(a);
+    };
+    for (const c of this.chefs) recoverStuck(c);
+    for (const b of this.barmen) recoverStuck(b);
+    for (const w of this.waiters) recoverStuck(w);
     this.recoverStalledTickets(dt);
     this.logHeartbeatIfDue(dt);
     this.streamActorsToCloud(dt);
