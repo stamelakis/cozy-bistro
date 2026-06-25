@@ -232,6 +232,23 @@ pub fn publish_player_save(
     if data.len() > 512 * 1024 {
         return Err("Save blob too large (>512 KB)".into());
     }
+    // REGRESSION GUARD (belt-and-suspenders to the login-transfer fix): never
+    // let a client overwrite a SUBSTANTIAL save with a fresh day-1 / tier-1
+    // shell. That's the stale-tab / fresh-incognito clobber mode that buried
+    // Dunnin's tier-5 save. A genuine reset goes through wipe_my_restaurant
+    // (which DELETES the row first), so it is NOT caught here; and normal play
+    // only ever advances day/tier, so a real session never trips this.
+    if let Some(existing) = ctx.db.player_save().identity().find(ctx.sender) {
+        let existing_has_progress = existing.day_number >= 10 || existing.luxury_tier >= 2;
+        let incoming_is_shell = day_number <= 1 && luxury_tier <= 1;
+        if existing_has_progress && incoming_is_shell {
+            log::warn!(
+                "publish_player_save: REFUSED shell write for {} — existing day {}/tier {} vs incoming day {}/tier {}",
+                ctx.sender.to_hex(), existing.day_number, existing.luxury_tier, day_number, luxury_tier
+            );
+            return Err("Refusing to overwrite an established save with a fresh shell".into());
+        }
+    }
     let row = PlayerSave {
         identity: ctx.sender,
         data,

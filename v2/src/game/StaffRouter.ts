@@ -3179,7 +3179,15 @@ export class StaffRouter {
     // pickupPos (defensive — every ready-transition sets it now).
     const pickupPos = ticket.pickupPos ?? this.pickupPos;
     const pickupFloor = ticket.pickupFloor ?? 0;
-    w.target = pickupPos.clone();
+    // Clamp the pickup target INSIDE the building before pathing. The raw
+    // pickup pos is the chef's spot at the station; for a station against an
+    // outer wall, planPath's snapToClear can land the waiter on a "clear" cell
+    // BEYOND the wall (the nav grid reads empty outdoor tiles as clear), which
+    // strands him on the floor edge over the gap — exactly the waiter seen
+    // hanging off the upper floor. snapIdleClear clamps the anchor FIRST so the
+    // snap searches inward to a real walkable cell (the same dual-clamp the
+    // idle/home targets already get).
+    w.target = this.snapIdleClear(pickupPos.clone(), pickupFloor);
     w.targetFloor = pickupFloor;
     this.planPath(w);
     w.state = "movingToWork";

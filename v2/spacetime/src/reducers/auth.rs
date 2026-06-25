@@ -227,20 +227,38 @@ fn transfer_identity_resources(
     }
 
     // --- player_save (PK = identity) ---
-    // Only transfer if the new identity doesn't already have a
-    // save (don't clobber).  Otherwise the old one becomes orphan
-    // data that the reset-save flow can clean up later.
-    let new_has_save = ctx.db.player_save().identity().find(new_id).is_some();
+    // Move the player's save onto the new identity. CRITICAL: when BOTH
+    // identities already have a save, keep the one with MORE progress.
+    //
+    // The old code skipped the move whenever new_id already had ANY save —
+    // which stranded the REAL save under old_id when the new browser had
+    // auto-created a day-1 "shell" player_save before login fired. That's
+    // exactly how Dunnin's tier-5 / day-1494 save orphaned under a retired
+    // identity while his login pointed at a fresh tier-1 shell (the restaurant
+    // + money transferred, but the save didn't). Compare (day, tier, money)
+    // and let the richer save win so a shell can never bury real progress.
+    let old_save = ctx.db.player_save().identity().find(old_id);
+    let new_save = ctx.db.player_save().identity().find(new_id);
     let mut moved_save = false;
-    if !new_has_save {
-        if let Some(old_save) = ctx.db.player_save().identity().find(old_id) {
+    if let Some(os) = old_save {
+        let take_old = match &new_save {
+            None => true,
+            Some(ns) => (os.day_number, os.luxury_tier, os.money)
+                > (ns.day_number, ns.luxury_tier, ns.money),
+        };
+        if take_old {
+            if new_save.is_some() {
+                ctx.db.player_save().identity().delete(new_id);
+            }
             ctx.db.player_save().identity().delete(old_id);
             ctx.db.player_save().insert(PlayerSave {
                 identity: new_id,
-                ..old_save
+                ..os
             });
             moved_save = true;
         }
+        // else: new_id's save is newer/richer — keep it; the old one is left
+        // for the orphan-cleanup path.
     }
 
     // --- achievement_unlock.player ---
