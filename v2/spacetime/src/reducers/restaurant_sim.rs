@@ -1764,6 +1764,15 @@ fn member_jitter(member_id: &str) -> (f32, f32) {
 fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32) {
     let rid = actor.restaurant_id;
     let (jx, jz) = member_jitter(&actor.member_id);
+    // Keep every home / idle / stand target INSIDE the building. The legacy
+    // spawn-home default (~9.35) and old client-mirrored idle spots sit out
+    // on the grass (live rows show waiters parked at x 6.9-8.1); the server
+    // then sends staff to idle there and the client clamp fights it every
+    // frame and loses (staff stuck against the wall / mid-air outside).
+    // [-4.2, 5.2] matches the client's fixed INTERIOR box. Entry paths
+    // (guests / errands from the road) never pass through this function, so
+    // clamping here can't strand anyone outside.
+    let clamp_in = |x: f32, z: f32| (x.clamp(-4.2_f32, 5.2_f32), z.clamp(-4.2_f32, 5.2_f32));
     // Waiter: a pinned rest spot wins (fanned out so the pool doesn't
     // stack on one tile). With NO rest spot a waiter returns to its OWN
     // spawn home — those are already spread out and always reachable.
@@ -1778,10 +1787,12 @@ fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32
     if actor.role == "waiter" {
         if let Some(r) = ctx.db.restaurant().id().find(rid) {
             if r.waiter_rest_set {
-                return (r.waiter_rest_x + jx, r.waiter_rest_z + jz, r.waiter_rest_floor);
+                let (cx, cz) = clamp_in(r.waiter_rest_x + jx, r.waiter_rest_z + jz);
+                return (cx, cz, r.waiter_rest_floor);
             }
         }
-        return (actor.home_x, actor.home_z, actor.home_floor);
+        let (cx, cz) = clamp_in(actor.home_x, actor.home_z);
+        return (cx, cz, actor.home_floor);
     }
     // Chef → in front of the nearest cook station; barman → behind the
     // nearest bar. Jittered so a multi-chef kitchen doesn't stack on one
@@ -1805,8 +1816,8 @@ fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32
         }
     }
     match best {
-        Some((sx, sz, _)) => (sx + jx, sz + jz, actor.home_floor),
-        None => (actor.home_x, actor.home_z, actor.home_floor),
+        Some((sx, sz, _)) => { let (cx, cz) = clamp_in(sx + jx, sz + jz); (cx, cz, actor.home_floor) },
+        None => { let (cx, cz) = clamp_in(actor.home_x, actor.home_z); (cx, cz, actor.home_floor) },
     }
 }
 
