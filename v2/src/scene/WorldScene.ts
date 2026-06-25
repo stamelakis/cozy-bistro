@@ -714,6 +714,23 @@ export class WorldScene {
       this.placedLampLightPool.push({ light, inUse: false });
     }
 
+    // Stove / appliance cast-light pool — mirrors the lamp pool but follows
+    // the ACTIVE cooking stations instead of lamps, and is NOT night-gated
+    // (a lit stove glows whenever a chef is cooking, day or night). The
+    // per-station flame meshes stay emissive-only; a light PER station would
+    // change the active-light count every time a stove starts/stops cooking
+    // and recompile the lit-material shader (the multi-minute floor-reveal
+    // stall). This FIXED pool keeps the count constant. Parented to
+    // threeScene (world space) to match the station effects; the warm colour
+    // reads as cooking heat.
+    for (let i = 0; i < this.stoveLightPoolSize; i += 1) {
+      const light = new THREE.PointLight(0xff8a4c, 0, 3.2, 1.8);
+      light.castShadow = false;
+      light.position.set(0, -100, 0);
+      this.threeScene.add(light);
+      this.stoveLightPool.push(light);
+    }
+
     // Sky dome — sphere radius 600 (well inside the camera's far
     // plane of 1000) with BackSide material so the camera sees its
     // inner surface, depthWrite false so it never occludes scene
@@ -794,6 +811,15 @@ export class WorldScene {
   // Reused each frame in updatePlacedLampLights to avoid a per-frame array alloc.
   private placedLampClosestI: number[] = [];
   private placedLampClosestD: number[] = [];
+  /** Cast-light pool for ACTIVE cooking stations — the stove/appliance
+   * analogue of placedLampLightPool. Fixed count (stoveLightPoolSize) so the
+   * lit-material shader compiles once at boot and never recompiles when a
+   * stove starts/stops cooking. Repositioned each frame by updateStoveLights. */
+  private stoveLightPool: THREE.PointLight[] = [];
+  // Reused each frame in updateStoveLights (flat x,y,z triples + closest scan).
+  private stoveActivePos: number[] = [];
+  private stoveClosestI: number[] = [];
+  private stoveClosestD: number[] = [];
   /** Footprints of every procedurally-placed scenery house in the city
    * (populated by addCityScenery). The scatter passes that follow
    * (grass blades, wildflowers, trees, rocks) consult this list via
@@ -833,6 +859,7 @@ export class WorldScene {
    * takes effect on the next reload. */
   private readonly placedLampPoolSize = getCurrentGraphicsPreset().placedLampPool;
   private readonly streetLampPoolSize = getCurrentGraphicsPreset().streetLampPool;
+  private readonly stoveLightPoolSize = getCurrentGraphicsPreset().stoveLightPool;
   /** Cached camera position from the last light-pool reposition. Skip
    * the re-sort when the camera hasn't moved enough to change which
    * lamps are closest. */
@@ -1018,6 +1045,65 @@ export class WorldScene {
       if (idx >= 0) {
         light.position.copy(this.placedLamps[idx].pos);
         light.intensity = peak;
+      } else {
+        light.intensity = 0;
+      }
+    }
+  }
+
+  /** Camera-following cast-light pool for ACTIVE cooking stations — the
+   * stove/appliance analogue of updatePlacedLampLights. Each frame it lights
+   * only the nearest stoveLightPoolSize stations that are currently cooking
+   * (visible flame); every other active station keeps its emissive glow but
+   * casts no halo. The pool never grows, so the lit-material shader's active-
+   * light count stays constant — the same trick that fixed the lamp freeze.
+   * UNLIKE lamps this is NOT night-gated: a lit stove casts whenever a chef is
+   * cooking, day or night. Called from Engine.tick. */
+  updateStoveLights(cameraPos: THREE.Vector3): void {
+    const pool = this.stoveLightPool;
+    const POOL = pool.length;
+    if (POOL === 0) return;
+    // Gather currently-active (visible) stations' world positions. Station
+    // effects live in threeScene, so group.position is already world space.
+    const pos = this.stoveActivePos;
+    pos.length = 0;
+    for (const e of this.stationEffects.values()) {
+      if (!e.group.visible) continue;
+      const p = e.group.position;
+      pos.push(p.x, p.y, p.z);
+    }
+    const count = pos.length / 3;
+    if (count === 0) {
+      for (let s = 0; s < POOL; s += 1) pool[s].intensity = 0;
+      return;
+    }
+    // Pick the POOL active stations nearest the camera (same worst-slot scan
+    // as updatePlacedLampLights). cameraPos is world space, matching pos.
+    const closestI = this.stoveClosestI;
+    const closestD = this.stoveClosestD;
+    closestI.length = POOL; closestD.length = POOL;
+    closestI.fill(-1); closestD.fill(Infinity);
+    let worstSlot = 0;
+    for (let i = 0; i < count; i += 1) {
+      const dx = pos[i * 3] - cameraPos.x;
+      const dz = pos[i * 3 + 2] - cameraPos.z;
+      const d = dx * dx + dz * dz;
+      if (d < closestD[worstSlot]) {
+        closestI[worstSlot] = i;
+        closestD[worstSlot] = d;
+        let w = 0;
+        for (let k = 1; k < POOL; k += 1) if (closestD[k] > closestD[w]) w = k;
+        worstSlot = w;
+      }
+    }
+    for (let s = 0; s < POOL; s += 1) {
+      const light = pool[s];
+      const idx = closestI[s];
+      if (idx >= 0) {
+        // Lift the light a touch above the burner so it spills onto the
+        // counter and hood rather than sitting inside the flame mesh.
+        light.position.set(pos[idx * 3], pos[idx * 3 + 1] + 0.3, pos[idx * 3 + 2]);
+        light.intensity = 1.4;
       } else {
         light.intensity = 0;
       }

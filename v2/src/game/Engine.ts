@@ -3903,6 +3903,7 @@ export class Engine {
     // ramps inside applyDayNight via the shared bulb material.
     this.scene.updateStreetLamps(this.camera.threeCamera.position);
     this.scene.updatePlacedLampLights(this.camera.threeCamera.position);
+    this.scene.updateStoveLights(this.camera.threeCamera.position);
     this.renderer.setClearColor(day.skyColor);
     if (this.scene.threeScene.fog instanceof THREE.Fog) {
       this.scene.threeScene.fog.color.setHex(day.skyColor);

@@ -36,6 +36,13 @@ export interface GraphicsPreset {
    * change takes effect on reload. */
   placedLampPool: number;
   streetLampPool: number;
+  /** Active cast-light pool for COOKING stations (stoves, toasters, etc.).
+   * The flame meshes are emissive-only; this fixed pool gives the nearest few
+   * ACTIVE stations a real warm halo so the kitchen lights up while cooking —
+   * day AND night. Constant count, so it never recompiles the lit-material
+   * shader when a stove starts/stops (the floor-reveal freeze). Active on
+   * every tier — on Low it's the only light source (no lamps). */
+  stoveLightPool: number;
 }
 
 export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
@@ -45,9 +52,9 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
   // lights is well past the count that froze weak GPUs (the GTX 1050 Ti) for
   // minutes while the lit-material shader compiled — fine on a modern GPU,
   // a long one-time load stall on a weak one. That's the player's call.
-  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, placedLampPool: 0,  streetLampPool: 0  },
-  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  placedLampPool: 24, streetLampPool: 6  },
-  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  placedLampPool: 40, streetLampPool: 16 },
+  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, placedLampPool: 0,  streetLampPool: 0,  stoveLightPool: 4 },
+  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  placedLampPool: 24, streetLampPool: 6,  stoveLightPool: 6 },
+  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  placedLampPool: 40, streetLampPool: 16, stoveLightPool: 8 },
 };
 
 const STORAGE_KEY = "cozy-bistro.graphics-quality";

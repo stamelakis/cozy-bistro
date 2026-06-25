@@ -479,6 +479,23 @@ export class SpacetimeClient {
    * BuildingPickModal so the user re-claims and re-creates one
    * instead of silently sitting on an empty world. */
   getMyRestaurantId(): bigint | null {
+    // Lazy re-resolve: a cross-device login transfers this account's
+    // restaurant.owner to the CURRENT identity (auth.rs login →
+    // transfer_identity_resources) AFTER the initial subscription snapshot.
+    // Subscribed to the whole city, that transfer arrives as an onUpdate
+    // (owner changes on an EXISTING row), NOT an onInsert — so the onInsert
+    // hook in onSubscriptionReady misses it and restaurantId stays null,
+    // stranding the player on the building picker. Re-scan the live cache for
+    // a restaurant owned by us whenever we don't have one resolved yet.
+    if (this.restaurantId == null && this.conn && this.identity) {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (identityEquals(r.owner, this.identity)) {
+          this.restaurantId = r.id;
+          console.log(`[SpacetimeDB] restaurant ${r.id} resolved via re-scan (cross-device transfer)`);
+          break;
+        }
+      }
+    }
     return this.restaurantId;
   }
 
