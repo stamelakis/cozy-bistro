@@ -371,6 +371,16 @@ export class SpacetimeClient {
    * Latched so it only fires once per session. */
   private maybeAutoLoadCloudSave(snap: { data: string } | null, force = false): void {
     if (this.cloudAutoLoadTriggered) return;
+    // PERSISTENT one-shot latch. The in-memory cloudAutoLoadTriggered flag
+    // RESETS on the page reload this method triggers — so without this, a
+    // forced load reload-LOOPS forever (load → reload → load …), which is
+    // exactly the "loads the wrong one, goes to setup, again and again" report.
+    // sessionStorage survives the reload (and the whole incognito session), so
+    // the auto-load fires at most ONCE per session; a truly fresh session (all
+    // incognito windows closed) clears it.
+    try {
+      if (sessionStorage.getItem("cozy-bistro.cloud-autoload-latch") === "1") return;
+    } catch { /* private-mode storage — fall through */ }
     // `force` lets the post-login path load a RICHER cloud save over a local
     // day-1 shell even when this wasn't a fresh start — incognito tabs share
     // storage, so a stale shell can outlive wasFreshStart.
@@ -405,6 +415,7 @@ export class SpacetimeClient {
       return;
     }
     this.cloudAutoLoadTriggered = true;
+    try { sessionStorage.setItem("cozy-bistro.cloud-autoload-latch", "1"); } catch { /* ignore */ }
     console.log(`[SpacetimeDB] cross-device login — auto-loaded cloud save into slot ${slot}, reloading`);
     // Tiny delay so the console message can flush + so the user
     // sees a brief "loading…" before the page swaps. The reload
