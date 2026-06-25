@@ -10,6 +10,17 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const AccountSave = __t.object("AccountSave", {
+  username: __t.string(),
+  data: __t.string(),
+  dayNumber: __t.u32(),
+  money: __t.i64(),
+  ratingAvg: __t.f32(),
+  luxuryTier: __t.u32(),
+  updatedAt: __t.timestamp(),
+});
+export type AccountSave = __Infer<typeof AccountSave>;
+
 export const AchievementUnlock = __t.object("AchievementUnlock", {
   id: __t.u64(),
   player: __t.identity(),

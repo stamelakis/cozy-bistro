@@ -1,7 +1,7 @@
 //! Restaurant CRUD + save snapshots.
 
 use spacetimedb::{reducer, ReducerContext, Identity, Table};
-use crate::tables::{restaurant, save_snapshot, co_owner, player_save, recipe_upgrade_in_flight, visit_event, Restaurant, SaveSnapshot, PlayerSave, VisitEvent};
+use crate::tables::{restaurant, save_snapshot, co_owner, player_save, recipe_upgrade_in_flight, visit_event, auth_record, account_save, Restaurant, SaveSnapshot, PlayerSave, VisitEvent};
 
 /// Create a new restaurant owned by the caller.
 #[reducer]
@@ -269,6 +269,62 @@ pub fn publish_player_save(
         ctx.db.player_save().identity().update(row);
     } else {
         ctx.db.player_save().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase J — write the ACCOUNT-keyed canonical save (account_save), keyed by
+/// username instead of the churning per-device identity. The caller must be the
+/// account's CURRENT logged-in device (auth_record.identity == ctx.sender), so
+/// only the active session writes; every session can READ it (public table).
+/// Same regression guard as publish_player_save so a shell can never bury it.
+#[reducer]
+pub fn save_account(
+    ctx: &ReducerContext,
+    username: String,
+    data: String,
+    day_number: u32,
+    money: i64,
+    rating_avg: f32,
+    luxury_tier: u32,
+) -> Result<(), String> {
+    let username_lc = username.trim().to_lowercase();
+    let acct = ctx
+        .db
+        .auth_record()
+        .username()
+        .find(&username_lc)
+        .ok_or_else(|| "No such account".to_string())?;
+    if acct.identity != ctx.sender {
+        return Err("Not the active session for this account".into());
+    }
+    if data.len() > 512 * 1024 {
+        return Err("Save blob too large (>512 KB)".into());
+    }
+    if let Some(existing) = ctx.db.account_save().username().find(&username_lc) {
+        let existing_substantial = existing.day_number >= 10 || existing.luxury_tier >= 2;
+        let regresses = day_number < existing.day_number || luxury_tier < existing.luxury_tier;
+        if existing_substantial && regresses {
+            log::warn!(
+                "save_account: REFUSED regressing write for {} — existing day {}/tier {} vs incoming day {}/tier {}",
+                username_lc, existing.day_number, existing.luxury_tier, day_number, luxury_tier
+            );
+            return Err("Refusing to overwrite an established account save with a lesser one".into());
+        }
+    }
+    let row = crate::tables::AccountSave {
+        username: username_lc.clone(),
+        data,
+        day_number,
+        money,
+        rating_avg,
+        luxury_tier,
+        updated_at: ctx.timestamp,
+    };
+    if ctx.db.account_save().username().find(&username_lc).is_some() {
+        ctx.db.account_save().username().update(row);
+    } else {
+        ctx.db.account_save().insert(row);
     }
     Ok(())
 }

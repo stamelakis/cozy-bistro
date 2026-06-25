@@ -613,6 +613,27 @@ pub struct PlayerSave {
     pub free_seats: u32,
 }
 
+/// Phase J — ACCOUNT-keyed canonical save. Keyed by username (stable) instead
+/// of the per-device Identity, which churns on every cross-device login and is
+/// what made the save get stranded / overwritten. THIS is the save a session
+/// loads: logging in on any device/incognito reads account_save[username] and
+/// gets the same restaurant — no ownership transfer, no churn, no shell burying
+/// it. The legacy identity-keyed `player_save` stays as a fallback + visit mode.
+#[table(name = account_save, public)]
+pub struct AccountSave {
+    /// Owning account — lowercased username, matching auth_record's key.
+    #[primary_key]
+    pub username: String,
+    /// JSON-serialized SaveGameState.
+    pub data: String,
+    /// Denormalized stats (same as player_save) for list/visit UIs.
+    pub day_number: u32,
+    pub money: i64,
+    pub rating_avg: f32,
+    pub luxury_tier: u32,
+    pub updated_at: Timestamp,
+}
+
 /// Achievement unlocks per player. One row per (player, achievement_id)
 /// pair. Used both for "did this player unlock X" lookups and for global
 /// "what % of players have X" stats via the table size.

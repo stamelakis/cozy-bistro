@@ -630,6 +630,28 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase J — write the ACCOUNT-keyed canonical save (account_save), keyed by
+   * username so ANY session loads it (no per-identity churn). Best-effort: the
+   * server accepts it only from the account's CURRENT logged-in device, so a
+   * stale session's call is harmlessly rejected. Mirrors publishPlayerSave. */
+  saveAccount(blob: string, dayNumber: number, money: number, ratingAvg: number, luxuryTier: number): void {
+    if (!this.conn) return;
+    const u = this.myUsername();
+    if (!u) return;
+    try {
+      this.conn.reducers.saveAccount({
+        username: u,
+        data: blob,
+        dayNumber,
+        money: BigInt(Math.trunc(money)),
+        ratingAvg,
+        luxuryTier,
+      });
+    } catch (e) {
+      console.warn("[Cloud] saveAccount failed:", e);
+    }
+  }
+
   /** P5 — every shared pedestrian currently walking on the server.
    * Each row is a trajectory: client lerps current position from
    * (now - spawnAtMs) / durationMs. SharedPedestrians polls this
@@ -3309,6 +3331,47 @@ export class SpacetimeClient {
     return null;
   }
 
+  /** The username the player logged in as (persisted, lowercased to match the
+   * server's account_save key). Null if never logged in on this device. */
+  private myUsername(): string | null {
+    try {
+      const u = localStorage.getItem("cozy-bistro.username");
+      return u ? u.trim().toLowerCase() : null;
+    } catch { return null; }
+  }
+
+  /** The ACCOUNT-keyed canonical save (account_save) for a username — stable
+   * across devices/sessions, unlike the churning per-identity player_save. */
+  getAccountSave(username: string): { data: string; dayNumber: number; money: number; ratingAvg: number; luxuryTier: number } | null {
+    if (!this.conn) return null;
+    const lc = username.trim().toLowerCase();
+    try {
+      for (const row of this.conn.db.account_save.iter()) {
+        if (row.username !== lc) continue;
+        return {
+          data: row.data,
+          dayNumber: row.dayNumber,
+          money: Number(row.money),
+          ratingAvg: row.ratingAvg,
+          luxuryTier: row.luxuryTier,
+        };
+      }
+    } catch { /* table not yet wired */ }
+    return null;
+  }
+
+  /** The save a session should load: the account-keyed save (stable, by
+   * username) if we have one, else the legacy per-identity save. This is what
+   * makes any device / incognito load the SAME restaurant. */
+  private getCanonicalSave(): { data: string; dayNumber: number; money: number; ratingAvg: number; luxuryTier: number } | null {
+    const u = this.myUsername();
+    if (u) {
+      const acct = this.getAccountSave(u);
+      if (acct && acct.data) return acct;
+    }
+    return this.identity ? this.getPlayerSave(this.identity) : null;
+  }
+
   /** Every known account on this server (auth_record snapshot).
    * SocialModal's username search drives off this. Includes self
    * unless the caller filters. */
@@ -3400,6 +3463,10 @@ export class SpacetimeClient {
     this.setRememberMe(rememberMe);
     await this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
     await this.waitForAuthRecord();
+    // Persist the account name so the ACCOUNT-keyed save (account_save) resolves
+    // on this device — including on later token-reconnects that never call
+    // login() again.
+    try { localStorage.setItem("cozy-bistro.username", username); } catch { /* ignore */ }
     // Cross-device: the login reducer just transferred this account's
     // restaurant + player_save to our identity (auth.rs
     // transfer_identity_resources). If we booted FRESH (incognito / new
@@ -3421,7 +3488,7 @@ export class SpacetimeClient {
     // few subscription ticks after the auth_record update — poll ~12s.
     for (let i = 0; i < 48; i += 1) {
       void this.getMyRestaurantId(); // lazy re-scan also resolves restaurantId
-      const mySave = this.getPlayerSave(this.identity);
+      const mySave = this.getCanonicalSave();
       if (mySave && mySave.data) {
         const localDay = this.game.day.getDayNumber();
         const localTier = this.game.getLuxuryTier();
@@ -3933,7 +4000,7 @@ export class SpacetimeClient {
       // fresh device restored a tier-1 game: locked upper floors, no
       // upgrades, no staff roster, no decor). player_save is the table
       // cloudSaveNow keeps current.
-      const mySave = this.identity ? this.getPlayerSave(this.identity) : null;
+      const mySave = this.getCanonicalSave();
       if (mySave && mySave.data) {
         const localDay = this.game.day.getDayNumber();
         const localTier = this.game.getLuxuryTier();
@@ -4354,7 +4421,7 @@ export class SpacetimeClient {
     // exactly the "InPrivate shows tier 1" report. Block the write, and pull the
     // real save instead (reloads into it when the tab isn't already closing).
     if (this.wasFreshStart && !this.cloudAutoLoadTriggered && this.identity) {
-      const existing = this.getPlayerSave(this.identity);
+      const existing = this.getCanonicalSave();
       if (existing && existing.data) {
         const curDay = this.game.day.getDayNumber();
         const curTier = this.game.getLuxuryTier();
@@ -4395,6 +4462,16 @@ export class SpacetimeClient {
         this.game.getLuxuryTier(),
         spawnerStats?.open ?? true,
         spawnerStats?.freeSeats ?? 0,
+      );
+      // Phase J — also write the ACCOUNT-keyed canonical save (stable across
+      // devices/sessions). Best-effort; the server accepts it only from the
+      // account's active session.
+      this.saveAccount(
+        json,
+        this.game.day.getDayNumber(),
+        this.game.economy.getMoney(),
+        this.game.reputation.getAverageRating(),
+        this.game.getLuxuryTier(),
       );
     } catch (e) {
       console.warn("[SpacetimeDB] cloud save failed", e);

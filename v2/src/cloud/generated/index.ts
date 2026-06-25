@@ -94,6 +94,7 @@ import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
+import SaveAccountReducer from "./save_account_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
 import SellDishwareReducer from "./sell_dishware_reducer";
 import SellFurnitureReducer from "./sell_furniture_reducer";
@@ -148,6 +149,7 @@ import WipeMyRestaurantReducer from "./wipe_my_restaurant_reducer";
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AccountSaveRow from "./account_save_table";
 import AchievementUnlockRow from "./achievement_unlock_table";
 import ActiveGuestRow from "./active_guest_table";
 import ActiveMenuRow from "./active_menu_table";
@@ -192,6 +194,17 @@ import WeatherStateRow from "./weather_state_table";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  account_save: __table({
+    name: 'account_save',
+    indexes: [
+      { accessor: 'username', name: 'account_save_username_idx_btree', algorithm: 'btree', columns: [
+        'username',
+      ] },
+    ],
+    constraints: [
+      { name: 'account_save_username_key', constraint: 'unique', columns: ['username'] },
+    ],
+  }, AccountSaveRow),
   achievement_unlock: __table({
     name: 'achievement_unlock',
     indexes: [
@@ -784,6 +797,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),
   __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
+  __reducerSchema("save_account", SaveAccountReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
   __reducerSchema("sell_dishware", SellDishwareReducer),
   __reducerSchema("sell_furniture", SellFurnitureReducer),
