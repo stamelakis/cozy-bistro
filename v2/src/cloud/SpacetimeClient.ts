@@ -387,7 +387,18 @@ export class SpacetimeClient {
     try {
       localStorage.setItem(key, snap.data);
     } catch (e) {
-      console.warn("[SpacetimeDB] couldn't write cloud save to localStorage (quota?)", e);
+      // localStorage genuinely unavailable (not just incognito, which has
+      // session storage). Apply the blob to the RUNNING game in-place so
+      // progression still restores — we can't reload to pick it up without
+      // localStorage to read it back. Best-effort: the data model updates
+      // immediately; the floor unlock follows the next FloorSelector refresh.
+      console.warn("[SpacetimeDB] no localStorage; applying cloud save in-place", e);
+      try {
+        this.game.hydrate(JSON.parse(snap.data) as Parameters<typeof this.game.hydrate>[0]);
+        this.cloudAutoLoadTriggered = true;
+      } catch (e2) {
+        console.warn("[SpacetimeDB] in-place cloud hydrate failed", e2);
+      }
       return;
     }
     this.cloudAutoLoadTriggered = true;
@@ -3779,18 +3790,22 @@ export class SpacetimeClient {
       void conn;
     } else {
       this.restaurantId = myRestaurants[0].id;
-      const snap = ctx.db.save_snapshot.restaurant_id.find(this.restaurantId);
-      if (snap) {
-        console.log(`[SpacetimeDB] found cloud save for restaurant ${this.restaurantId} on day ${snap.dayNumber} ($${snap.money})`);
-        // If the player walked in on a fresh device with no local save,
-        // pull the cloud snapshot now and reload. On a device that
-        // ALREADY had a local save we leave the cloud copy alone — the
-        // local game has already booted and the player can still pull
-        // the cloud version manually via SlotsModal's "Load from cloud"
-        // button if they want to overwrite.
-        this.maybeAutoLoadCloudSave(snap);
+      // Read the CURRENT, identity-keyed player_save blob — NOT the legacy
+      // restaurant-keyed save_snapshot, whose blob goes stale (live: it held
+      // tier 1 / day 1 while the real player_save was tier 5 / day 1486, so a
+      // fresh device restored a tier-1 game: locked upper floors, no
+      // upgrades, no staff roster, no decor). player_save is the table
+      // cloudSaveNow keeps current.
+      const mySave = this.identity ? this.getPlayerSave(this.identity) : null;
+      if (mySave && mySave.data) {
+        console.log(`[SpacetimeDB] found cloud player_save — day ${mySave.dayNumber}, tier ${mySave.luxuryTier} ($${mySave.money})`);
+        // If the player walked in on a fresh device with no local save, pull
+        // the cloud save now and reload. On a device that ALREADY had a local
+        // save we leave it alone (the local game already booted; the player
+        // can still pull the cloud copy via SlotsModal's "Load from cloud").
+        this.maybeAutoLoadCloudSave({ data: mySave.data });
       } else {
-        console.log(`[SpacetimeDB] restaurant ${this.restaurantId} exists but no save yet`);
+        console.log(`[SpacetimeDB] restaurant ${this.restaurantId} exists but no player_save yet`);
       }
       // H.22 — drain any pending end-of-visit rollup the server
       // accumulated while this tab was backgrounded / disconnected.
