@@ -6,6 +6,7 @@ import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
+import { closeMobileSheets } from "./MobileUI";
 import { attachTooltip } from "./tooltip";
 
 /** A single user action that can be undone. The BuildMenu records one of
@@ -215,6 +216,7 @@ export class BuildMenu {
   private buildPanel(parent: HTMLElement): HTMLDivElement {
     const root = document.createElement("div");
     this.rootEl = root;
+    root.classList.add("cb-buildmenu");
     Object.assign(root.style, {
       position: "fixed",
       top: "12px",
@@ -671,36 +673,7 @@ export class BuildMenu {
         if (this.moveMode) this.toggleMoveMode();
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
-        // Wall / wall-shelf items have their rotation FORCED by the wall
-        // they snap to — R must not change them. The old code patched
-        // currentPlan.rotY for every placement type, and a click before
-        // the next pointer-move snapped the rotation back; clicks
-        // immediately after R placed the item perpendicular to the wall
-        // (bbox piercing through the wall, mesh sticking into the room).
-        const placement = this.placingDef?.placement ?? "tile";
-        const wallLocked = placement === "wall" || placement === "wall-shelf";
-        if (wallLocked) {
-          // Swallow R for wall items — preview already shows the forced
-          // orientation and clicks should honour that, not the player's
-          // accumulated rotationY.
-          return;
-        }
-        this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
-        // Patch currentPlan too — otherwise a click immediately after R
-        // (no mouse move in between) consumes the plan that
-        // onPointerMove captured at the OLD rotation, and the item lands
-        // facing the original direction even though the preview looks
-        // rotated. Adding π/2 mirrors the same delta that just went
-        // into this.rotationY, so the formula
-        //   tile items:    plan.rotY = this.rotationY
-        //   surface items: plan.rotY = snap.rotY + this.rotationY
-        // both stay in sync.
-        if (this.currentPlan) {
-          this.currentPlan.rotY = (this.currentPlan.rotY + Math.PI / 2) % (Math.PI * 2);
-          this.preview.rotation.y = this.currentPlan.rotY;
-        } else {
-          this.preview.rotation.y = this.rotationY;
-        }
+        this.rotatePlacement();
       }
     });
   }
@@ -712,6 +685,9 @@ export class BuildMenu {
     }
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     if (this.moveMode) this.toggleMoveMode();
+    // On mobile the build panel is a slide-in sheet covering the view —
+    // close it so the player can see the floor they're placing on.
+    closeMobileSheets();
     this.cancelPlacing();
     const gen = ++this.placeGen;
     this.placingDef = def;
@@ -738,6 +714,9 @@ export class BuildMenu {
     }
     // Surface seat-slot markers as a placement aid.
     this.seatMarkers?.setEnabled(true);
+    // Touch users get a floating rotate button (no R key). Wall-mounted
+    // items can't be rotated, so only show it for free-standing pieces.
+    this.showPlaceRotate(def.placement !== "wall" && def.placement !== "wall-shelf");
   }
 
   /** Synchronously clone an already-placed model into a translucent ghost.
@@ -822,9 +801,49 @@ export class BuildMenu {
     }
     this.placingDef = null;
     this.currentPlan = null;
+    this.showPlaceRotate(false);
     // If nothing else needs the markers, hide them.
     if (!this.moveMode && this.holdingUid == null) {
       this.seatMarkers?.setEnabled(false);
+    }
+  }
+
+  /** A floating on-screen rotate button for touch — the R key has no
+   * equivalent on a phone. Lazily created; the stylesheet keeps it
+   * hidden on desktop and whenever not placing. */
+  private placeRotateBtn: HTMLButtonElement | null = null;
+
+  private showPlaceRotate(show: boolean): void {
+    if (show && !this.placeRotateBtn) {
+      const b = document.createElement("button");
+      b.className = "cb-place-rotate";
+      b.textContent = "⟳";
+      b.title = "Rotate";
+      b.addEventListener("click", () => this.rotatePlacement());
+      document.body.appendChild(b);
+      this.placeRotateBtn = b;
+    }
+    this.placeRotateBtn?.classList.toggle("cb-show", show);
+  }
+
+  /** Rotate the active placement ghost by 90°. Shared by the R key and
+   * the mobile rotate button. Wall / wall-shelf items have their
+   * rotation forced by the wall they snap to, so it's a no-op for them:
+   * the preview already shows the forced orientation, and a click right
+   * after must honour that — not an accumulated rotationY. */
+  private rotatePlacement(): void {
+    if (!this.preview) return;
+    const placement = this.placingDef?.placement ?? "tile";
+    if (placement === "wall" || placement === "wall-shelf") return;
+    this.rotationY = (this.rotationY + Math.PI / 2) % (Math.PI * 2);
+    // Patch currentPlan too — otherwise a click immediately after a
+    // rotate (no pointer-move in between) consumes the plan captured at
+    // the OLD rotation and the item lands facing the original way.
+    if (this.currentPlan) {
+      this.currentPlan.rotY = (this.currentPlan.rotY + Math.PI / 2) % (Math.PI * 2);
+      this.preview.rotation.y = this.currentPlan.rotY;
+    } else {
+      this.preview.rotation.y = this.rotationY;
     }
   }
 

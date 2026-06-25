@@ -42,6 +42,7 @@ export class CameraControls {
     this.getHomePos = getHomePos;
 
     const root = document.createElement("div");
+    root.classList.add("cb-cameracontrols");
     Object.assign(root.style, {
       position: "fixed",
       top: "12px",

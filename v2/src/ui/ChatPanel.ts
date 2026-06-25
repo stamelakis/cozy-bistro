@@ -72,6 +72,7 @@ export class ChatPanel {
     // MenuPanel on common screen sizes. width clamps so a tiny
     // viewport still hides the panel rather than overlapping things.
     this.root = document.createElement("div");
+    this.root.classList.add("cb-chat");
     // Bottom-left strip — right of the 256 px sidebar (12 px gap).
     // The centered MenuPanel can grow leftward to meet this strip on
     // typical viewports (at 100vw=1280, menu_left = 280 = chat_left

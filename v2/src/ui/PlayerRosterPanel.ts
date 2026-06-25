@@ -29,6 +29,7 @@ export class PlayerRosterPanel {
     this.cloud = cloud;
 
     this.root = document.createElement("div");
+    this.root.classList.add("cb-roster");
     Object.assign(this.root.style, {
       position: "fixed",
       // Sits directly below CameraControls (which is top:12, left:280

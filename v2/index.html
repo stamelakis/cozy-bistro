@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Cozy Bistro 3D</title>
     <!-- Preload the login background so it starts downloading in
          parallel with the JS bundle instead of waiting for the
@@ -17,10 +20,24 @@
         font-family: system-ui, -apple-system, sans-serif;
         color: #fff5dc;
         overflow: hidden;
+        /* Stop the browser from hijacking touch drags as pull-to-refresh
+           / overscroll bounce while the player pans or pinches the 3D
+           view. */
+        overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
       }
       #app {
         width: 100vw;
         height: 100vh;
+        /* dvh tracks the *visible* viewport as mobile browser chrome
+           (URL bar) shows/hides, so the canvas never leaves a dead strip. */
+        height: 100dvh;
+      }
+      /* The WebGL canvas must own all touch gestures (pan / pinch) — the
+         browser default would scroll/zoom the page instead. UI panels keep
+         their normal touch behaviour since this targets the canvas only. */
+      #app canvas {
+        touch-action: none;
       }
       #loading {
         position: fixed;

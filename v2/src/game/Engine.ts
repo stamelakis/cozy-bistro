@@ -21,6 +21,7 @@ import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
 import { FloorSelector } from "../ui/FloorSelector";
 import { CameraControls } from "../ui/CameraControls";
+import { setMobileInGame } from "../ui/MobileUI";
 import { VisitMode } from "../ui/VisitMode";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
@@ -2433,6 +2434,9 @@ export class Engine {
         }
       }
       this.game.setAuthGated(false);
+      // Reveal the mobile bottom bar / camera chrome now that login +
+      // plot-pick are behind us (no-op on desktop).
+      setMobileInGame(true);
       // Global weather — route the local WeatherSystem to the
       // server's weather_state table. Other clients see the same
       // rain / snow / festival at the same wallclock time. The

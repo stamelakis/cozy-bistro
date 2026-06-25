@@ -1,4 +1,5 @@
 import { Engine } from "./game/Engine";
+import { initMobileUI } from "./ui/MobileUI";
 
 const app = document.getElementById("app");
 if (!app) {
@@ -7,6 +8,10 @@ if (!app) {
 
 const engine = new Engine(app);
 engine.start();
+
+// Bolt on the mobile / touch layer. No-op on a wide mouse-driven desktop —
+// it only activates when the pointer is coarse or the viewport is narrow.
+initMobileUI();
 
 // Surface engine in dev for in-browser debugging.
 if (import.meta.env.DEV) {

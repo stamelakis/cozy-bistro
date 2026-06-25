@@ -112,6 +112,7 @@ export class MenuPanel {
       // to sit above the bubble layer but below modals (1000+).
       zIndex: "100",
     } as Partial<CSSStyleDeclaration>);
+    this.root.classList.add("cb-menupanel");
     parent.appendChild(this.root);
 
     const title = document.createElement("div");

@@ -22,6 +22,7 @@ export class Sidebar {
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
+    this.root.classList.add("cb-sidebar");
     Object.assign(this.root.style, {
       position: "fixed",
       top: "12px",

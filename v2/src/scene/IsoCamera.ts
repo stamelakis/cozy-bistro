@@ -31,6 +31,17 @@ export class IsoCamera {
   private dragLastX = 0;
   private dragLastY = 0;
 
+  // ── Multi-touch: pinch-zoom + two-finger pan ─────────────────────
+  // Every active pointer tracked by id. While ≥2 are down we suppress
+  // the single-finger pan/rotate and instead zoom by the change in
+  // finger spacing and pan by the midpoint drift — the touch equivalent
+  // of wheel-zoom + left-drag (a phone has no scroll wheel).
+  private readonly activePointers = new Map<number, { x: number; y: number }>();
+  private pinching = false;
+  private pinchDist = 0;
+  private pinchMidX = 0;
+  private pinchMidY = 0;
+
   // Floor-focus tween: when the player presses a floor button on the
   // FloorSelector the camera glides its look-at target up/down to the
   // matching storey instead of snapping. We blend `target.y` from the
@@ -328,6 +339,20 @@ export class IsoCamera {
   private dragMoved = 0;  // total px moved during this drag
 
   private onPointerDown = (e: PointerEvent): void => {
+    this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (this.activePointers.size >= 2) {
+      // A second finger landed — switch from single-finger pan to a
+      // pinch. Drop the in-progress drag so the view doesn't lurch as
+      // the gesture takes over.
+      this.dragging = false;
+      this.pinching = true;
+      this.pinchDist = this.twoPointerDist();
+      const mid = this.twoPointerMid();
+      this.pinchMidX = mid.x;
+      this.pinchMidY = mid.y;
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      return;
+    }
     // Left = pan, Right = rotate, Middle = rotate.
     if (e.button === 0 || e.button === 1 || e.button === 2) {
       this.dragging = true;
@@ -340,6 +365,32 @@ export class IsoCamera {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
+    // Keep every tracked finger's position current so the pinch math
+    // always reads live coordinates.
+    if (this.activePointers.has(e.pointerId)) {
+      this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    // Two fingers down → pinch-zoom + two-finger pan; skip the single-
+    // pointer path entirely.
+    if (this.pinching && this.activePointers.size >= 2) {
+      const dist = this.twoPointerDist();
+      if (this.pinchDist > 0 && dist > 0) {
+        // Fingers spreading apart (dist grows) zooms IN — zoom is the
+        // half-view height, so a >1 spread ratio must shrink it.
+        const factor = this.pinchDist / dist;
+        this.zoom = THREE.MathUtils.clamp(this.zoom * factor, IsoCamera.MIN_ZOOM, IsoCamera.MAX_ZOOM);
+        this.resize(window.innerWidth, window.innerHeight);
+      }
+      this.pinchDist = dist;
+      const mid = this.twoPointerMid();
+      this.panGround(mid.x - this.pinchMidX, mid.y - this.pinchMidY);
+      this.pinchMidX = mid.x;
+      this.pinchMidY = mid.y;
+      this.updatePose();
+      return;
+    }
+
     if (!this.dragging) return;
     const dx = e.clientX - this.dragLastX;
     const dy = e.clientY - this.dragLastY;
@@ -357,23 +408,8 @@ export class IsoCamera {
       // angles + wide zoom.
       this.elevation = THREE.MathUtils.clamp(this.elevation - dy * 0.005, Math.PI / 8, Math.PI / 2 - 0.05);
     } else {
-      // Plain left-drag = pan. The camera's local +Y axis has a non-
-      // zero world-Y component at iso angle, so naively panning along
-      // it drifts target.y every vertical drag — over a couple of pans
-      // the camera ends up looking up at sky or down at void. Pan in
-      // the GROUND plane (XZ) only: project camera-right and camera-up
-      // onto Y=0, renormalise, and use those as the screen-right /
-      // screen-up directions for the pan delta. target.y stays put,
-      // so the floor selection survives any amount of dragging.
-      const panScale = this.zoom * 0.0025;
-      const right = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 0);
-      right.y = 0;
-      if (right.lengthSq() > 1e-6) right.normalize();
-      const screenUp = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 1);
-      screenUp.y = 0;
-      if (screenUp.lengthSq() > 1e-6) screenUp.normalize();
-      this.target.addScaledVector(right, -dx * panScale);
-      this.target.addScaledVector(screenUp, dy * panScale);
+      // Plain left-drag = pan in the ground (XZ) plane.
+      this.panGround(dx, dy);
     }
     this.updatePose();
   };
@@ -384,9 +420,57 @@ export class IsoCamera {
     return this.dragMoved > 6;
   }
 
-  private onPointerUp = (_e: PointerEvent): void => {
-    this.dragging = false;
+  private onPointerUp = (e: PointerEvent): void => {
+    this.activePointers.delete(e.pointerId);
+    if (this.activePointers.size < 2) {
+      this.pinching = false;
+      this.pinchDist = 0;
+      if (this.activePointers.size === 1) {
+        // One finger still down after a pinch → resume single-finger
+        // pan from its current spot so the view doesn't jump.
+        const [p] = Array.from(this.activePointers.values());
+        this.dragLastX = p.x;
+        this.dragLastY = p.y;
+        this.dragging = true;
+        this.dragButton = 0;
+        this.dragMoved = 0;
+      } else {
+        this.dragging = false;
+      }
+    }
   };
+
+  /** Pan the look-at target in the ground (XZ) plane by a screen-space
+   * delta. The camera's local +Y axis has a non-zero world-Y component
+   * at iso angle, so naively panning along it drifts target.y. We
+   * project camera-right and camera-up onto Y=0 and move along those —
+   * target.y stays put, so the floor selection survives any pan. Shared
+   * by single-finger drag and two-finger touch pan. */
+  private panGround(dx: number, dy: number): void {
+    const panScale = this.zoom * 0.0025;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 0);
+    right.y = 0;
+    if (right.lengthSq() > 1e-6) right.normalize();
+    const screenUp = new THREE.Vector3().setFromMatrixColumn(this.threeCamera.matrix, 1);
+    screenUp.y = 0;
+    if (screenUp.lengthSq() > 1e-6) screenUp.normalize();
+    this.target.addScaledVector(right, -dx * panScale);
+    this.target.addScaledVector(screenUp, dy * panScale);
+  }
+
+  /** Pixel distance between the two active touch points (0 if <2). */
+  private twoPointerDist(): number {
+    const pts = Array.from(this.activePointers.values());
+    if (pts.length < 2) return 0;
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+
+  /** Midpoint of the two active touch points (origin if <2). */
+  private twoPointerMid(): { x: number; y: number } {
+    const pts = Array.from(this.activePointers.values());
+    if (pts.length < 2) return { x: 0, y: 0 };
+    return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+  }
 
   /** Minimum elevation that keeps the bottom-of-screen ray pointing
    * at or above the ground plane (Y=0) for the current zoom. Derived

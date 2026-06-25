@@ -39,6 +39,7 @@ export class FloorSelector {
     this.camera = camera;
 
     this.root = document.createElement("div");
+    this.root.classList.add("cb-floorsel");
     Object.assign(this.root.style, {
       position: "fixed",
       top: "12px",
