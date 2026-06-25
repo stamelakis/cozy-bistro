@@ -917,11 +917,15 @@ export class StaffRouter {
     // Engine retries at 1 Hz until the context exists.
     if (!this.cloud.hasRestaurantContext()) return;
     const rows = this.cloud.listStaffActors();
-    this.cloudHydratedStaff = true;
     if (rows.length === 0) {
-      console.log("[H.48] hydrateFromCloud: no cloud staff_actor rows to apply");
+      // Context is up (conn + restaurantId) but the staff_actor rows
+      // haven't landed in the subscription cache yet. DON'T latch on this
+      // empty answer — otherwise the staff stay frozen at their default
+      // spawn spots forever (hydrate is once-latched and never re-runs).
+      // Retry on the next 1 Hz tick.
       return;
     }
+    this.cloudHydratedStaff = true;
     let updated = 0;
     let missing = 0;
     for (const row of rows) {
@@ -975,6 +979,13 @@ export class StaffRouter {
                                 || actor.state === "returningHome") ? "idle" : "walk";
       updated += 1;
     }
+    // The server's straight-line position model can park a body INSIDE a
+    // furniture footprint (it ignores walls + items). Snapping straight to
+    // row.x/z therefore drops staff inside counters/tables on reload — push
+    // every body out to a walkable cell NOW, instead of waiting for the
+    // per-frame clamp to crawl them out after the veil has already lifted
+    // (which is what left waiters standing in objects on load).
+    this.clampAllStaffToInterior();
     console.log(
       `[H.48] hydrateFromCloud: ${updated} staff actors updated from cloud` +
       (missing > 0 ? ` (${missing} cloud rows skipped — local actor not found)` : ""),

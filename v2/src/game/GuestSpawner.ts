@@ -1972,7 +1972,17 @@ export class GuestSpawner {
     // retries at 1 Hz until the context exists.
     if (!this.cloud.hasRestaurantContext()) return;
     const cloudRows = this.cloud.listActiveGuests();
-    // Even if cloud is empty, mark hydrated so we don't keep retrying.
+    // Don't latch on an EMPTY answer during the boot race. Guest rows can
+    // lag the restaurant id into the subscription cache, and latching
+    // there leaves the hydrate permanently dead — so guests trickle in
+    // one-by-one walking from the door on reload instead of appearing
+    // already at their seats. Staff rows co-arrive in the same snapshot
+    // and every restaurant has staff, so their presence is a reliable
+    // "snapshot applied" proxy: only treat an empty guest list as real
+    // (and latch) once the snapshot has demonstrably landed.
+    const snapshotApplied = this.cloud.listStaffActors().length > 0;
+    if (cloudRows.length === 0 && !snapshotApplied) return; // retry next tick
+    // Even if cloud is genuinely empty, mark hydrated so we don't retry.
     this.cloudHydrated = true;
     if (cloudRows.length === 0 && this.guests.length === 0) {
       return;

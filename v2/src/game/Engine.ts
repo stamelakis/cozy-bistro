@@ -2348,24 +2348,29 @@ export class Engine {
       // walks the whole room out, see furnitureCloudReady), plus the staff
       // router + guest spawner constructed with a live cloud context.
       // Polled with wall-clock-bounded backoff (~5s) so it never hangs.
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + 6000;
       while (Date.now() < deadline) {
+        // Wait for the staff_actor rows to ACTUALLY be in the subscription
+        // cache, not merely for a restaurant id — lifting the veil before
+        // they land shows the default spawn positions, and hydrate would
+        // latch on the empty answer and never re-apply.
         if (this.furnitureCloudReady && this.router && this.spawner
-            && this.cloud.hasRestaurantContext()) break;
+            && this.cloud.hasRestaurantContext()
+            && this.cloud.listStaffActors().length > 0) break;
         await new Promise<void>((r) => { window.setTimeout(r, 80); });
       }
-      // Apply it now — idempotent (these hydrates are once-latched, so the
-      // retry loop's later calls no-op). Snaps staff to their server
-      // positions and seated guests onto their seats instead of the door.
-      // The guest snap stays gated on furnitureCloudReady to avoid the
-      // "no seats yet → everyone walks out" race.
+      // Apply it now — idempotent (once-latched, so the retry loop's later
+      // calls no-op). Snaps staff to their server positions AND pushes them
+      // out of any furniture they were parked in; seats guests onto their
+      // seats. The guest snap stays gated on furnitureCloudReady to avoid
+      // the "no seats yet → everyone walks out" race.
       this.router?.hydrateFromCloud();
       this.errand?.hydrateFromCloud();
       if (this.furnitureCloudReady) await this.spawner?.hydrateFromCloud();
-      // Give the render loop one tick to paint the snapped transforms
-      // before we lift the veil (setTimeout, not rAF, so a backgrounded
-      // tab can't strand the veil).
-      await new Promise<void>((r) => { window.setTimeout(r, 50); });
+      // Let the game loop paint a few frames so the snapped + pushed-out
+      // transforms are actually on screen before we uncover the scene.
+      // setTimeout (not rAF) so a backgrounded tab can't strand the veil.
+      await new Promise<void>((r) => { window.setTimeout(r, 180); });
     } catch (e) {
       console.warn("[Engine] seamless-reveal hydrate failed:", e);
     } finally {
