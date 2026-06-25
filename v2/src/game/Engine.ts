@@ -2326,6 +2326,94 @@ export class Engine {
     }
   }
 
+  /** Has the one-time seamless-reload veil already run? Guards against a
+   * second enterGame (e.g. re-entry after the BuildingPickModal) stacking
+   * another veil. */
+  private seamlessRevealStarted = false;
+
+  /** Seamless reload — overlay a loading veil and keep it up until the
+   * server snapshot has been applied to staff + guests, then lift it.
+   * Without this the player watches everyone start at default positions
+   * and walk into place while the once-per-second hydrate (the boot retry
+   * loop) catches up. ALWAYS lifts (finally) and is bounded by a timeout,
+   * so a slow / missing snapshot degrades to the old catch-up behaviour
+   * rather than a stuck screen. */
+  private async revealWhenHydrated(): Promise<void> {
+    if (this.seamlessRevealStarted) return;
+    this.seamlessRevealStarted = true;
+    const veil = this.showLoadingVeil();
+    try {
+      // Wait until the snapshot can actually be applied: furniture
+      // restored (so seats exist — importing seated guests before that
+      // walks the whole room out, see furnitureCloudReady), plus the staff
+      // router + guest spawner constructed with a live cloud context.
+      // Polled with wall-clock-bounded backoff (~5s) so it never hangs.
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (this.furnitureCloudReady && this.router && this.spawner
+            && this.cloud.hasRestaurantContext()) break;
+        await new Promise<void>((r) => { window.setTimeout(r, 80); });
+      }
+      // Apply it now — idempotent (these hydrates are once-latched, so the
+      // retry loop's later calls no-op). Snaps staff to their server
+      // positions and seated guests onto their seats instead of the door.
+      // The guest snap stays gated on furnitureCloudReady to avoid the
+      // "no seats yet → everyone walks out" race.
+      this.router?.hydrateFromCloud();
+      this.errand?.hydrateFromCloud();
+      if (this.furnitureCloudReady) await this.spawner?.hydrateFromCloud();
+      // Give the render loop one tick to paint the snapped transforms
+      // before we lift the veil (setTimeout, not rAF, so a backgrounded
+      // tab can't strand the veil).
+      await new Promise<void>((r) => { window.setTimeout(r, 50); });
+    } catch (e) {
+      console.warn("[Engine] seamless-reveal hydrate failed:", e);
+    } finally {
+      veil.remove();
+    }
+  }
+
+  /** Full-screen "Setting up your restaurant…" overlay used by
+   * {@link revealWhenHydrated}. Sits above all game chrome (modals are
+   * <=1500) and fades itself out on remove(). */
+  private showLoadingVeil(): { remove: () => void } {
+    if (!document.getElementById("cb-veil-style")) {
+      const s = document.createElement("style");
+      s.id = "cb-veil-style";
+      s.textContent = "@keyframes cb-veil-spin{to{transform:rotate(360deg)}}";
+      document.head.appendChild(s);
+    }
+    const el = document.createElement("div");
+    Object.assign(el.style, {
+      position: "fixed", inset: "0", zIndex: "99999",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: "14px",
+      background: "#1b1410", color: "#fff5dc",
+      font: "16px/1.4 system-ui, sans-serif",
+      transition: "opacity 280ms ease", opacity: "1",
+    } as Partial<CSSStyleDeclaration>);
+    const spinner = document.createElement("div");
+    Object.assign(spinner.style, {
+      width: "34px", height: "34px",
+      border: "3px solid rgba(255,245,220,0.2)",
+      borderTopColor: "#e8c89a", borderRadius: "50%",
+      animation: "cb-veil-spin 0.8s linear infinite",
+    } as Partial<CSSStyleDeclaration>);
+    const label = document.createElement("div");
+    label.textContent = "Setting up your restaurant…";
+    label.style.opacity = "0.85";
+    el.appendChild(spinner);
+    el.appendChild(label);
+    document.body.appendChild(el);
+    let removed = false;
+    return { remove: () => {
+      if (removed) return;
+      removed = true;
+      el.style.opacity = "0";
+      window.setTimeout(() => el.remove(), 300);
+    } };
+  }
+
   /** Spawn the LoginModal AND start polling to see if the connecting
    * identity is already authenticated (returning player). On
    * authenticated, check building ownership — players who haven't
@@ -2426,6 +2514,11 @@ export class Engine {
       // Reveal the mobile bottom bar / camera chrome now that login +
       // plot-pick are behind us (no-op on desktop).
       setMobileInGame(true);
+      // Seamless reload — hold a loading veil over the scene until the
+      // server snapshot has been applied to staff + guests (see
+      // revealWhenHydrated), so they're never seen starting at default
+      // positions and walking into place. Fire-and-forget; always lifts.
+      void this.revealWhenHydrated();
       // Global weather — route the local WeatherSystem to the
       // server's weather_state table. Other clients see the same
       // rain / snow / festival at the same wallclock time. The
