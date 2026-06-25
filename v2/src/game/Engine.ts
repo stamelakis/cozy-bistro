@@ -2662,28 +2662,38 @@ export class Engine {
       const ready = (): boolean =>
         this.cloud.getMyBuilding() !== null
         && this.cloud.getMyRestaurantId() !== null;
-      if (ready()) {
-        enterGame(false);
-        return;
-      }
-      // Poll for ~3s — the building / restaurant rows may not have
-      // landed on the same tick as the auth_record. If still missing
-      // after the grace period, show the picker.
-      let waited = 0;
-      const wait = (): void => {
-        waited += 200;
-        if (ready()) {
-          enterGame(false);
-          return;
-        }
-        if (waited < 3000) { window.setTimeout(wait, 200); return; }
-        // Show the building picker. claim_building auto-creates the
-        // Restaurant atomically (H.96), so the modal completion
-        // means both rows now exist. enterGame(true) triggers the
-        // starter cash bonus.
-        new BuildingPickModal(container, this.cloud, () => enterGame(true));
+      // A big restaurant's building + restaurant rows can take well over the
+      // old 3s grace to land. Previously we showed the picker and STOPPED —
+      // which stranded a RETURNING player on "pick a building" even though
+      // their restaurant existed (they had to back/forward to clear it). Now:
+      // poll indefinitely; show the picker only after a longer grace; and
+      // AUTO-DISMISS it the instant the rows arrive. A genuinely new player
+      // claims a plot (doEnter(true)); the `entered` latch then stops the poll.
+      let pickModal: BuildingPickModal | null = null;
+      let entered = false;
+      const doEnter = (didClaim: boolean): void => {
+        if (entered) return;
+        entered = true;
+        pickModal?.destroy();
+        pickModal = null;
+        enterGame(didClaim);
       };
-      window.setTimeout(wait, 200);
+      if (ready()) { doEnter(false); return; }
+      let waited = 0;
+      const GRACE_MS = 6000;
+      const wait = (): void => {
+        if (entered) return;
+        waited += 250;
+        if (ready()) { doEnter(false); return; }
+        if (waited >= GRACE_MS && !pickModal) {
+          // claim_building auto-creates the Restaurant atomically (H.96), so
+          // the modal's completion means both rows now exist. enterGame(true)
+          // triggers the starter cash bonus.
+          pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
+        }
+        window.setTimeout(wait, 250);
+      };
+      window.setTimeout(wait, 250);
     };
 
     // Pre-build the modal HIDDEN so the silent detection window below

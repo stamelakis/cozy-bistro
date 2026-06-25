@@ -333,6 +333,14 @@ export class BuildingPickModal {
     }
   }
 
+  /** Remove the picker from the DOM. Called by the boot flow when the
+   * player's building + restaurant rows finally land AFTER the picker was
+   * shown (a slow big-restaurant subscription), so a returning player isn't
+   * stranded on "pick a building" with their restaurant already loaded. */
+  destroy(): void {
+    try { this.root.remove(); } catch { /* already gone */ }
+  }
+
   private async claim(buildingId: bigint): Promise<void> {
     if (this.busy) return;
     this.busy = true;
