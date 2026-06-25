@@ -39,9 +39,15 @@ export interface GraphicsPreset {
 }
 
 export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
-  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, placedLampPool: 0,  streetLampPool: 0 },
-  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  placedLampPool: 6,  streetLampPool: 6 },
-  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  placedLampPool: 28, streetLampPool: 4 },
+  // Lamp pools per the player's spec: low = no lamps (just stove/appliance
+  // glow), medium = enough to light the lamps on-screen on the current floor,
+  // high = effectively all of a restaurant's lamps. HIGH IS HEAVY: ~56 active
+  // lights is well past the count that froze weak GPUs (the GTX 1050 Ti) for
+  // minutes while the lit-material shader compiled — fine on a modern GPU,
+  // a long one-time load stall on a weak one. That's the player's call.
+  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, placedLampPool: 0,  streetLampPool: 0  },
+  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  placedLampPool: 24, streetLampPool: 6  },
+  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  placedLampPool: 40, streetLampPool: 16 },
 };
 
 const STORAGE_KEY = "cozy-bistro.graphics-quality";
