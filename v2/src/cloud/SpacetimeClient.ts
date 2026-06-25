@@ -352,6 +352,71 @@ export class SpacetimeClient {
       moduleName: cfg.moduleName ?? DEFAULT_MODULE,
       host: cfg.host ?? DEFAULT_HOST,
     };
+    // On-demand console diagnostics — type `cozyDiag()` in devtools to print
+    // the full cross-device load state in one clean, copy-pasteable block (no
+    // fishing through the noisy console).
+    try {
+      (globalThis as unknown as Record<string, unknown>).cozyDiag = () => this.dumpDiagnostics();
+    } catch { /* ignore */ }
+  }
+
+  /** Print the cross-device load state in one clean block. Exposed globally as
+   * `cozyDiag()` for console debugging — tells us the player's identity, who
+   * that identity is logged in as, which restaurant/save it resolves to, and
+   * where the real save actually lives. */
+  dumpDiagnostics(): void {
+    const hex = (id: { toHexString(): string } | null | undefined): string => {
+      try { return id ? id.toHexString() : "(none)"; } catch { return String(id); }
+    };
+    const meHex = hex(this.identity);
+    let loggedInAs = "(my identity is in NO auth_record — not authenticated as anyone)";
+    const allAuth: string[] = [];
+    if (this.conn) {
+      try {
+        for (const a of this.conn.db.auth_record.iter()) {
+          allAuth.push(`${a.username}=${hex(a.identity).slice(0, 14)}…`);
+          if (this.identity && identityEquals(a.identity, this.identity)) loggedInAs = a.username;
+        }
+      } catch { /* ignore */ }
+    }
+    const rid = this.restaurantId != null ? this.restaurantId.toString() : "(none)";
+    let restOwner = "(n/a)";
+    if (this.conn && this.restaurantId != null) {
+      try {
+        const r = this.conn.db.restaurant.id.find(this.restaurantId);
+        if (r) restOwner = hex(r.owner);
+      } catch { /* ignore */ }
+    }
+    const mine = this.identity ? this.getPlayerSave(this.identity) : null;
+    const mineStr = mine
+      ? `day ${mine.dayNumber} / tier ${mine.luxuryTier} / $${Math.round(mine.money)}`
+      : "(NONE — no player_save row for my identity)";
+    const allSaves: string[] = [];
+    if (this.conn) {
+      try {
+        for (const s of this.conn.db.player_save.iter()) {
+          allSaves.push(`${hex(s.identity).slice(0, 14)}… d${s.dayNumber}/t${s.luxuryTier}`);
+        }
+      } catch { /* ignore */ }
+    }
+    let latch = "?";
+    try { latch = sessionStorage.getItem("cozy-bistro.cloud-autoload-latch") ?? "(unset)"; } catch { /* ignore */ }
+    const block = [
+      "",
+      "╔════════ COZY CROSS-DEVICE DIAGNOSTICS ════════",
+      `║ my identity     : ${meHex}`,
+      `║ logged in as    : ${loggedInAs}`,
+      `║ my restaurantId : ${rid}  (owner ${restOwner})`,
+      `║ MY cloud save   : ${mineStr}`,
+      `║ local game      : day ${this.game.day.getDayNumber()} / tier ${this.game.getLuxuryTier()}`,
+      `║ wasFreshStart   : ${this.wasFreshStart}`,
+      `║ cloudAutoLoaded : ${this.cloudAutoLoadTriggered}    autoload-latch: ${latch}`,
+      `║ all auth_records: ${allAuth.join("   ") || "(none)"}`,
+      `║ all cloud saves : ${allSaves.join("  |  ") || "(none)"}`,
+      "╚═══════════════════════════════════════════════",
+      "",
+    ].join("\n");
+    console.log(block);
   }
 
   /** Engine calls this before connect() to tell us whether the local
