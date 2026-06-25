@@ -698,11 +698,12 @@ export class WorldScene {
     // updatePlacedLampLights() repositions this fixed pool onto the
     // lamps nearest the camera (mirrors updateStreetLamps), so only
     // nearby lamps cast light while every lamp keeps its glowing bulb.
-    // Pool size (this.lampPoolSize) is tiered by graphics quality and
-    // intentionally small — it's the single biggest factor in how long
-    // that one-time boot shader compile takes on a weak GPU. 0 (Low) means
-    // no cast halos at all, just the glowing bulbs.
-    for (let i = 0; i < this.lampPoolSize; i += 1) {
+    // Pool size (this.placedLampPoolSize) is tiered by graphics quality and
+    // kept small — it's the biggest factor in how long that one-time boot
+    // shader compile takes on a weak GPU. 0 (Low) means no cast halos at
+    // all, just the glowing bulbs. High favours placed lamps (28) over
+    // street (4) so the player's own indoor lamps light up.
+    for (let i = 0; i < this.placedLampPoolSize; i += 1) {
       const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
       light.castShadow = false;
       // Park far below the ground while idle so the light contributes
@@ -824,13 +825,14 @@ export class WorldScene {
    * to keep the shader cheap; the bulbs themselves give the visual
    * presence of light at distance. */
   private streetLampLightPool: THREE.PointLight[] = [];
-  /** Active lamp-light pool size, tiered by graphics quality (low 0 /
-   * medium 6 / high 16). Read once at construction — it sizes BOTH the
-   * placed-lamp and street-lamp PointLight pools, which fixes the scene's
-   * active-light count (and thus the lit-material shader's compile cost —
-   * the thing that froze weak GPUs at high counts). A quality change takes
-   * effect on the next reload. */
-  private readonly lampPoolSize = getCurrentGraphicsPreset().lampPool;
+  /** Active lamp-light pool sizes, tiered by graphics quality and split by
+   * type so the budget favours the player's PLACED lamps over street lamps
+   * (high: 28 placed / 4 street). Read once at construction — they fix the
+   * scene's active-light count (and thus the lit-material shader's compile
+   * cost — the thing that froze weak GPUs at high counts). A quality change
+   * takes effect on the next reload. */
+  private readonly placedLampPoolSize = getCurrentGraphicsPreset().placedLampPool;
+  private readonly streetLampPoolSize = getCurrentGraphicsPreset().streetLampPool;
   /** Cached camera position from the last light-pool reposition. Skip
    * the re-sort when the camera hasn't moved enough to change which
    * lamps are closest. */
@@ -1161,7 +1163,7 @@ export class WorldScene {
     this.worldRoot.add(bulbInst);
 
     // === Light pool — N point lights repositioned each tick ===
-    for (let i = 0; i < this.lampPoolSize; i += 1) {
+    for (let i = 0; i < this.streetLampPoolSize; i += 1) {
       // Warm sodium-vapour glow. Distance ~14m gives a clear pool
       // under each lit lamp without bleeding across the whole map.
       // Decay 1.5 keeps the centre bright while falloff still hits

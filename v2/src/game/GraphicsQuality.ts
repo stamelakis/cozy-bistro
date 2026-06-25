@@ -28,19 +28,20 @@ export interface GraphicsPreset {
   pixelRatio: number;
   sunShadows: boolean;
   furnitureShadows: boolean;
-  /** Active lamp-light cap (PER pool — placed lamps AND street lamps each
-   * get this many camera-following PointLights; every other lamp still
-   * shows its glowing bulb). 0 = bulbs only, no cast halos. This drives
-   * the lit-material shader's compile cost — the knob that froze weak GPUs
-   * at high counts — so it's tiered: low 0 / medium 6 / high 16. Applied
-   * at scene construction; a quality change takes effect on reload. */
-  lampPool: number;
+  /** Active lamp-light caps, tiered by quality and SPLIT by type so the
+   * budget favours the player's own PLACED lamps (indoors) over exterior
+   * street lamps. Total active = placed + street; kept near the ~32 ceiling
+   * weak GPUs can still compile (the knob that froze them at high counts).
+   * 0 = bulbs only, no halos. Applied at scene construction; a quality
+   * change takes effect on reload. */
+  placedLampPool: number;
+  streetLampPool: number;
 }
 
 export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
-  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, lampPool: 0  },
-  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  lampPool: 6  },
-  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  lampPool: 16 },
+  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, placedLampPool: 0,  streetLampPool: 0 },
+  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  placedLampPool: 6,  streetLampPool: 6 },
+  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  placedLampPool: 28, streetLampPool: 4 },
 };
 
 const STORAGE_KEY = "cozy-bistro.graphics-quality";
