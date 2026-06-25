@@ -1107,15 +1107,33 @@ export class StaffRouter {
       if (!s) { s = this.pathfind.blockedCells(floor); blockedByFloor.set(floor, s); }
       return s;
     };
+    const clampInterior = (v: THREE.Vector2): void => {
+      if (v.x < INTERIOR_MIN_X) v.x = INTERIOR_MIN_X;
+      else if (v.x > INTERIOR_MAX_X) v.x = INTERIOR_MAX_X;
+      if (v.y < INTERIOR_MIN_Z) v.y = INTERIOR_MIN_Z;
+      else if (v.y > INTERIOR_MAX_Z) v.y = INTERIOR_MAX_Z;
+    };
     const clampOne = (a: StaffActor): void => {
+      // HARD body constraint — clamp into the building + eject from any
+      // furniture it overlaps.
       const p = a.character.groundPos;
-      if (p.x < INTERIOR_MIN_X) p.x = INTERIOR_MIN_X;
-      else if (p.x > INTERIOR_MAX_X) p.x = INTERIOR_MAX_X;
-      if (p.y < INTERIOR_MIN_Z) p.y = INTERIOR_MIN_Z;
-      else if (p.y > INTERIOR_MAX_Z) p.y = INTERIOR_MAX_Z;
-      // HARD furniture constraint — eject the body from any item it overlaps.
+      clampInterior(p);
       const cells = blockedFor(a.currentFloor);
       if (cells) this.pushOutOfCells(p, cells);
+      // HARD TARGET constraint — the body is walked toward a.target every
+      // frame by the local sim, and under the server cutover that target is
+      // the SERVER's straight-line goal, which ignores walls + furniture and
+      // can sit outside the building or inside a counter. Clamping only the
+      // body then just fights the sim (jitter at the wall, stuck against an
+      // item, drifting mid-air over the grass on upper floors). Constrain the
+      // destination to a reachable interior cell so the body has somewhere
+      // valid to go. Legitimate work spots (stand-in-front-of-stove, pickup,
+      // a seat) are already in clear cells, so this is a no-op for them and
+      // only rescues the bad server targets.
+      const t = a.target;
+      clampInterior(t);
+      const tcells = blockedFor(a.targetFloor);
+      if (tcells) this.pushOutOfCells(t, tcells);
     };
     for (const a of this.chefs) clampOne(a);
     for (const a of this.waiters) clampOne(a);
