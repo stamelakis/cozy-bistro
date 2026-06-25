@@ -102,12 +102,6 @@ export class Engine {
    * furniture instead of clipping through it. */
   readonly pathfind: Pathfinding;
   readonly seatMarkers: SeatMarkers;
-  /** True when the chef/waiter pair failed to load and the spawner is
-   * running with the stub router (tickets resolve internally with no
-   * staff motion). Surfaced in the UI as a loud warning so we don't
-   * spend another week chasing "staff not moving" without realizing
-   * THIS is the underlying state. */
-  private usingStubRouter = false;
   readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffPanel: StaffPanel;
@@ -1279,7 +1273,6 @@ export class Engine {
           "[Engine] ⚠ STUB ROUTER ACTIVE — tickets will be processed but staff models won't move. " +
           "Chef or waiter character GLB failed to load. Check Network tab for chef.glb / waiter.glb.",
         );
-        this.usingStubRouter = true;
       } else {
         // Make sure the StaffSystem has a roster entry for every base
         // staff character the world spawned (1 chef, 1 waiter, 1
@@ -3926,22 +3919,6 @@ export class Engine {
       // Rating sign mounted on the door lintel — keeps the visible star
       // count in sync with the actual restaurant rating.
       this.scene.updateRatingSign(this.game.reputation.getAverageRating());
-      // Spawner diagnostic line — defaults to "waiting on world" until
-      // the spawner is constructed (post-staffReady). Stub-router state
-      // takes priority and surfaces as a red warning.
-      if (this.usingStubRouter) {
-        this.sidebar.updateSpawnerStatus({
-          customers: 0, waiting: 0, seatsAvail: 0, seatsTotal: 0,
-          overflow: 0, spawnInSec: 0, open: false, hasRegistry: false,
-          tables: 0, chairs: 0, rawSlots: 0,
-        });
-        this.sidebar.spawnerStatus.textContent =
-          "⚠ STUB ROUTER — staff models can't move. Hard-refresh once.";
-        this.sidebar.spawnerStatus.style.color = "#ff5050";
-        this.sidebar.spawnerStatus.style.opacity = "1";
-      } else if (this.spawner) {
-        this.sidebar.updateSpawnerStatus(this.spawner.getSpawnerStats());
-      }
       // SeatMarkers.refresh internally no-ops when disabled, so this is
       // safe to call unconditionally — BuildMenu toggles the enabled flag.
       this.seatMarkers.refresh();
