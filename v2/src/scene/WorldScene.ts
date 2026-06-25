@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { disposeObject3D } from "../assets/disposeObject3D";
+import { getCurrentGraphicsPreset } from "../game/GraphicsQuality";
 import { mergeGeometries as mergeBufferGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { CharacterLoader } from "../assets/CharacterLoader";
 import { ModelLoader } from "../assets/ModelLoader";
@@ -121,14 +122,6 @@ interface PerimeterWallState {
    * per-storey clone so DecorModal can theme each floor. */
   wallMatRef?: THREE.MeshStandardMaterial;
 }
-
-/** Phase I (perf) — pool size for placed-lamp point lights.  16 is
- * generous for a small / medium restaurant; the player rarely places
- * more lamps than this.  Beyond the pool, registerLamp falls back to
- * the construct-a-new-light path (one shader recompile per extra
- * lamp).  Bumping this costs ~3 KB of GPU buffer per extra light +
- * grows the per-pixel shader cost slightly (proportional to N). */
-const PLACED_LAMP_POOL_SIZE = 6;
 
 export class WorldScene {
   readonly threeScene = new THREE.Scene();
@@ -705,10 +698,11 @@ export class WorldScene {
     // updatePlacedLampLights() repositions this fixed pool onto the
     // lamps nearest the camera (mirrors updateStreetLamps), so only
     // nearby lamps cast light while every lamp keeps its glowing bulb.
-    // Pool size is intentionally small (see PLACED_LAMP_POOL_SIZE) to
-    // keep the compiled shader tiny — the single biggest factor in
-    // how long that one-time boot compile takes on a weak GPU.
-    for (let i = 0; i < PLACED_LAMP_POOL_SIZE; i += 1) {
+    // Pool size (this.lampPoolSize) is tiered by graphics quality and
+    // intentionally small — it's the single biggest factor in how long
+    // that one-time boot shader compile takes on a weak GPU. 0 (Low) means
+    // no cast halos at all, just the glowing bulbs.
+    for (let i = 0; i < this.lampPoolSize; i += 1) {
       const light = new THREE.PointLight(0xffd6a0, 0, 4.5, 1.7);
       light.castShadow = false;
       // Park far below the ground while idle so the light contributes
@@ -830,7 +824,13 @@ export class WorldScene {
    * to keep the shader cheap; the bulbs themselves give the visual
    * presence of light at distance. */
   private streetLampLightPool: THREE.PointLight[] = [];
-  private static readonly STREET_LAMP_POOL_SIZE = 6;
+  /** Active lamp-light pool size, tiered by graphics quality (low 0 /
+   * medium 6 / high 16). Read once at construction — it sizes BOTH the
+   * placed-lamp and street-lamp PointLight pools, which fixes the scene's
+   * active-light count (and thus the lit-material shader's compile cost —
+   * the thing that froze weak GPUs at high counts). A quality change takes
+   * effect on the next reload. */
+  private readonly lampPoolSize = getCurrentGraphicsPreset().lampPool;
   /** Cached camera position from the last light-pool reposition. Skip
    * the re-sort when the camera hasn't moved enough to change which
    * lamps are closest. */
@@ -1161,7 +1161,7 @@ export class WorldScene {
     this.worldRoot.add(bulbInst);
 
     // === Light pool — N point lights repositioned each tick ===
-    for (let i = 0; i < WorldScene.STREET_LAMP_POOL_SIZE; i += 1) {
+    for (let i = 0; i < this.lampPoolSize; i += 1) {
       // Warm sodium-vapour glow. Distance ~14m gives a clear pool
       // under each lit lamp without bleeding across the whole map.
       // Decay 1.5 keeps the centre bright while falloff still hits

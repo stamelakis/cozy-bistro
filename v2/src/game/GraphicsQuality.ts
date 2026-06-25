@@ -28,12 +28,19 @@ export interface GraphicsPreset {
   pixelRatio: number;
   sunShadows: boolean;
   furnitureShadows: boolean;
+  /** Active lamp-light cap (PER pool — placed lamps AND street lamps each
+   * get this many camera-following PointLights; every other lamp still
+   * shows its glowing bulb). 0 = bulbs only, no cast halos. This drives
+   * the lit-material shader's compile cost — the knob that froze weak GPUs
+   * at high counts — so it's tiered: low 0 / medium 6 / high 16. Applied
+   * at scene construction; a quality change takes effect on reload. */
+  lampPool: number;
 }
 
 export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
-  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false },
-  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true  },
-  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true  },
+  low:    { pixelRatio: 1.0, sunShadows: false, furnitureShadows: false, lampPool: 0  },
+  medium: { pixelRatio: 1.5, sunShadows: true,  furnitureShadows: true,  lampPool: 6  },
+  high:   { pixelRatio: 2.0, sunShadows: true,  furnitureShadows: true,  lampPool: 16 },
 };
 
 const STORAGE_KEY = "cozy-bistro.graphics-quality";
