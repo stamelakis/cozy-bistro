@@ -369,9 +369,12 @@ export class SpacetimeClient {
    * and reload the page so the game restarts with the real data.
    * Called from onSubscriptionReady after restaurantId is established.
    * Latched so it only fires once per session. */
-  private maybeAutoLoadCloudSave(snap: { data: string } | null): void {
+  private maybeAutoLoadCloudSave(snap: { data: string } | null, force = false): void {
     if (this.cloudAutoLoadTriggered) return;
-    if (!this.wasFreshStart) return;
+    // `force` lets the post-login path load a RICHER cloud save over a local
+    // day-1 shell even when this wasn't a fresh start — incognito tabs share
+    // storage, so a stale shell can outlive wasFreshStart.
+    if (!this.wasFreshStart && !force) return;
     if (!snap || typeof snap.data !== "string" || snap.data.length === 0) return;
     try {
       // Validate the payload parses BEFORE we trample the slot — a
@@ -3336,21 +3339,32 @@ export class SpacetimeClient {
    * a returning player who already had a local save, or a brand-new account
    * with no cloud save yet (poll times out → they proceed to the picker). */
   private async loadCloudSaveAfterLogin(): Promise<void> {
-    if (!this.wasFreshStart || this.cloudAutoLoadTriggered) return;
+    if (this.cloudAutoLoadTriggered) return;
     if (!this.conn || !this.identity) return;
     // The transfer (restaurant.owner + player_save.identity → us) can land a
-    // few subscription ticks after the auth_record update — poll ~6s.
-    for (let i = 0; i < 24; i += 1) {
+    // few subscription ticks after the auth_record update — poll ~12s.
+    for (let i = 0; i < 48; i += 1) {
       void this.getMyRestaurantId(); // lazy re-scan also resolves restaurantId
       const mySave = this.getPlayerSave(this.identity);
       if (mySave && mySave.data) {
-        console.log(`[SpacetimeDB] post-login cross-device — pulling cloud save (day ${mySave.dayNumber}, tier ${mySave.luxuryTier})`);
-        this.maybeAutoLoadCloudSave({ data: mySave.data });
+        const localDay = this.game.day.getDayNumber();
+        const localTier = this.game.getLuxuryTier();
+        // Load the cloud save when we booted fresh, OR when we're staring at a
+        // day-1 SHELL while a substantial cloud save sits under our identity.
+        // The shell case is the one the old wasFreshStart-only gate missed: an
+        // incognito tab (shared storage) keeps a stale shell alive, so the
+        // player got stuck on tier-1 with their real tier-5 save in the cloud.
+        const localIsShell = localDay <= 1 && localTier <= 1;
+        const cloudSubstantial = mySave.dayNumber >= 10 || mySave.luxuryTier >= 2;
+        if (this.wasFreshStart || (localIsShell && cloudSubstantial)) {
+          console.log(`[SpacetimeDB] post-login — loading cloud save (cloud day ${mySave.dayNumber}/tier ${mySave.luxuryTier} over local day ${localDay}/tier ${localTier})`);
+          this.maybeAutoLoadCloudSave({ data: mySave.data }, true);
+        }
         return;
       }
       await new Promise((r) => setTimeout(r, 250));
     }
-    console.warn("[SpacetimeDB] post-login: no cloud save arrived after ~6s (new account, or save not yet written)");
+    console.warn("[SpacetimeDB] post-login: no cloud save arrived after ~12s");
   }
 
   /** Call logout. Releases this identity's claim on the account on
