@@ -9,13 +9,7 @@
 export class Sidebar {
   readonly root: HTMLElement;
   readonly body: HTMLElement;
-  /** Always-visible save indicator pinned to the panel footer. Engine
-   * polls this and updates the text every HUD tick. */
-  readonly saveStatus: HTMLElement;
-  /** Manual save button right next to the indicator. Engine wires its
-   * onclick to fire SaveSystem.saveNow(). */
-  readonly saveNowBtn: HTMLButtonElement;
-  /** Live spawner diagnostic line (above the save footer). Engine pushes
+  /** Live spawner diagnostic line (pinned to the panel bottom). Engine pushes
    * `customers · functional seats · spawn in Ts` into here so the player
    * can see at a glance whether the room is alive. */
   readonly spawnerStatus: HTMLElement;
@@ -72,34 +66,12 @@ export class Sidebar {
     this.spawnerStatus.textContent = "👥 waiting on world…";
     this.root.appendChild(this.spawnerStatus);
 
-    // Pinned footer: save status + manual save button. Always visible so
-    // the player can verify autosave is actually running.
-    const footer = document.createElement("div");
-    Object.assign(footer.style, {
-      flex: "0 0 auto",
-      display: "flex", alignItems: "center", gap: "6px",
-      padding: "6px 10px",
-      borderTop: "1px solid rgba(255,245,220,0.18)",
-      background: "rgba(0,0,0,0.18)",
-      fontSize: "10px",
-    } as Partial<CSSStyleDeclaration>);
-    this.saveStatus = document.createElement("span");
-    Object.assign(this.saveStatus.style, {
-      flex: "1", opacity: "0.85",
-      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-    } as Partial<CSSStyleDeclaration>);
-    this.saveStatus.textContent = "💾 Not saved yet";
-    footer.appendChild(this.saveStatus);
-    this.saveNowBtn = document.createElement("button");
-    this.saveNowBtn.textContent = "Save now";
-    Object.assign(this.saveNowBtn.style, {
-      padding: "3px 8px",
-      background: "rgba(120, 180, 200, 0.22)", color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.30)", borderRadius: "4px",
-      cursor: "pointer", font: "inherit", fontSize: "10px", fontWeight: "600",
-    } as Partial<CSSStyleDeclaration>);
-    footer.appendChild(this.saveNowBtn);
-    this.root.appendChild(footer);
+    // No save footer: the cloud player_save is authoritative and persists
+    // automatically (on open/close, tier changes, and tab close), so a
+    // manual "Save now" button + a localStorage status line were redundant
+    // — and the status read a misleading "Not saved yet" since the
+    // per-frame autosave loop is disabled. The background localStorage save
+    // still runs on beforeunload as a fallback.
   }
 
   /** Render the spawner diagnostic line. Color flips amber if no spawn
@@ -143,26 +115,6 @@ export class Sidebar {
       stats.seatsTotal === 0 ? "#ff9a9a" :
       stats.customers === 0 && stats.waiting === 0 ? "#ffd47a" :
       "#a8e2a8";
-  }
-
-  /** Refresh the pinned save indicator from a stats snapshot. Called by
-   * Engine on every HUD tick. */
-  updateSaveStatus(stats: { count: number; lastMs: number; bytes: number; ok: boolean; error: string; slot: number }): void {
-    if (!stats.ok) {
-      this.saveStatus.textContent = `⚠ Save failed: ${stats.error}`.slice(0, 48);
-      this.saveStatus.style.color = "#ff9a9a";
-      return;
-    }
-    if (stats.count === 0) {
-      this.saveStatus.textContent = "💾 Not saved yet";
-      this.saveStatus.style.color = "#fff5dc";
-      return;
-    }
-    const ageS = Math.max(0, Math.round((Date.now() - stats.lastMs) / 1000));
-    const ageStr = ageS < 60 ? `${ageS}s` : ageS < 3600 ? `${Math.round(ageS / 60)}m` : `${Math.round(ageS / 3600)}h`;
-    const kb = (stats.bytes / 1024).toFixed(1);
-    this.saveStatus.textContent = `💾 Slot ${stats.slot} · ${ageStr} ago · ${kb} KB`;
-    this.saveStatus.style.color = ageS > 30 ? "#ffd47a" : "#a8e2a8";
   }
 
   /** Helper: add a thin separator before the next section. Call between

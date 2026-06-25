@@ -631,10 +631,6 @@ export class Engine {
     // Single shared left panel that holds the HUD + tier/boost widget +
     // stock status + staff panel as stacked sections.
     this.sidebar = new Sidebar(container);
-    this.sidebar.saveNowBtn.onclick = () => {
-      this.saver.saveNow();
-      this.sidebar.updateSaveStatus(this.saver.getSaveStats());
-    };
     // UI request — Expand / Boost / Grant pinned at the very top of
     // the sidebar (above cash/weather) so the three economy actions
     // are the first thing the eye lands on. Constructed first so
@@ -3927,7 +3923,6 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.cameraControls.update();
-      this.sidebar.updateSaveStatus(this.saver.getSaveStats());
       // Rating sign mounted on the door lintel — keeps the visible star
       // count in sync with the actual restaurant rating.
       this.scene.updateRatingSign(this.game.reputation.getAverageRating());
