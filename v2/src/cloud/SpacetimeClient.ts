@@ -3321,6 +3321,36 @@ export class SpacetimeClient {
     this.setRememberMe(rememberMe);
     await this.callReducer("login", () => this.conn!.reducers.login({ username, password }));
     await this.waitForAuthRecord();
+    // Cross-device: the login reducer just transferred this account's
+    // restaurant + player_save to our identity (auth.rs
+    // transfer_identity_resources). If we booted FRESH (incognito / new
+    // device) the initial subscription took the "no restaurant" branch and
+    // never loaded the cloud save, so we'd be staring at a day-1 shell. Pull
+    // the canonical save now (it reloads us into the real game).
+    await this.loadCloudSaveAfterLogin();
+  }
+
+  /** After a successful login on a FRESH-START session, wait for the
+   * just-transferred player_save row to land in the subscription, then
+   * auto-load it (writes localStorage + reloads into the real game). No-op for
+   * a returning player who already had a local save, or a brand-new account
+   * with no cloud save yet (poll times out → they proceed to the picker). */
+  private async loadCloudSaveAfterLogin(): Promise<void> {
+    if (!this.wasFreshStart || this.cloudAutoLoadTriggered) return;
+    if (!this.conn || !this.identity) return;
+    // The transfer (restaurant.owner + player_save.identity → us) can land a
+    // few subscription ticks after the auth_record update — poll ~6s.
+    for (let i = 0; i < 24; i += 1) {
+      void this.getMyRestaurantId(); // lazy re-scan also resolves restaurantId
+      const mySave = this.getPlayerSave(this.identity);
+      if (mySave && mySave.data) {
+        console.log(`[SpacetimeDB] post-login cross-device — pulling cloud save (day ${mySave.dayNumber}, tier ${mySave.luxuryTier})`);
+        this.maybeAutoLoadCloudSave({ data: mySave.data });
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    console.warn("[SpacetimeDB] post-login: no cloud save arrived after ~6s (new account, or save not yet written)");
   }
 
   /** Call logout. Releases this identity's claim on the account on
@@ -4218,6 +4248,26 @@ export class SpacetimeClient {
    * per-identity player_save table (visit mode reads this one). */
   private publishCloud(json: string): void {
     if (!this.conn) return;
+    // Cross-device DATA-LOSS GUARD — a FRESH-START session that has NOT loaded
+    // a cloud save must never overwrite an EXISTING cloud save with MORE
+    // progress. The race: we booted fresh (incognito / new device) before the
+    // login reducer transferred the restaurant + player_save to us, so the real
+    // tier-5 save never loaded and we're running a day-1 shell. A day-rollover
+    // or tab-close cloudSaveNow would then write that shell over the real save —
+    // exactly the "InPrivate shows tier 1" report. Block the write, and pull the
+    // real save instead (reloads into it when the tab isn't already closing).
+    if (this.wasFreshStart && !this.cloudAutoLoadTriggered && this.identity) {
+      const existing = this.getPlayerSave(this.identity);
+      if (existing && existing.data) {
+        const curDay = this.game.day.getDayNumber();
+        const curTier = this.game.getLuxuryTier();
+        if (existing.dayNumber > curDay || existing.luxuryTier > curTier) {
+          console.warn(`[SpacetimeDB] BLOCKED cloud save: fresh shell (day ${curDay}/tier ${curTier}) would regress cloud save (day ${existing.dayNumber}/tier ${existing.luxuryTier}). Pulling the real save instead.`);
+          this.maybeAutoLoadCloudSave({ data: existing.data });
+          return;
+        }
+      }
+    }
     try {
       if (json.length > 256 * 1024) {
         console.warn(`[SpacetimeDB] save too large to upload (${json.length} bytes)`);
