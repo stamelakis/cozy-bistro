@@ -239,14 +239,19 @@ pub fn publish_player_save(
     // (which DELETES the row first), so it is NOT caught here; and normal play
     // only ever advances day/tier, so a real session never trips this.
     if let Some(existing) = ctx.db.player_save().identity().find(ctx.sender) {
-        let existing_has_progress = existing.day_number >= 10 || existing.luxury_tier >= 2;
-        let incoming_is_shell = day_number <= 1 && luxury_tier <= 1;
-        if existing_has_progress && incoming_is_shell {
+        let existing_substantial = existing.day_number >= 10 || existing.luxury_tier >= 2;
+        // Block ANY regression of a substantial save — not just day<=1 shells.
+        // The old day<=1 check had a hole: an incognito shell that played a
+        // single day became day 2, slipped past, and overwrote the real tier-5.
+        // A genuine reset deletes the row first (wipe_my_restaurant); normal
+        // play only ever advances day/tier, so this never blocks a real session.
+        let regresses = day_number < existing.day_number || luxury_tier < existing.luxury_tier;
+        if existing_substantial && regresses {
             log::warn!(
-                "publish_player_save: REFUSED shell write for {} — existing day {}/tier {} vs incoming day {}/tier {}",
+                "publish_player_save: REFUSED regressing write for {} — existing day {}/tier {} vs incoming day {}/tier {}",
                 ctx.sender.to_hex(), existing.day_number, existing.luxury_tier, day_number, luxury_tier
             );
-            return Err("Refusing to overwrite an established save with a fresh shell".into());
+            return Err("Refusing to overwrite an established save with a lesser one".into());
         }
     }
     let row = PlayerSave {
