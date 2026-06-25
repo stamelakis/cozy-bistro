@@ -5399,6 +5399,26 @@ fn actor_walk_speed(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
 /// full ownership.
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    // Hard interior clamp for non-errand staff — runs every tick, including
+    // for idle actors. Errands legitimately walk out to the road to shop, but
+    // a waiter / chef / barman should NEVER be outside the walls. An already-
+    // idle one whose target is never re-issued can sit stranded on the grass
+    // forever (live: a waiter idle at x=8.1 on floor 3 — staff_home_target
+    // only re-homes on a returningHome transition that never comes). Snap BOTH
+    // body and target into the box [-4.2, 5.2] so the client renders it inside
+    // at once; skip the rest of this tick (the next resumes from the new spot).
+    if a.role != "errand" {
+        let cx = a.x.clamp(-4.2_f32, 5.2_f32);
+        let cz = a.z.clamp(-4.2_f32, 5.2_f32);
+        let tx = a.target_x.clamp(-4.2_f32, 5.2_f32);
+        let tz = a.target_z.clamp(-4.2_f32, 5.2_f32);
+        if cx != a.x || cz != a.z || tx != a.target_x || tz != a.target_z {
+            ctx.db.staff_actor().member_id().update(StaffActor {
+                x: cx, z: cz, target_x: tx, target_z: tz, ..a
+            });
+            return;
+        }
+    }
     // Phase 9.48 — DEAD-BINDING self-heal. A chef/waiter can end up
     // pinned to a task whose row no longer exists: the diverging client
     // sim re-binds a stale ticket onto an actor the server had just

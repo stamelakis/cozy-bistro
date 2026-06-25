@@ -53,6 +53,12 @@ export interface AnimatedCharacter {
   // was added to the animator — preserves CharacterLoader.liftFeetToOrigin
   // through the per-frame position reset.
   _baseY?: number;
+  /** Internal: previous-frame groundPos, so the animator can tell whether a
+   * character actually MOVED and gate the walk clip — a stuck "walk" staffer
+   * (the server says "working", but it can't reach its target) otherwise
+   * moonwalks in place against the furniture. */
+  _animPrevX?: number;
+  _animPrevZ?: number;
   /** Raw "lift the feet off the ground" offset, independent of any
    * storey-Y. Captured at add-time as (_baseY − homeFloor × STOREY)
    * for upper-floor staff, or simply _baseY for guests / ground-floor
@@ -175,6 +181,21 @@ export class CharacterAnimator {
       // (breathing math, per-action switch + trig) is what we
       // actually skip via the cull below.
       const baseY = c._baseY ?? 0;
+      // Movement gate for the walk clip. Compare groundPos to last frame: a
+      // character with a stale action="walk" that ISN'T actually moving (the
+      // server says "working" but it's stuck / idle in place) renders as
+      // "idle" instead of moonwalking against the furniture. Only "walk" is
+      // gated — carry / sit / cook poses are legitimately stationary. < ~5 mm
+      // of travel/frame = stationary; real walking moves far more at any sane
+      // framerate (>=2 cm/frame even at 144 fps), so it's never mis-gated.
+      // Tracked for every character (even hidden) so re-showing doesn't jump.
+      const prevX = c._animPrevX ?? c.groundPos.x;
+      const prevZ = c._animPrevZ ?? c.groundPos.y;
+      const movedSq = (c.groundPos.x - prevX) ** 2 + (c.groundPos.y - prevZ) ** 2;
+      c._animPrevX = c.groundPos.x;
+      c._animPrevZ = c.groundPos.y;
+      const effAction: CharacterAction =
+        c.action === "walk" && movedSq < 0.000025 ? "idle" : c.action;
       c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
       c.root.rotation.set(0, c.facingY, 0);
 
@@ -216,7 +237,7 @@ export class CharacterAnimator {
         // guests get the equivalent via the "sit" case in tickCharacter, which
         // the skeletal path skips.
         if (c.action === "sit" && c.seatHeight) c.root.position.y += c.seatHeight;
-        c.skeletal.update(dt, c.action);
+        c.skeletal.update(dt, effAction);
         continue;
       }
 
