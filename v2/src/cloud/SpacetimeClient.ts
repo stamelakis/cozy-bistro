@@ -3859,12 +3859,19 @@ export class SpacetimeClient {
       // cloudSaveNow keeps current.
       const mySave = this.identity ? this.getPlayerSave(this.identity) : null;
       if (mySave && mySave.data) {
-        console.log(`[SpacetimeDB] found cloud player_save — day ${mySave.dayNumber}, tier ${mySave.luxuryTier} ($${mySave.money})`);
-        // If the player walked in on a fresh device with no local save, pull
-        // the cloud save now and reload. On a device that ALREADY had a local
-        // save we leave it alone (the local game already booted; the player
-        // can still pull the cloud copy via SlotsModal's "Load from cloud").
-        this.maybeAutoLoadCloudSave({ data: mySave.data });
+        const localDay = this.game.day.getDayNumber();
+        const localTier = this.game.getLuxuryTier();
+        const localIsShell = localDay <= 1 && localTier <= 1;
+        const cloudSubstantial = mySave.dayNumber >= 10 || mySave.luxuryTier >= 2;
+        console.log(`[SpacetimeDB] found cloud player_save — day ${mySave.dayNumber}, tier ${mySave.luxuryTier} ($${mySave.money}); local day ${localDay}/tier ${localTier} (shell=${localIsShell}, cloudSubstantial=${cloudSubstantial})`);
+        // Pull the cloud save on a fresh device, OR when this device is sitting
+        // on a day-1 SHELL while a substantial cloud save exists under our
+        // identity. The shell case is the reconnect-via-token path (reopening
+        // incognito doesn't call login(), so loadCloudSaveAfterLogin never runs)
+        // plus incognito's shared storage keeping a stale shell alive past
+        // wasFreshStart. A returning player with a real local game is left
+        // alone; they can still use SlotsModal "Load from cloud".
+        this.maybeAutoLoadCloudSave({ data: mySave.data }, this.wasFreshStart || (localIsShell && cloudSubstantial));
       } else {
         console.log(`[SpacetimeDB] restaurant ${this.restaurantId} exists but no player_save yet`);
       }
