@@ -2281,6 +2281,24 @@ export class StaffRouter {
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
+    // HARD interior clamp — EVERY frame, EVERY non-errand actor, regardless of
+    // state. moveActor only clamps the body while an actor is MOVING; an IDLE
+    // waiter / chef / barman stranded outside (a diverging local-sim target, or
+    // an idle home that's never re-issued) would otherwise just stand on the
+    // grass forever — "that guy outside" the player keeps seeing. Snap body AND
+    // target into the interior box so it can never render or walk out. Errands
+    // legitimately go out to shop, so they aren't in these lists. Mirrors the
+    // server's tick_staff_actor clamp (restaurant_sim.rs).
+    const clampInside = (a: StaffActor): void => {
+      const p = a.character.groundPos;
+      p.x = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, p.x));
+      p.y = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, p.y));
+      a.target.x = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, a.target.x));
+      a.target.y = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, a.target.y));
+    };
+    for (const c of this.chefs) clampInside(c);
+    for (const b of this.barmen) clampInside(b);
+    for (const w of this.waiters) clampInside(w);
     // Rigged staff play their WORK gesture (cook / mix / serve at a station)
     // ONLY while actually AT the station working — the RiggedController keys
     // off action "carry". Set it from the authoritative state here (after the
