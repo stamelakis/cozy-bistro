@@ -461,9 +461,16 @@ export class SpacetimeClient {
     // sessionStorage survives the reload (and the whole incognito session), so
     // the auto-load fires at most ONCE per session; a truly fresh session (all
     // incognito windows closed) clears it.
-    try {
-      if (sessionStorage.getItem("cozy-bistro.cloud-autoload-latch") === "1") return;
-    } catch { /* private-mode storage — fall through */ }
+    // The latch stops a reload LOOP — but ONLY once we've actually loaded a real
+    // (non-shell) game. If we're still on a day-1 SHELL while the cloud has a
+    // real save, the prior load didn't take (e.g. it loaded a shell before
+    // account_save arrived) — a set latch must NOT strand us there, so allow
+    // another attempt. cozyDiag showed exactly this: latch=1, local=shell,
+    // getCanonical=tier-5 → the latch was eating the load.
+    const localIsShellForLatch = this.game.day.getDayNumber() <= 1 && this.game.getLuxuryTier() <= 1;
+    let latched = false;
+    try { latched = sessionStorage.getItem("cozy-bistro.cloud-autoload-latch") === "1"; } catch { /* private-mode */ }
+    if (latched && !localIsShellForLatch) return;
     // `force` lets the post-login path load a RICHER cloud save over a local
     // day-1 shell even when this wasn't a fresh start — incognito tabs share
     // storage, so a stale shell can outlive wasFreshStart.
