@@ -1472,7 +1472,7 @@ export class Engine {
       // The per-restaurant recipe_level mirror is gated separately
       // since it's owner-specific state — H.43 reconciles those on
       // every connect via the drain path, not via this seed loop.
-      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v2"; // v2: + furniture_cost (Phase A2)
+      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v3"; // v3: + grill/oven/fryer/pizza recipes + stations
       const CATALOG_SEED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
       const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY);
       const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw, 10) : 0;

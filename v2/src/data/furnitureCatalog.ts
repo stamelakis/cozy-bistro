@@ -895,6 +895,60 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "dessert-display", name: "Dessert Case",   category: "decoration",
     modelPath: "proc:dessert-display", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 250, style: 4, attractionBonus: 4, ratingBonus: 0.04,
     tier: 3 },
+
+  // === New cooking stations — spread the kitchen across dedicated gear. ===
+  // category "stove" puts them in the "Cooking" build-menu section; the
+  // per-stove flame system is id-gated so these carry their own glow.
+  // Each `provides` a unique appliance so recipes route a chef to the
+  // RIGHT station (grilled mains → grill, fried sides → fryer, baked
+  // dishes + desserts → oven, pizzas → pizza oven).
+  { id: "grill-station",  name: "Flat-Top Grill",  category: "stove",
+    modelPath: "proc:grill-station", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 280, style: 2, ratingBonus: 0.02,
+    tier: 2, provides: "grill" },
+  { id: "fryer-station",  name: "Deep Fryer",       category: "stove",
+    modelPath: "proc:fryer-station", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 220, style: 1,
+    tier: 2, provides: "fryer" },
+  { id: "oven-station",   name: "Convection Oven",  category: "stove",
+    modelPath: "proc:oven-station", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 360, style: 2, ratingBonus: 0.02,
+    tier: 3, provides: "oven" },
+  { id: "pizza-oven",     name: "Wood-Fired Pizza Oven", category: "stove",
+    modelPath: "proc:pizza-oven", scale: S_PROC, size: { width: 2, depth: 1 }, cost: 900, style: 5, attractionBonus: 4, ratingBonus: 0.05,
+    tier: 4, provides: "pizza-oven", fillTile: true },
+
+  // === New cozy decor (procedural). ===
+  { id: "fireplace",      name: "Stone Fireplace",  category: "decoration",
+    modelPath: "proc:fireplace", scale: S_PROC, size: { width: 2, depth: 1 }, cost: 550, style: 6, attractionBonus: 6, ratingBonus: 0.06,
+    tier: 4 },
+  { id: "potted-tree",    name: "Indoor Tree",      category: "plant",
+    modelPath: "proc:potted-tree", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 70, style: 3, attractionBonus: 4, ratingBonus: 0.02,
+    tier: 3 },
+  { id: "grandfather-clock", name: "Grandfather Clock", category: "decoration",
+    modelPath: "proc:grandfather-clock", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 180, style: 4, attractionBonus: 2, ratingBonus: 0.02,
+    tier: 3 },
+  { id: "living-wall",    name: "Living Plant Wall", category: "plant",
+    modelPath: "proc:living-wall", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 320, style: 5, attractionBonus: 6, ratingBonus: 0.05,
+    tier: 4, placement: "wall" },
+  { id: "bar-back-shelf", name: "Back-Bar Shelf",   category: "decoration",
+    modelPath: "proc:bar-back-shelf", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 280, style: 5, attractionBonus: 2, ratingBonus: 0.04,
+    tier: 4, placement: "wall" },
+  { id: "vintage-poster", name: "Vintage Poster",   category: "decoration",
+    modelPath: "proc:vintage-poster", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 45, style: 3, attractionBonus: 2, ratingBonus: 0.01,
+    tier: 2, placement: "wall" },
+  { id: "wall-clock",     name: "Wall Clock",       category: "decoration",
+    modelPath: "proc:wall-clock", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 60, style: 3, attractionBonus: 1, ratingBonus: 0.01,
+    tier: 2, placement: "wall" },
+  { id: "persian-rug",    name: "Persian Rug",      category: "decoration",
+    modelPath: "proc:persian-rug", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 90, style: 5, comfort: 2, ratingBonus: 0.03,
+    tier: 3, targetHeight: 0.04, flat: true },
+  { id: "candle-centerpiece", name: "Candle Centerpiece", category: "decoration",
+    modelPath: "proc:candle-centerpiece", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 30, style: 3, ratingBonus: 0.01,
+    tier: 2, placement: "surface" },
+  { id: "chandelier",     name: "Chandelier",       category: "lamp",
+    modelPath: "proc:chandelier", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 420, style: 6, attractionBonus: 4, ratingBonus: 0.05,
+    tier: 4, placement: "ceiling" },
+  { id: "string-lights",  name: "String Lights",    category: "lamp",
+    modelPath: "proc:string-lights", scale: S_PROC, size: { width: 1, depth: 1 }, cost: 90, style: 3, attractionBonus: 4, ratingBonus: 0.02,
+    tier: 2, placement: "ceiling" },
 ];
 
 export function getFurnitureDef(id: string): FurnitureDef | undefined {

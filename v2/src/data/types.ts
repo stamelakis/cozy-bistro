@@ -80,7 +80,8 @@ export interface PlacedFurniture {
  * by one or more catalog items via FurnitureDef.provides. A recipe is
  * "makeable" iff every appliance in its `appliances` list is provided
  * by at least one placed item. */
-export type ApplianceId = "stove" | "counter" | "toaster" | "coffee" | "blender" | "microwave" | "hood" | "bar";
+export type ApplianceId = "stove" | "counter" | "toaster" | "coffee" | "blender" | "microwave" | "hood" | "bar"
+  | "grill" | "oven" | "fryer" | "pizza-oven";
 
 /** Human labels for the appliance ids — used by the menu UI to show
  * "needs Toaster + Counter" badges on each recipe row. */
@@ -93,6 +94,10 @@ export const APPLIANCE_LABELS: Record<ApplianceId, string> = {
   microwave: "Microwave",
   hood: "Range Hood",
   bar: "Bar Counter",
+  grill: "Grill",
+  oven: "Oven",
+  fryer: "Deep Fryer",
+  "pizza-oven": "Pizza Oven",
 };
 
 export interface RecipeDefinition {

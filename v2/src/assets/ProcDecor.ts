@@ -618,6 +618,493 @@ function dessertDisplay(): THREE.Group {
   return g;
 }
 
+// === Cooking stations (spread the kitchen across dedicated equipment). ===
+// All floor-standing 1×1 (pizza oven 2×1), authored from y=0 up like the
+// other floor props. They live in the "stove" build-menu category but the
+// per-stove flame system is id-gated (def.id === "stove"/"stove-electric")
+// so these don't pick up gas-burner flames — each carries its own glow.
+
+/** Flat-top grill — dark griddle with red ember glow between the bars. */
+function grillStation(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.82, 0.8),
+    new THREE.MeshStandardMaterial({ color: 0x3a3d42, roughness: 0.5, metalness: 0.6 }),
+  );
+  body.position.y = 0.41;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // Griddle plate.
+  const plate = new THREE.Mesh(
+    new THREE.BoxGeometry(0.84, 0.05, 0.72),
+    new THREE.MeshStandardMaterial({ color: 0x17191b, roughness: 0.8, metalness: 0.4 }),
+  );
+  plate.position.y = 0.84;
+  g.add(plate);
+  // Ember strips (emissive-only — no cast light, per the perf rule).
+  const emberMat = new THREE.MeshStandardMaterial({ color: 0xff5a1e, emissive: 0xff4a14, emissiveIntensity: 0.9, roughness: 0.7 });
+  for (let i = 0; i < 4; i += 1) {
+    const ember = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.012, 0.04), emberMat);
+    ember.position.set(0, 0.865, -0.27 + i * 0.18);
+    g.add(ember);
+  }
+  // Grate bars over the embers.
+  const barMat = new THREE.MeshStandardMaterial({ color: 0x101214, roughness: 0.6, metalness: 0.5 });
+  for (let i = 0; i < 7; i += 1) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.02, 0.025), barMat);
+    bar.position.set(0, 0.885, -0.3 + i * 0.1);
+    g.add(bar);
+  }
+  return g;
+}
+
+/** Convection oven — stainless box with a warm glowing glass door + dials. */
+function ovenStation(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.9, 0.95, 0.8),
+    new THREE.MeshStandardMaterial({ color: 0xd6d9dc, roughness: 0.4, metalness: 0.5 }),
+  );
+  body.position.y = 0.475;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // Glass door with warm interior glow.
+  const door = new THREE.Mesh(
+    new THREE.BoxGeometry(0.7, 0.5, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.2, emissive: 0xff8a2a, emissiveIntensity: 0.55, transparent: true, opacity: 0.85 }),
+  );
+  door.position.set(0, 0.4, 0.41);
+  g.add(door);
+  // Control strip + dials.
+  const panel = new THREE.Mesh(
+    new THREE.BoxGeometry(0.72, 0.16, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0x33363a, roughness: 0.6 }),
+  );
+  panel.position.set(0, 0.85, 0.41);
+  g.add(panel);
+  const dialMat = new THREE.MeshStandardMaterial({ color: 0x1a1c1e, roughness: 0.4, metalness: 0.5 });
+  for (let i = 0; i < 3; i += 1) {
+    const d = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 12), dialMat);
+    d.rotation.x = Math.PI / 2;
+    d.position.set(-0.2 + i * 0.2, 0.85, 0.44);
+    g.add(d);
+  }
+  // Handle.
+  const handle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.04, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x44474b, metalness: 0.7, roughness: 0.3 }),
+  );
+  handle.position.set(0, 0.68, 0.44);
+  g.add(handle);
+  return g;
+}
+
+/** Deep fryer — twin oil vats with a golden glow + basket handles. */
+function fryerStation(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 0.85, 0.78),
+    new THREE.MeshStandardMaterial({ color: 0xc3c9cf, roughness: 0.3, metalness: 0.7 }),
+  );
+  body.position.y = 0.425;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  const oilMat = new THREE.MeshStandardMaterial({ color: 0xd9a23a, roughness: 0.3, emissive: 0xc88a1e, emissiveIntensity: 0.45, transparent: true, opacity: 0.9 });
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0x2a2c2e, metalness: 0.6, roughness: 0.4 });
+  for (const x of [-0.2, 0.2]) {
+    const vat = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.04, 0.5), oilMat);
+    vat.position.set(x, 0.86, 0);
+    g.add(vat);
+    const rim = new THREE.Mesh(
+      new THREE.BoxGeometry(0.34, 0.06, 0.54),
+      new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.7, roughness: 0.3 }),
+    );
+    rim.position.set(x, 0.83, 0);
+    g.add(rim);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.04), handleMat);
+    handle.position.set(x, 0.96, 0.3);
+    g.add(handle);
+  }
+  return g;
+}
+
+/** Wood-fired pizza oven — domed brick oven with a fiery mouth + chimney. 2×1. */
+function pizzaOven(): THREE.Group {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(1.7, 0.7, 0.8),
+    new THREE.MeshStandardMaterial({ color: 0x9a5a3a, roughness: 0.85 }),
+  );
+  base.position.y = 0.35;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  g.add(base);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(0.55, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0xb56a44, roughness: 0.8 }),
+  );
+  dome.position.set(0, 0.7, 0);
+  dome.scale.set(1.4, 1.0, 0.95);
+  dome.castShadow = true;
+  g.add(dome);
+  // Arched mouth with fire glow.
+  const mouth = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.32, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0x1a0e06, roughness: 0.6, emissive: 0xff6a1e, emissiveIntensity: 1.1 }),
+  );
+  mouth.position.set(0, 0.84, 0.4);
+  g.add(mouth);
+  const chimney = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.1, 0.12, 0.5, 12),
+    new THREE.MeshStandardMaterial({ color: 0x7a4a30, roughness: 0.85 }),
+  );
+  chimney.position.set(-0.55, 1.32, -0.12);
+  chimney.castShadow = true;
+  g.add(chimney);
+  return g;
+}
+
+// === Cozy decor (procedural — no GLB needed). ===
+
+/** Stone fireplace with a live fire glow + mantel. Floor, 2×1. */
+function fireplace(): THREE.Group {
+  const g = new THREE.Group();
+  const surround = new THREE.Mesh(
+    new THREE.BoxGeometry(1.7, 1.5, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x8a8278, roughness: 0.9 }),
+  );
+  surround.position.y = 0.75;
+  surround.castShadow = true;
+  surround.receiveShadow = true;
+  g.add(surround);
+  // Dark firebox recess.
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(1.0, 0.8, 0.32),
+    new THREE.MeshStandardMaterial({ color: 0x16100a, roughness: 1.0 }),
+  );
+  box.position.set(0, 0.6, 0.18);
+  g.add(box);
+  // Flames (emissive-only).
+  const fireMat = new THREE.MeshStandardMaterial({ color: 0xff6a1e, emissive: 0xff5212, emissiveIntensity: 1.3, roughness: 0.6 });
+  for (let i = 0; i < 4; i += 1) {
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.35 + Math.random() * 0.15, 7), fireMat);
+    flame.position.set(-0.3 + i * 0.2, 0.5, 0.2);
+    g.add(flame);
+  }
+  // Logs.
+  const logMat = new THREE.MeshStandardMaterial({ color: 0x4a2e1a, roughness: 0.9 });
+  for (let i = 0; i < 2; i += 1) {
+    const log = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.7, 8), logMat);
+    log.rotation.z = Math.PI / 2;
+    log.rotation.y = i * 0.35;
+    log.position.set(0, 0.3 + i * 0.1, 0.2);
+    g.add(log);
+  }
+  // Mantel shelf.
+  const mantel = new THREE.Mesh(
+    new THREE.BoxGeometry(1.8, 0.1, 0.6),
+    new THREE.MeshStandardMaterial({ color: 0x6a4a30, roughness: 0.7 }),
+  );
+  mantel.position.set(0, 1.16, 0.06);
+  g.add(mantel);
+  return g;
+}
+
+/** Large potted indoor tree — trunk + layered green canopy. Floor, 1×1. */
+function pottedTree(): THREE.Group {
+  const g = new THREE.Group();
+  const pot = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.28, 0.22, 0.42, 16),
+    new THREE.MeshStandardMaterial({ color: 0xb5734a, roughness: 0.8 }),
+  );
+  pot.position.y = 0.21;
+  pot.castShadow = true;
+  pot.receiveShadow = true;
+  g.add(pot);
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.08, 1.0, 8),
+    new THREE.MeshStandardMaterial({ color: 0x6a4830, roughness: 0.85 }),
+  );
+  trunk.position.y = 0.85;
+  trunk.castShadow = true;
+  g.add(trunk);
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x4a7834, roughness: 0.85 });
+  const tiers = [
+    { y: 1.25, r: 0.42, h: 0.5 },
+    { y: 1.6, r: 0.34, h: 0.45 },
+    { y: 1.9, r: 0.24, h: 0.4 },
+  ];
+  for (const t of tiers) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(t.r, t.h, 10), leafMat);
+    cone.position.y = t.y;
+    cone.castShadow = true;
+    g.add(cone);
+  }
+  return g;
+}
+
+/** Vintage grandfather clock — tall wooden case with a glowing pendulum. */
+function grandfatherClock(): THREE.Group {
+  const g = new THREE.Group();
+  const caseMat = new THREE.MeshStandardMaterial({ color: 0x5a3a22, roughness: 0.7 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.9, 0.3), caseMat);
+  body.position.y = 0.95;
+  body.castShadow = true;
+  body.receiveShadow = true;
+  g.add(body);
+  // Clock face.
+  const face = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.15, 0.04, 20),
+    new THREE.MeshStandardMaterial({ color: 0xf2ead2, roughness: 0.5, emissive: 0x3a3020, emissiveIntensity: 0.12 }),
+  );
+  face.rotation.x = Math.PI / 2;
+  face.position.set(0, 1.6, 0.16);
+  g.add(face);
+  // Hands.
+  const handMat = new THREE.MeshStandardMaterial({ color: 0x1a1208, roughness: 0.5 });
+  const hh = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.09, 0.01), handMat);
+  hh.position.set(0, 1.63, 0.185);
+  g.add(hh);
+  const mh = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.13, 0.01), handMat);
+  mh.position.set(0.03, 1.59, 0.185);
+  mh.rotation.z = -0.6;
+  g.add(mh);
+  // Pendulum (brass, faint glow).
+  const pend = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.07, 0.07, 0.03, 16),
+    new THREE.MeshStandardMaterial({ color: 0xc4a44a, metalness: 0.8, roughness: 0.3, emissive: 0x4a3a10, emissiveIntensity: 0.2 }),
+  );
+  pend.rotation.x = Math.PI / 2;
+  pend.position.set(0, 0.7, 0.155);
+  g.add(pend);
+  // Crown.
+  const crown = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.12, 0.36), caseMat);
+  crown.position.y = 1.96;
+  g.add(crown);
+  return g;
+}
+
+/** Living plant wall — a lush green panel of foliage. Wall-mounted. */
+function livingWall(): THREE.Group {
+  const g = new THREE.Group();
+  // Backing panel sits flush against the wall (+Z toward the wall).
+  const back = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 1.4, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x2e3a24, roughness: 0.9 }),
+  );
+  back.position.set(0, 0.7, 0.025);
+  back.castShadow = true;
+  back.receiveShadow = true;
+  g.add(back);
+  // Foliage tufts in a staggered grid, facing the room (-Z).
+  const greens = [0x4a7834, 0x5a8a3e, 0x3e6a2c, 0x6a9a48];
+  for (let row = 0; row < 5; row += 1) {
+    for (let col = 0; col < 4; col += 1) {
+      const mat = new THREE.MeshStandardMaterial({ color: greens[(row + col) % greens.length], roughness: 0.85 });
+      const tuft = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), mat);
+      tuft.position.set(-0.4 + col * 0.27, 0.18 + row * 0.28, -0.08);
+      tuft.scale.set(1, 0.8, 0.6);
+      g.add(tuft);
+    }
+  }
+  return g;
+}
+
+/** Back-bar liquor shelf — lit shelves of colorful bottles. Wall-mounted. */
+function barBackShelf(): THREE.Group {
+  const g = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x3a2818, roughness: 0.7 });
+  const back = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.3, 0.05), frameMat);
+  back.position.set(0, 0.65, 0.025);
+  back.castShadow = true;
+  back.receiveShadow = true;
+  g.add(back);
+  const shelfMat = new THREE.MeshStandardMaterial({ color: 0x5a4028, roughness: 0.6 });
+  const bottleColors = [0x2a6a3a, 0xa83a2a, 0xc4a44a, 0x3a5a9a, 0x7a3a6a, 0xd6c068];
+  for (let row = 0; row < 3; row += 1) {
+    const shelfY = 0.25 + row * 0.42;
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(1.16, 0.04, 0.16), shelfMat);
+    shelf.position.set(0, shelfY, -0.07);
+    g.add(shelf);
+    // Backlight strip (emissive-only).
+    const glow = new THREE.Mesh(
+      new THREE.BoxGeometry(1.1, 0.02, 0.01),
+      new THREE.MeshStandardMaterial({ color: 0xffe0a0, emissive: 0xffd890, emissiveIntensity: 0.8 }),
+    );
+    glow.position.set(0, shelfY + 0.34, -0.02);
+    g.add(glow);
+    for (let i = 0; i < 6; i += 1) {
+      const mat = new THREE.MeshStandardMaterial({ color: bottleColors[(row * 6 + i) % bottleColors.length], roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.9 });
+      const bottle = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.28, 8), mat);
+      bottle.position.set(-0.46 + i * 0.185, shelfY + 0.16, -0.07);
+      g.add(bottle);
+    }
+  }
+  return g;
+}
+
+/** Framed vintage travel poster — warm-toned wall art. Wall-mounted. */
+function vintagePoster(): THREE.Group {
+  const g = new THREE.Group();
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.86, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.6 }),
+  );
+  frame.castShadow = true;
+  g.add(frame);
+  // Poster face (-Z toward the room), banded like a retro print.
+  const bands = [0xe0a85a, 0xd6743a, 0x6a9a8a, 0x3a5a6a];
+  for (let i = 0; i < 4; i += 1) {
+    const band = new THREE.Mesh(
+      new THREE.BoxGeometry(0.52, 0.19, 0.02),
+      new THREE.MeshStandardMaterial({ color: bands[i], roughness: 0.6, emissive: bands[i], emissiveIntensity: 0.1 }),
+    );
+    band.position.set(0, 0.3 - i * 0.2, -0.035);
+    g.add(band);
+  }
+  return g;
+}
+
+/** Ornate round wall clock. Wall-mounted. */
+function wallClock(): THREE.Group {
+  const g = new THREE.Group();
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(0.26, 0.035, 10, 24),
+    new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.6 }),
+  );
+  rim.position.z = -0.04;
+  g.add(rim);
+  const face = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.24, 0.24, 0.03, 28),
+    new THREE.MeshStandardMaterial({ color: 0xf4eeda, roughness: 0.5, emissive: 0x322a18, emissiveIntensity: 0.1 }),
+  );
+  face.rotation.x = Math.PI / 2;
+  face.position.z = -0.05;
+  g.add(face);
+  const handMat = new THREE.MeshStandardMaterial({ color: 0x1a1208, roughness: 0.5 });
+  const hh = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.13, 0.01), handMat);
+  hh.position.set(0, 0.03, -0.075);
+  g.add(hh);
+  const mh = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.19, 0.01), handMat);
+  mh.position.set(0.05, -0.02, -0.075);
+  mh.rotation.z = -0.7;
+  g.add(mh);
+  return g;
+}
+
+/** Persian-style rug — flat ornamental floor covering. */
+function persianRug(): THREE.Group {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(1.0, 0.02, 0.7),
+    new THREE.MeshStandardMaterial({ color: 0x7a2a24, roughness: 0.95 }),
+  );
+  base.receiveShadow = true;
+  g.add(base);
+  // Border.
+  const border = new THREE.Mesh(
+    new THREE.BoxGeometry(0.86, 0.022, 0.58),
+    new THREE.MeshStandardMaterial({ color: 0x244a5a, roughness: 0.95 }),
+  );
+  border.position.y = 0.001;
+  g.add(border);
+  // Center medallion.
+  const medallion = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.024, 0.28),
+    new THREE.MeshStandardMaterial({ color: 0xc4a44a, roughness: 0.9 }),
+  );
+  medallion.position.y = 0.002;
+  g.add(medallion);
+  return g;
+}
+
+/** A cluster of three lit candles on a base. Sits on a table/surface. */
+function candleCenterpiece(): THREE.Group {
+  const g = new THREE.Group();
+  const plate = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.13, 0.14, 0.03, 16),
+    new THREE.MeshStandardMaterial({ color: 0x8a6a3a, metalness: 0.5, roughness: 0.4 }),
+  );
+  plate.position.y = 0.015;
+  g.add(plate);
+  const waxMat = new THREE.MeshStandardMaterial({ color: 0xf2e6c8, roughness: 0.6 });
+  const flameMat = new THREE.MeshStandardMaterial({ color: 0xffd060, emissive: 0xffc23a, emissiveIntensity: 1.6, roughness: 0.4 });
+  const spots = [
+    { x: 0, z: 0, h: 0.18 },
+    { x: -0.07, z: 0.05, h: 0.12 },
+    { x: 0.07, z: 0.05, h: 0.14 },
+  ];
+  for (const s of spots) {
+    const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, s.h, 10), waxMat);
+    candle.position.set(s.x, 0.03 + s.h / 2, s.z);
+    g.add(candle);
+    const flame = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.06, 7), flameMat);
+    flame.position.set(s.x, 0.03 + s.h + 0.03, s.z);
+    g.add(flame);
+  }
+  return g;
+}
+
+/** Elegant chandelier — brass ring of candle-bulbs. Ceiling-mounted.
+ * Authored bottom-at-y=0 so placementY("ceiling") hangs its top at the
+ * ceiling and the body drops ~0.5 m into the room (mirrors hanging-plant). */
+function chandelier(): THREE.Group {
+  const g = new THREE.Group();
+  const brass = new THREE.MeshStandardMaterial({ color: 0xc4a44a, metalness: 0.8, roughness: 0.3 });
+  // Drop rod from the ceiling.
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), brass);
+  rod.position.y = 0.65;
+  g.add(rod);
+  // Ring.
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.025, 8, 22), brass);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 0.4;
+  g.add(ring);
+  // Arms + candle bulbs (emissive-only).
+  const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffe49a, emissiveIntensity: 1.5, roughness: 0.4 });
+  for (let i = 0; i < 6; i += 1) {
+    const a = (i / 6) * Math.PI * 2;
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.34, 6), brass);
+    arm.position.set(Math.cos(a) * 0.16, 0.42, Math.sin(a) * 0.16);
+    arm.rotation.z = Math.PI / 2;
+    arm.rotation.y = -a;
+    g.add(arm);
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.03, 0.05, 8), brass);
+    cup.position.set(Math.cos(a) * 0.32, 0.44, Math.sin(a) * 0.32);
+    g.add(cup);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), bulbMat);
+    bulb.position.set(Math.cos(a) * 0.32, 0.51, Math.sin(a) * 0.32);
+    g.add(bulb);
+  }
+  return g;
+}
+
+/** A swag of warm string lights. Ceiling-mounted; drapes a gentle catenary. */
+function stringLights(): THREE.Group {
+  const g = new THREE.Group();
+  const wireMat = new THREE.MeshStandardMaterial({ color: 0x2a2620, roughness: 0.6 });
+  const bulbMat = new THREE.MeshStandardMaterial({ color: 0xffe6a0, emissive: 0xffd87a, emissiveIntensity: 1.3, roughness: 0.4 });
+  // 9 bulbs strung in a shallow droop across the tile, near the ceiling.
+  const n = 9;
+  for (let i = 0; i < n; i += 1) {
+    const t = i / (n - 1);
+    const x = -0.45 + t * 0.9;
+    // Catenary-ish droop, deepest in the middle.
+    const droop = Math.sin(t * Math.PI) * 0.18;
+    const y = 0.55 - droop;
+    const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.13, 5), wireMat);
+    wire.position.set(x, y + 0.06, 0);
+    g.add(wire);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), bulbMat);
+    bulb.position.set(x, y, 0);
+    g.add(bulb);
+  }
+  return g;
+}
+
 /** Map of "proc:" id suffix → builder. ModelLoader routes through this. */
 export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "framed-art-warm": () => framedArt(0xc97e4a, "warm"),
@@ -638,4 +1125,21 @@ export const PROC_BUILDERS: Record<string, () => THREE.Group> = {
   "planter-box": () => planterBox(),
   "hanging-plant": () => hangingPlant(),
   "dessert-display": () => dessertDisplay(),
+  // Cooking stations.
+  "grill-station": () => grillStation(),
+  "oven-station": () => ovenStation(),
+  "fryer-station": () => fryerStation(),
+  "pizza-oven": () => pizzaOven(),
+  // Cozy decor.
+  "fireplace": () => fireplace(),
+  "potted-tree": () => pottedTree(),
+  "grandfather-clock": () => grandfatherClock(),
+  "living-wall": () => livingWall(),
+  "bar-back-shelf": () => barBackShelf(),
+  "vintage-poster": () => vintagePoster(),
+  "wall-clock": () => wallClock(),
+  "persian-rug": () => persianRug(),
+  "candle-centerpiece": () => candleCenterpiece(),
+  "chandelier": () => chandelier(),
+  "string-lights": () => stringLights(),
 };
