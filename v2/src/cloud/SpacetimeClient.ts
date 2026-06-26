@@ -487,32 +487,23 @@ export class SpacetimeClient {
     }
     const slot = this.saver.getActiveSlot();
     const key = slot === 1 ? "cozy-bistro-3d-save" : `cozy-bistro-3d-save-${slot}`;
+    // Apply the cloud save IN-PLACE instead of write-localStorage-and-reload.
+    // The reload approach RACED the autosave: the running day-1 shell saved OVER
+    // the slot during the reload delay, so the reload re-loaded the shell —
+    // forever (the loop the user hit). Hydrating in place makes the game the real
+    // save immediately; the next autosave then persists THAT, not the shell. No
+    // reload → no race → no loop.
     try {
-      localStorage.setItem(key, snap.data);
+      this.game.hydrate(JSON.parse(snap.data) as Parameters<typeof this.game.hydrate>[0]);
     } catch (e) {
-      // localStorage genuinely unavailable (not just incognito, which has
-      // session storage). Apply the blob to the RUNNING game in-place so
-      // progression still restores — we can't reload to pick it up without
-      // localStorage to read it back. Best-effort: the data model updates
-      // immediately; the floor unlock follows the next FloorSelector refresh.
-      console.warn("[SpacetimeDB] no localStorage; applying cloud save in-place", e);
-      try {
-        this.game.hydrate(JSON.parse(snap.data) as Parameters<typeof this.game.hydrate>[0]);
-        this.cloudAutoLoadTriggered = true;
-      } catch (e2) {
-        console.warn("[SpacetimeDB] in-place cloud hydrate failed", e2);
-      }
+      console.warn("[SpacetimeDB] cloud hydrate failed", e);
       return;
     }
+    // Persist to the active slot too, so a later COLD boot finds it directly.
+    try { localStorage.setItem(key, snap.data); } catch { /* best-effort */ }
     this.cloudAutoLoadTriggered = true;
     try { sessionStorage.setItem("cozy-bistro.cloud-autoload-latch", "1"); } catch { /* ignore */ }
-    console.log(`[SpacetimeDB] cross-device login — auto-loaded cloud save into slot ${slot}, reloading`);
-    // Tiny delay so the console message can flush + so the user
-    // sees a brief "loading…" before the page swaps. The reload
-    // re-enters Engine boot, which now finds the save in
-    // localStorage and hydrates as if it were a normal returning
-    // player.
-    window.setTimeout(() => window.location.reload(), 250);
+    console.log(`[SpacetimeDB] applied cloud save in-place (slot ${slot}, day ${this.game.day.getDayNumber()}/tier ${this.game.getLuxuryTier()}) — no reload`);
   }
 
   // ============================================================================
