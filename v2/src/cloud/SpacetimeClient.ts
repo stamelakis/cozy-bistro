@@ -391,6 +391,22 @@ export class SpacetimeClient {
     const mineStr = mine
       ? `day ${mine.dayNumber} / tier ${mine.luxuryTier} / $${Math.round(mine.money)}`
       : "(NONE — no player_save row for my identity)";
+    // ACCOUNT-keyed save — the canonical one the current build loads.
+    const myUser = this.myUsername();
+    const acct = myUser ? this.getAccountSave(myUser) : null;
+    const acctStr = acct
+      ? `day ${acct.dayNumber} / tier ${acct.luxuryTier} / $${Math.round(acct.money)}`
+      : (myUser ? "(NONE in client cache — account_save not subscribed/arrived?)" : "(no username persisted)");
+    const canon = this.getCanonicalSave();
+    const canonStr = canon ? `day ${canon.dayNumber} / tier ${canon.luxuryTier}` : "(none)";
+    const allAccts: string[] = [];
+    if (this.conn) {
+      try {
+        for (const a of this.conn.db.account_save.iter()) {
+          allAccts.push(`${a.username}:d${a.dayNumber}/t${a.luxuryTier}`);
+        }
+      } catch { /* ignore */ }
+    }
     const allSaves: string[] = [];
     if (this.conn) {
       try {
@@ -403,17 +419,19 @@ export class SpacetimeClient {
     try { latch = sessionStorage.getItem("cozy-bistro.cloud-autoload-latch") ?? "(unset)"; } catch { /* ignore */ }
     const block = [
       "",
-      "╔════════ COZY CROSS-DEVICE DIAGNOSTICS ════════",
-      `║ my identity     : ${meHex}`,
-      `║ logged in as    : ${loggedInAs}`,
-      `║ my restaurantId : ${rid}  (owner ${restOwner})`,
-      `║ MY cloud save   : ${mineStr}`,
-      `║ local game      : day ${this.game.day.getDayNumber()} / tier ${this.game.getLuxuryTier()}`,
-      `║ wasFreshStart   : ${this.wasFreshStart}`,
-      `║ cloudAutoLoaded : ${this.cloudAutoLoadTriggered}    autoload-latch: ${latch}`,
-      `║ all auth_records: ${allAuth.join("   ") || "(none)"}`,
-      `║ all cloud saves : ${allSaves.join("  |  ") || "(none)"}`,
-      "╚═══════════════════════════════════════════════",
+      "╔═══════ COZY DIAGNOSTICS (account-save build) ═══════",
+      `║ my identity      : ${meHex}`,
+      `║ logged in as     : ${loggedInAs}`,
+      `║ my username      : ${myUser ?? "(NONE persisted — login didn't save it)"}`,
+      `║ my restaurantId  : ${rid}  (owner ${restOwner})`,
+      `║ >> account_save  : ${acctStr}`,
+      `║ >> getCanonical  : ${canonStr}   <- what the build will LOAD`,
+      `║ my player_save   : ${mineStr}`,
+      `║ local game       : day ${this.game.day.getDayNumber()} / tier ${this.game.getLuxuryTier()}`,
+      `║ wasFreshStart=${this.wasFreshStart}  latch=${latch}  loaded=${this.cloudAutoLoadTriggered}`,
+      `║ all account_saves: ${allAccts.join("  |  ") || "(NONE in cache)"}`,
+      `║ all auth_records : ${allAuth.join("   ") || "(none)"}`,
+      "╚═════════════════════════════════════════════════════",
       "",
     ].join("\n");
     console.log(block);
@@ -3486,21 +3504,24 @@ export class SpacetimeClient {
     if (!this.conn || !this.identity) return;
     // The transfer (restaurant.owner + player_save.identity → us) can land a
     // few subscription ticks after the auth_record update — poll ~12s.
+    const u = this.myUsername();
     for (let i = 0; i < 48; i += 1) {
       void this.getMyRestaurantId(); // lazy re-scan also resolves restaurantId
-      const mySave = this.getCanonicalSave();
+      // STRONGLY prefer the ACCOUNT-keyed save. If we know our username, WAIT
+      // for account_save to arrive in the subscription before falling back to a
+      // possibly-shell per-identity save — otherwise the very first tick loads
+      // the incognito's day-1 shell and we never see the real tier-5. Allow the
+      // per-identity fallback only with no username, or after ~5s of waiting.
+      const acct = u ? this.getAccountSave(u) : null;
+      const fallback = !acct && (!u || i >= 20) && this.identity ? this.getPlayerSave(this.identity) : null;
+      const mySave = acct ?? fallback;
       if (mySave && mySave.data) {
         const localDay = this.game.day.getDayNumber();
         const localTier = this.game.getLuxuryTier();
-        // Load the cloud save when we booted fresh, OR when we're staring at a
-        // day-1 SHELL while a substantial cloud save sits under our identity.
-        // The shell case is the one the old wasFreshStart-only gate missed: an
-        // incognito tab (shared storage) keeps a stale shell alive, so the
-        // player got stuck on tier-1 with their real tier-5 save in the cloud.
         const localIsShell = localDay <= 1 && localTier <= 1;
         const cloudSubstantial = mySave.dayNumber >= 10 || mySave.luxuryTier >= 2;
         if (this.wasFreshStart || (localIsShell && cloudSubstantial)) {
-          console.log(`[SpacetimeDB] post-login — loading cloud save (cloud day ${mySave.dayNumber}/tier ${mySave.luxuryTier} over local day ${localDay}/tier ${localTier})`);
+          console.log(`[SpacetimeDB] post-login — loading ${acct ? "account_save" : "player_save"} (day ${mySave.dayNumber}/tier ${mySave.luxuryTier} over local day ${localDay}/tier ${localTier})`);
           this.maybeAutoLoadCloudSave({ data: mySave.data }, true);
         }
         return;
