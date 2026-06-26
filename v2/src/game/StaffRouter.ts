@@ -2290,11 +2290,23 @@ export class StaffRouter {
     // legitimately go out to shop, so they aren't in these lists. Mirrors the
     // server's tick_staff_actor clamp (restaurant_sim.rs).
     const clampInside = (a: StaffActor): void => {
-      const p = a.character.groundPos;
-      p.x = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, p.x));
-      p.y = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, p.y));
+      // Target always into the box (cheap; stops them pathing back out).
       a.target.x = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, a.target.x));
       a.target.y = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, a.target.y));
+      const p = a.character.groundPos;
+      let cx = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, p.x));
+      let cz = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, p.y));
+      // Also snap OFF furniture — a plain box-clamp can land an out-of-bounds
+      // actor on a wall-edge lamp/cabinet ("stuck in the lamp"). snapToClear is
+      // a no-op when already on a walkable tile (chef at a stove, waiter beside
+      // a seat), so only a genuinely clipped / outside actor is moved.
+      if (this.pathfind) {
+        const s = this.pathfind.snapToClear(cx, cz, a.currentFloor);
+        cx = Math.max(INTERIOR_MIN_X, Math.min(INTERIOR_MAX_X, s.x));
+        cz = Math.max(INTERIOR_MIN_Z, Math.min(INTERIOR_MAX_Z, s.z));
+      }
+      // Only write when it actually moved — never disturb a normally-walking actor.
+      if (Math.abs(cx - p.x) > 1e-4 || Math.abs(cz - p.y) > 1e-4) p.set(cx, cz);
     };
     for (const c of this.chefs) clampInside(c);
     for (const b of this.barmen) clampInside(b);
