@@ -3543,6 +3543,10 @@ export class SpacetimeClient {
       const key = tokenStorageKeyFor(this.cfg.host);
       localStorage.removeItem(key);
       sessionStorage.removeItem(key);
+      // Clear the persisted account name too — otherwise a re-login as a
+      // DIFFERENT user would resolve the OLD username and load the wrong
+      // account's save (account-keyed save). [bug-sweep fix]
+      localStorage.removeItem("cozy-bistro.username");
     } catch { /* private-mode storage — ignore */ }
   }
 

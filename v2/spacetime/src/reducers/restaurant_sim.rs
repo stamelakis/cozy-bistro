@@ -1690,6 +1690,10 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         } else {
             (station.x + station.rot_y.sin(), station.z + station.rot_y.cos())
         };
+        // Clamp the cook-stand to the interior box at the SOURCE — a station
+        // against a wall puts the +facing stand position outside, which the
+        // per-tick clamp only corrects a frame later ("guy outside"). [bug-sweep]
+        let (stand_x, stand_z) = (stand_x.clamp(-4.2_f32, 5.2_f32), stand_z.clamp(-4.2_f32, 5.2_f32));
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
@@ -8035,6 +8039,16 @@ pub fn set_guest_order(
         .ok_or_else(|| "Guest's restaurant not found".to_string())?;
     if r.owner != ctx.sender {
         return Err("Only the owner can set guest orders".into());
+    }
+    // Anti-cheat / DoS guard — cap the order payload. A legit order is a handful
+    // of courses; without this a modded owner client could send multi-MB CSVs
+    // (DoS) or a huge course count to inflate money / leaderboard scores. [bug-sweep]
+    const MAX_ORDER_CSV: usize = 512;
+    if recipes_csv.len() > MAX_ORDER_CSV || appliances_csv.len() > MAX_ORDER_CSV
+        || cook_seconds_csv.len() > MAX_ORDER_CSV || prices_csv.len() > MAX_ORDER_CSV
+        || satisfactions_csv.len() > MAX_ORDER_CSV
+        || recipes_csv.split(',').count() > 8 {
+        return Err("Order payload too large".into());
     }
     let new_appliances = if appliances_csv.is_empty() { None } else { Some(appliances_csv) };
     let new_cook_seconds = if cook_seconds_csv.is_empty() { None } else { Some(cook_seconds_csv) };
