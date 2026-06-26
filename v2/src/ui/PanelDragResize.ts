@@ -368,6 +368,26 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   // explicit panel moves re-cache the anchored edge.
   refreshAnchorsAfterUserMove = updateAnchorsFromRect;
 
+  // Ride the viewport on resize. A bottom-anchored ("up") panel gets converted
+  // to absolute top/left for dragging, after which it no longer follows the
+  // viewport bottom — so a viewport change (opening/closing devtools, resizing
+  // the window) strands it at a fixed top px, off the bottom, and it then
+  // EXPANDS in the wrong place. Shift it by the viewport-height delta so its
+  // bottom edge keeps riding the viewport bottom, and re-cache the anchor.
+  if (expandDirection === "up") {
+    let lastVH = window.innerHeight;
+    window.addEventListener("resize", () => {
+      const dvh = window.innerHeight - lastVH;
+      lastVH = window.innerHeight;
+      if (dvh === 0) return;
+      const r = root.getBoundingClientRect();
+      const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - VIEWPORT_PADDING - root.offsetHeight);
+      const newTop = Math.max(VIEWPORT_PADDING, Math.min(r.top + dvh, maxTop));
+      root.style.top = `${newTop}px`;
+      updateAnchorsFromRect();
+    });
+  }
+
   void savedHeight; // referenced for closure capture
 }
 

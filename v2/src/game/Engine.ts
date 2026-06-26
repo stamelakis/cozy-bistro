@@ -767,7 +767,7 @@ export class Engine {
       // overrode the new 500-max via PanelDragResize.applyLayout, which
       // sets explicit width + maxWidth:none. Bumping the key drops the
       // stale wider layout so new sessions get the intended 500-px box.
-      storageKey: "cozy-bistro.panel.menu.v3",
+      storageKey: "cozy-bistro.panel.menu.v4",
       root: this.menuPanel.root,
       handle: this.menuPanel.titleEl,
       collapseSentinel: this.menuPanel.body,
