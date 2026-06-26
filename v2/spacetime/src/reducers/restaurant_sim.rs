@@ -14,16 +14,16 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_menu, active_ticket, auth_record, building, customer_archetype, dirty_pile,
-    dishware_pool, dishwasher_batch, furniture_cost, hired_staff_member, ingredient_cost, pantry_stock,
+    dishware_pool, dishwasher_batch, furniture_cost, furniture_meta, hired_staff_member, ingredient_cost, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, seat_slot, staff_actor, weather_state, money_cutover,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost,
+    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureMeta,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    SeatSlot, StaffActor, MoneyCutover,
+    SeatSlot, SeatAppeal, StaffActor, MoneyCutover,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -1732,6 +1732,14 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
         "blender" => Some("blender"),
         "toaster" => Some("toaster"),
         "bar-counter" | "bar-end" => Some("bar"),
+        // Phase 9.62 — new dedicated cooking stations. Without these
+        // entries the server's auto_claim_queued_tickets can't match a
+        // grill/oven/fryer/pizza ticket to a station, so those recipes
+        // would queue forever and never cook (the chef stands idle).
+        "grill-station" => Some("grill"),
+        "fryer-station" => Some("fryer"),
+        "oven-station" => Some("oven"),
+        "pizza-oven" => Some("pizza-oven"),
         _ => None,
     }
 }
@@ -2122,7 +2130,10 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     let mut sink_count: i32 = 0;
     for f in ctx.db.placed_furniture().restaurant_id().filter(g.restaurant_id) {
         match f.def_id.as_str() {
-            "stove" | "stove-electric" => stove_count += 1,
+            // Phase 9.62 — open-flame / wood-fired stations smoke too, so
+            // they need a range hood like a stove. Fryer + oven are
+            // enclosed → exempt.
+            "stove" | "stove-electric" | "grill-station" | "pizza-oven" => stove_count += 1,
             "kitchen-hood" | "kitchen-hood-l" => hood_count += 1,
             _ => {}
         }
@@ -3163,6 +3174,114 @@ pub fn set_furniture_cost(
     Ok(())
 }
 
+/// Phase 9.62 (anti-cheat) — seed the furniture metadata catalog. The
+/// client seeds at boot from furnitureCatalog.ts; the server uses it to
+/// compute per-seat taste appeal + the attraction aggregate itself
+/// (replacing the old client-computed mirrors). Same gate shape as
+/// set_furniture_cost: an idempotent re-seed is open to any client, but
+/// an actual CHANGE is admin-only (a player must not be able to inflate
+/// their own decor/attraction to game seating + spawn rate).
+#[reducer]
+pub fn set_furniture_meta(
+    ctx: &ReducerContext,
+    def_id: String,
+    category: String,
+    style_x100: i32,
+    comfort_x100: i32,
+    attraction_x100: i32,
+    rating_bonus_x100: i32,
+    surface: String,
+) -> Result<(), String> {
+    let zero = spacetimedb::Identity::__dummy();
+    if ctx.sender == zero { return Err("Must be authenticated".into()); }
+    if def_id.is_empty() || def_id.len() > 64 {
+        return Err("def_id must be 1-64 chars".into());
+    }
+    let existing = ctx.db.furniture_meta().def_id().find(def_id.clone());
+    if let Some(r) = &existing {
+        if r.category == category && r.style_x100 == style_x100
+            && r.comfort_x100 == comfort_x100 && r.attraction_x100 == attraction_x100
+            && r.rating_bonus_x100 == rating_bonus_x100 && r.surface == surface {
+            return Ok(()); // idempotent
+        }
+    }
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Furniture meta catalog changes are admin-only".into());
+    }
+    let row = FurnitureMeta {
+        def_id, category, style_x100, comfort_x100, attraction_x100, rating_bonus_x100, surface,
+    };
+    if existing.is_some() {
+        ctx.db.furniture_meta().def_id().update(row);
+    } else {
+        ctx.db.furniture_meta().insert(row);
+    }
+    Ok(())
+}
+
+/// Phase 9.62 — server-side per-seat appeal, computed from
+/// placed_furniture + furniture_meta. Mirror of the client's
+/// GuestSpawner.computeNearbyDecorScore / isSeatWindowAdjacent /
+/// surface helpers, moved server-side so seating is fully
+/// authoritative. `furn` is the restaurant's furniture pre-collected
+/// once by the caller (avoids an O(seats×furniture) re-scan).
+struct ApFurn { x: f32, z: f32, floor: u32, is_window: bool, is_decor: bool, quality: f32 }
+
+fn compute_seat_appeal(
+    ctx: &ReducerContext,
+    furn: &[ApFurn],
+    seat_x: f32,
+    seat_z: f32,
+    floor: u32,
+    table_uid: &str,
+    at_bar: bool,
+) -> (f32, bool, String) {
+    let mut decor = 0.0_f32;
+    let mut window_adj = false;
+    for f in furn {
+        if f.floor != floor { continue; }
+        let dx = f.x - seat_x;
+        let dz = f.z - seat_z;
+        let dist_sq = dx * dx + dz * dz;
+        if f.is_window && dist_sq < 6.25 { window_adj = true; } // 2.5m
+        if f.is_decor && dist_sq <= 36.0 {                      // 6 tiles
+            decor += f.quality / (1.0 + dist_sq);
+        }
+    }
+    let decor_score = (decor * 4.0).min(60.0);
+    // Surface: bar seats are drink; else the table's furniture_meta.surface
+    // (coffee tables are "drink"); default "food".
+    let surface = if at_bar {
+        "drink".to_string()
+    } else {
+        ctx.db.placed_furniture().uid().find(table_uid.to_string())
+            .and_then(|t| ctx.db.furniture_meta().def_id().find(t.def_id))
+            .map(|m| if m.surface == "drink" { "drink".to_string() } else { "food".to_string() })
+            .unwrap_or_else(|| "food".to_string())
+    };
+    (decor_score, window_adj, surface)
+}
+
+/// Phase 9.62 — collect the restaurant's furniture into appeal records
+/// once (decor quality + window flag from furniture_meta / def_id), so
+/// per-seat scoring is a cheap in-memory scan.
+fn collect_appeal_furniture(ctx: &ReducerContext, rid: u64) -> Vec<ApFurn> {
+    let mut out = Vec::new();
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        let is_window = f.def_id.starts_with("window") || f.def_id.starts_with("int-window");
+        let (is_decor, quality) = match ctx.db.furniture_meta().def_id().find(f.def_id.clone()) {
+            Some(m) if m.category == "decoration" || m.category == "plant" || m.category == "lamp" => {
+                let q = m.style_x100 as f32 / 100.0 + 10.0 * (m.rating_bonus_x100 as f32 / 100.0);
+                (true, q)
+            }
+            _ => (false, 0.0),
+        };
+        if !is_window && !is_decor { continue; }
+        out.push(ApFurn { x: f.x, z: f.z, floor: f.floor, is_window, is_decor, quality });
+    }
+    out
+}
+
 /// Anti-cheat B/C (income flow 1/5) — server-authoritative starter grant.
 /// Replaces the client's earnMoney+bump (Engine.enterGame / ExpandWidget)
 /// with a server credit on a server-enforced 3h cooldown, so a cheater
@@ -4059,13 +4178,37 @@ fn apply_pool_delta(
     );
 }
 
-/// Phase H.28 — client pushes the latest aggregate furniture stats
-/// computed via FurnitureRegistry.getAggregateStats +
-/// getBathroomScore. Cached on the Restaurant row so the server can
-/// apply vibe + bathroom rating modifiers to backgrounded guests
-/// without porting the catalog data to Rust.
+/// Phase 9.62 — server-computed furniture aggregates (style / comfort /
+/// rating_bonus / attraction), each ×100, summed across placed_furniture
+/// via furniture_meta. Mirror of the client's getAggregateStats (a plain
+/// per-item sum), moved server-side so attraction → spawn rate + the vibe
+/// rating modifier are authoritative instead of a trusted client mirror.
+/// Returns None when furniture_meta has no rows (catalog not seeded yet)
+/// so the caller falls back to the client-sent values during the seed
+/// window. Returns (style, comfort, rating_bonus, attraction).
+fn server_furniture_aggregates(ctx: &ReducerContext, rid: u64) -> Option<(i32, i32, i32, i32)> {
+    if ctx.db.furniture_meta().iter().next().is_none() { return None; }
+    let (mut style, mut comfort, mut attraction, mut rating) = (0i32, 0i32, 0i32, 0i32);
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        if let Some(m) = ctx.db.furniture_meta().def_id().find(f.def_id) {
+            style = style.saturating_add(m.style_x100);
+            comfort = comfort.saturating_add(m.comfort_x100);
+            attraction = attraction.saturating_add(m.attraction_x100);
+            rating = rating.saturating_add(m.rating_bonus_x100);
+        }
+    }
+    Some((style, comfort, rating, attraction))
+}
+
+/// Phase H.28 / 9.62 — refresh the cached furniture aggregates on the
+/// Restaurant row (vibe + attraction drive backgrounded-guest rating +
+/// spawn rate). The furniture-derived four are now RECOMPUTED server-side
+/// from placed_furniture + furniture_meta (authoritative); the client's
+/// pushed values are only a fallback for the pre-seed window. Bathroom
+/// quality is still client-sent (its fixture-quality math hasn't been
+/// ported yet — tracked as a follow-up).
 ///
-/// Owner-only. Idempotent: a push with identical values is a no-op.
+/// Owner-only. Idempotent: no change → no-op.
 #[reducer]
 pub fn update_restaurant_aggregates(
     ctx: &ReducerContext,
@@ -4081,6 +4224,11 @@ pub fn update_restaurant_aggregates(
     if r.owner != ctx.sender {
         return Err("Only the owner can update aggregates".into());
     }
+    // Server-authoritative recompute; fall back to client values only
+    // until furniture_meta is seeded.
+    let (style_x100, comfort_x100, rating_bonus_x100, attraction_bonus_x100) =
+        server_furniture_aggregates(ctx, restaurant_id)
+            .unwrap_or((style_x100, comfort_x100, rating_bonus_x100, attraction_bonus_x100));
     if r.cached_style_x100 == style_x100
         && r.cached_comfort_x100 == comfort_x100
         && r.cached_rating_bonus_x100 == rating_bonus_x100
@@ -6580,10 +6728,61 @@ pub(crate) fn try_spawn_arrival_guest(
     // wait timeout. try_promote_waiting_guest seats them the moment
     // a chair frees; the Phase 6.1b waiting-timeout tick walks them
     // out (dissatisfied) if it never does.
+    // Phase 9.61 — roll archetype + taste BEFORE seat assignment so the
+    // picker can honour decor/window/diet preferences, restoring the
+    // seat-by-taste behaviour the client's pickBestSeatForTaste lost when
+    // guest spawning went server-side (Phase 9.4). Pseudo-random rolls
+    // hash (timestamp ^ restaurant_id ^ active_count) — Date.now()/
+    // random() are disallowed in scheduled-reducer context.
+    let seed: u64 = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
+        .wrapping_mul(restaurant_id.wrapping_add(1))
+        .wrapping_mul(active_count as u64 + 17);
+    let mut h: u64 = seed ^ 0x9E37_79B9_7F4A_7C15;
+    h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    // H.38 — pick an archetype from the seeded catalog. Patience
+    // multiplier + WC-use chance come from the archetype.
+    let (archetype_id, archetype_patience_mult, wc_chance_x100, _order_bias)
+        = pick_archetype(ctx, h);
+    let wc_roll = ((h >> 24) % 100) as i32;
+    let will_use_toilet = wc_roll < wc_chance_x100 / 5; // ~20% of wc-prone
+    let will_wash_only = !will_use_toilet && wc_roll < wc_chance_x100 * 4 / 5;
+    // Combine archetype's patience multiplier with a small per-guest
+    // jitter so two casual diners aren't identical.
+    let jitter = ((h >> 40) % 21) as i32 - 10; // ±10
+    let patience_mult_x100 = (archetype_patience_mult + jitter).clamp(40, 200);
+    let client_temp_id = format!("srv-arrival-{}", h & 0xFFFF_FFFF);
+
+    // Taste roll biased by archetype — mirrors the client's
+    // rollCustomerTaste (customerArchetypes.ts) so server-spawned guests
+    // show the same variety: foodies/dates/critics care about decor,
+    // dates want windows, quick-lunch barely notices, drink-only sit at
+    // the bar. Distinct hash bit-slices give independent 0..1 randoms.
+    let rng = |shift: u32| ((h >> shift) % 1000) as f32 / 1000.0;
+    let (decor_base, window_base): (f32, f32) = match archetype_id.as_str() {
+        "quick-lunch" => (0.15, 0.15),
+        "foodie"      => (0.70, 0.55),
+        "date-night"  => (0.70, 0.85),
+        "critic"      => (0.70, 0.40),
+        "tourist"     => (0.40, 0.55),
+        _             => (0.40, 0.40),
+    };
+    let taste_decor_pref = (decor_base + (rng(8) - 0.5) * 0.3).clamp(0.0, 1.0);
+    let taste_window_pref = (window_base + (rng(16) - 0.5) * 0.3).clamp(0.0, 1.0);
+    let diet_roll = rng(48);
+    let taste_diet: String = match archetype_id.as_str() {
+        "quick-lunch" => if diet_roll < 0.85 { "food" } else { "drink" },
+        "date-night" | "foodie" =>
+            if diet_roll < 0.7 { "both" } else if diet_roll < 0.9 { "food" } else { "drink" },
+        _ => if diet_roll < 0.25 { "drink" } else if diet_roll < 0.75 { "food" } else { "both" },
+    }.to_string();
+
     let mut wait_mode = false;
     let mut waiting_timeout_ms: i64 = 0;
     let (seat_uid, seat_x, seat_z, seat_floor) =
-        match try_assign_seat_for(ctx, restaurant_id, door_x, door_z, None) {
+        match try_assign_seat_for(ctx, restaurant_id, door_x, door_z, None,
+            Some((taste_decor_pref, taste_window_pref, &taste_diet))) {
             Some(s) => s,
             None => {
                 let avg_x100 = avg_rating_x100(ctx, restaurant_id); // 100..500
@@ -6616,32 +6815,6 @@ pub(crate) fn try_spawn_arrival_guest(
             }
         };
 
-    // Pseudo-random rolls — Date.now()/random() are disallowed in
-    // scheduled-reducer context, so we hash (timestamp ^ restaurant_id
-    // ^ active_count) and pull bits off it. Distribution good enough
-    // for archetype-like flavor rolls.
-    let seed: u64 = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
-        .wrapping_mul(restaurant_id.wrapping_add(1))
-        .wrapping_mul(active_count as u64 + 17);
-    let mut h: u64 = seed ^ 0x9E37_79B9_7F4A_7C15;
-    h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
-    // H.38 — pick an archetype from the seeded catalog instead of
-    // hardcoding "regular". Patience multiplier + WC-use chance come
-    // from the archetype; previously they were rolled inline.
-    let (archetype_id, archetype_patience_mult, wc_chance_x100, _order_bias)
-        = pick_archetype(ctx, h);
-    let wc_roll = ((h >> 24) % 100) as i32;
-    let will_use_toilet = wc_roll < wc_chance_x100 / 5; // ~20% of wc-prone
-    let will_wash_only = !will_use_toilet && wc_roll < wc_chance_x100 * 4 / 5;
-    // Combine archetype's patience multiplier with a small per-guest
-    // jitter so two casual diners aren't identical.
-    let jitter = ((h >> 40) % 21) as i32 - 10; // ±10
-    let patience_mult_x100 = (archetype_patience_mult + jitter).clamp(40, 200);
-
-    let client_temp_id = format!("srv-arrival-{}", h & 0xFFFF_FFFF);
-
     // H.40 — build a server-side order so the guest actually orders
     // something instead of sitting forever with an empty
     // order_recipes string.  Pulls recipe metadata from recipe_meta
@@ -6665,9 +6838,11 @@ pub(crate) fn try_spawn_arrival_guest(
         // H.38 — archetype from the seeded catalog (was hardcoded
         // "regular"). Falls back to "regular" if catalog is empty.
         archetype: archetype_id,
-        taste_diet: "both".to_string(),
-        taste_decor_pref: 0.5,
-        taste_window_pref: 0.5,
+        // Phase 9.61 — rolled taste (was hardcoded both/0.5/0.5). Drives
+        // the taste-aware seat pick above + the satisfaction rollup.
+        taste_diet,
+        taste_decor_pref,
+        taste_window_pref,
         taste_cuisine_bias: String::new(),
         taste_drink_tolerance: 0.0,
         will_use_toilet,
@@ -7108,7 +7283,8 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
 ///
 /// Thin wrapper around `try_assign_seat_for` — see that for details.
 fn try_assign_seat(ctx: &ReducerContext, g: &ActiveGuest) -> Option<(String, f32, f32, u32)> {
-    try_assign_seat_for(ctx, g.restaurant_id, g.x, g.z, Some(g.id))
+    try_assign_seat_for(ctx, g.restaurant_id, g.x, g.z, Some(g.id),
+        Some((g.taste_decor_pref, g.taste_window_pref, &g.taste_diet)))
 }
 
 /// Phase I (H.89) — Generalised seat picker, callable both during
@@ -7193,23 +7369,51 @@ pub fn replace_seat_slots(
     for uid in stale {
         ctx.db.seat_slot().seat_uid().delete(uid);
     }
+    // Phase 9.61 — clear the parallel seat_appeal rows too; they're
+    // rewritten below from the extended CSV (fields 9-11).
+    let stale_appeal: Vec<String> = ctx.db.seat_appeal()
+        .restaurant_id().filter(restaurant_id)
+        .map(|s| s.seat_uid.clone())
+        .collect();
+    for uid in stale_appeal {
+        ctx.db.seat_appeal().seat_uid().delete(uid);
+    }
+    // Phase 9.62 — collect furniture appeal records ONCE so per-seat
+    // scoring below is a cheap in-memory scan, not an O(seats×furniture)
+    // table re-scan.
+    let appeal_furn = collect_appeal_furniture(ctx, restaurant_id);
     let mut inserted = 0u32;
     for entry in slots_csv.split('|') {
         let parts: Vec<&str> = entry.split(';').collect();
-        if parts.len() != 8 { continue; }
+        if parts.len() < 8 { continue; }
         let (Ok(x), Ok(z), Ok(floor), Ok(facing), Ok(px), Ok(pz)) = (
             parts[1].parse::<f32>(), parts[2].parse::<f32>(),
             parts[3].parse::<u32>(), parts[4].parse::<f32>(),
             parts[5].parse::<f32>(), parts[6].parse::<f32>(),
         ) else { continue };
+        let seat_uid = parts[0].to_string();
+        let at_bar = parts[7] == "1";
         ctx.db.seat_slot().insert(SeatSlot {
-            seat_uid: parts[0].to_string(),
+            seat_uid: seat_uid.clone(),
             restaurant_id,
             x, z, floor,
             facing_y: facing,
             plate_x: px,
             plate_z: pz,
-            at_bar: parts[7] == "1",
+            at_bar,
+        });
+        // Phase 9.62 — the SERVER computes the seat's taste appeal from
+        // placed_furniture + furniture_meta (the client only sent the
+        // chair position). seat_uid is "{tableUid}#{slotIndex}".
+        let table_uid = seat_uid.split('#').next().unwrap_or("");
+        let (decor_score, window_adj, surface) =
+            compute_seat_appeal(ctx, &appeal_furn, x, z, floor, table_uid, at_bar);
+        ctx.db.seat_appeal().insert(SeatAppeal {
+            seat_uid,
+            restaurant_id,
+            decor_score,
+            window_adj,
+            surface,
         });
         inserted += 1;
     }
@@ -7248,7 +7452,8 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
         // stranded outside forever even with the dining room empty.
         .find(|g| is_waiting_state(&g.state))
     else { return };
-    let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id))
+    let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id),
+        Some((g.taste_decor_pref, g.taste_window_pref, &g.taste_diet)))
     else { return };
     log::info!(
         "try_promote_waiting_guest: guest {} → seat {} in restaurant {}",
@@ -7283,6 +7488,14 @@ fn try_assign_seat_for(
     from_x: f32,
     from_z: f32,
     exclude_guest_id: Option<u64>,
+    // Phase 9.61 — (decor_pref, window_pref, diet) for taste-aware seat
+    // scoring, restoring the seat-by-preference behaviour the client's
+    // pickBestSeatForTaste lost when guest spawning went server-side.
+    // None → nearest-seat (legacy). Some → score against the seat_appeal
+    // mirror. Scoring only REORDERS free seats, never excludes one, so a
+    // guest is always seated when a seat is free (no starvation risk even
+    // if the appeal data is missing or wrong).
+    taste: Option<(f32, f32, &str)>,
 ) -> Option<(String, f32, f32, u32)> {
     // Build set of taken seat uids (other guests' seat_uid).
     let mut taken_uids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -7333,6 +7546,7 @@ fn try_assign_seat_for(
     // occupancy bookkeeping. Fallback only runs while a restaurant
     // has never pushed slots (pre-9.7 client).
     let mut best: Option<(String, f32, f32, u32)> = None;
+    let mut best_score = f32::NEG_INFINITY;
     let mut best_dist = f32::INFINITY;
     let mut have_slots = false;
     for s in ctx.db.seat_slot().restaurant_id().filter(rid) {
@@ -7348,8 +7562,35 @@ fn try_assign_seat_for(
         let dx = s.x - from_x;
         let dz = s.z - from_z;
         let dist = dx * dx + dz * dz;
-        if dist < best_dist {
-            best_dist = dist;
+        // Phase 9.61 — taste-aware score. taste=None reduces to -dist
+        // (nearest seat, the legacy pick). taste=Some lets decor / window /
+        // diet appeal dominate, with distance as a small capped tiebreaker.
+        // The appeal lookup defaults to neutral, so a seat with no mirrored
+        // appeal just scores on distance — never excluded.
+        let score = match taste {
+            None => -dist,
+            Some((decor_pref, window_pref, diet)) => {
+                let mut sc = 0.0_f32;
+                if let Some(app) = ctx.db.seat_appeal().seat_uid().find(s.seat_uid.clone()) {
+                    sc += app.decor_score * decor_pref;
+                    if app.window_adj { sc += 20.0 * window_pref; }
+                    if !app.surface.is_empty() {
+                        let is_drink = app.surface == "drink";
+                        let matches = diet == "both"
+                            || (diet == "drink" && is_drink)
+                            || (diet == "food" && !is_drink);
+                        // Strong but SOFT diet preference: a matching seat
+                        // wins big, a mismatch is penalised but still
+                        // seatable (prevents starvation when the only free
+                        // seat is the "wrong" surface).
+                        sc += if matches { 60.0 } else { -40.0 };
+                    }
+                }
+                sc - dist.min(100.0) * 0.15
+            }
+        };
+        if score > best_score {
+            best_score = score;
             best = Some((s.seat_uid.clone(), s.x, s.z, s.floor));
         }
     }

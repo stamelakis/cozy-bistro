@@ -237,6 +237,17 @@ export const FurnitureCost = __t.object("FurnitureCost", {
 });
 export type FurnitureCost = __Infer<typeof FurnitureCost>;
 
+export const FurnitureMeta = __t.object("FurnitureMeta", {
+  defId: __t.string(),
+  category: __t.string(),
+  styleX100: __t.i32(),
+  comfortX100: __t.i32(),
+  attractionX100: __t.i32(),
+  ratingBonusX100: __t.i32(),
+  surface: __t.string(),
+});
+export type FurnitureMeta = __Infer<typeof FurnitureMeta>;
+
 export const HiredStaffMember = __t.object("HiredStaffMember", {
   memberId: __t.string(),
   restaurantId: __t.u64(),
@@ -467,6 +478,15 @@ export const SaveSnapshot = __t.object("SaveSnapshot", {
   savedAt: __t.timestamp(),
 });
 export type SaveSnapshot = __Infer<typeof SaveSnapshot>;
+
+export const SeatAppeal = __t.object("SeatAppeal", {
+  seatUid: __t.string(),
+  restaurantId: __t.u64(),
+  decorScore: __t.f32(),
+  windowAdj: __t.bool(),
+  surface: __t.string(),
+});
+export type SeatAppeal = __Infer<typeof SeatAppeal>;
 
 export const SeatSlot = __t.object("SeatSlot", {
   seatUid: __t.string(),

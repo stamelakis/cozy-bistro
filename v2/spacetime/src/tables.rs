@@ -1672,6 +1672,28 @@ pub struct FurnitureCost {
     pub refund_cents: i64,
 }
 
+/// Phase 9.62 — server-side furniture metadata catalog, seeded from the
+/// client's furnitureCatalog.ts (admin-gated, same pattern as
+/// furniture_cost / recipe_meta). Lets the SERVER compute furniture-
+/// derived gameplay — per-seat taste appeal (decor density / surface)
+/// and the attraction aggregate (spawn rate) — instead of trusting a
+/// client-computed mirror. The client no longer computes any of that;
+/// it only mirrors chair POSITIONS (catalog geometry, genuinely
+/// client-bound) + the placements themselves.
+#[table(name = furniture_meta, public)]
+pub struct FurnitureMeta {
+    #[primary_key]
+    pub def_id: String,
+    /// "table" | "chair" | "stove" | "decoration" | "plant" | "lamp" | …
+    pub category: String,
+    pub style_x100: i32,
+    pub comfort_x100: i32,
+    pub attraction_x100: i32,
+    pub rating_bonus_x100: i32,
+    /// "food" | "drink" — serving surface for seating defs; "" otherwise.
+    pub surface: String,
+}
+
 /// Anti-cheat B/C — global money-cutover switch. Single row (id = 1).
 /// When `active`, bump_cloud_money rejects POSITIVE deltas and
 /// set_cloud_money is locked, making the server the SOLE +money authority
@@ -1869,6 +1891,32 @@ pub struct SeatSlot {
     pub plate_x: f32,
     pub plate_z: f32,
     pub at_bar: bool,
+}
+
+/// Per-seat "appeal" metrics mirrored from the client so the server's
+/// seat picker (try_assign_seat_for) can honour customer taste —
+/// decor density, window adjacency, and food/drink surface — instead
+/// of seating everyone at the nearest chair. The client owns the heavy
+/// furniture math (it has the full catalog) and recomputes these on
+/// every placement mutation via the extended replace_seat_slots CSV.
+/// Keyed by the same seat_uid as seat_slot. A SEPARATE table (not new
+/// columns on seat_slot) so the schema change is a safe additive
+/// publish. Rows are derived/disposable — fully rewritten each mirror,
+/// so a missing or stale row just degrades the picker to distance-only.
+#[table(name = seat_appeal, public)]
+pub struct SeatAppeal {
+    #[primary_key]
+    pub seat_uid: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// 0..~60 — summed nearby decor/plant/lamp quality (client's
+    /// computeNearbyDecorScore).
+    pub decor_score: f32,
+    /// True when a window sits within ~2.5 tiles of the seat.
+    pub window_adj: bool,
+    /// "food" | "drink" — the serving surface this seat belongs to
+    /// (dining table vs bar/coffee table). Empty = unknown.
+    pub surface: String,
 }
 
 /// Phase 9.19 — The player's auto-shop stock target (one uniform

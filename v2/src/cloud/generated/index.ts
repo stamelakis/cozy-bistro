@@ -112,6 +112,7 @@ import SetCloudTransactionLogReducer from "./set_cloud_transaction_log_reducer";
 import SetCustomerArchetypeReducer from "./set_customer_archetype_reducer";
 import SetErrandStateReducer from "./set_errand_state_reducer";
 import SetFurnitureCostReducer from "./set_furniture_cost_reducer";
+import SetFurnitureMetaReducer from "./set_furniture_meta_reducer";
 import SetGuestOrderReducer from "./set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "./set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "./set_guest_waiting_chair_reducer";
@@ -166,6 +167,7 @@ import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
+import FurnitureMetaRow from "./furniture_meta_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
@@ -185,6 +187,7 @@ import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
+import SeatAppealRow from "./seat_appeal_table";
 import SeatSlotRow from "./seat_slot_table";
 import StaffActorRow from "./staff_actor_table";
 import VisitEventRow from "./visit_event_table";
@@ -438,6 +441,17 @@ const tablesSchema = __schema({
       { name: 'furniture_cost_def_id_key', constraint: 'unique', columns: ['defId'] },
     ],
   }, FurnitureCostRow),
+  furniture_meta: __table({
+    name: 'furniture_meta',
+    indexes: [
+      { accessor: 'def_id', name: 'furniture_meta_def_id_idx_btree', algorithm: 'btree', columns: [
+        'defId',
+      ] },
+    ],
+    constraints: [
+      { name: 'furniture_meta_def_id_key', constraint: 'unique', columns: ['defId'] },
+    ],
+  }, FurnitureMetaRow),
   hired_staff_member: __table({
     name: 'hired_staff_member',
     indexes: [
@@ -677,6 +691,20 @@ const tablesSchema = __schema({
       { name: 'save_snapshot_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
     ],
   }, SaveSnapshotRow),
+  seat_appeal: __table({
+    name: 'seat_appeal',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'seat_appeal_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+      { accessor: 'seat_uid', name: 'seat_appeal_seat_uid_idx_btree', algorithm: 'btree', columns: [
+        'seatUid',
+      ] },
+    ],
+    constraints: [
+      { name: 'seat_appeal_seat_uid_key', constraint: 'unique', columns: ['seatUid'] },
+    ],
+  }, SeatAppealRow),
   seat_slot: __table({
     name: 'seat_slot',
     indexes: [
@@ -815,6 +843,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_customer_archetype", SetCustomerArchetypeReducer),
   __reducerSchema("set_errand_state", SetErrandStateReducer),
   __reducerSchema("set_furniture_cost", SetFurnitureCostReducer),
+  __reducerSchema("set_furniture_meta", SetFurnitureMetaReducer),
   __reducerSchema("set_guest_order", SetGuestOrderReducer),
   __reducerSchema("set_guest_reserved_tiers", SetGuestReservedTiersReducer),
   __reducerSchema("set_guest_waiting_chair", SetGuestWaitingChairReducer),

@@ -84,6 +84,7 @@ import SetCloudTransactionLogReducer from "../set_cloud_transaction_log_reducer"
 import SetCustomerArchetypeReducer from "../set_customer_archetype_reducer";
 import SetErrandStateReducer from "../set_errand_state_reducer";
 import SetFurnitureCostReducer from "../set_furniture_cost_reducer";
+import SetFurnitureMetaReducer from "../set_furniture_meta_reducer";
 import SetGuestOrderReducer from "../set_guest_order_reducer";
 import SetGuestReservedTiersReducer from "../set_guest_reserved_tiers_reducer";
 import SetGuestWaitingChairReducer from "../set_guest_waiting_chair_reducer";
@@ -196,6 +197,7 @@ export type SetCloudTransactionLogParams = __Infer<typeof SetCloudTransactionLog
 export type SetCustomerArchetypeParams = __Infer<typeof SetCustomerArchetypeReducer>;
 export type SetErrandStateParams = __Infer<typeof SetErrandStateReducer>;
 export type SetFurnitureCostParams = __Infer<typeof SetFurnitureCostReducer>;
+export type SetFurnitureMetaParams = __Infer<typeof SetFurnitureMetaReducer>;
 export type SetGuestOrderParams = __Infer<typeof SetGuestOrderReducer>;
 export type SetGuestReservedTiersParams = __Infer<typeof SetGuestReservedTiersReducer>;
 export type SetGuestWaitingChairParams = __Infer<typeof SetGuestWaitingChairReducer>;

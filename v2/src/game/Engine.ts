@@ -1472,7 +1472,7 @@ export class Engine {
       // The per-restaurant recipe_level mirror is gated separately
       // since it's owner-specific state — H.43 reconciles those on
       // every connect via the drain path, not via this seed loop.
-      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v3"; // v3: + grill/oven/fryer/pizza recipes + stations
+      const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v4"; // v4: + furniture_meta (server-side appeal/aggregates)
       const CATALOG_SEED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
       const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY);
       const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw, 10) : 0;
@@ -1540,6 +1540,18 @@ export class Engine {
               def.id,
               Math.round(scaledCost(def) * 100),
               Math.round(furnitureRefundValue(def) * 100),
+            );
+            // Phase 9.62 — seed furniture_meta so the SERVER computes
+            // per-seat taste appeal + the attraction aggregate itself
+            // (no more client-computed mirrors). surface "" for non-tables.
+            this.cloud.setFurnitureMeta(
+              def.id,
+              def.category,
+              Math.round((def.style ?? 0) * 100),
+              Math.round((def.comfort ?? 0) * 100),
+              Math.round((def.attractionBonus ?? 0) * 100),
+              Math.round((def.ratingBonus ?? 0) * 100),
+              def.surface ?? "",
             );
           }
         });

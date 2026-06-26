@@ -269,6 +269,10 @@ export class FurnitureRegistry {
     const slotEntries: string[] = [];
     for (const s of this.getResolvedSeatSlots()) {
       if (!s.chairUid) continue;
+      // Phase 9.62 — positions ONLY. The server computes per-seat taste
+      // appeal (decor/window/surface) itself from placed_furniture +
+      // furniture_meta; the client just resolves WHERE the chairs are
+      // (catalog geometry, the one thing that must stay client-side).
       slotEntries.push([
         `${s.tableUid}#${s.slotIndex}`,
         s.x.toFixed(3), s.z.toFixed(3),

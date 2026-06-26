@@ -2715,6 +2715,36 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase 9.62 — seed one furniture def's metadata (category + stats +
+   * serving surface) so the SERVER computes per-seat taste appeal + the
+   * attraction aggregate itself. Idempotent server-side; a CHANGE is
+   * admin-only (same gate as setFurnitureCost). */
+  setFurnitureMeta(
+    defId: string,
+    category: string,
+    styleX100: number,
+    comfortX100: number,
+    attractionX100: number,
+    ratingBonusX100: number,
+    surface: string,
+  ): void {
+    if (!this.conn) return;
+    if (!defId) return;
+    try {
+      this.conn.reducers.setFurnitureMeta({
+        defId,
+        category,
+        styleX100: Math.round(styleX100),
+        comfortX100: Math.round(comfortX100),
+        attractionX100: Math.round(attractionX100),
+        ratingBonusX100: Math.round(ratingBonusX100),
+        surface,
+      });
+    } catch (e) {
+      console.warn("[Cloud] setFurnitureMeta failed:", e);
+    }
+  }
+
   /** H.41 — Read the restaurant's accrued auto-shop debt.  Caller is
    * Engine.onSubscriptionReady; returns cents that should be debited
    * via game.economy.forceSpendMoney("restock") before firing
