@@ -3266,7 +3266,7 @@ pub fn set_furniture_meta(
 /// surface helpers, moved server-side so seating is fully
 /// authoritative. `furn` is the restaurant's furniture pre-collected
 /// once by the caller (avoids an O(seats×furniture) re-scan).
-struct ApFurn { x: f32, z: f32, floor: u32, is_window: bool, is_decor: bool, quality: f32 }
+struct ApFurn { x: f32, z: f32, floor: u32, is_window: bool, is_decor: bool, is_toilet: bool, quality: f32 }
 
 fn compute_seat_appeal(
     ctx: &ReducerContext,
@@ -3279,6 +3279,7 @@ fn compute_seat_appeal(
 ) -> (f32, bool, String) {
     let mut decor = 0.0_f32;
     let mut window_adj = false;
+    let mut toilet_penalty = 0.0_f32;
     for f in furn {
         if f.floor != floor { continue; }
         let dx = f.x - seat_x;
@@ -3288,8 +3289,15 @@ fn compute_seat_appeal(
         if f.is_decor && dist_sq <= 36.0 {                      // 6 tiles
             decor += f.quality / (1.0 + dist_sq);
         }
+        // Phase 9.68 — nobody wants to dine right next to a toilet.
+        // Penalise seats within ~3 tiles of one so guests avoid bathroom-
+        // adjacent seats when nicer ones are free (a full house still
+        // seats them — scoring only reorders, never excludes).
+        if f.is_toilet && dist_sq <= 9.0 {
+            toilet_penalty += 40.0 / (1.0 + dist_sq);
+        }
     }
-    let decor_score = (decor * 4.0).min(60.0);
+    let decor_score = (decor * 4.0 - toilet_penalty).clamp(-50.0, 60.0);
     // Surface: bar seats are drink; else the table's furniture_meta.surface
     // (coffee tables are "drink"); default "food".
     let surface = if at_bar {
@@ -3310,6 +3318,7 @@ fn collect_appeal_furniture(ctx: &ReducerContext, rid: u64) -> Vec<ApFurn> {
     let mut out = Vec::new();
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         let is_window = f.def_id.starts_with("window") || f.def_id.starts_with("int-window");
+        let is_toilet = is_toilet_def(&f.def_id);
         let (is_decor, quality) = match ctx.db.furniture_meta().def_id().find(f.def_id.clone()) {
             Some(m) if m.category == "decoration" || m.category == "plant" || m.category == "lamp" => {
                 let q = m.style_x100 as f32 / 100.0 + 10.0 * (m.rating_bonus_x100 as f32 / 100.0);
@@ -3317,8 +3326,8 @@ fn collect_appeal_furniture(ctx: &ReducerContext, rid: u64) -> Vec<ApFurn> {
             }
             _ => (false, 0.0),
         };
-        if !is_window && !is_decor { continue; }
-        out.push(ApFurn { x: f.x, z: f.z, floor: f.floor, is_window, is_decor, quality });
+        if !is_window && !is_decor && !is_toilet { continue; }
+        out.push(ApFurn { x: f.x, z: f.z, floor: f.floor, is_window, is_decor, is_toilet, quality });
     }
     out
 }
