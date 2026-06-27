@@ -141,11 +141,12 @@ const DEFAULTS: ServerSimFlags = {
   // mint money. Rollback: set this back to false AND
   // `spacetime call dunnin set_money_cutover_active false`.
   money: true,
-  // Staff migration Pass 6 — the locomotion cutover. OFF by default; the
-  // server-side path-following (Passes 1-5) is live but the client still
-  // drives the owner's staff in mirror mode until this flips. Opt-in via
-  // ?serverSim=all to test, then default-on once proven.
-  staffMove: false,
+  // Staff migration Pass 6 — the locomotion cutover. DEFAULT-ON as of
+  // 2026-06-27: proven via ?serverSim=all (staff reach stations, barman
+  // gets into the bar, nobody stranded outside). The client now renders
+  // staff from the server pose; the legacy local locomotion path only
+  // runs if explicitly disabled with ?serverSim=staffMove-off equivalents.
+  staffMove: true,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
