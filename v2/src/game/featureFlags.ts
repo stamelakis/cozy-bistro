@@ -52,6 +52,15 @@ export interface ServerSimFlags {
    * client still writes money, so this only protects after the default
    * flips AND the server rejects bump_cloud_money. */
   money: boolean;
+  /** Phase D cutover (staff migration Pass 6) — when ON the SERVER fully
+   * owns staff LOCOMOTION + state: the client stops running its local
+   * StaffRouter sim + pathfinding for staff and instead lerps each body
+   * toward the subscribed staff_actor row, and stops streaming positions.
+   * The `staff` flag above only MIRRORS (local sim stays authoritative);
+   * THIS is the actual cutover. Opt-in (default false). Test by adding
+   * ?serverSim=all to the URL (enables this on top of the on-by-default
+   * mirror flags); roll back by removing the param. */
+  staffMove: boolean;
 }
 
 const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
@@ -132,6 +141,11 @@ const DEFAULTS: ServerSimFlags = {
   // mint money. Rollback: set this back to false AND
   // `spacetime call dunnin set_money_cutover_active false`.
   money: true,
+  // Staff migration Pass 6 — the locomotion cutover. OFF by default; the
+  // server-side path-following (Passes 1-5) is live but the client still
+  // drives the owner's staff in mirror mode until this flips. Opt-in via
+  // ?serverSim=all to test, then default-on once proven.
+  staffMove: false,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
@@ -148,20 +162,21 @@ function parseFlagList(raw: string | null | undefined): Partial<ServerSimFlags> 
   if (!raw) return {};
   const trimmed = raw.trim().toLowerCase();
   if (trimmed === "" || trimmed === "off" || trimmed === "none" || trimmed === "false") {
-    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false };
+    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false };
   }
   if (trimmed === "all" || trimmed === "on" || trimmed === "true") {
-    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true, money: true };
+    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true, money: true, staffMove: true };
   }
   // Explicit list: start from all-off, then enable the listed
   // subsystems. Result: only the listed ones are on.
   const out: ServerSimFlags = {
-    guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false,
+    guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false,
   };
   for (const tok of trimmed.split(",")) {
     const key = tok.trim();
     if (key === "guests" || key === "tickets" || key === "staff"
-        || key === "dishware" || key === "furniture" || key === "money") {
+        || key === "dishware" || key === "furniture" || key === "money"
+        || key === "staffMove") {
       out[key] = true;
     }
   }

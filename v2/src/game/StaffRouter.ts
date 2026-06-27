@@ -245,6 +245,15 @@ interface StaffActor {
    * homeFloor and updates whenever moveActor consumes a fromStair-
    * flagged waypoint. Anchors the body Y between stair walks. */
   currentFloor: number;
+  /** Phase 9.65 (staff migration Pass 6) — latest authoritative pose from
+   * the staff_actor cloud row, stashed by reconcileCloudStaffActor. When
+   * ?serverSim=staffMove is on, update() lerps the body toward (cloudX,
+   * cloudZ), adopts cloudFloor, and animates from cloudState — the server
+   * fully owns locomotion. Undefined until the first cloud row arrives. */
+  cloudX?: number;
+  cloudZ?: number;
+  cloudFloor?: number;
+  cloudState?: string;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -1804,6 +1813,14 @@ export class StaffRouter {
     const actor = this.findLocalActor(row.memberId);
     if (!actor) return;
 
+    // Phase 9.65 (staff migration Pass 6) — stash the authoritative server
+    // pose so update()'s staffMove render loop can lerp the body toward it
+    // and animate from the server state. Cheap; unused while staffMove off.
+    actor.cloudX = row.x;
+    actor.cloudZ = row.z;
+    actor.cloudFloor = row.floor;
+    actor.cloudState = row.state;
+
     // Case: server made a chef-claim / waiter-pickup decision for an
     // actor that is locally idle. With Phase 1's gating, the local idle
     // handler no longer makes this decision itself — the bridge is the
@@ -2277,7 +2294,78 @@ export class StaffRouter {
     return true;
   }
 
+  /** Phase 9.65 (staff migration Pass 6) — render one staff actor purely
+   * from its server row when ?serverSim=staffMove is on. The server owns
+   * the state machine + pathfinding (Passes 1-5); here we just lerp the
+   * body toward the latest cloud pose, reparent on a floor change, anchor
+   * body Y to the floor slab, face the travel direction, and animate from
+   * the server state. No local pathfinding, no streaming — so the client
+   * can't fight the server (the root of the mirror-mode "stranded outside
+   * / stuck looping" reports). */
+  private renderActorFromServer(a: StaffActor, dt: number): void {
+    if (a.cloudX === undefined || a.cloudZ === undefined) return; // no row yet
+    const STOREY = 3;
+    if (a.cloudFloor !== undefined && a.cloudFloor !== a.currentFloor) {
+      a.currentFloor = a.cloudFloor;
+      this.reparentCharacter?.(a.character, a.cloudFloor);
+    }
+    const pos = a.character.groundPos;
+    const dx = a.cloudX - pos.x;
+    const dz = a.cloudZ - pos.y;
+    const dist = Math.hypot(dx, dz);
+    // Lerp toward the latest server position; snap on a big jump (teleport
+    // / floor change) so we don't slide across the room.
+    if (dist > 2.0) {
+      pos.set(a.cloudX, a.cloudZ);
+    } else if (dist > 1e-4) {
+      const alpha = Math.min(1, dt * 12);
+      pos.x += dx * alpha;
+      pos.y += dz * alpha;
+    }
+    // Containment belt-and-braces (the server already clamps to the box).
+    if (pos.x < INTERIOR_MIN_X) pos.x = INTERIOR_MIN_X;
+    else if (pos.x > INTERIOR_MAX_X) pos.x = INTERIOR_MAX_X;
+    if (pos.y < INTERIOR_MIN_Z) pos.y = INTERIOR_MIN_Z;
+    else if (pos.y > INTERIOR_MAX_Z) pos.y = INTERIOR_MAX_Z;
+    // Anchor body Y to the floor slab (moveActor normally does this).
+    const feetLift = a.character._feetLift ?? 0;
+    const anchorY = a.currentFloor * STOREY + feetLift;
+    a.character.root.position.y = anchorY;
+    a.character._baseY = anchorY;
+    // Face the travel direction (GLB -Z forward → atan2(-dx,-dz)); only
+    // while moving so a stationary actor keeps its last facing.
+    const moving = dist > 0.03;
+    if (moving) a.character.facingY = Math.atan2(-dx, -dz);
+    // Animate from the server state: working-at-station = the work gesture
+    // ("carry"), anything in motion = walk, otherwise idle.
+    if (a.cloudState === "working" && !moving) {
+      a.character.action = "carry";
+    } else {
+      a.character.action = moving ? "walk" : "idle";
+    }
+    // Keep local state in sync for any reader (snapshotMovable pins
+    // "working" actors so the camera doesn't shove them mid-cook).
+    if (a.cloudState === "idle" || a.cloudState === "movingToWork"
+        || a.cloudState === "working" || a.cloudState === "returningHome") {
+      a.state = a.cloudState;
+    }
+  }
+
   update(dt: number): void {
+    // Phase 9.65 (staff migration Pass 6) — full server ownership. The
+    // server runs the staff state machine + pathfinding (Passes 1-5); the
+    // client just lerps each body toward its staff_actor row + adopts the
+    // server state for animation. No local sim, no client pathfinding, no
+    // position streaming (the early return skips streamActorsToCloud
+    // below). Opt-in: ?serverSim=all (roll back by removing the URL param).
+    // Skipping the local ticks + clamp + stream is the whole point — those
+    // are what fight the server in mirror mode.
+    if (isServerSim("staffMove")) {
+      for (const c of this.chefs) this.renderActorFromServer(c, dt);
+      for (const b of this.barmen) this.renderActorFromServer(b, dt);
+      for (const w of this.waiters) this.renderActorFromServer(w, dt);
+      return;
+    }
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
