@@ -4765,8 +4765,20 @@ export class WorldScene {
       errand: { x:  3.5, z: -1.0, facingY: -Math.PI / 2, action: "idle" },
     };
     const base = homeByRole[role];
-    // Stagger each new hire 0.6 units further along the kitchen line.
-    const x = base.x + offsetSlot * 0.6;
+    // Lay hires out in ROWS that stay INSIDE the walls. The old single line
+    // (base.x + slot*0.6) marched staff out PAST the +X wall (~5.2) at high
+    // slot counts — they spawned AND homed outside, then clamped to the wall
+    // edge and read as "staff standing outside / in the wall" (more visible
+    // once the Pass-6 cutover stopped the client overriding the position).
+    // Wrap to a new row (toward the back) once a row reaches the interior
+    // margin; clamp z so deep rows don't punch the -Z wall.
+    const MAX_X = 4.6; // body-width margin inside the +X wall (5.2)
+    const SPACING = 0.6;
+    const perRow = Math.max(1, Math.floor((MAX_X - base.x) / SPACING) + 1);
+    const col = offsetSlot % perRow;
+    const rowIdx = Math.floor(offsetSlot / perRow);
+    const x = base.x + col * SPACING;
+    const z = Math.max(-3.8, base.z - rowIdx * 0.75);
     try {
       // Staff now use their rigged GLB models (chef/waiter/errand); the barman
       // has no model yet, so it keeps the placeholder.
@@ -4781,7 +4793,7 @@ export class WorldScene {
       }
       const animated: AnimatedCharacter = {
         root: model,
-        groundPos: new THREE.Vector2(x, base.z),
+        groundPos: new THREE.Vector2(x, z),
         facingY: base.facingY,
         action: base.action,
         phase: Math.random() * 5,
