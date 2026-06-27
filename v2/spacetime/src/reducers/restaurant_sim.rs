@@ -1686,7 +1686,8 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         // IN FRONT (+facing). Without this the barman mixed from the
         // customer side / inside the bar mesh.
         let (stand_x, stand_z) = if is_bar {
-            (station.x - station.rot_y.sin(), station.z - station.rot_y.cos())
+            // Phase 9.63 — centroid-aware inside-bar spot (fixes wrapped bars).
+            bar_inside_stand(ctx, rid, station.x, station.z, station.rot_y, station.floor)
         } else {
             (station.x + station.rot_y.sin(), station.z + station.rot_y.cos())
         };
@@ -1742,6 +1743,40 @@ fn def_provides(def_id: &str) -> Option<&'static str> {
         "pizza-oven" => Some("pizza-oven"),
         _ => None,
     }
+}
+
+/// Phase 9.63 (staff migration Pass 2) — centroid-aware "behind the bar"
+/// stand spot, mirroring the client's `barmanInsideStandFor`. Bar defs
+/// seat customers on the +facing side, so a barman serves from the other
+/// side. For a SINGLE bar tile that's simply BACK (−facing). For a U/O-
+/// shaped multi-tile bar, "inside the ring" is whichever of front/back is
+/// closer to the CENTROID of all bar tiles — that's the fix for the
+/// "barman can't reach the inside-of-bar serving spot" bug, which the old
+/// naive (x−sin, z−cos) got wrong for wrapped bars. Caller clamps to the
+/// interior box. Re-iterates furniture (for the centroid), so callers must
+/// invoke this OUTSIDE any open placed_furniture iteration.
+fn bar_inside_stand(ctx: &ReducerContext, rid: u64, sx: f32, sz: f32, rot_y: f32, floor: u32) -> (f32, f32) {
+    let (sin, cos) = (rot_y.sin(), rot_y.cos());
+    let front = (sx + sin, sz + cos);
+    let back = (sx - sin, sz - cos);
+    let mut cx = 0.0_f32;
+    let mut cz = 0.0_f32;
+    let mut n = 0u32;
+    for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        if f.floor != floor { continue; }
+        if def_provides(&f.def_id) != Some("bar") { continue; }
+        cx += f.x;
+        cz += f.z;
+        n += 1;
+    }
+    if n <= 1 {
+        return back;
+    }
+    cx /= n as f32;
+    cz /= n as f32;
+    let d_front = (front.0 - cx).powi(2) + (front.1 - cz).powi(2);
+    let d_back = (back.0 - cx).powi(2) + (back.1 - cz).powi(2);
+    if d_front < d_back { front } else { back }
 }
 
 /// Phase 9.31 — Where a staff member idles / returns when they have no
@@ -1810,25 +1845,31 @@ fn staff_home_target(ctx: &ReducerContext, actor: &StaffActor) -> (f32, f32, u32
     // nearest bar. Jittered so a multi-chef kitchen doesn't stack on one
     // stand spot. Falls back to the spawn home when the floor has none.
     let want_bar = actor.role == "barman";
-    let mut best: Option<(f32, f32, f32)> = None; // (stand_x, stand_z, dist²)
+    // Phase 9.63 — track the nearest matching STATION in the loop, then
+    // compute its stand spot AFTER (bar_inside_stand re-iterates furniture
+    // for the centroid, so it can't run inside this iteration).
+    let mut best_station: Option<(f32, f32, f32, f32)> = None; // (x, z, rot_y, dist²)
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
         if f.floor != actor.home_floor { continue; }
         let Some(provides) = def_provides(&f.def_id) else { continue };
         let is_bar = provides == "bar";
         if want_bar != is_bar { continue; }
-        // Bar → stand BEHIND (−facing); cook station → IN FRONT (+facing).
-        let (sx, sz) = if is_bar {
-            (f.x - f.rot_y.sin(), f.z - f.rot_y.cos())
-        } else {
-            (f.x + f.rot_y.sin(), f.z + f.rot_y.cos())
-        };
         let d = (f.x - actor.home_x).powi(2) + (f.z - actor.home_z).powi(2);
-        if best.map_or(true, |(_, _, bd)| d < bd) {
-            best = Some((sx, sz, d));
+        if best_station.map_or(true, |(_, _, _, bd)| d < bd) {
+            best_station = Some((f.x, f.z, f.rot_y, d));
         }
     }
-    match best {
-        Some((sx, sz, _)) => { let (cx, cz) = clamp_in(sx + jx, sz + jz); (cx, cz, actor.home_floor) },
+    match best_station {
+        Some((fx, fz, frot, _)) => {
+            // Bar → centroid-aware inside spot; cook station → IN FRONT (+facing).
+            let (sx, sz) = if want_bar {
+                bar_inside_stand(ctx, rid, fx, fz, frot, actor.home_floor)
+            } else {
+                (fx + frot.sin(), fz + frot.cos())
+            };
+            let (cx, cz) = clamp_in(sx + jx, sz + jz);
+            (cx, cz, actor.home_floor)
+        }
         None => { let (cx, cz) = clamp_in(actor.home_x, actor.home_z); (cx, cz, actor.home_floor) },
     }
 }
@@ -5637,8 +5678,21 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         return;
     }
     // H.52 — waiter walk speed includes training multiplier.
+    // Phase 9.64 (staff migration Pass 3-5) — chefs/waiters/barmen now PATH
+    // around furniture + walls instead of straight-lining through them (the
+    // root of the "staff stuck / clipping / stranded outside" reports).
+    // Recompute the path each tick (no stored path to desync); aim at the
+    // next waypoint. Same-floor only — cross-floor keeps the straight step
+    // (the client's stair anim covers it). Errands already branched out
+    // above (they walk OUT to the road, off the interior grid). Empty/
+    // blocked path → straight-line fallback, so a miss never freezes anyone.
+    let (step_tx, step_tz) = if a.role != "errand" && a.floor == a.target_floor {
+        next_path_step(ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z, a.floor)
+    } else {
+        (a.target_x, a.target_z)
+    };
     let (new_x, new_z) = step_toward_target(
-        a.x, a.z, a.target_x, a.target_z,
+        a.x, a.z, step_tx, step_tz,
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
@@ -7630,6 +7684,26 @@ const GUEST_SPEED: f32 = 1.5;
 /// pathfinder cell — far enough below "at rest" to read clean to
 /// subscribers, large enough not to wobble on f32 drift.
 const STEP_SNAP_EPS: f32 = 0.125;
+
+/// Phase 9.64 (staff migration Pass 3-5) — the next world point to walk
+/// toward when path-following: the first waypoint on the A* path that's
+/// more than the arrival threshold from the current position (skips a
+/// leading start-tile waypoint and the direct-line case). Falls back to
+/// the target itself on an empty path, so a pathfinder miss never freezes
+/// the actor (it just walks straight, the pre-9.64 behaviour). Same-floor
+/// callers only — cross-floor stays on the straight-line step.
+fn next_path_step(ctx: &ReducerContext, rid: u64, x: f32, z: f32, tx: f32, tz: f32, floor: u32) -> (f32, f32) {
+    let path = crate::reducers::pathfinding::find_path(ctx, rid, x, z, tx, tz, floor);
+    for (wx, wz) in path {
+        let dx = wx - x;
+        let dz = wz - z;
+        if dx * dx + dz * dz > 0.04 {
+            // > 0.2 m
+            return (wx, wz);
+        }
+    }
+    (tx, tz)
+}
 
 /// Step (x, z) toward (target_x, target_z) at `speed` m/s over `dt_ms`
 /// milliseconds. Returns the new (x, z). Shared by staff + guest body
