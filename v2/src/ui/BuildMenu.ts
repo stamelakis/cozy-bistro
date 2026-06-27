@@ -355,6 +355,14 @@ export class BuildMenu {
     moveBtn.onclick = () => this.toggleMoveMode();
     actionRow.appendChild(moveBtn);
     this.moveBtn = moveBtn;
+    // Let the 3 action buttons shrink within the panel width + ellipsize a
+    // long active label instead of overflowing the panel (a 1fr grid item
+    // otherwise refuses to shrink below its content's min-width).
+    for (const b of [sellBtn, storeBtn, moveBtn]) {
+      Object.assign(b.style, {
+        minWidth: "0", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+      } as Partial<CSSStyleDeclaration>);
+    }
     body.appendChild(actionRow);
 
     // Auto-Arrange + Undo as a second pair of actions.
@@ -736,8 +744,8 @@ export class BuildMenu {
         ? "rgba(220, 140, 80, 0.6)"
         : "rgba(220, 140, 80, 0.18)";
       this.sellBtn.textContent = this.sellMode
-        ? "SELL MODE — click item to sell (Esc to exit)"
-        : "SELL MODE (50% refund)";
+        ? "SELL ✓ tap item"
+        : "SELL (50%)";
     }
   }
 
@@ -753,7 +761,7 @@ export class BuildMenu {
         ? "rgba(150, 200, 190, 0.6)"
         : "rgba(150, 200, 190, 0.18)";
       this.storeBtn.textContent = this.storeMode
-        ? "STORE — click item to stash (Esc)"
+        ? "STORE ✓ tap item"
         : "STORE";
     }
   }
@@ -1247,7 +1255,7 @@ export class BuildMenu {
   private onPointerMove = (e: PointerEvent): void => {
     // Run the raycaster in placing / sell / move modes so we always
     // know which cell a click would hit.
-    if (!this.placingDef && !this.sellMode && !this.moveMode) return;
+    if (!this.placingDef && !this.sellMode && !this.moveMode && !this.storeMode) return;
     const rect = this.canvas.getBoundingClientRect();
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -1289,7 +1297,7 @@ export class BuildMenu {
     // findAt(floor-x, floor-z) misses by a wide margin. Instead, raycast
     // against placed furniture meshes directly.
     this.hoveredItemUid = null;
-    const wantsItem = this.sellMode || (this.moveMode && !this.holdingUid);
+    const wantsItem = this.sellMode || this.storeMode || (this.moveMode && !this.holdingUid);
     if (wantsItem) {
       // Restrict the raycast to items on the focused storey. Without
       // this, an iso ray on Floor 1 passes through the slab below and

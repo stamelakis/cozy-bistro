@@ -254,6 +254,13 @@ interface StaffActor {
   cloudZ?: number;
   cloudFloor?: number;
   cloudState?: string;
+  /** Phase 9.70 — snapshot-interp for the staffMove render: the pose BEFORE
+   * the latest cloud update + a 0→1 clock advanced each frame, so the body
+   * glides between the two most recent 2 Hz server poses instead of catching
+   * up fast then stalling (the "teleport forward, pause" stutter). */
+  cloudPrevX?: number;
+  cloudPrevZ?: number;
+  cloudInterp?: number;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -1816,6 +1823,16 @@ export class StaffRouter {
     // Phase 9.65 (staff migration Pass 6) — stash the authoritative server
     // pose so update()'s staffMove render loop can lerp the body toward it
     // and animate from the server state. Cheap; unused while staffMove off.
+    // Snapshot-interp (Phase 9.70): when the pose actually moves, shift the
+    // previous-pose anchor + reset the 0→1 interp clock so update() glides
+    // from the old pose to this one over the ~500 ms tick instead of snapping
+    // then stalling. First update (no prior pose) starts settled (interp 1).
+    if (actor.cloudX === undefined
+        || Math.hypot(row.x - actor.cloudX, row.z - (actor.cloudZ ?? row.z)) > 1e-4) {
+      actor.cloudPrevX = actor.cloudX ?? row.x;
+      actor.cloudPrevZ = actor.cloudZ ?? row.z;
+      actor.cloudInterp = actor.cloudX === undefined ? 1 : 0;
+    }
     actor.cloudX = row.x;
     actor.cloudZ = row.z;
     actor.cloudFloor = row.floor;
@@ -2310,17 +2327,26 @@ export class StaffRouter {
       this.reparentCharacter?.(a.character, a.cloudFloor);
     }
     const pos = a.character.groundPos;
-    const dx = a.cloudX - pos.x;
-    const dz = a.cloudZ - pos.y;
-    const dist = Math.hypot(dx, dz);
-    // Lerp toward the latest server position; snap on a big jump (teleport
-    // / floor change) so we don't slide across the room.
-    if (dist > 2.0) {
+    // Snapshot interpolation: glide from the previous server pose to the
+    // latest over the 2 Hz tick interval (interp 0→1), so the body moves at a
+    // steady speed instead of the old exponential lerp that covered the
+    // ~1.4 m/tick gap in ~250 ms and then stalled ("teleport + pause").
+    const prevX = a.cloudPrevX ?? a.cloudX;
+    const prevZ = a.cloudPrevZ ?? a.cloudZ;
+    const STAFF_TICK_S = 0.5; // server staff tick = 2 Hz
+    a.cloudInterp = Math.min(1, (a.cloudInterp ?? 1) + dt / STAFF_TICK_S);
+    const t = a.cloudInterp;
+    const tx = prevX + (a.cloudX - prevX) * t;
+    const tz = prevZ + (a.cloudZ - prevZ) * t;
+    // Snap on a real teleport / floor change; otherwise ease toward the
+    // (already-smooth) interpolated point to absorb any update jitter.
+    const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
+    if (jump > 2.5) {
       pos.set(a.cloudX, a.cloudZ);
-    } else if (dist > 1e-4) {
-      const alpha = Math.min(1, dt * 12);
-      pos.x += dx * alpha;
-      pos.y += dz * alpha;
+    } else {
+      const alpha = Math.min(1, dt * 16);
+      pos.x += (tx - pos.x) * alpha;
+      pos.y += (tz - pos.y) * alpha;
     }
     // Containment belt-and-braces (the server already clamps to the box).
     if (pos.x < INTERIOR_MIN_X) pos.x = INTERIOR_MIN_X;
@@ -2332,10 +2358,13 @@ export class StaffRouter {
     const anchorY = a.currentFloor * STOREY + feetLift;
     a.character.root.position.y = anchorY;
     a.character._baseY = anchorY;
-    // Face the travel direction (GLB -Z forward → atan2(-dx,-dz)); only
-    // while moving so a stationary actor keeps its last facing.
-    const moving = dist > 0.03;
-    if (moving) a.character.facingY = Math.atan2(-dx, -dz);
+    // Face + animate from the current segment's travel direction. "moving" =
+    // still gliding along a non-trivial segment; once arrived (t=1) with no
+    // new pose, the actor reads as stopped.
+    const segX = a.cloudX - prevX;
+    const segZ = a.cloudZ - prevZ;
+    const moving = Math.hypot(segX, segZ) > 0.03 && t < 1;
+    if (moving) a.character.facingY = Math.atan2(-segX, -segZ);
     // Animate from the server state: working-at-station = the work gesture
     // ("carry"), anything in motion = walk, otherwise idle.
     if (a.cloudState === "working" && !moving) {
