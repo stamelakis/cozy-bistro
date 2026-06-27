@@ -4806,8 +4806,9 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     const WASH_DROP_DWELL_MS: i64 = 1_000;
 
     // H.52 — waiter walk-speed gets +10% per training level.
-    let (new_x, new_z) = step_toward_target(
-        a.x, a.z, a.target_x, a.target_z,
+    let (new_x, new_z) = path_step_same_floor(
+        ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z,
+        a.floor, a.target_floor,
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
@@ -4968,8 +4969,9 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
         return;
     }
 
-    let (new_x, new_z) = step_toward_target(
-        a.x, a.z, a.target_x, a.target_z,
+    let (new_x, new_z) = path_step_same_floor(
+        ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z,
+        a.floor, a.target_floor,
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
@@ -6358,7 +6360,14 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     let (new_x, new_z) = if anchored {
         (g.x, g.z)
     } else {
-        step_toward_target(g.x, g.z, effective_target_x, effective_target_z, GUEST_SPEED, dt_ms)
+        // Phase 9.69 — route around furniture on the guest's own floor
+        // instead of clipping straight through tables. Cross-floor legs
+        // stay straight-line (stairs are handled by the floor pin).
+        path_step_same_floor(
+            ctx, g.restaurant_id, g.x, g.z,
+            effective_target_x, effective_target_z,
+            g.floor, effective_target_floor, GUEST_SPEED, dt_ms,
+        )
     };
 
     // Phase H.9 — server-side guest state-machine transitions. Each
@@ -7729,6 +7738,28 @@ fn next_path_step(ctx: &ReducerContext, rid: u64, x: f32, z: f32, tx: f32, tz: f
         }
     }
     (tx, tz)
+}
+
+/// Same-floor pathfinding step: route around furniture toward (tx,tz)
+/// via the nav-grid (next_path_step), then speed-cap the move. A
+/// cross-floor leg (floor != target_floor) keeps the straight-line step —
+/// the 2D pather can't model stairs, and those legs are pinned by
+/// target_floor elsewhere. Used by guests + the waiter wash / seat-clean
+/// sub-trips so they stop clipping through tables on their own floor.
+fn path_step_same_floor(
+    ctx: &ReducerContext,
+    rid: u64,
+    x: f32, z: f32,
+    tx: f32, tz: f32,
+    floor: u32, target_floor: u32,
+    speed: f32, dt_ms: i64,
+) -> (f32, f32) {
+    if floor == target_floor {
+        let (wx, wz) = next_path_step(ctx, rid, x, z, tx, tz, floor);
+        step_toward_target(x, z, wx, wz, speed, dt_ms)
+    } else {
+        step_toward_target(x, z, tx, tz, speed, dt_ms)
+    }
 }
 
 /// Step (x, z) toward (target_x, target_z) at `speed` m/s over `dt_ms`

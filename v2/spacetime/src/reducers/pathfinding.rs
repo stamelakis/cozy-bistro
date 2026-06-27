@@ -365,6 +365,49 @@ pub(crate) fn compute_blocked(
     (cells, edges)
 }
 
+// === Per-reducer-call memo of compute_blocked ============================
+//
+// compute_blocked rescans placed_furniture (+ a furniture_meta lookup per
+// row) on every call. With guests + staff each running find_path per
+// tick, that scan repeated 30+× per restaurant_tick for the SAME
+// (rid,floor). Memoise it for the duration of one reducer call, keyed by
+// ctx.timestamp (constant within a call, distinct across ticks) so a
+// furniture edit on the next tick is always picked up. WASM is single-
+// threaded, so the thread_local is effectively a per-call global; the
+// memo returns exactly what compute_blocked would, so determinism (and
+// cross-replica agreement) is unaffected.
+struct BlockedMemo {
+    stamp: i64,
+    map: std::collections::HashMap<(u64, u32), (BTreeSet<(i32, i32)>, BTreeSet<String>)>,
+}
+thread_local! {
+    static BLOCKED_MEMO: std::cell::RefCell<BlockedMemo> = std::cell::RefCell::new(
+        BlockedMemo { stamp: i64::MIN, map: std::collections::HashMap::new() }
+    );
+}
+
+/// compute_blocked, memoised per reducer call (see BlockedMemo).
+fn compute_blocked_cached(
+    ctx: &ReducerContext,
+    rid: u64,
+    floor: u32,
+) -> (BTreeSet<(i32, i32)>, BTreeSet<String>) {
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    BLOCKED_MEMO.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.stamp != now {
+            c.map.clear();
+            c.stamp = now;
+        }
+        if let Some(v) = c.map.get(&(rid, floor)) {
+            return v.clone();
+        }
+        let v = compute_blocked(ctx, rid, floor);
+        c.map.insert((rid, floor), v.clone());
+        v
+    })
+}
+
 /// True if every cell on the straight line between (x1,z1) and (x2,z2),
 /// exclusive of both endpoints, is unblocked. Bresenham traversal,
 /// verbatim port of `directLineClear`. The goal cell is intentionally
@@ -431,7 +474,7 @@ pub(crate) fn find_path(
         return vec![final_target];
     }
 
-    let (blocked, blocked_edges) = compute_blocked(ctx, rid, floor);
+    let (blocked, blocked_edges) = compute_blocked_cached(ctx, rid, floor);
 
     // Direct-line shortcut — only when no edge walls are in play (a
     // Bresenham step can cross a wall edge diagonally, which we can't
