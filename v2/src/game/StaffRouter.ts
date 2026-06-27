@@ -2366,6 +2366,22 @@ export class StaffRouter {
       for (const w of this.waiters) this.renderActorFromServer(w, dt);
       return;
     }
+    // ⚠ DEAD IN PRODUCTION since 2026-06-27 (commit 460f442): staffMove is
+    // DEFAULT-ON (featureFlags.ts), so the early return above ALWAYS fires and
+    // everything below — the pre-cutover client staff sim (tickChef/tickBarman/
+    // tickWaiter + clamp/recover/stampWork + streamActorsToCloud + the client
+    // dispatch/assignment helpers that call planPath) — never runs. The server
+    // now owns staff dispatch + pathfinding + state (Passes 1-6; restaurant_sim.rs
+    // tick_staff_actor / auto_claim_queued_tickets).
+    //
+    // KEPT ONLY as the staffMove ROLLBACK: set DEFAULTS.staffMove=false in
+    // featureFlags.ts and the client drives staff again if a server staff bug
+    // surfaces. SCHEDULED FOR DELETION once the cutover is proven in real play
+    // (~2-3k lines, most of this file). All-or-nothing: tsconfig noUnusedLocals
+    // is true, so deleting this branch makes tsc flag every now-unused method —
+    // delete what it lists, re-run tsc, repeat until clean (no dangling refs,
+    // forced-complete). Runtime-safe (prod already skips this). See memory
+    // cozy-bistro-staff-legacy-cleanup.
     for (const c of this.chefs) this.tickChef(c, dt);
     for (const b of this.barmen) this.tickBarman(b, dt);
     for (const w of this.waiters) this.tickWaiter(w, dt);
