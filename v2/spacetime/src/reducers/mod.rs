@@ -14,6 +14,11 @@ mod pedestrians;
 mod chat;
 mod weather;
 mod restaurant_sim;
+// Pass 1 (additive): server-side nav-grid + A* pathfinder port. Self-
+// contained and unwired — exposes no reducers, so it's a plain `mod`
+// (no glob re-export). Pass 3 will call into it via
+// `crate::reducers::pathfinding::*`.
+mod pathfinding;
 
 pub use lifecycle::*;
 pub use auth::*;
