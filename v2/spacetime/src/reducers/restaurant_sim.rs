@@ -14,12 +14,12 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_menu, active_ticket, auth_record, building, customer_archetype, dirty_pile,
-    dishware_pool, dishwasher_batch, furniture_cost, furniture_inventory, furniture_meta, hired_staff_member, ingredient_cost, pantry_stock,
+    dishware_pool, dishwasher_batch, furniture_cost, furniture_inventory, furniture_meta, hired_staff_member, ingredient_cost, layout_preset, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
@@ -9559,6 +9559,54 @@ pub fn place_from_inventory(
     } else {
         ctx.db.placed_furniture().insert(row);
     }
+    Ok(())
+}
+
+/// QoL layout — save/overwrite a named layout preset for a restaurant.
+/// `layout_json` is the client's serialized snapshot() (PersistedPlacement[]).
+#[reducer]
+pub fn save_layout_preset(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    name: String,
+    layout_json: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can save layouts".into());
+    }
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Layout name can't be empty".into());
+    }
+    if name.chars().count() > 40 {
+        return Err("Layout name too long".into());
+    }
+    let id = format!("{restaurant_id}:{name}");
+    let row = LayoutPreset { id: id.clone(), restaurant_id, name, layout_json };
+    if ctx.db.layout_preset().id().find(id).is_some() {
+        ctx.db.layout_preset().id().update(row);
+    } else {
+        ctx.db.layout_preset().insert(row);
+    }
+    Ok(())
+}
+
+/// QoL layout — delete a named preset. Idempotent.
+#[reducer]
+pub fn delete_layout_preset(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    name: String,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can delete layouts".into());
+    }
+    let id = format!("{}:{}", restaurant_id, name.trim());
+    ctx.db.layout_preset().id().delete(id);
     Ok(())
 }
 

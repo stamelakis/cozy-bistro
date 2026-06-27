@@ -2421,6 +2421,51 @@ export class SpacetimeClient {
     }
   }
 
+  /** QoL layout — save/overwrite a named preset = serialized layout JSON. */
+  saveLayoutPreset(name: string, layoutJson: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.saveLayoutPreset({ restaurantId: this.restaurantId, name, layoutJson });
+    } catch (e) { console.warn("[Cloud] saveLayoutPreset failed:", e); }
+  }
+
+  /** QoL layout — delete a named preset. */
+  deleteLayoutPreset(name: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.deleteLayoutPreset({ restaurantId: this.restaurantId, name });
+    } catch (e) { console.warn("[Cloud] deleteLayoutPreset failed:", e); }
+  }
+
+  /** QoL layout — named layout presets for this restaurant. */
+  listLayoutPresets(): { name: string; layoutJson: string }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: { name: string; layoutJson: string }[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const p of this.conn.db.layout_preset.iter()) {
+        if (p.restaurantId !== rid) continue;
+        out.push({ name: p.name, layoutJson: p.layoutJson });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  /** Fire `onChange` whenever this restaurant's layout presets change. */
+  subscribeLayoutPresetChanges(onChange: () => void): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type LpRow = { id: string; restaurantId: bigint; name: string; layoutJson: string };
+    const fire = (r: LpRow): void => { if (r.restaurantId === rid) onChange(); };
+    try {
+      this.conn.db.layout_preset.onInsert((_c, r: LpRow) => fire(r));
+      this.conn.db.layout_preset.onUpdate((_c, _o: LpRow, n: LpRow) => fire(n));
+      this.conn.db.layout_preset.onDelete((_c, r: LpRow) => fire(r));
+    } catch (e) {
+      console.warn("[Cloud] subscribeLayoutPresetChanges failed:", e);
+    }
+  }
+
   /** Subscribe to live placed_furniture row changes for the current
    * restaurant. Used by FurnitureRegistry to apply other clients'
    * edits without a refresh. The three callbacks fire for the

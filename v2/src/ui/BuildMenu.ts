@@ -3,7 +3,7 @@ import { furnitureCatalog, inferQualityTier, scaledCost, type FurnitureDef } fro
 import type { LuxuryTier } from "../data/types";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
-import { FurnitureRegistry, footprintCells } from "../game/FurnitureRegistry";
+import { FurnitureRegistry, footprintCells, type PersistedPlacement } from "../game/FurnitureRegistry";
 import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 import { closeMobileSheets } from "./MobileUI";
@@ -131,6 +131,9 @@ export class BuildMenu {
   private storageListEl?: HTMLDivElement;
   /** Guards against re-subscribing the inventory sub if the menu rebuilds. */
   private storageSubscribed = false;
+  /** Saved-layout list element + its sub guard. */
+  private layoutListEl?: HTMLDivElement;
+  private layoutSubscribed = false;
   /** When true, first click picks up a placed item, second click drops
    * it at a new cell. */
   private moveMode = false;
@@ -417,6 +420,43 @@ export class BuildMenu {
     if (!this.storageSubscribed) {
       this.storageSubscribed = true;
       this.registry.onStorageChanged(() => this.refreshStorageList());
+    }
+
+    // Layouts — named presets. SAVE captures the current layout; clicking a
+    // preset LOADs it (current furniture → storage, shortfall bought).
+    const layoutRow = document.createElement("div");
+    Object.assign(layoutRow.style, {
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      marginTop: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    const layoutHeader = document.createElement("div");
+    layoutHeader.textContent = "🗂 LAYOUTS";
+    Object.assign(layoutHeader.style, {
+      fontSize: "11px", fontWeight: "700", color: "#cfe8df", letterSpacing: "0.5px",
+    } as Partial<CSSStyleDeclaration>);
+    layoutRow.appendChild(layoutHeader);
+    const saveLayoutBtn = document.createElement("button");
+    saveLayoutBtn.textContent = "+ SAVE";
+    saveLayoutBtn.title = "Save the current furniture layout as a named preset";
+    Object.assign(saveLayoutBtn.style, {
+      padding: "2px 8px", fontSize: "10px", fontWeight: "700",
+      background: "rgba(150, 200, 190, 0.18)", color: "#eafff7",
+      border: "1px solid rgba(150, 200, 190, 0.5)", borderRadius: "4px", cursor: "pointer",
+    } as Partial<CSSStyleDeclaration>);
+    saveLayoutBtn.onclick = () => this.saveCurrentLayout();
+    layoutRow.appendChild(saveLayoutBtn);
+    body.appendChild(layoutRow);
+    const layoutList = document.createElement("div");
+    Object.assign(layoutList.style, {
+      display: "flex", flexDirection: "column", gap: "3px",
+      marginTop: "4px", maxHeight: "120px", overflowY: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(layoutList);
+    this.layoutListEl = layoutList;
+    this.refreshLayoutList();
+    if (!this.layoutSubscribed) {
+      this.layoutSubscribed = true;
+      this.registry.onLayoutChanged(() => this.refreshLayoutList());
     }
 
     const hint = document.createElement("div");
@@ -751,6 +791,85 @@ export class BuildMenu {
       } as Partial<CSSStyleDeclaration>);
       if (def) btn.onclick = () => { void this.startPlacing(def, true); };
       el.appendChild(btn);
+    }
+  }
+
+  /** Save the current layout as a named preset (prompt for the name). */
+  private saveCurrentLayout(): void {
+    const name = window.prompt("Save current layout as:")?.trim();
+    if (!name) return;
+    this.registry.saveLayout(name);
+    this.flashRoot(`Saved layout "${name}"`, "success");
+    this.refreshLayoutList();
+  }
+
+  /** Load a preset — reconcile the floor to it (current furniture → storage,
+   * shortfall bought). Confirms first since it rearranges everything. */
+  private async loadLayout(name: string, layoutJson: string): Promise<void> {
+    if (!window.confirm(`Load "${name}"?\n\nYour current furniture goes to storage and the saved layout is placed (re-using storage, buying anything missing).`)) return;
+    let placements: PersistedPlacement[];
+    try { placements = JSON.parse(layoutJson) as PersistedPlacement[]; }
+    catch { this.flashRoot("Layout data is corrupt", "error"); return; }
+    this.flashRoot(`Loading "${name}"…`, "info");
+    const res = await this.registry.applyLayout(placements, (defId) => {
+      const def = furnitureCatalog.find((d) => d.id === defId);
+      if (!def) return false;
+      return this.game.economy.spendMoney(scaledCost(def), "decor");
+    });
+    this.flashRoot(
+      `Loaded "${name}": ${res.fromStore} from storage, ${res.bought} bought` +
+      (res.skipped ? `, ${res.skipped} skipped (couldn't afford)` : ""),
+      res.skipped ? "info" : "success",
+    );
+    this.refreshStorageList();
+  }
+
+  /** Rebuild the saved-layout list from the server presets. */
+  private refreshLayoutList(): void {
+    const el = this.layoutListEl;
+    if (!el) return;
+    el.innerHTML = "";
+    const presets = this.registry.listLayouts()
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (presets.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No saved layouts yet.";
+      Object.assign(empty.style, {
+        fontSize: "10px", color: "rgba(255,245,220,0.45)", padding: "2px 0",
+      } as Partial<CSSStyleDeclaration>);
+      el.appendChild(empty);
+      return;
+    }
+    for (const { name, layoutJson } of presets) {
+      const row = document.createElement("div");
+      Object.assign(row.style, { display: "flex", gap: "3px" } as Partial<CSSStyleDeclaration>);
+      const loadBtn = document.createElement("button");
+      loadBtn.textContent = name;
+      loadBtn.title = "Load this layout (rearranges your furniture)";
+      Object.assign(loadBtn.style, {
+        flex: "1", textAlign: "left", padding: "4px 6px", fontSize: "11px",
+        background: "rgba(150, 200, 190, 0.12)", color: "#eafff7",
+        border: "1px solid rgba(150, 200, 190, 0.3)", borderRadius: "4px", cursor: "pointer",
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+      } as Partial<CSSStyleDeclaration>);
+      loadBtn.onclick = () => { void this.loadLayout(name, layoutJson); };
+      row.appendChild(loadBtn);
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "✕";
+      delBtn.title = "Delete this layout";
+      Object.assign(delBtn.style, {
+        padding: "4px 7px", fontSize: "11px",
+        background: "rgba(220, 120, 100, 0.15)", color: "#ffd9cf",
+        border: "1px solid rgba(220, 120, 100, 0.4)", borderRadius: "4px", cursor: "pointer",
+      } as Partial<CSSStyleDeclaration>);
+      delBtn.onclick = () => {
+        if (!window.confirm(`Delete layout "${name}"?`)) return;
+        this.registry.deleteLayout(name);
+        this.refreshLayoutList();
+      };
+      row.appendChild(delBtn);
+      el.appendChild(row);
     }
   }
 

@@ -273,6 +273,14 @@ export const IngredientCost = __t.object("IngredientCost", {
 });
 export type IngredientCost = __Infer<typeof IngredientCost>;
 
+export const LayoutPreset = __t.object("LayoutPreset", {
+  id: __t.string(),
+  restaurantId: __t.u64(),
+  name: __t.string(),
+  layoutJson: __t.string(),
+});
+export type LayoutPreset = __Infer<typeof LayoutPreset>;
+
 export const LeaderboardEntry = __t.object("LeaderboardEntry", {
   id: __t.u64(),
   player: __t.identity(),

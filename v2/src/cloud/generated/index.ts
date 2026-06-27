@@ -69,6 +69,7 @@ import ConsumePendingTrainingCompletionsReducer from "./consume_pending_training
 import ConsumePendingVisitRollupReducer from "./consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
 import DeleteHiredStaffMemberReducer from "./delete_hired_staff_member_reducer";
+import DeleteLayoutPresetReducer from "./delete_layout_preset_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import DeliverTicketReducer from "./deliver_ticket_reducer";
 import FinishCookingReducer from "./finish_cooking_reducer";
@@ -96,6 +97,7 @@ import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
 import SaveAccountReducer from "./save_account_reducer";
+import SaveLayoutPresetReducer from "./save_layout_preset_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
 import SellDishwareReducer from "./sell_dishware_reducer";
 import SellFurnitureReducer from "./sell_furniture_reducer";
@@ -173,6 +175,7 @@ import FurnitureInventoryRow from "./furniture_inventory_table";
 import FurnitureMetaRow from "./furniture_meta_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
+import LayoutPresetRow from "./layout_preset_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import MoneyCutoverRow from "./money_cutover_table";
 import PantryStockRow from "./pantry_stock_table";
@@ -494,6 +497,20 @@ const tablesSchema = __schema({
       { name: 'ingredient_cost_ingredient_id_key', constraint: 'unique', columns: ['ingredientId'] },
     ],
   }, IngredientCostRow),
+  layout_preset: __table({
+    name: 'layout_preset',
+    indexes: [
+      { accessor: 'id', name: 'layout_preset_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'layout_preset_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'layout_preset_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, LayoutPresetRow),
   leaderboard_entry: __table({
     name: 'leaderboard_entry',
     indexes: [
@@ -817,6 +834,7 @@ const reducersSchema = __reducers(
   __reducerSchema("consume_pending_visit_rollup", ConsumePendingVisitRollupReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
   __reducerSchema("delete_hired_staff_member", DeleteHiredStaffMemberReducer),
+  __reducerSchema("delete_layout_preset", DeleteLayoutPresetReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
   __reducerSchema("deliver_ticket", DeliverTicketReducer),
   __reducerSchema("finish_cooking", FinishCookingReducer),
@@ -844,6 +862,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
   __reducerSchema("save_account", SaveAccountReducer),
+  __reducerSchema("save_layout_preset", SaveLayoutPresetReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),
   __reducerSchema("sell_dishware", SellDishwareReducer),
   __reducerSchema("sell_furniture", SellFurnitureReducer),

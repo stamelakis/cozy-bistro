@@ -280,6 +280,104 @@ export class FurnitureRegistry {
     this.storageChangeCb = cb;
   }
 
+  // ---- QoL layout presets (save / load with storage-based reconcile) ----
+
+  /** Serialize the current layout (PersistedPlacement[]) to JSON for a preset. */
+  captureLayout(): string {
+    return JSON.stringify(this.snapshot());
+  }
+
+  /** Programmatically place one item at an absolute pose on any floor,
+   * mirroring it like a normal placement (no ghost/click). `fromStorage`
+   * routes the mirror to place_from_inventory (free). Returns the new uid
+   * (null on unknown def / load failure). Mirrors applyCloudInsert's
+   * placement so any-floor mounting + Y are correct. */
+  async placeProgrammatic(
+    defId: string, x: number, z: number, rotY: number, floor: number,
+    parent: { parentUid: string; slotIndex: number } | undefined,
+    fromStorage: boolean,
+  ): Promise<string | null> {
+    const def = getFurnitureDef(defId);
+    if (!def) return null;
+    try {
+      const model = await this.loader.load(def.modelPath);
+      fitFurniture(model, def);
+      const f = Math.max(0, floor);
+      model.position.set(x, placementY(model, def) + this.floorYOffset(f), z);
+      model.rotation.y = rotY;
+      snapToAdjacentWall(model, def);
+      this.mountFor(f).add(model);
+      return this.register(defId, x, z, rotY, model, parent, f, fromStorage);
+    } catch (err) {
+      console.warn(`[FurnitureRegistry] placeProgrammatic failed (${defId}):`, err);
+      return null;
+    }
+  }
+
+  /** QoL layout LOAD — reconcile the floor to a saved layout WITHOUT
+   * conjuring free furniture: STORE everything currently placed, then
+   * re-place the preset from storage (free) or by buying the shortfall.
+   * `tryBuy(defId)` charges for + approves a purchase (false = unaffordable
+   * → that item is skipped). Returns counts for a result toast. */
+  async applyLayout(
+    placements: PersistedPlacement[],
+    tryBuy: (defId: string) => boolean,
+  ): Promise<{ fromStore: number; bought: number; skipped: number }> {
+    // Items placeable WITHOUT buying = existing storage + everything on the
+    // floor now (about to be stored). Tracked locally because the SDK
+    // inventory cache won't update mid-batch.
+    const pool = new Map<string, number>();
+    for (const s of this.listStorage()) pool.set(s.defId, (pool.get(s.defId) ?? 0) + s.qty);
+    const current = this.snapshot();
+    for (const it of current) pool.set(it.defId, (pool.get(it.defId) ?? 0) + 1);
+    // 1) Store everything currently placed (banks to inventory, no money).
+    //    removeAtByUid cascades surface children + is null-safe on re-hits.
+    for (const it of current) this.removeAtByUid(it.uid, true);
+    // 2) Place the preset. Hosts (non-parented) first so surface children
+    //    can remap their parent uid to the freshly-placed host.
+    const sorted = [...placements].sort((a, b) => (a.parentUid ? 1 : 0) - (b.parentUid ? 1 : 0));
+    const uidMap = new Map<string, string>();
+    let fromStore = 0, bought = 0, skipped = 0;
+    for (const p of sorted) {
+      if (!getFurnitureDef(p.defId)) { skipped += 1; continue; }
+      const have = pool.get(p.defId) ?? 0;
+      let useStore = false;
+      if (have > 0) { useStore = true; pool.set(p.defId, have - 1); fromStore += 1; }
+      else if (tryBuy(p.defId)) { bought += 1; }
+      else { skipped += 1; continue; }
+      const parent = (p.parentUid && uidMap.has(p.parentUid) && typeof p.slotIndex === "number")
+        ? { parentUid: uidMap.get(p.parentUid)!, slotIndex: p.slotIndex }
+        : undefined;
+      const newUid = await this.placeProgrammatic(p.defId, p.x, p.z, p.rotY, p.floor ?? 0, parent, useStore);
+      if (newUid) uidMap.set(p.uid, newUid);
+    }
+    // 3) Snap any surface children onto their re-placed hosts.
+    for (const u of uidMap.values()) this.reseatSurfaceChildren(u);
+    return { fromStore, bought, skipped };
+  }
+
+  /** Saved layout presets for this restaurant. */
+  listLayouts(): { name: string; layoutJson: string }[] {
+    return this.cloud?.listLayoutPresets() ?? [];
+  }
+
+  /** Save/overwrite a named preset capturing the current layout. */
+  saveLayout(name: string): void {
+    this.cloud?.saveLayoutPreset(name, this.captureLayout());
+  }
+
+  /** Delete a named layout preset. */
+  deleteLayout(name: string): void {
+    this.cloud?.deleteLayoutPreset(name);
+  }
+
+  /** Register the build menu's layout-list refresh, fired by the
+   * post-connect subscription wired in subscribeToCloudChanges. */
+  onLayoutChanged(cb: () => void): void {
+    this.layoutChangeCb = cb;
+  }
+  private layoutChangeCb: (() => void) | null = null;
+
   /** H.28 — Recompute aggregate furniture stats and push them to the
    * server's Restaurant row cache. The server uses these to apply
    * vibe + bathroom rating modifiers to backgrounded guests in
@@ -1380,6 +1478,7 @@ export class FurnitureRegistry {
     // same post-connect point so it's reliably live (the menu may have
     // been built before the cloud finished connecting).
     this.cloud.subscribeFurnitureInventoryChanges(() => this.storageChangeCb?.());
+    this.cloud.subscribeLayoutPresetChanges(() => this.layoutChangeCb?.());
   }
 
   /** Insert event from the subscription. Skips when the uid is

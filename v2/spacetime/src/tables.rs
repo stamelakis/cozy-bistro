@@ -1933,6 +1933,22 @@ pub struct FurnitureInventory {
     pub qty: u32,
 }
 
+/// QoL layout presets — a named snapshot of a restaurant's furniture
+/// layout (serialized PersistedPlacement[] JSON, uids included so the
+/// client can remap surface-child parent links on load). Loading
+/// reconciles the floor to the snapshot client-side, reusing the
+/// storage room (store everything, then re-place from storage / buy).
+#[table(name = layout_preset, public)]
+pub struct LayoutPreset {
+    /// "{restaurant_id}:{name}" — composite key so re-saving a name overwrites.
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub name: String,
+    pub layout_json: String,
+}
+
 /// Phase 9.19 — The player's auto-shop stock target (one uniform
 /// number, tuned in the Pantry UI). The errand dispatcher shops
 /// toward THIS instead of its old hardcoded "below 3 units" floor —

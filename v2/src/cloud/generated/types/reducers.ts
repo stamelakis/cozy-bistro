@@ -41,6 +41,7 @@ import ConsumePendingTrainingCompletionsReducer from "../consume_pending_trainin
 import ConsumePendingVisitRollupReducer from "../consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "../create_restaurant_reducer";
 import DeleteHiredStaffMemberReducer from "../delete_hired_staff_member_reducer";
+import DeleteLayoutPresetReducer from "../delete_layout_preset_reducer";
 import DeleteRestaurantReducer from "../delete_restaurant_reducer";
 import DeliverTicketReducer from "../deliver_ticket_reducer";
 import FinishCookingReducer from "../finish_cooking_reducer";
@@ -68,6 +69,7 @@ import ResetSalaryTickClockReducer from "../reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "../reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "../respond_friend_request_reducer";
 import SaveAccountReducer from "../save_account_reducer";
+import SaveLayoutPresetReducer from "../save_layout_preset_reducer";
 import SaveRestaurantSnapshotReducer from "../save_restaurant_snapshot_reducer";
 import SellDishwareReducer from "../sell_dishware_reducer";
 import SellFurnitureReducer from "../sell_furniture_reducer";
@@ -156,6 +158,7 @@ export type ConsumePendingTrainingCompletionsParams = __Infer<typeof ConsumePend
 export type ConsumePendingVisitRollupParams = __Infer<typeof ConsumePendingVisitRollupReducer>;
 export type CreateRestaurantParams = __Infer<typeof CreateRestaurantReducer>;
 export type DeleteHiredStaffMemberParams = __Infer<typeof DeleteHiredStaffMemberReducer>;
+export type DeleteLayoutPresetParams = __Infer<typeof DeleteLayoutPresetReducer>;
 export type DeleteRestaurantParams = __Infer<typeof DeleteRestaurantReducer>;
 export type DeliverTicketParams = __Infer<typeof DeliverTicketReducer>;
 export type FinishCookingParams = __Infer<typeof FinishCookingReducer>;
@@ -183,6 +186,7 @@ export type ResetSalaryTickClockParams = __Infer<typeof ResetSalaryTickClockRedu
 export type ResetSimSchedulesParams = __Infer<typeof ResetSimSchedulesReducer>;
 export type RespondFriendRequestParams = __Infer<typeof RespondFriendRequestReducer>;
 export type SaveAccountParams = __Infer<typeof SaveAccountReducer>;
+export type SaveLayoutPresetParams = __Infer<typeof SaveLayoutPresetReducer>;
 export type SaveRestaurantSnapshotParams = __Infer<typeof SaveRestaurantSnapshotReducer>;
 export type SellDishwareParams = __Infer<typeof SellDishwareReducer>;
 export type SellFurnitureParams = __Infer<typeof SellFurnitureReducer>;
