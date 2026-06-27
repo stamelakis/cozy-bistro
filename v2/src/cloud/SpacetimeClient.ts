@@ -2353,6 +2353,74 @@ export class SpacetimeClient {
     catch (e) { console.warn("[Cloud] sellFurniture failed:", e); }
   }
 
+  /** QoL storage — bank a placed item into the storage room (no refund)
+   * instead of selling it. Server deletes the row + increments the
+   * furniture_inventory qty for its def. */
+  storeFurniture(uid: string): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.storeFurniture({ uid }); }
+    catch (e) { console.warn("[Cloud] storeFurniture failed:", e); }
+  }
+
+  /** QoL storage — re-place a stored item for FREE (no money debit). The
+   * server decrements the inventory qty + inserts the placed_furniture
+   * row. Same arg shape as placeFurniture so the registry reuses its
+   * normal placement bookkeeping; it just calls this on the storage path. */
+  placeFromInventory(args: {
+    uid: string;
+    defId: string;
+    x: number; z: number; rotY: number; floor: number;
+    parentUid: string;
+    slotIndex: number;
+    localRotY: number;
+  }): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.placeFromInventory({
+        restaurantId: this.restaurantId,
+        uid: args.uid,
+        defId: args.defId,
+        x: args.x, z: args.z, rotY: args.rotY, floor: args.floor,
+        parentUid: args.parentUid,
+        slotIndex: args.slotIndex,
+        localRotY: args.localRotY,
+      });
+    } catch (e) {
+      console.warn("[Cloud] placeFromInventory failed:", e);
+    }
+  }
+
+  /** Owned-but-unplaced furniture (the storage room) for the current
+   * restaurant, as {defId, qty} with qty > 0. */
+  listFurnitureInventory(): { defId: string; qty: number }[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: { defId: string; qty: number }[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const i of this.conn.db.furniture_inventory.iter()) {
+        if (i.restaurantId !== rid) continue;
+        if (i.qty > 0) out.push({ defId: i.defId, qty: i.qty });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  /** Fire `onChange` whenever this restaurant's storage inventory changes
+   * (store / re-place), so the build menu's storage list stays live. */
+  subscribeFurnitureInventoryChanges(onChange: () => void): void {
+    if (!this.conn || this.restaurantId == null) return;
+    const rid = this.restaurantId;
+    type InvRow = { id: string; restaurantId: bigint; defId: string; qty: number };
+    const fire = (r: InvRow): void => { if (r.restaurantId === rid) onChange(); };
+    try {
+      this.conn.db.furniture_inventory.onInsert((_c, r: InvRow) => fire(r));
+      this.conn.db.furniture_inventory.onUpdate((_c, _o: InvRow, n: InvRow) => fire(n));
+      this.conn.db.furniture_inventory.onDelete((_c, r: InvRow) => fire(r));
+    } catch (e) {
+      console.warn("[Cloud] subscribeFurnitureInventoryChanges failed:", e);
+    }
+  }
+
   /** Subscribe to live placed_furniture row changes for the current
    * restaurant. Used by FurnitureRegistry to apply other clients'
    * edits without a refresh. The three callbacks fire for the

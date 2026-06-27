@@ -173,6 +173,7 @@ export class FurnitureRegistry {
     model: THREE.Object3D,
     parent?: { parentUid: string; slotIndex: number },
     floor = 0,
+    fromStorage = false,
   ): string {
     const uid = makeUid();
     const item: PlacedFurnitureItem = { uid, defId, x, z, rotY, floor, model };
@@ -194,7 +195,7 @@ export class FurnitureRegistry {
       }
     }
     this.items.push(item);
-    this.mirrorFurniturePlace(item);
+    this.mirrorFurniturePlace(item, fromStorage);
     return uid;
   }
 
@@ -206,10 +207,10 @@ export class FurnitureRegistry {
   // placed_furniture table tracks the same layout. All three helpers
   // bail silently when the flag is off OR cloud isn't wired.
 
-  private mirrorFurniturePlace(item: PlacedFurnitureItem): void {
+  private mirrorFurniturePlace(item: PlacedFurnitureItem, fromStorage = false): void {
     if (this.suppressMirrorForReload) return;
     if (!isServerSim("furniture") || !this.cloud) return;
-    this.cloud.placeFurniture({
+    const args = {
       uid: item.uid,
       defId: item.defId,
       x: item.x,
@@ -219,7 +220,11 @@ export class FurnitureRegistry {
       parentUid: item.parentUid ?? "",
       slotIndex: item.slotIndex ?? -1,
       localRotY: item.localRotY ?? 0,
-    });
+    };
+    // Storage re-place routes to place_from_inventory (free + decrements
+    // the stored qty) instead of place_furniture.
+    if (fromStorage) this.cloud.placeFromInventory(args);
+    else this.cloud.placeFurniture(args);
     this.mirrorAggregates(); // H.28
   }
 
@@ -247,6 +252,32 @@ export class FurnitureRegistry {
     if (!isServerSim("furniture") || !this.cloud) return;
     this.cloud.sellFurniture(uid);
     this.mirrorAggregates(); // H.28
+  }
+
+  /** QoL storage — like mirrorFurnitureSell but banks the item into the
+   * storage room (no refund) so it can be re-placed for free later. */
+  private mirrorFurnitureStore(uid: string): void {
+    if (this.suppressMirrorForReload) return;
+    if (!isServerSim("furniture") || !this.cloud) return;
+    this.cloud.storeFurniture(uid);
+    this.mirrorAggregates(); // H.28
+  }
+
+  /** Stored (owned-but-unplaced) furniture for this restaurant — the
+   * storage room contents, as {defId, qty}. */
+  listStorage(): { defId: string; qty: number }[] {
+    return this.cloud?.listFurnitureInventory() ?? [];
+  }
+
+  /** Build menu's storage-list refresh callback, fired by the post-connect
+   * inventory subscription wired in subscribeToCloudChanges. */
+  private storageChangeCb: (() => void) | null = null;
+
+  /** Register the build menu's storage-list refresh. The actual inventory
+   * subscription is established post-connect (subscribeToCloudChanges), so
+   * this works no matter when the menu was built. */
+  onStorageChanged(cb: () => void): void {
+    this.storageChangeCb = cb;
   }
 
   /** H.28 — Recompute aggregate furniture stats and push them to the
@@ -547,7 +578,7 @@ export class FurnitureRegistry {
    * item is a host of any surface items, those are removed too and their
    * refunds folded into the returned value — the caller (BuildMenu sell)
    * pays out the whole stack in one go. */
-  removeAtByUid(uid: string): { defId: string; refund: number } | null {
+  removeAtByUid(uid: string, store = false): { defId: string; refund: number } | null {
     const idx = this.items.findIndex((it) => it.uid === uid);
     if (idx < 0) return null;
     const item = this.items[idx];
@@ -587,8 +618,10 @@ export class FurnitureRegistry {
     // Mirror the cascade-sell — every child uid first (so the order
     // matches the local splice order), then the host. cancel/idempotent
     // semantics server-side handle re-runs safely.
-    for (const child of children) this.mirrorFurnitureSell(child.uid);
-    this.mirrorFurnitureSell(uid);
+    for (const child of children) {
+      if (store) this.mirrorFurnitureStore(child.uid); else this.mirrorFurnitureSell(child.uid);
+    }
+    if (store) this.mirrorFurnitureStore(uid); else this.mirrorFurnitureSell(uid);
     const def = getFurnitureDef(item.defId);
     return { defId: item.defId, refund: (def ? scaledCost(def) : 0) + totalChildRefund };
   }
@@ -1343,6 +1376,10 @@ export class FurnitureRegistry {
       onUpdate: (row) => { this.applyCloudUpdate(row); },
       onDelete: (uid) => { this.applyCloudDelete(uid); },
     });
+    // QoL storage — drive the build menu's storage-list refresh from the
+    // same post-connect point so it's reliably live (the menu may have
+    // been built before the cloud finished connecting).
+    this.cloud.subscribeFurnitureInventoryChanges(() => this.storageChangeCb?.());
   }
 
   /** Insert event from the subscription. Skips when the uid is

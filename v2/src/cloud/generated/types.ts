@@ -237,6 +237,14 @@ export const FurnitureCost = __t.object("FurnitureCost", {
 });
 export type FurnitureCost = __Infer<typeof FurnitureCost>;
 
+export const FurnitureInventory = __t.object("FurnitureInventory", {
+  id: __t.string(),
+  restaurantId: __t.u64(),
+  defId: __t.string(),
+  qty: __t.u32(),
+});
+export type FurnitureInventory = __Infer<typeof FurnitureInventory>;
+
 export const FurnitureMeta = __t.object("FurnitureMeta", {
   defId: __t.string(),
   category: __t.string(),

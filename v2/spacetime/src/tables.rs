@@ -1919,6 +1919,20 @@ pub struct SeatAppeal {
     pub surface: String,
 }
 
+/// QoL storage room — furniture the owner removed with "Store" instead
+/// of "Sell". Kept (no refund) so it can be re-placed for FREE later.
+/// One row per (restaurant, def_id); `qty` is the count in storage.
+#[table(name = furniture_inventory, public)]
+pub struct FurnitureInventory {
+    /// "{restaurant_id}:{def_id}" — composite key for cheap upsert.
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub def_id: String,
+    pub qty: u32,
+}
+
 /// Phase 9.19 — The player's auto-shop stock target (one uniform
 /// number, tuned in the Pantry UI). The errand dispatcher shops
 /// toward THIS instead of its old hardcoded "below 3 units" floor —

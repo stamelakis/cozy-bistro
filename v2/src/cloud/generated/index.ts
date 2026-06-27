@@ -82,6 +82,7 @@ import PickupDirtyPileReducer from "./pickup_dirty_pile_reducer";
 import PickupDirtyPileBySeatReducer from "./pickup_dirty_pile_by_seat_reducer";
 import PickupTicketReducer from "./pickup_ticket_reducer";
 import PingPresenceReducer from "./ping_presence_reducer";
+import PlaceFromInventoryReducer from "./place_from_inventory_reducer";
 import PlaceFurnitureReducer from "./place_furniture_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
@@ -134,6 +135,7 @@ import SetWaiterRestSpotReducer from "./set_waiter_rest_spot_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
+import StoreFurnitureReducer from "./store_furniture_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import SyncCloudDailyTotalsReducer from "./sync_cloud_daily_totals_reducer";
 import SyncDayClockReducer from "./sync_day_clock_reducer";
@@ -167,6 +169,7 @@ import DishwasherBatchRow from "./dishwasher_batch_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
+import FurnitureInventoryRow from "./furniture_inventory_table";
 import FurnitureMetaRow from "./furniture_meta_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
@@ -441,6 +444,20 @@ const tablesSchema = __schema({
       { name: 'furniture_cost_def_id_key', constraint: 'unique', columns: ['defId'] },
     ],
   }, FurnitureCostRow),
+  furniture_inventory: __table({
+    name: 'furniture_inventory',
+    indexes: [
+      { accessor: 'id', name: 'furniture_inventory_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'furniture_inventory_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'furniture_inventory_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, FurnitureInventoryRow),
   furniture_meta: __table({
     name: 'furniture_meta',
     indexes: [
@@ -813,6 +830,7 @@ const reducersSchema = __reducers(
   __reducerSchema("pickup_dirty_pile_by_seat", PickupDirtyPileBySeatReducer),
   __reducerSchema("pickup_ticket", PickupTicketReducer),
   __reducerSchema("ping_presence", PingPresenceReducer),
+  __reducerSchema("place_from_inventory", PlaceFromInventoryReducer),
   __reducerSchema("place_furniture", PlaceFurnitureReducer),
   __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
@@ -865,6 +883,7 @@ const reducersSchema = __reducers(
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),
+  __reducerSchema("store_furniture", StoreFurnitureReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("sync_cloud_daily_totals", SyncCloudDailyTotalsReducer),
   __reducerSchema("sync_day_clock", SyncDayClockReducer),

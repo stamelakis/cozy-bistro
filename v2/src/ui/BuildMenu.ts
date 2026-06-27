@@ -120,6 +120,17 @@ export class BuildMenu {
    * Mutually exclusive with placingDef (entering sell mode cancels placement). */
   private sellMode = false;
   private sellBtn?: HTMLButtonElement;
+  /** When true, clicking a placed item banks it into the storage room
+   * (no refund) instead of selling. Mutually exclusive with sell/move. */
+  private storeMode = false;
+  private storeBtn?: HTMLButtonElement;
+  /** True while the active placement is a free re-place from storage —
+   * skip the money charge + route the mirror to place_from_inventory. */
+  private placingFromStorage = false;
+  /** Storage-room list element, rebuilt from the inventory subscription. */
+  private storageListEl?: HTMLDivElement;
+  /** Guards against re-subscribing the inventory sub if the menu rebuilds. */
+  private storageSubscribed = false;
   /** When true, first click picks up a placed item, second click drops
    * it at a new cell. */
   private moveMode = false;
@@ -287,7 +298,7 @@ export class BuildMenu {
     // Sell + Move buttons live as a pair under the catalog list.
     const actionRow = document.createElement("div");
     Object.assign(actionRow.style, {
-      display: "grid", gridTemplateColumns: "1fr 1fr",
+      display: "grid", gridTemplateColumns: "1fr 1fr 1fr",
       gap: "4px", marginTop: "10px",
     } as Partial<CSSStyleDeclaration>);
     const sellBtn = document.createElement("button");
@@ -306,6 +317,24 @@ export class BuildMenu {
     sellBtn.onclick = () => this.toggleSellMode();
     actionRow.appendChild(sellBtn);
     this.sellBtn = sellBtn;
+
+    const storeBtn = document.createElement("button");
+    storeBtn.textContent = "STORE";
+    storeBtn.title = "Stash an item into the storage room (no refund) to re-place it free later";
+    Object.assign(storeBtn.style, {
+      padding: "6px 4px",
+      background: "rgba(150, 200, 190, 0.18)",
+      color: "#fff5dc",
+      border: "1px solid rgba(150, 200, 190, 0.5)",
+      borderRadius: "4px",
+      textAlign: "center",
+      cursor: "pointer",
+      fontSize: "12px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    storeBtn.onclick = () => this.toggleStoreMode();
+    actionRow.appendChild(storeBtn);
+    this.storeBtn = storeBtn;
 
     const moveBtn = document.createElement("button");
     moveBtn.textContent = "MOVE";
@@ -367,6 +396,28 @@ export class BuildMenu {
     this.undoBtn.onclick = () => this.runUndo();
     actionRow2.appendChild(this.undoBtn);
     body.appendChild(actionRow2);
+
+    // Storage room — owned-but-unplaced furniture. Click an entry to
+    // re-place it for free. Populated live from the server inventory.
+    const storageHeader = document.createElement("div");
+    storageHeader.textContent = "📦 STORAGE";
+    Object.assign(storageHeader.style, {
+      marginTop: "10px", fontSize: "11px", fontWeight: "700",
+      color: "#cfe8df", letterSpacing: "0.5px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(storageHeader);
+    const storageList = document.createElement("div");
+    Object.assign(storageList.style, {
+      display: "flex", flexDirection: "column", gap: "3px",
+      marginTop: "4px", maxHeight: "140px", overflowY: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(storageList);
+    this.storageListEl = storageList;
+    this.refreshStorageList();
+    if (!this.storageSubscribed) {
+      this.storageSubscribed = true;
+      this.registry.onStorageChanged(() => this.refreshStorageList());
+    }
 
     const hint = document.createElement("div");
     hint.innerHTML = `Click item → click floor to place. R = rotate. Esc = cancel.<br/>
@@ -638,6 +689,7 @@ export class BuildMenu {
     this.sellMode = !this.sellMode;
     if (this.sellMode) {
       this.cancelPlacing(); // sell mode and placing mode are mutually exclusive
+      if (this.storeMode) this.toggleStoreMode();
     }
     if (this.sellBtn) {
       this.sellBtn.style.background = this.sellMode
@@ -646,6 +698,59 @@ export class BuildMenu {
       this.sellBtn.textContent = this.sellMode
         ? "SELL MODE — click item to sell (Esc to exit)"
         : "SELL MODE (50% refund)";
+    }
+  }
+
+  private toggleStoreMode(): void {
+    this.storeMode = !this.storeMode;
+    if (this.storeMode) {
+      this.cancelPlacing();
+      if (this.sellMode) this.toggleSellMode();
+      if (this.moveMode) this.toggleMoveMode();
+    }
+    if (this.storeBtn) {
+      this.storeBtn.style.background = this.storeMode
+        ? "rgba(150, 200, 190, 0.6)"
+        : "rgba(150, 200, 190, 0.18)";
+      this.storeBtn.textContent = this.storeMode
+        ? "STORE — click item to stash (Esc)"
+        : "STORE";
+    }
+  }
+
+  /** Rebuild the storage-room list from the server inventory. Clicking an
+   * entry starts a FREE re-placement of that def. */
+  private refreshStorageList(): void {
+    const el = this.storageListEl;
+    if (!el) return;
+    el.innerHTML = "";
+    const items = this.registry.listStorage()
+      .slice()
+      .sort((a, b) => a.defId.localeCompare(b.defId));
+    if (items.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "Empty — use STORE to stash an item here.";
+      Object.assign(empty.style, {
+        fontSize: "10px", color: "rgba(255,245,220,0.45)", padding: "2px 0",
+      } as Partial<CSSStyleDeclaration>);
+      el.appendChild(empty);
+      return;
+    }
+    for (const { defId, qty } of items) {
+      const def = furnitureCatalog.find((d) => d.id === defId);
+      const btn = document.createElement("button");
+      btn.textContent = `${def?.name ?? defId} ×${qty}`;
+      btn.title = "Click, then click the floor to re-place (free)";
+      Object.assign(btn.style, {
+        display: "block", width: "100%", textAlign: "left",
+        padding: "4px 6px", fontSize: "11px",
+        background: "rgba(150, 200, 190, 0.12)",
+        color: "#eafff7",
+        border: "1px solid rgba(150, 200, 190, 0.3)",
+        borderRadius: "4px", cursor: "pointer",
+      } as Partial<CSSStyleDeclaration>);
+      if (def) btn.onclick = () => { void this.startPlacing(def, true); };
+      el.appendChild(btn);
     }
   }
 
@@ -671,6 +776,7 @@ export class BuildMenu {
         }
         if (this.sellMode) this.toggleSellMode();
         if (this.moveMode) this.toggleMoveMode();
+        if (this.storeMode) this.toggleStoreMode();
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
         this.rotatePlacement();
@@ -678,13 +784,15 @@ export class BuildMenu {
     });
   }
 
-  private async startPlacing(def: FurnitureDef): Promise<void> {
-    if (this.game.economy.canAfford(scaledCost(def)) === false) {
+  private async startPlacing(def: FurnitureDef, fromStorage = false): Promise<void> {
+    if (!fromStorage && this.game.economy.canAfford(scaledCost(def)) === false) {
       this.flashRoot("Not enough money", "error");
       return;
     }
+    this.placingFromStorage = fromStorage;
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     if (this.moveMode) this.toggleMoveMode();
+    if (this.storeMode) this.toggleStoreMode();
     // On mobile the build panel is a slide-in sheet covering the view —
     // close it so the player can see the floor they're placing on.
     closeMobileSheets();
@@ -800,6 +908,7 @@ export class BuildMenu {
       this.preview = null;
     }
     this.placingDef = null;
+    this.placingFromStorage = false;
     this.currentPlan = null;
     this.showPlaceRotate(false);
     // If nothing else needs the markers, hide them.
@@ -1735,6 +1844,28 @@ export class BuildMenu {
       this.flashRoot(`Sold for $${removed.refund}`, "success");
       return;
     }
+    if (this.storeMode && this.hoverValid) {
+      const item = this.hoveredItemUid
+        ? this.registry.snapshotItems().find((it) => it.uid === this.hoveredItemUid) ?? null
+        : this.registry.findAt(Math.round(this.hoverCell.x), Math.round(this.hoverCell.z), undefined, this.currentFloor());
+      if (!item) {
+        this.flashRoot("Nothing to store there", "error");
+        return;
+      }
+      const itemModel = item.model;
+      const itemDef = furnitureCatalog.find((d) => d.id === item.defId);
+      // store=true → banks to the storage room (no refund) instead of sell.
+      const stored = this.registry.removeAtByUid(item.uid, true);
+      if (!stored) {
+        this.flashRoot("Nothing to store there", "error");
+        return;
+      }
+      if (itemDef?.category === "lamp") this.onLampRemoved?.(itemModel);
+      if (itemDef?.category === "door" && !itemDef.id.startsWith("window")) this.onDoorRemoved?.(itemModel);
+      if (itemDef?.id.startsWith("window")) this.onWindowRemoved?.(itemModel);
+      this.flashRoot(`Stored ${itemDef?.name ?? "item"}`, "success");
+      return;
+    }
     if (this.moveMode && this.hoverValid) {
       if (!this.holdingUid) {
         // First click: pick up whatever's under the cursor (raycaster hit
@@ -1831,12 +1962,17 @@ export class BuildMenu {
     // synchronously below; cleared when the cursor moves (onPointerMove).
     const placeKey = `${plan.x},${plan.z},${this.currentFloor()}`;
     if (this.lastPlacedKey === placeKey) return;
-    const purchasePrice = scaledCost(def);
-    if (!this.game.economy.spendMoney(purchasePrice, "decor")) {
+    const fromStorage = this.placingFromStorage;
+    const purchasePrice = fromStorage ? 0 : scaledCost(def);
+    if (!fromStorage && !this.game.economy.spendMoney(purchasePrice, "decor")) {
       this.flashRoot("Not enough money", "error");
       return;
     }
     this.lastPlacedKey = placeKey;
+    // Storage re-place is one-shot (limited qty) — end placing now so a
+    // second click can't place a copy you no longer own. The in-flight
+    // placement below still completes from its captured vars.
+    if (fromStorage) this.cancelPlacing();
     // Bake the preview into the scene using the plan's final pose (which
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
@@ -1883,8 +2019,10 @@ export class BuildMenu {
       const parent = (def.placement === "surface" && planHostUid && typeof planSlotIndex === "number")
         ? { parentUid: planHostUid, slotIndex: planSlotIndex }
         : undefined;
-      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent, placeFloor);
-      this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
+      const uid = this.registry.register(def.id, placeX, placeZ, rotY, solid, parent, placeFloor, fromStorage);
+      // Storage re-places aren't on the undo stack (undo would sell, not
+      // re-stash) — re-store the item if you change your mind.
+      if (!fromStorage) this.pushUndo({ kind: "place", uid, defId: def.id, refundCost: cost });
       // Lifetime "pieces placed" counter for the achievement system —
       // monotonically non-decreasing (sells don't undo it).
       this.game.bumpPlayerCounter("furniturePlaced");

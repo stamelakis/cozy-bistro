@@ -14,12 +14,12 @@
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
     active_guest, active_menu, active_ticket, auth_record, building, customer_archetype, dirty_pile,
-    dishware_pool, dishwasher_batch, furniture_cost, furniture_meta, hired_staff_member, ingredient_cost, pantry_stock,
+    dishware_pool, dishwasher_batch, furniture_cost, furniture_inventory, furniture_meta, hired_staff_member, ingredient_cost, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureMeta,
+    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
@@ -9446,6 +9446,118 @@ pub fn sell_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// QoL storage — like sell_furniture, but the item is banked into the
+/// owner's furniture_inventory (NO refund) so it can be re-placed for
+/// free later. Same cascade as sell (dishwasher batch + evict diners
+/// whose seat vanished). Idempotent: a missing uid is a no-op.
+#[reducer]
+pub fn store_furniture(ctx: &ReducerContext, uid: String) -> Result<(), String> {
+    let existing = match ctx.db.placed_furniture().uid().find(uid.clone()) {
+        Some(f) => f,
+        None => return Ok(()),
+    };
+    let r = ctx.db.restaurant().id().find(existing.restaurant_id)
+        .ok_or_else(|| "Item's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can store their furniture".into());
+    }
+    ctx.db.placed_furniture().uid().delete(uid.clone());
+    if ctx.db.dishwasher_batch().furniture_uid().find(uid.clone()).is_some() {
+        ctx.db.dishwasher_batch().furniture_uid().delete(uid.clone());
+    }
+    // Evict diners whose seat just vanished (mirror sell_furniture's
+    // eviction — patience 0 = the 1★ dissatisfaction signal).
+    let evictees: Vec<ActiveGuest> = ctx.db.active_guest()
+        .restaurant_id().filter(existing.restaurant_id)
+        .filter(|g| !is_leaving_state(&g.state)
+            && (g.seat_uid == uid
+                || g.seat_uid.starts_with(&format!("{uid}#"))
+                || g.waiting_chair_uid == uid))
+        .collect();
+    for g in evictees {
+        ctx.db.active_guest().id().update(ActiveGuest {
+            state: "leaving".to_string(),
+            state_clock_ms: 0,
+            patience_ms: 0,
+            target_x: 0.0,
+            target_z: 0.0,
+            target_floor: 0,
+            ..g
+        });
+    }
+    // Bank into inventory: +1 qty for (restaurant, def_id). No money
+    // moves — the player gets the item back, not cash.
+    let inv_id = format!("{}:{}", existing.restaurant_id, existing.def_id);
+    if let Some(inv) = ctx.db.furniture_inventory().id().find(inv_id.clone()) {
+        ctx.db.furniture_inventory().id().update(FurnitureInventory {
+            qty: inv.qty.saturating_add(1),
+            ..inv
+        });
+    } else {
+        ctx.db.furniture_inventory().insert(FurnitureInventory {
+            id: inv_id,
+            restaurant_id: existing.restaurant_id,
+            def_id: existing.def_id.clone(),
+            qty: 1,
+        });
+    }
+    log::info!("store_furniture: {} ({}) → storage", uid, existing.def_id);
+    Ok(())
+}
+
+/// QoL storage — place an item the owner has in furniture_inventory back
+/// onto the floor for FREE (no money debit), decrementing its stored
+/// qty. Errors if nothing of that def is in storage. Mirrors
+/// place_furniture's row shape so the client reuses its normal
+/// placement bookkeeping (it just skips the spend on this path).
+#[reducer]
+pub fn place_from_inventory(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    uid: String,
+    def_id: String,
+    x: f32,
+    z: f32,
+    rot_y: f32,
+    floor: u32,
+    parent_uid: String,
+    slot_index: i32,
+    local_rot_y: f32,
+) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can place furniture".into());
+    }
+    let inv_id = format!("{restaurant_id}:{def_id}");
+    let inv = ctx.db.furniture_inventory().id().find(inv_id.clone())
+        .filter(|i| i.qty > 0)
+        .ok_or_else(|| format!("No {def_id} in storage"))?;
+    // Decrement (delete the row at zero) BEFORE inserting so a failure
+    // can't double-spend the stored copy.
+    if inv.qty <= 1 {
+        ctx.db.furniture_inventory().id().delete(inv_id);
+    } else {
+        ctx.db.furniture_inventory().id().update(FurnitureInventory {
+            qty: inv.qty - 1,
+            ..inv
+        });
+    }
+    let row = PlacedFurniture {
+        uid: uid.clone(),
+        restaurant_id,
+        def_id,
+        x, z, rot_y, floor,
+        parent_uid, slot_index, local_rot_y,
+    };
+    if ctx.db.placed_furniture().uid().find(uid).is_some() {
+        ctx.db.placed_furniture().uid().update(row);
+    } else {
+        ctx.db.placed_furniture().insert(row);
     }
     Ok(())
 }
