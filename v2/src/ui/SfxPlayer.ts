@@ -32,7 +32,8 @@ const MUSIC_MAX_VOLUME = 0.4;
  * synthesis chain rather than the old single bandpass-on-noise that
  * the player rightly called "TV with no signal". */
 type LoopId = "gas-stove" | "electric-stove" | "microwave" | "coffee"
-            | "blender" | "toaster" | "hood" | "sink" | "bathtub" | "dishwasher";
+            | "blender" | "toaster" | "hood" | "sink" | "bathtub" | "dishwasher"
+            | "grill" | "fryer" | "oven" | "pizza-oven";
 
 interface LoopHandle {
   nodes: AudioNode[];          // root-level nodes so we can disconnect on stop
@@ -827,6 +828,90 @@ export class SfxPlayer {
         gain.connect(bus);
         return { nodes, gain, variant: id };
       }
+      case "grill": {
+        // Flat-top grill searing: a hot flame whoosh (low filtered noise) +
+        // an aggressive sizzle band (food hitting the grates) + frequent
+        // crackle pops. Punchier + higher than the gas stove.
+        const body = ensureLoopSource(2);
+        const bodyFilt = ctx.createBiquadFilter();
+        bodyFilt.type = "bandpass"; bodyFilt.frequency.value = 210; bodyFilt.Q.value = 0.7;
+        const bodyG = ctx.createGain(); bodyG.gain.value = 0.7;
+        body.connect(bodyFilt); bodyFilt.connect(bodyG); bodyG.connect(gain);
+        nodes.push(bodyFilt, bodyG);
+        const sizz = ensureLoopSource(2);
+        const sizzFilt = ctx.createBiquadFilter();
+        sizzFilt.type = "bandpass"; sizzFilt.frequency.value = 1300; sizzFilt.Q.value = 1.0;
+        const sizzG = ctx.createGain(); sizzG.gain.value = 0.5;
+        sizz.connect(sizzFilt); sizzFilt.connect(sizzG); sizzG.connect(gain);
+        nodes.push(sizzFilt, sizzG);
+        peak(0.20);
+        const ticker = window.setInterval(() => {
+          if (Math.random() < 0.7) this.crackle();
+        }, 550);
+        gain.connect(bus);
+        return { nodes, gain, variant: id, ticker };
+      }
+      case "fryer": {
+        // Deep fryer: rolling-boil oil — a mid-band noise body + an upper
+        // frying fizz + a steady stream of wet bubble pops.
+        const body = ensureLoopSource(2);
+        const bodyFilt = ctx.createBiquadFilter();
+        bodyFilt.type = "bandpass"; bodyFilt.frequency.value = 700; bodyFilt.Q.value = 0.5;
+        const bodyG = ctx.createGain(); bodyG.gain.value = 0.6;
+        body.connect(bodyFilt); bodyFilt.connect(bodyG); bodyG.connect(gain);
+        nodes.push(bodyFilt, bodyG);
+        const fizz = ensureLoopSource(2);
+        const fizzFilt = ctx.createBiquadFilter();
+        fizzFilt.type = "bandpass"; fizzFilt.frequency.value = 2600; fizzFilt.Q.value = 0.8;
+        const fizzG = ctx.createGain(); fizzG.gain.value = 0.3;
+        fizz.connect(fizzFilt); fizzFilt.connect(fizzG); fizzG.connect(gain);
+        nodes.push(fizzFilt, fizzG);
+        peak(0.18);
+        const ticker = window.setInterval(() => {
+          if (Math.random() < 0.85) this.bubble();
+        }, 260);
+        gain.connect(bus);
+        return { nodes, gain, variant: id, ticker };
+      }
+      case "oven": {
+        // Convection oven: a soft fan circulating hot air + a low element
+        // hum. Steady + quiet — an oven is mostly felt, barely heard.
+        const noise = ensureLoopSource(2);
+        const bp = ctx.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 350; bp.Q.value = 0.6;
+        const noiseG = ctx.createGain(); noiseG.gain.value = 0.6;
+        noise.connect(bp); bp.connect(noiseG); noiseG.connect(gain);
+        nodes.push(bp, noiseG);
+        const hum = ctx.createOscillator(); hum.type = "sine"; hum.frequency.value = 110;
+        const humG = ctx.createGain(); humG.gain.value = 0.2;
+        hum.connect(humG); humG.connect(gain); hum.start();
+        nodes.push(hum, humG);
+        peak(0.12);
+        gain.connect(bus);
+        return { nodes, gain, variant: id };
+      }
+      case "pizza-oven": {
+        // Wood-fired pizza oven: a deep fire ROAR (lowpassed noise) + a mid
+        // flame body + frequent wood crackle. Bigger + warmer than the gas
+        // stove — the sound of a proper wood fire.
+        const roar = ensureLoopSource(2);
+        const roarFilt = ctx.createBiquadFilter();
+        roarFilt.type = "lowpass"; roarFilt.frequency.value = 320;
+        const roarG = ctx.createGain(); roarG.gain.value = 0.85;
+        roar.connect(roarFilt); roarFilt.connect(roarG); roarG.connect(gain);
+        nodes.push(roarFilt, roarG);
+        const flame = ensureLoopSource(2);
+        const flameFilt = ctx.createBiquadFilter();
+        flameFilt.type = "bandpass"; flameFilt.frequency.value = 700; flameFilt.Q.value = 0.6;
+        const flameG = ctx.createGain(); flameG.gain.value = 0.3;
+        flame.connect(flameFilt); flameFilt.connect(flameG); flameG.connect(gain);
+        nodes.push(flameFilt, flameG);
+        peak(0.18);
+        const ticker = window.setInterval(() => {
+          if (Math.random() < 0.55) this.crackle();
+        }, 600);
+        gain.connect(bus);
+        return { nodes, gain, variant: id, ticker };
+      }
     }
     return null;
   }
@@ -845,5 +930,22 @@ export class SfxPlayer {
     src.connect(bp); bp.connect(g); g.connect(this.sfxBus);
     src.start();
     src.stop(ctx.currentTime + 0.06);
+  }
+
+  /** Wet bubble pop — short downward sine blip, for the deep-fryer loop. */
+  private bubble(): void {
+    const ctx = this.ensure();
+    if (!ctx || !this.sfxBus || this.sfxMuted) return;
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(360 + Math.random() * 320, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(170, ctx.currentTime + 0.06);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.07);
+    osc.connect(g); g.connect(this.sfxBus);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.08);
   }
 }

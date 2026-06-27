@@ -3887,6 +3887,18 @@ export class Engine {
     const dwInflight = this.game.dishware.getDishwasherInFlight("plate")
                      + this.game.dishware.getDishwasherInFlight("glass");
     this.sfx.setLoopActive("dishwasher", dwInflight > 0);
+    // New cooking stations (grill / fryer / oven / pizza oven) carry their
+    // own built-in glow rather than a WorldScene stationEffect, so they're
+    // not in getActiveStationVariants. Drive their loops straight off the
+    // active-station uids (a chef "working" there) + the station's provides.
+    const activeAppliances = new Set<string>();
+    for (const s of this.registry.getCookStations()) {
+      if (activeUids.has(s.uid)) activeAppliances.add(s.provides);
+    }
+    this.sfx.setLoopActive("grill",      activeAppliances.has("grill"));
+    this.sfx.setLoopActive("fryer",      activeAppliances.has("fryer"));
+    this.sfx.setLoopActive("oven",       activeAppliances.has("oven"));
+    this.sfx.setLoopActive("pizza-oven", activeAppliances.has("pizza-oven"));
     // Open the door when a guest, errand helper, or pedestrian is close.
     this.scene.setDoorOpen(this.anyoneNearDoor());
     // Animate interior doorways — any placed int-doorway opens when a

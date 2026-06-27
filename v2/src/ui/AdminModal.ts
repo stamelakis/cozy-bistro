@@ -30,6 +30,10 @@ const AUDIO_LOOPS: { id: string; label: string }[] = [
   { id: "sink",           label: "🚰 Sink"           },
   { id: "bathtub",        label: "🛁 Bathtub"        },
   { id: "dishwasher",     label: "🧽 Dishwasher"     },
+  { id: "grill",          label: "🍖 Grill"          },
+  { id: "fryer",          label: "🍟 Deep fryer"     },
+  { id: "oven",           label: "♨️ Oven"           },
+  { id: "pizza-oven",     label: "🍕 Pizza oven"     },
 ];
 
 /** Approximate audible duration of each one-shot in milliseconds —
