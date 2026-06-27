@@ -7319,11 +7319,19 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
     // the client's pathwayDistance is the better solver). Without
     // this gate, an upstairs fixture a few metres closer in XZ
     // wins, sending guests up the stairs for a wash.
-    let mut same_floor_best: Option<(String, f32, f32, u32)> = None;
-    let mut same_floor_best_dist = f32::INFINITY;
-    let mut any_floor_best: Option<(String, f32, f32, u32)> = None;
-    let mut any_floor_best_dist = f32::INFINITY;
+    // Phase 9.67 — SAME-FLOOR ONLY. The old cross-floor fallback
+    // (same_floor_best.or(any_floor_best)) sent a guest with no toilet on
+    // their storey walking to one on ANOTHER floor — but that cross-floor
+    // WC walk glitched, leaving them "using a toilet on another floor" from
+    // an empty spot on their own. Now a guest only uses a fixture on their
+    // CURRENT floor. With none, the caller's wc_initiation_target is None,
+    // so the existing give-up path (wc_giveup_triggered) keeps them seated +
+    // proceeds to ordering — a mild "wanted but couldn't" nudge to put a
+    // toilet on each floor — instead of a broken cross-floor walk.
+    let mut best: Option<(String, f32, f32, u32)> = None;
+    let mut best_dist = f32::INFINITY;
     for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
+        if f.floor != g.floor { continue; }
         if !predicate(&f.def_id) { continue; }
         if taken.contains(&f.uid) { continue; }
         let stand_x = f.x + f.rot_y.sin();
@@ -7331,24 +7339,12 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
         let dx = stand_x - g.x;
         let dz = stand_z - g.z;
         let dist = dx * dx + dz * dz;
-        if f.floor == g.floor {
-            if dist < same_floor_best_dist {
-                same_floor_best_dist = dist;
-                same_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
-            }
-        } else if dist < any_floor_best_dist {
-            any_floor_best_dist = dist;
-            any_floor_best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
         }
     }
-    // Phase 9.22 — Prefer same-floor, but ALLOW cross-floor (the
-    // client owns the stair-aware visual walk; the bridge routes the
-    // guest up/down via g.toiletFloor/sinkFloor, and the wcWalking→
-    // wcSitting transition is time-gated for the climb so the state
-    // doesn't race ahead). The returned tuple's 4th element is the
-    // fixture's floor, which flows to active_guest.target_floor and
-    // thence to the bridge.
-    same_floor_best.or(any_floor_best)
+    best
 }
 
 /// H.12 — Server-side fallback seat assignment. Called from
