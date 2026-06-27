@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import type { IsoCamera } from "../scene/IsoCamera";
 import type { WorldScene } from "../scene/WorldScene";
-import type { AnimatedCharacter, CharacterAction } from "../scene/CharacterAnimator";
+import type { AnimatedCharacter, CharacterAction, SkeletalDriver } from "../scene/CharacterAnimator";
+import { sharedRiggedLoader, riggedStaffModel, riggedCustomerForKey } from "../scene/RiggedCharacter";
 import { getFurnitureDef } from "../data/furnitureCatalog";
 import { fitFurniture, placementY } from "../assets/fitFurniture";
 import { HeldItemVisualizer } from "../scene/HeldItemVisualizer";
@@ -610,7 +611,18 @@ export class VisitMode {
         || row.role === "barman" || row.role === "errand"
       ? row.role : "waiter";
     try {
-      const model = await this.scene.characterLoader.load(role);
+      // Rigged GLB cast — the same models the owner's own scene uses, so
+      // a visited restaurant looks identical to playing it. Falls back to
+      // the placeholder loader only for a role with no rigged model.
+      const staffModel = riggedStaffModel(role);
+      let model: THREE.Object3D;
+      let skeletal: SkeletalDriver | undefined;
+      if (staffModel) {
+        const inst = await sharedRiggedLoader.createInstance(staffModel);
+        model = inst.root; skeletal = inst.controller;
+      } else {
+        model = await this.scene.characterLoader.load(role);
+      }
       // Player exited mid-load — abandon. The pending-loads guard
       // prevents this slot from ever being re-spawned, which is the
       // right behaviour: the player isn't watching this plot any more.
@@ -619,16 +631,11 @@ export class VisitMode {
         return;
       }
       const floor = Math.max(0, row.floor);
-      // Task D (half-buried fix) — CharacterLoader.liftFeetToOrigin
-      // leaves the model at position.y = (its feet-lift offset) so the
-      // feet sit on y=0. The host preserves that through the animator
-      // (which captures _baseY from position.y at add-time); the old
-      // visit code OVERWROTE position.y with floor*STOREY_HEIGHT,
-      // throwing the lift away and sinking the body ~half its bbox into
-      // the floor. Read the loader's lift first, then add the storey
-      // offset on top so feet land on the slab, and stamp _feetLift so
-      // the animator's sit-slab math (slabY = _baseY − _feetLift) is
-      // floor-correct.
+      // Rigged clips are authored feet-at-origin (createInstance leaves
+      // position.y = 0); the placeholder loader bakes its feet-lift into
+      // position.y. Reading position.y covers both — then add the storey
+      // offset so feet land on the slab, and stamp _feetLift so the
+      // animator's sit-slab math (slabY = _baseY − _feetLift) is correct.
       const feetLift = model.position.y;
       // Server x/z are restaurant-local (origin at the visited plot's
       // centre); visitorRoot is parented at that same plot world pos,
@@ -643,6 +650,7 @@ export class VisitMode {
         action: row.state === "idle" || row.state === "working" ? "idle" : "walk",
         phase: Math.random() * 5,
         seatHeight: 0,
+        skeletal,
         _feetLift: feetLift,
       };
       // Visitor root may have been disposed between the load start
@@ -952,16 +960,19 @@ export class VisitMode {
     this.liveCustomerPendingLoads.add(key);
     const modelId = row.variant && row.variant.startsWith("guest-") ? row.variant : "guest-v0";
     try {
-      const model = await this.scene.characterLoader.load(modelId);
+      // Rigged GLB cast, deterministic per server guest id — matches the
+      // owner's own guests. (modelId/variant is kept only for the error
+      // log below; the placeholder loader is no longer used here.)
+      const inst = await sharedRiggedLoader.createInstance(riggedCustomerForKey(key));
+      const model: THREE.Object3D = inst.root;
+      const skeletal: SkeletalDriver | undefined = inst.controller;
       if (this.activePlot?.id !== targetPlotId || !this.visitorRoot) {
         this.liveCustomerPendingLoads.delete(key);
         return;
       }
       const floor = Math.max(0, row.floor);
-      // Task D (half-buried fix) — preserve the loader's feet-lift the
-      // same way the staff spawn above does, so seated/standing guests
-      // rest on the floor instead of sinking into it. _feetLift keeps
-      // the animator's sit-slab math correct on upper storeys.
+      // Rigged clips sit/stand feet-at-origin (feetLift 0); reading
+      // position.y stays correct if a placeholder ever returns here.
       const feetLift = model.position.y;
       model.position.set(row.x, floor * STOREY_HEIGHT + feetLift, row.z);
       const action: CharacterAction = customerActionFor(row.state);
@@ -971,10 +982,11 @@ export class VisitMode {
         facingY: 0,
         action,
         phase: Math.random() * 5,
-        // 0.5 m chair lift — same as the existing ghost-customer
-        // spawn so the sitting pose lands on the cushion when state
-        // is "seated" / "eating".
-        seatHeight: 0.5,
+        // Rigged guests sit via their own clip, so no extra lift. (The
+        // curated visit row doesn't carry seat_at_bar, so bar guests sit
+        // ~0.2m low here — negligible.) Placeholder fallback keeps 0.5.
+        seatHeight: skeletal ? 0 : 0.5,
+        skeletal,
         _feetLift: feetLift,
       };
       this.visitorRoot.add(model);
