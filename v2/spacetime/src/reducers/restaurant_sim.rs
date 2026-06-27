@@ -5696,6 +5696,27 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
+    // Phase 9.66 — STUCK-STAFF WATCHDOG. An actor that's been moving toward
+    // its target for far longer than any real walk has an UNREACHABLE one —
+    // the inside of a closed / circular bar ring, a station boxed in by
+    // furniture, a cross-floor spot, etc. Under the staffMove cutover the
+    // client no longer runs its own stuck-recovery, so nothing rescues it
+    // and it loops the walk animation forever ("barman endlessly trying to
+    // get into his circular bar"). Snap it ONTO the target so it arrives +
+    // starts working / goes idle. The row update below already pins floor =
+    // target_floor, so this also rescues cross-floor strands. 15 s is far
+    // longer than any legitimate same- or cross-floor walk.
+    let moving_state = a.state == "movingToWork" || a.state == "returningHome";
+    let (new_x, new_z) = if moving_state && a.state_clock_ms > 15_000
+        && ((a.target_x - new_x).abs() > 0.05 || (a.target_z - new_z).abs() > 0.05) {
+        log::info!(
+            "tick_staff_actor: {} stuck {} {}ms — snapping to target ({:.1},{:.1})",
+            a.member_id, a.state, a.state_clock_ms, a.target_x, a.target_z,
+        );
+        (a.target_x, a.target_z)
+    } else {
+        (new_x, new_z)
+    };
 
     // Phase H.3 + H.8 — auto state flips on arrival. Base transitions:
     //   - movingToWork → working when the actor reaches target.
