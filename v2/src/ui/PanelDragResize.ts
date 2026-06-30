@@ -511,7 +511,17 @@ function saveCurrentLayout(key: string, root: HTMLElement, isExpanded: boolean):
     let height = rect.height;
     if (!isExpanded) {
       const existing = readState(key);
-      if (existing) height = existing.height;
+      if (existing) {
+        height = existing.height;
+      } else {
+        // Collapsed AND no previously-saved expanded height: do NOT persist
+        // the collapsed title-only height. It would be re-applied as the
+        // panel's fixed height on the next expand and clip the body off the
+        // bottom of the screen (the "MENU runs off-screen after dragging it
+        // while collapsed" bug). The drag's inline left/top still hold for
+        // this session; we just refuse to store a height we know is wrong.
+        return;
+      }
     }
     const state: SavedState = {
       left: rect.left,
