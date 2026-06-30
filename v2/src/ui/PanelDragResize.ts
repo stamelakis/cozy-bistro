@@ -98,6 +98,15 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   if (root.getAttribute(INIT_MARKER) === "1") return;
   root.setAttribute(INIT_MARKER, "1");
 
+  // Capture the panel's HOME anchor from its authored inline CSS (BEFORE the
+  // restore below converts it to absolute left/top), so an un-dragged panel
+  // can re-home to its edge/centre on viewport resize instead of stranding at
+  // a fixed left when devtools / the window opens + closes.
+  const homeRightPx = root.style.right.endsWith("px") ? parseFloat(root.style.right) : null;
+  const homeCentered = root.style.left === "50%"
+    || (root.style.transform || "").includes("translateX(-50%)");
+  let userMoved = false;
+
   // === RESTORE saved layout (or convert current anchor to top/left) ===
   // Height is restored ONLY when collapseSentinel is absent OR the
   // panel is currently expanded. For panels with a collapse sentinel
@@ -221,6 +230,7 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     activePointerId = -1;
     if (committed) {
       try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      userMoved = true; // user repositioned it — stop auto-homing on resize
       // Re-cache the anchored edge so the next expand/collapse
       // uses the dragged position as its baseline instead of the
       // pre-drag one.
@@ -267,7 +277,7 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
       borderBottomRightRadius: d.id === "se" ? "4px" : undefined,
       ...d.style,
     } as Partial<CSSStyleDeclaration>);
-    wireResize(h, d.id, root, minW, minH, storageKey, onChange, () => isExpanded, () => refreshAnchorsAfterUserMove());
+    wireResize(h, d.id, root, minW, minH, storageKey, onChange, () => isExpanded, () => { userMoved = true; refreshAnchorsAfterUserMove(); });
     root.appendChild(h);
     resizeHandleEls.push(h);
   }
@@ -416,8 +426,20 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
       // the viewport bottom rather than drifting up.
       const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - VIEWPORT_PADDING - w);
       const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - VIEWPORT_PADDING - h);
+      // Re-home an UN-dragged panel to its authored anchor as the viewport
+      // changes — Build (right-anchored) rides the right edge, centred panels
+      // stay centred — instead of stranding at a fixed left. A panel the user
+      // has dragged keeps its own position (just clamped on-screen).
+      let homeLeft: number;
+      if (!userMoved && homeRightPx !== null) {
+        homeLeft = window.innerWidth - w - homeRightPx;
+      } else if (!userMoved && homeCentered) {
+        homeLeft = (window.innerWidth - w) / 2;
+      } else {
+        homeLeft = r.left;
+      }
       const baseTop = expandDirection === "up" ? r.top + dvh : r.top;
-      const newLeft = Math.max(VIEWPORT_PADDING, Math.min(r.left, maxLeft));
+      const newLeft = Math.max(VIEWPORT_PADDING, Math.min(homeLeft, maxLeft));
       const newTop = Math.max(VIEWPORT_PADDING, Math.min(baseTop, maxTop));
       root.style.left = `${newLeft}px`;
       root.style.top = `${newTop}px`;
