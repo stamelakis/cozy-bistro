@@ -127,6 +127,10 @@ export class BuildMenu {
   /** True while the active placement is a free re-place from storage —
    * skip the money charge + route the mirror to place_from_inventory. */
   private placingFromStorage = false;
+  /** Optimistic in-flight storage placements (defId → count) not yet confirmed
+   * by the server, subtracted from the displayed qty so a fast re-click can't
+   * over-place during the round-trip. Cleared when the inventory sub fires. */
+  private readonly storagePending = new Map<string, number>();
   /** Storage-room list element, rebuilt from the inventory subscription. */
   private storageListEl?: HTMLDivElement;
   /** Guards against re-subscribing the inventory sub if the menu rebuilds. */
@@ -427,7 +431,12 @@ export class BuildMenu {
     this.refreshStorageList();
     if (!this.storageSubscribed) {
       this.storageSubscribed = true;
-      this.registry.onStorageChanged(() => this.refreshStorageList());
+      this.registry.onStorageChanged(() => {
+        // Server confirmed an inventory change — it's now authoritative, so
+        // drop the optimistic in-flight counts and show the real qty.
+        this.storagePending.clear();
+        this.refreshStorageList();
+      });
     }
 
     // Layouts — named presets. SAVE captures the current layout; clicking a
@@ -773,7 +782,11 @@ export class BuildMenu {
     if (!el) return;
     el.innerHTML = "";
     const items = this.registry.listStorage()
-      .slice()
+      // Subtract optimistic in-flight placements so the list reflects a
+      // re-place instantly (before the server round-trip) and an entry can't
+      // be re-clicked into over-placing. Reconciled when the inventory sub fires.
+      .map(({ defId, qty }) => ({ defId, qty: qty - (this.storagePending.get(defId) ?? 0) }))
+      .filter((it) => it.qty > 0)
       .sort((a, b) => a.defId.localeCompare(b.defId));
     if (items.length === 0) {
       const empty = document.createElement("div");
@@ -916,7 +929,6 @@ export class BuildMenu {
       this.flashRoot("Not enough money", "error");
       return;
     }
-    this.placingFromStorage = fromStorage;
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     if (this.moveMode) this.toggleMoveMode();
     if (this.storeMode) this.toggleStoreMode();
@@ -926,6 +938,11 @@ export class BuildMenu {
     this.cancelPlacing();
     const gen = ++this.placeGen;
     this.placingDef = def;
+    // MUST be set AFTER cancelPlacing() above (which clears it), or the
+    // free-from-storage flag is wiped before the place handler reads it — the
+    // place then routes through placeFurniture instead of place_from_inventory
+    // and the stored item never decrements (infinite free placements).
+    this.placingFromStorage = fromStorage;
     const ghost = await this.makeGhostPreview(def);
     if (gen !== this.placeGen) return; // superseded by a newer startPlacing — drop this orphan
     this.preview = ghost;
@@ -2099,7 +2116,14 @@ export class BuildMenu {
     // Storage re-place is one-shot (limited qty) — end placing now so a
     // second click can't place a copy you no longer own. The in-flight
     // placement below still completes from its captured vars.
-    if (fromStorage) this.cancelPlacing();
+    if (fromStorage) {
+      this.cancelPlacing();
+      // Optimistically mark this copy as placed so the storage list updates
+      // immediately (the entry vanishes at 0) — prevents a fast re-click from
+      // over-placing before the server confirms the decrement.
+      this.storagePending.set(def.id, (this.storagePending.get(def.id) ?? 0) + 1);
+      this.refreshStorageList();
+    }
     // Bake the preview into the scene using the plan's final pose (which
     // may be a slot-snapped chair pose, not the raw cursor cell).
     const placeX = plan.x, placeZ = plan.z, rotY = plan.rotY;
