@@ -357,6 +357,27 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
         h.style.display = nowExpanded ? "" : "none";
       }
       isExpanded = nowExpanded;
+      // Late-content guard for bottom-anchored ("up") panels: the body can
+      // finish rendering a frame or two AFTER expand (e.g. MenuPanel's recipe
+      // list populates lazily on open). We positioned by `top` from the height
+      // measured just now, so once the body grows the bottom slides DOWN
+      // off-screen — the "first expand opens off-screen, second is fine" bug.
+      // Re-pin the top from the anchored bottom after the content settles so
+      // the panel grows UP instead.
+      if (nowExpanded && expandDirection === "up") {
+        const repin = (): void => {
+          if (!isExpanded) return;
+          const h = root.offsetHeight;
+          let t = anchoredBottom - h;
+          if (t + h > window.innerHeight - VIEWPORT_PADDING) {
+            t = window.innerHeight - VIEWPORT_PADDING - h;
+          }
+          if (t < VIEWPORT_PADDING) t = VIEWPORT_PADDING;
+          root.style.top = `${t}px`;
+        };
+        requestAnimationFrame(repin);
+        setTimeout(repin, 130);
+      }
     };
     // Initial pass — apply CSS height/visibility to match the
     // sentinel's current state, then capture the resulting bottom
@@ -381,15 +402,24 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   // the window) strands it at a fixed top px, off the bottom, and it then
   // EXPANDS in the wrong place. Shift it by the viewport-height delta so its
   // bottom edge keeps riding the viewport bottom, and re-cache the anchor.
-  if (expandDirection === "up") {
+  {
     let lastVH = window.innerHeight;
     window.addEventListener("resize", () => {
       const dvh = window.innerHeight - lastVH;
       lastVH = window.innerHeight;
-      if (dvh === 0) return;
       const r = root.getBoundingClientRect();
-      const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - VIEWPORT_PADDING - root.offsetHeight);
-      const newTop = Math.max(VIEWPORT_PADDING, Math.min(r.top + dvh, maxTop));
+      const w = root.offsetWidth;
+      const h = root.offsetHeight;
+      // Clamp BOTH axes so a narrower / shorter viewport (devtools open/close,
+      // window resize) can't strand the panel off-screen. "up" panels also
+      // shift their top by the height delta so the bottom edge keeps riding
+      // the viewport bottom rather than drifting up.
+      const maxLeft = Math.max(VIEWPORT_PADDING, window.innerWidth - VIEWPORT_PADDING - w);
+      const maxTop = Math.max(VIEWPORT_PADDING, window.innerHeight - VIEWPORT_PADDING - h);
+      const baseTop = expandDirection === "up" ? r.top + dvh : r.top;
+      const newLeft = Math.max(VIEWPORT_PADDING, Math.min(r.left, maxLeft));
+      const newTop = Math.max(VIEWPORT_PADDING, Math.min(baseTop, maxTop));
+      root.style.left = `${newLeft}px`;
       root.style.top = `${newTop}px`;
       updateAnchorsFromRect();
     });
