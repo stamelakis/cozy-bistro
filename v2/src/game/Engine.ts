@@ -767,7 +767,11 @@ export class Engine {
       // overrode the new 500-max via PanelDragResize.applyLayout, which
       // sets explicit width + maxWidth:none. Bumping the key drops the
       // stale wider layout so new sessions get the intended 500-px box.
-      storageKey: "cozy-bistro.panel.menu.v4",
+      // v4 → v5 (2026-06-27): abandon stale layouts that pinned the
+      // collapsed title-only height and ran the MENU off-screen on expand
+      // (the module wipe only cleared the un-versioned keys, so a bad .v4
+      // survived refreshes). Pairs with the saveCurrentLayout guard.
+      storageKey: "cozy-bistro.panel.menu.v5",
       root: this.menuPanel.root,
       handle: this.menuPanel.titleEl,
       collapseSentinel: this.menuPanel.body,
@@ -1213,7 +1217,7 @@ export class Engine {
     this.buildMenu = buildMenu;
     if (buildMenu.rootEl && buildMenu.titleEl) {
       makeDraggableResizable({
-        storageKey: "cozy-bistro.panel.build.v2",
+        storageKey: "cozy-bistro.panel.build.v3", // v2→v3 (2026-06-27): drop stale collapsed-height layouts
         root: buildMenu.rootEl,
         handle: buildMenu.titleEl,
         collapseSentinel: buildMenu.bodyEl,
@@ -2305,7 +2309,7 @@ export class Engine {
       this.chatPanel = new ChatPanel(container, this.cloud);
       this.chatPanel.onMessageSent = () => this.game.bumpPlayerCounter("chatsSent");
       makeDraggableResizable({
-        storageKey: "cozy-bistro.panel.chat.v3", // v2 → v3: new minW/minH baseline
+        storageKey: "cozy-bistro.panel.chat.v4", // v3→v4 (2026-06-27): drop stale collapsed-height layouts
         root: this.chatPanel.root,
         handle: this.chatPanel.titleBar,
         collapseSentinel: this.chatPanel.body,

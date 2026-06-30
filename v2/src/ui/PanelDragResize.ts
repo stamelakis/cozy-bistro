@@ -77,7 +77,14 @@ const VIEWPORT_PADDING = 4;
  * before any panel attaches. */
 (() => {
   try {
-    for (const k of ["cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat"]) {
+    for (const k of [
+      "cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat",
+      // Abandoned VERSIONED keys — must be wiped too, else a bad saved value
+      // (e.g. a pinned collapsed height) survives refreshes under its version.
+      "cozy-bistro.panel.build.v2",
+      "cozy-bistro.panel.menu.v2", "cozy-bistro.panel.menu.v3", "cozy-bistro.panel.menu.v4",
+      "cozy-bistro.panel.chat.v2", "cozy-bistro.panel.chat.v3",
+    ]) {
       localStorage.removeItem(k);
     }
   } catch { /* private mode / quota — fine to skip */ }
