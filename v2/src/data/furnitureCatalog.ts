@@ -999,10 +999,22 @@ export function inferQualityTier(def: FurnitureDef): 1 | 2 | 3 | 4 | 5 {
 
 const TIER_PRICE_EXPONENT = 1.4;
 
+/** Global price-floor multiplier — a single dial on the whole build
+ * economy. Raised 1 → 5 (2026-07): the game was winnable too fast because
+ * everything (starter gear especially) was too cheap. This 5x's every
+ * purchase INCLUDING T1, so a $18 chair becomes $90 and the floor finally
+ * has weight, WITHOUT touching the per-tier curve above. Tune this ONE
+ * number to make the whole build economy harder/easier. Sell-back is 50%
+ * of scaledCost, so refunds scale with it automatically. */
+const GLOBAL_COST_MULTIPLIER = 5;
+
 export function scaledCost(def: FurnitureDef): number {
   const tier = inferQualityTier(def);
-  if (tier <= 1) return def.cost;
-  const raw = def.cost * Math.pow(tier, TIER_PRICE_EXPONENT);
+  const base = def.cost * GLOBAL_COST_MULTIPLIER;
+  // T1 skips the tier curve but still rides the global multiplier + $10
+  // rounding (it's no longer at its bare catalog price).
+  if (tier <= 1) return Math.ceil(base / 10) * 10;
+  const raw = base * Math.pow(tier, TIER_PRICE_EXPONENT);
   return Math.ceil(raw / 10) * 10;
 }
 
