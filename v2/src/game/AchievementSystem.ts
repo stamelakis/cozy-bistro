@@ -207,6 +207,38 @@ const REWARD_BY_ID: Record<string, number> = {
   "furniture-250":        REWARD_TIERS.T7,
 };
 
+/** Cash-milestone achievements ("have $X in the till") are a SPECIAL CASE and
+ * override the tier table above. Paying a cash bonus for reaching a BANK
+ * milestone feeds straight back into the NEXT milestone's predicate — a
+ * runaway cascade ($100 → bonus → $250 → bonus → …) that catapulted brand-new
+ * players thousands of dollars the instant the ~$1–2k starter grant landed
+ * (they'd unlock cash-100…cash-1k all at once, and each bonus tipped them into
+ * the next rung). Two rules kill it:
+ *   • milestones AT OR BELOW the starter grant pay NOTHING — no spawn windfall;
+ *     the cash rewards only ever start ABOVE the starting money.
+ *   • every higher milestone pays a small bonus that stays FAR under the gap to
+ *     the next milestone, so a single reward can never bridge one rung to the
+ *     next. Also ≤ the server's $5k per-claim cap so the toast never over-
+ *     promises. Non-cash achievements are untouched — their predicates aren't
+ *     money-based, so they can't cascade. */
+const CASH_MILESTONE_REWARDS: Record<string, number> = {
+  "cash-100":      0,
+  "cash-250":      0,
+  "cash-500":      0,
+  "cash-1k":       0,
+  "cash-2k":       0,
+  "cash-5k":     250,
+  "cash-10k":    500,
+  "cash-25k":  1_000,
+  "cash-50k":  2_000,
+  "cash-100k": 3_000,
+  "cash-250k": 4_000,
+  "cash-500k": 5_000,
+};
+for (const id of Object.keys(CASH_MILESTONE_REWARDS)) {
+  REWARD_BY_ID[id] = CASH_MILESTONE_REWARDS[id];
+}
+
 /** Phase I (H.100) — Public lookup. Used by the modal (display) and
  * Engine.onUnlock (grant). Unknown ids fall back to T2. */
 export function getCashReward(id: string): number {
