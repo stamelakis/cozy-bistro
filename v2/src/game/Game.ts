@@ -56,13 +56,12 @@ export interface DayEndSummary {
  *  T1=$40, T2=$80, T3=$160, T4=$320, T5=$640.
  * Index 0 is unused (tiers are 1-indexed). */
 const RENT_BY_TIER = [0, 40, 80, 160, 320, 640];
-/** Number of in-game days where rent is waived — gives a brand-new
- * restaurant breathing room to upgrade a couple of recipes, hire one
- * or two extra staff, and reach the break-even line before fixed
- * costs start eating starter cash. Day N's rent fires at end-of-day,
- * so rent first hits on the rollover from day RENT_GRACE_DAYS to
- * day RENT_GRACE_DAYS+1. */
-const RENT_GRACE_DAYS = 30;
+/** Opening grace period, in in-game days. During it a brand-new
+ * restaurant pays NO rent AND NO wages — breathing room to upgrade a
+ * couple of recipes, hire a little, and reach the break-even line before
+ * fixed costs start eating starter cash. Both switch on together on day
+ * GRACE_DAYS+1; the HUD shows a live countdown while it's active. */
+const GRACE_DAYS = 14;
 /** Default money charged per staff member per real minute. */
 const DEFAULT_PAYROLL_PER_STAFF_PER_MINUTE = 6;
 /** Default cost per unit of ingredient when auto-shopping. */
@@ -445,8 +444,12 @@ export class Game {
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
     if (this.restaurantOpen) {
+      // tickSalary still runs during the grace period so its 5-second
+      // cadence clock keeps pace — skipping it would bill one lump the
+      // moment grace ends. We just don't APPLY the charge until fixed costs
+      // switch on (day GRACE_DAYS+1); until then staff work for free.
       const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
-      if (payroll.charge > 0) {
+      if (payroll.charge > 0 && !this.isInGracePeriod()) {
         const couldPay = this.economy.getMoney() >= payroll.charge;
         this.economy.forceSpendMoney(payroll.charge, "wages"); // floors at $0
         if (!couldPay) {
@@ -636,9 +639,10 @@ export class Game {
     const dayNumber = this.day.getDayNumber();
     // Rent fires once at the END of each day past the grace period.
     // dayNumber here is the day that JUST ENDED, so the first rent
-    // payment lands on the rollover from day RENT_GRACE_DAYS to day
-    // RENT_GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free).
-    if (chargeRent && dayNumber > RENT_GRACE_DAYS && this.restaurantOpen) {
+    // payment lands on the rollover from day GRACE_DAYS to day
+    // GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free — no rent AND, in
+    // the update() payroll path, no wages either).
+    if (chargeRent && dayNumber > GRACE_DAYS && this.restaurantOpen) {
       this.economy.forceSpendMoney(this.getDailyRent(), "rent");
     }
     const revenue = this.economy.getDailyRevenue();
@@ -1088,6 +1092,29 @@ export class Game {
     const tier = Math.max(1, Math.min(5, this.luxuryTier));
     const raw = RENT_BY_TIER[tier] ?? RENT_BY_TIER[1];
     return Math.max(0, Math.round(raw * this.admin.rentMultiplier * this.plotRentMultiplier));
+  }
+
+  /** Opening grace period — days 1..GRACE_DAYS pay no rent AND no wages.
+   * The HUD shows a live countdown so fixed costs switching on isn't a
+   * surprise. */
+  isInGracePeriod(): boolean {
+    return this.day.getDayNumber() <= GRACE_DAYS;
+  }
+  /** Free days left in the opening grace (0 once over; 1 on the last free
+   * day, GRACE_DAYS itself). */
+  getGraceDaysRemaining(): number {
+    return Math.max(0, GRACE_DAYS - this.day.getDayNumber() + 1);
+  }
+  /** Total grace length in days — for "costs start day N" copy. */
+  getGracePeriodDays(): number {
+    return GRACE_DAYS;
+  }
+  /** Live real-time seconds until rent + wages switch on (0 once active):
+   * whole days left before the grace ends × day length + time left today. */
+  getSecondsUntilCostsStart(): number {
+    if (!this.isInGracePeriod()) return 0;
+    const daysAfterToday = GRACE_DAYS - this.day.getDayNumber();
+    return daysAfterToday * this.day.getDayLengthSeconds() + this.day.getTimeRemainingSeconds();
   }
 
   // === Dirty-dish pile ===

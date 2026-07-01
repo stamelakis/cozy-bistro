@@ -63,6 +63,18 @@ export interface HudActions {
 /** A modal-trigger icon for the icon row. */
 interface IconBtn { icon: string; title: string; click: () => void; tint?: string }
 
+/** Format a real-time duration (seconds) as a compact "Hh MMm" / "Mm SSs"
+ * / "Ss" countdown — used by the opening-grace timer. */
+function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, "0")}s`;
+  return `${sec}s`;
+}
+
 /**
  * Compact HUD: stats grid + speed/mute row + single modal icon row +
  * tiny dev sub-row at the bottom. Everything else (upgrades, decor,
@@ -96,6 +108,9 @@ export class Hud {
    * non-admin accounts. The button now opens AdminModal directly
    * instead of toggling a sub-menu. */
   private devToolsBtn?: HTMLButtonElement;
+  /** Opening-grace banner under the title — a live countdown of the
+   * rent-and-wages-free period. Shown only while the grace is active. */
+  private graceBanner?: HTMLElement;
 
   constructor(parent: HTMLElement, game: Game, spawner: SpawnerAccessor, time: TimeControl, actions: HudActions) {
     this.game = game;
@@ -107,6 +122,7 @@ export class Hud {
     parent.appendChild(this.root);
 
     this.buildTitle();
+    this.buildGraceBanner();
     this.buildStatsGrid();
     this.buildOpenCloseRow();
     this.buildSpeedRow();
@@ -152,6 +168,30 @@ export class Hud {
     this.onlineCountEl = t.querySelector("[data-online-count]") as HTMLSpanElement;
     this.incomingCountEl = t.querySelector("[data-incoming-count]") as HTMLSpanElement;
     this.timeOfDayEl = t.querySelector("[data-time-of-day]") as HTMLElement;
+  }
+
+  /** Opening-grace banner — a prominent chip under the title that counts
+   * down the days (plus a live timer) until rent & wages switch on, so a
+   * new player understands why they're paying nothing yet and isn't
+   * surprised when fixed costs begin. update() shows/hides + refreshes it. */
+  private buildGraceBanner(): void {
+    const b = document.createElement("div");
+    Object.assign(b.style, {
+      display: "none", marginBottom: "8px", padding: "6px 8px",
+      textAlign: "center", borderRadius: "5px",
+      background: "linear-gradient(180deg, rgba(120,200,120,0.20), rgba(120,200,120,0.06))",
+      border: "1px solid rgba(120,200,120,0.45)",
+      color: "#d4f0d4",
+    } as Partial<CSSStyleDeclaration>);
+    b.innerHTML =
+      `<div style="font-size:11px;font-weight:800;letter-spacing:0.05em;">🎁 GRACE PERIOD · RENT &amp; WAGES FREE</div>` +
+      `<div data-grace-timer style="font-size:12px;font-weight:700;margin-top:2px;color:#eaffea;">—</div>`;
+    this.root.appendChild(b);
+    this.graceBanner = b;
+    attachTooltip(b,
+      `Opening grace period — your first ${this.game.getGracePeriodDays()} in-game days are free of ` +
+      "rent and staff wages, so you can set up without fixed costs draining your starter cash. " +
+      "When the countdown ends, rent (charged at day-end) and wages (per minute) both begin.");
   }
 
   /** Visually-rich stat cards. Each card is a small chip with:
@@ -565,6 +605,22 @@ export class Hud {
     // Rating shown out of 5 so the number has a built-in scale reference.
     this.fields.rating.textContent = `${rating} / 5`;
     this.fields.day.textContent = `${day}`;
+    // Opening-grace banner — live countdown to rent + wages switching on.
+    if (this.graceBanner) {
+      if (this.game.isInGracePeriod()) {
+        const daysLeft = this.game.getGraceDaysRemaining();
+        const startDay = this.game.getGracePeriodDays() + 1;
+        const timerEl = this.graceBanner.querySelector("[data-grace-timer]") as HTMLElement | null;
+        if (timerEl) {
+          timerEl.textContent =
+            `${daysLeft} ${daysLeft === 1 ? "day" : "days"} left · ` +
+            `${formatDuration(this.game.getSecondsUntilCostsStart())} · costs start day ${startDay}`;
+        }
+        this.graceBanner.style.display = "block";
+      } else {
+        this.graceBanner.style.display = "none";
+      }
+    }
     // Weather: emoji on its own line above the label so the icon is
     // unmistakable instead of squished into the value cell.
     this.fields.weather.textContent = `${w.emoji} ${w.label}`;
