@@ -12,7 +12,6 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 18,
     satisfactionEffect: 4,
     unlockedByDefault: true,
-    activeByDefault: true,
   },
   {
     id: "garden-salad",
@@ -24,6 +23,7 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 24,
     satisfactionEffect: 5,
     unlockedByDefault: true,
+    activeByDefault: true,
   },
   {
     id: "bruschetta",
@@ -59,6 +59,7 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 34,
     satisfactionEffect: 7,
     unlockedByDefault: true,
+    activeByDefault: true,
   },
   {
     id: "soup",
@@ -71,7 +72,6 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 30,
     satisfactionEffect: 7,
     unlockedByDefault: true,
-    activeByDefault: true,
   },
   {
     id: "pasta",
@@ -223,7 +223,6 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 18,
     satisfactionEffect: 4,
     unlockedByDefault: true,
-    activeByDefault: true,
   },
   {
     id: "iced-tea",
@@ -235,6 +234,7 @@ export const recipes: RecipeDefinition[] = [
     sellPrice: 18,
     satisfactionEffect: 4,
     unlockedByDefault: true,
+    activeByDefault: true,
   },
   {
     id: "coffee",

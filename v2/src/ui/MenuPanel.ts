@@ -219,10 +219,15 @@ export class MenuPanel {
   /** Mutate the existing summary sections to reflect the current
    * menu. Uses a signature check so the DOM is only touched when
    * something visibly changed — same defensive pattern as
-   * renderContent. */
+   * renderContent. The signature folds in the provided-appliance set
+   * so selling / placing an appliance (e.g. removing the toaster)
+   * re-renders the makeable counts + missing-appliance warnings even
+   * though the active-menu id list itself is unchanged. */
   private renderSummary(): void {
     const onMenu = this.game.cooking.getMenuRecipeIds();
-    const sig = onMenu.slice().sort().join(",");
+    const provided = this.game.getProvidedAppliances?.();
+    const provKey = provided ? Array.from(provided).sort().join(",") : "∅";
+    const sig = `${onMenu.slice().sort().join(",")}|${provKey}`;
     if (sig === this.lastSummarySig) return;
     this.lastSummarySig = sig;
     const onMenuSet = new Set(onMenu);
@@ -230,11 +235,27 @@ export class MenuPanel {
       const refs = this.summarySections.get(sec.key);
       if (!refs) continue;
       const items = recipes.filter((r) => r.category === sec.key && onMenuSet.has(r.id));
-      const count = items.length;
+      // Per-recipe missing appliances. A recipe you can't cook (missing
+      // stove / toaster / …) is still ON the menu but will never reach a
+      // customer, so it must NOT count toward the category tally — the
+      // count reflects how many active dishes here can actually be served.
+      // Delete the toaster and "Appetizers (1/3)" drops to "(0/3)": a
+      // visible flag that something's broken even though the recipe still
+      // shows in the list below (struck out + "Toaster missing" in red).
+      const missingByRecipe = new Map<string, ApplianceId[]>();
+      for (const r of items) missingByRecipe.set(r.id, this.missingAppliancesFor(r, provided));
+      const makeable = items.filter((r) => (missingByRecipe.get(r.id)?.length ?? 0) === 0).length;
+      const anyBroken = items.some((r) => (missingByRecipe.get(r.id)?.length ?? 0) > 0);
       const max = maxActiveRecipesPerCategory;
-      const headerColor = count >= max ? "#ffd986" : count === 0 ? "rgba(255,245,220,0.55)" : "#fff5dc";
+      // Red header the moment any active dish here can't be cooked;
+      // otherwise the prior amber-full / dim-empty / normal scheme, keyed
+      // off the MAKEABLE count so it agrees with the number displayed.
+      const headerColor = anyBroken ? "#ff7a7a"
+        : makeable >= max ? "#ffd986"
+        : makeable === 0 ? "rgba(255,245,220,0.55)"
+        : "#fff5dc";
       refs.header.style.color = headerColor;
-      refs.header.textContent = `${sec.label} (${count}/${max}):`;
+      refs.header.textContent = `${sec.label} (${makeable}/${max}):`;
       // Rebuild list contents — small enough that diffing isn't worth it.
       refs.list.innerHTML = "";
       if (items.length === 0) {
@@ -246,48 +267,77 @@ export class MenuPanel {
         refs.list.appendChild(empty);
       } else {
         for (const r of items) {
-          const line = document.createElement("div");
-          // Flex row: coloured tier chip + dish name. The chip serves
-          // as the visual list marker (no bullet character needed)
-          // and tells the player at a glance how pricey each picked
-          // dish is — useful when the menu mixes tiers and the player
-          // is trying to balance a starter T1 against a flagship T4.
-          Object.assign(line.style, {
-            display: "flex", alignItems: "center", gap: "5px",
-            whiteSpace: "nowrap", overflow: "hidden",
-          } as Partial<CSSStyleDeclaration>);
-          const tier = getRecipeLuxuryTier(r);
-          const badge = document.createElement("span");
-          badge.textContent = `T${tier}`;
-          const bg = TIER_BADGE_BG[Math.max(0, Math.min(TIER_BADGE_BG.length - 1, tier - 1))];
-          Object.assign(badge.style, {
-            display: "inline-block",
-            background: bg,
-            color: "#fff",
-            fontSize: "9px",
-            fontWeight: "700",
-            letterSpacing: "0.04em",
-            padding: "1px 5px",
-            borderRadius: "3px",
-            flex: "0 0 auto",
-            // Slight inset shadow gives the chip a subtle pill look
-            // against the dark summary background.
-            boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.25)",
-          } as Partial<CSSStyleDeclaration>);
-          line.appendChild(badge);
-          const name = document.createElement("span");
-          name.textContent = r.name;
-          Object.assign(name.style, {
-            flex: "1 1 auto",
-            minWidth: "0",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          } as Partial<CSSStyleDeclaration>);
-          line.appendChild(name);
-          refs.list.appendChild(line);
+          refs.list.appendChild(this.renderSummaryLine(r, missingByRecipe.get(r.id) ?? []));
         }
       }
     }
+  }
+
+  /** The appliance ids a recipe needs but the restaurant doesn't
+   * currently provide. Empty when everything's placed — or when the
+   * provided set isn't known yet (early boot treats recipes as
+   * makeable, matching CookingSystem.canMakeRecipe). */
+  private missingAppliancesFor(
+    recipe: RecipeDefinition, provided: ReadonlySet<string> | undefined,
+  ): ApplianceId[] {
+    if (!provided) return [];
+    const missing: ApplianceId[] = [];
+    for (const a of this.game.cooking.getRecipeAppliances(recipe)) {
+      if (!provided.has(a)) missing.push(a);
+    }
+    return missing;
+  }
+
+  /** One active-recipe line in the summary panel: coloured tier chip +
+   * dish name, plus — when the recipe can't be cooked — a struck-through
+   * dimmed name and a red "<Appliance> missing" sub-line, so a glance at
+   * the active menu shows which dishes are broken (appliance sold or
+   * never built) instead of silently never being served. */
+  private renderSummaryLine(r: RecipeDefinition, missing: ApplianceId[]): HTMLElement {
+    const broken = missing.length > 0;
+    const cell = document.createElement("div");
+    Object.assign(cell.style, {
+      display: "flex", flexDirection: "column", gap: "0",
+      opacity: broken ? "0.85" : "1",
+    } as Partial<CSSStyleDeclaration>);
+    const line = document.createElement("div");
+    // Flex row: coloured tier chip + dish name. The chip doubles as the
+    // list marker and tells the player how pricey each picked dish is.
+    Object.assign(line.style, {
+      display: "flex", alignItems: "center", gap: "5px",
+      whiteSpace: "nowrap", overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    const tier = getRecipeLuxuryTier(r);
+    const badge = document.createElement("span");
+    badge.textContent = `T${tier}`;
+    const bg = TIER_BADGE_BG[Math.max(0, Math.min(TIER_BADGE_BG.length - 1, tier - 1))];
+    Object.assign(badge.style, {
+      display: "inline-block", background: bg, color: "#fff",
+      fontSize: "9px", fontWeight: "700", letterSpacing: "0.04em",
+      padding: "1px 5px", borderRadius: "3px", flex: "0 0 auto",
+      boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.25)",
+    } as Partial<CSSStyleDeclaration>);
+    line.appendChild(badge);
+    const name = document.createElement("span");
+    name.textContent = r.name;
+    Object.assign(name.style, {
+      flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis",
+      textDecoration: broken ? "line-through" : "none",
+      color: broken ? "rgba(255,245,220,0.6)" : "inherit",
+    } as Partial<CSSStyleDeclaration>);
+    line.appendChild(name);
+    cell.appendChild(line);
+    if (broken) {
+      const warn = document.createElement("div");
+      warn.textContent = `${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")} missing`;
+      Object.assign(warn.style, {
+        color: "#ff6b6b", fontWeight: "700", fontSize: "10px",
+        paddingLeft: "3px", whiteSpace: "nowrap",
+        overflow: "hidden", textOverflow: "ellipsis",
+      } as Partial<CSSStyleDeclaration>);
+      cell.appendChild(warn);
+    }
+    return cell;
   }
 
   /** Build the 5 tier-tab buttons one time. Each button's click handler
