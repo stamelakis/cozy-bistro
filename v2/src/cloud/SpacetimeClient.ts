@@ -586,12 +586,33 @@ export class SpacetimeClient {
       for (const r of this.conn.db.restaurant.iter()) {
         if (identityEquals(r.owner, this.identity)) {
           this.restaurantId = r.id;
+          this.flushPendingActiveMenu();
           console.log(`[SpacetimeDB] restaurant ${r.id} resolved via re-scan (cross-device transfer)`);
           break;
         }
       }
     }
     return this.restaurantId;
+  }
+
+  /** Menu seed stashed while restaurantId was unresolved (new-account boot);
+   * flushed by flushPendingActiveMenu once the id resolves. See setActiveMenu. */
+  private pendingActiveMenuCsv: string | null = null;
+
+  /** Flush a menu seed dropped because restaurantId wasn't known yet — notably
+   * the boot active_menu seed. On a NEW account the restaurant resolves lazily
+   * / after subscription, AFTER the Engine's boot menu-seed fires, so that seed
+   * no-ops; without this flush active_menu stays empty and guests can never
+   * order (the chef sits idle forever). Call right after setting restaurantId
+   * (kept separate from the assignment so TS still narrows the field). */
+  private flushPendingActiveMenu(): void {
+    if (this.pendingActiveMenuCsv != null && this.conn && this.restaurantId != null) {
+      try {
+        this.conn.reducers.setActiveMenu({ restaurantId: this.restaurantId, recipeIds: this.pendingActiveMenuCsv });
+        console.log("[SpacetimeDB] flushed pending active_menu after restaurant resolved");
+      } catch (e) { console.warn("[Cloud] flush setActiveMenu failed:", e); }
+      this.pendingActiveMenuCsv = null;
+    }
   }
 
   /** Claim an unowned building. Resolves when the row updates;
@@ -2632,12 +2653,21 @@ export class SpacetimeClient {
    * knows which recipes are available for backgrounded guests to
    * order. Called whenever CookingSystem changes the menu set. */
   setActiveMenu(recipeIds: readonly string[]): void {
-    if (!this.conn || this.restaurantId == null) return;
+    const csv = recipeIds.join(",");
+    // New-account boot: the restaurant resolves lazily / after subscription,
+    // so this seed can fire before restaurantId is known. Stash it and flush
+    // when the id resolves (flushPendingActiveMenu) — otherwise the default
+    // menu never reaches the server and guests can never order (chef idle).
+    if (!this.conn || this.restaurantId == null) {
+      this.pendingActiveMenuCsv = csv;
+      return;
+    }
     try {
       this.conn.reducers.setActiveMenu({
         restaurantId: this.restaurantId,
-        recipeIds: recipeIds.join(","),
+        recipeIds: csv,
       });
+      this.pendingActiveMenuCsv = null;
     } catch (e) {
       console.warn("[Cloud] setActiveMenu failed:", e);
     }
@@ -4150,6 +4180,7 @@ export class SpacetimeClient {
         if (this.restaurantId != null) return;
         if (!identityEquals(row.owner, identity)) return;
         this.restaurantId = row.id;
+        this.flushPendingActiveMenu();
         console.log(`[SpacetimeDB] restaurant ${row.id} arrived — cloud saves enabled`);
         try { ctx.db.restaurant.removeOnInsert(onInsert); } catch { /* SDK quirk */ }
       };
@@ -4160,6 +4191,7 @@ export class SpacetimeClient {
       void conn;
     } else {
       this.restaurantId = myRestaurants[0].id;
+      this.flushPendingActiveMenu();
       // Read the CURRENT, identity-keyed player_save blob — NOT the legacy
       // restaurant-keyed save_snapshot, whose blob goes stale (live: it held
       // tier 1 / day 1 while the real player_save was tier 5 / day 1486, so a

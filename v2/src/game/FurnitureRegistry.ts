@@ -872,15 +872,14 @@ export class FurnitureRegistry {
         const world = this.rotateSlotOffset(slot, it);
         const sx = it.x + world.dx;
         const sz = it.z + world.dz;
-        // Reject seats without walkable clearance. A slot within a guest body-
-        // radius (~0.35) of the interior edge seats the guest HALF-THROUGH a
-        // wall / in the doorway gap — it reads as "sitting on nothing in the
-        // doorway" and the body clips the wall (e.g. a 2x2 table shoved against
-        // the front wall puts its back-row slot at z=5, past the safe 4.85).
-        // Bounds = StaffRouter's fixed interior box [-4.2, 5.2] minus 0.35.
-        // Filtering here — the single seat source — keeps them out of the
-        // server mirror, so a guest is never assigned one.
-        if (sx < -3.85 || sx > 4.85 || sz < -3.85 || sz > 4.85) continue;
+        // Reject only seats that fall essentially OUTSIDE the interior box (a
+        // slot past a wall reads as "sitting on nothing"). Margin loosened
+        // 0.35 → 0.15: players legitimately place tables flush against a wall
+        // and expect the wall-side chairs to work — a guest's back overlapping
+        // the wall a little is fine; sitting fully through it is not. Bounds =
+        // StaffRouter's interior box [-4.2, 5.2] minus 0.15. Filtering here —
+        // the single seat source — keeps invalid slots out of the server mirror.
+        if (sx < -4.05 || sx > 5.05 || sz < -4.05 || sz > 5.05) continue;
         out.push({
           tableUid: it.uid,
           slotIndex: i,
