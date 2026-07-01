@@ -270,6 +270,9 @@ body.cb-mobile .cb-buildmenu.cb-open { transform: translateX(0) !important; }
 
 /* Recipes (MenuPanel) → bottom sheet */
 body.cb-mobile .cb-menupanel {
+  /* width:100% must INCLUDE the panel's 12px padding, else the sheet is
+     24px wider than the viewport and its right edge clips off-screen. */
+  box-sizing: border-box !important;
   left: 0 !important;
   right: 0 !important;
   bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
