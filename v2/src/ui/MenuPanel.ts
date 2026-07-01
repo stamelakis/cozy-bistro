@@ -469,9 +469,15 @@ export class MenuPanel {
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = on;
-    cb.disabled = !usable;
-    // Tooltip on the checkbox itself so the player knows WHY it's disabled.
-    if (!unlocked) {
+    // You can ALWAYS untick a recipe that's already on the menu — even one
+    // you currently can't cook (missing appliance) — so the menu never gets
+    // stuck advertising a dish the kitchen can't make. Only TICKING a new
+    // recipe on is gated behind `usable` (unlocked tier + all appliances).
+    cb.disabled = !on && !usable;
+    // Tooltip explains WHY it's gated / that you can still remove it.
+    if (on && !makeable) {
+      cb.title = `Missing ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")} — untick to take it off the menu`;
+    } else if (!unlocked) {
       cb.title = `Locked — unlock with Tier ${this.selectedTier} expansion`;
     } else if (!makeable) {
       cb.title = `Needs: ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;

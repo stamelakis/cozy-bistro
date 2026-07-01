@@ -64,17 +64,19 @@ export interface Achievement {
  * T6 mastery          (deep play)
  * T7 endgame flex     (legend status)
  *
- * Tuned so each reward is ~5-15% of typical bank at that point —
- * meaningful but never economy-breaking. Full sweep ≈ $700k.
+ * Deliberately SMALL — achievements are a progression garnish, not an
+ * income source (the cash ones don't even pay; see CASH_MILESTONE_REWARDS).
+ * Every value is <= the server's $5k per-claim cap so the toast never
+ * over-promises what actually lands. Cut ~2-3x from the original tuning.
  */
 export const REWARD_TIERS = {
-  T1:    50,
-  T2:   150,
-  T3:   500,
-  T4: 1_500,
-  T5: 5_000,
-  T6:15_000,
-  T7:50_000,
+  T1:    20,
+  T2:    60,
+  T3:   150,
+  T4:   400,
+  T5: 1_000,
+  T6: 2_500,
+  T7: 5_000,
 } as const;
 
 /** Phase I (H.100) — Per-achievement reward, assigned by tier.
@@ -377,19 +379,23 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     description: "Buy at least one ingredient set.",
     predicate: (g) => g.economy.getDailyExpenses() > 0 || g.history.recent().some((d) => d.expenses > 0) },
 
-  // ─── CASH (12) ─── from spare change to retirement.
-  cashAt("cash-100",   "Pocket Change",    100),
-  cashAt("cash-250",   "Lunch Money",      250),
-  cashAt("cash-500",   "Saving Up",        500),
-  cashAt("cash-1k",    "Four Figures",     1_000),
-  cashAt("cash-2k",    "Comfortable",      2_000),
-  cashAt("cash-5k",    "Tycoon",           5_000),
-  cashAt("cash-10k",   "Five Figures",     10_000),
-  cashAt("cash-25k",   "Restaurateur",     25_000),
-  cashAt("cash-50k",   "Bistro Baron",     50_000),
-  cashAt("cash-100k",  "Six Figures",      100_000),
-  cashAt("cash-250k",  "Quarter Mill",     250_000),
-  cashAt("cash-500k",  "Half a Million",   500_000),
+  // ─── CASH (12) ─── from spare change to empire. Steep geometric ramp
+  // (~2.5x/step): income compounds, so a flat ladder unlocks in one
+  // sitting. IDs are stable save keys — they no longer equal the dollar
+  // value. Cash rewards themselves stay tiny/zero (CASH_MILESTONE_REWARDS)
+  // since paying cash for having cash is circular.
+  cashAt("cash-100",   "Pocket Change",    500),
+  cashAt("cash-250",   "Lunch Money",      2_000),
+  cashAt("cash-500",   "Saving Up",        5_000),
+  cashAt("cash-1k",    "Comfortable",      12_000),
+  cashAt("cash-2k",    "Well-Off",         30_000),
+  cashAt("cash-5k",    "Tycoon",           75_000),
+  cashAt("cash-10k",   "Six Figures",      150_000),
+  cashAt("cash-25k",   "Restaurateur",     400_000),
+  cashAt("cash-50k",   "Millionaire",      1_000_000),
+  cashAt("cash-100k",  "Bistro Baron",     2_500_000),
+  cashAt("cash-250k",  "Mogul",            6_000_000),
+  cashAt("cash-500k",  "Empire",           15_000_000),
 
   // ─── DAYS (9) ─── playtime milestones.
   dayAt("day-2",   "Second Service",  2,   "Survive to day 2."),
@@ -402,17 +408,19 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
   dayAt("day-60",  "Two-Month Run",   60,  "Survive to day 60."),
   dayAt("day-100", "Century Chef",    100, "Survive to day 100."),
 
-  // ─── CUSTOMERS SERVED (10) ─── lifetime plates out the door.
-  servedAt("served-5",    "Quick Five",      5,    "Serve 5 customers lifetime."),
-  servedAt("served-10",   "Lunch Rush",      10,   "Serve 10 customers lifetime."),
-  servedAt("served-25",   "Building a Crowd",25,   "Serve 25 customers lifetime."),
-  servedAt("served-50",   "Half a Hundred",  50,   "Serve 50 customers lifetime."),
-  servedAt("served-100",  "Hundred Plates",  100,  "Serve 100 customers lifetime."),
-  servedAt("served-250",  "Reliable Spot",   250,  "Serve 250 customers lifetime."),
-  servedAt("served-500",  "Five Hundred",    500,  "Serve 500 customers lifetime."),
-  servedAt("served-1k",   "Thousand-Strong", 1000, "Serve 1,000 customers lifetime."),
-  servedAt("served-2.5k", "City Favorite",   2500, "Serve 2,500 customers lifetime."),
-  servedAt("served-5k",   "Bistro Legend",   5000, "Serve 5,000 customers lifetime."),
+  // ─── CUSTOMERS SERVED (10) ─── lifetime plates out the door. A full
+  // floor clears dozens/day, so the old 5→5k ladder fell in an afternoon.
+  // Steepened ~2.5x/step; IDs stay as save keys.
+  servedAt("served-5",    "Getting Started", 15,    "Serve 15 customers lifetime."),
+  servedAt("served-10",   "Lunch Rush",      40,    "Serve 40 customers lifetime."),
+  servedAt("served-25",   "Building a Crowd",100,   "Serve 100 customers lifetime."),
+  servedAt("served-50",   "Reliable Spot",   250,   "Serve 250 customers lifetime."),
+  servedAt("served-100",  "Popular Place",   600,   "Serve 600 customers lifetime."),
+  servedAt("served-250",  "City Favorite",   1_500, "Serve 1,500 customers lifetime."),
+  servedAt("served-500",  "Bustling Bistro", 3_500, "Serve 3,500 customers lifetime."),
+  servedAt("served-1k",   "Thousand-Strong", 8_000, "Serve 8,000 customers lifetime."),
+  servedAt("served-2.5k", "Institution",     20_000,"Serve 20,000 customers lifetime."),
+  servedAt("served-5k",   "Bistro Legend",   50_000,"Serve 50,000 customers lifetime."),
 
   // ─── RATING (6) ─── from first 5⭐ to consistent excellence.
   { id: "rating-first-5", name: "Five-Star Service", category: "rating",
@@ -528,12 +536,12 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     predicate: (g) => g.cooking.getPantry().filter((s) => s.quantity >= 5).length >= 12 },
 
   // ─── BUILD (8) ─── decorating + multi-floor.
-  furnitureAt("furniture-5",   "Getting Cozy",     5,   "Place 5 pieces of furniture."),
-  furnitureAt("furniture-10",  "Filled In",        10,  "Place 10 pieces of furniture."),
-  furnitureAt("furniture-25",  "Properly Outfitted",25, "Place 25 pieces of furniture."),
-  furnitureAt("furniture-50",  "Full Service",     50,  "Place 50 pieces of furniture."),
-  furnitureAt("furniture-100", "Interior Designer",100, "Place 100 pieces of furniture."),
-  furnitureAt("furniture-250", "Master Builder",   250, "Place 250 pieces of furniture."),
+  furnitureAt("furniture-5",   "Getting Cozy",     10,    "Place 10 pieces of furniture."),
+  furnitureAt("furniture-10",  "Filled In",        30,    "Place 30 pieces of furniture."),
+  furnitureAt("furniture-25",  "Properly Outfitted",75,   "Place 75 pieces of furniture."),
+  furnitureAt("furniture-50",  "Full Service",     200,   "Place 200 pieces of furniture."),
+  furnitureAt("furniture-100", "Interior Designer",500,   "Place 500 pieces of furniture."),
+  furnitureAt("furniture-250", "Master Builder",   1_200, "Place 1,200 pieces of furniture."),
   { id: "build-2-floors", name: "Going Up", category: "build",
     description: "Build on at least 2 different floors.",
     predicate: (g) => floorsBuiltOn(g) >= 2 },
@@ -552,31 +560,31 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     description: "Try every restaurant theme at least once.",
     predicate: (g) => g.playerCounters.themesTried.size >= RESTAURANT_THEMES.length },
   { id: "decor-10-pieces", name: "Knick-knacks", category: "decor",
-    description: "Place 10 decoration / plant / lamp items.",
-    predicate: (g) => decorPiecesPlaced(g) >= 10 },
-  { id: "decor-30-pieces", name: "Visual Feast", category: "decor",
     description: "Place 30 decoration / plant / lamp items.",
     predicate: (g) => decorPiecesPlaced(g) >= 30 },
+  { id: "decor-30-pieces", name: "Visual Feast", category: "decor",
+    description: "Place 100 decoration / plant / lamp items.",
+    predicate: (g) => decorPiecesPlaced(g) >= 100 },
 
   // ─── DISHWARE (8) ─── plate + glass collections.
   { id: "dish-buy-set", name: "First Purchase", category: "dishware",
     description: "Buy any extra plate or glass set.",
     predicate: (g) => g.dishware.getPurchaseLog().length >= 1 },
   { id: "dish-50-plates", name: "Plate Stash", category: "dishware",
-    description: "Own 50 plates (clean or dirty).",
-    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 50 },
+    description: "Own 100 plates (clean or dirty).",
+    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 100 },
   { id: "dish-150-plates", name: "Plate Reserve", category: "dishware",
-    description: "Own 150 plates.",
-    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 150 },
+    description: "Own 400 plates.",
+    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 400 },
   { id: "dish-300-plates", name: "Plate Warehouse", category: "dishware",
-    description: "Own 300 plates.",
-    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 300 },
+    description: "Own 1,000 plates.",
+    predicate: (g) => g.dishware.getClean("plate") + g.dishware.getDirty("plate") >= 1000 },
   { id: "dish-50-glasses", name: "Glassware Drawer", category: "dishware",
-    description: "Own 50 glasses (clean or dirty).",
-    predicate: (g) => g.dishware.getClean("glass") + g.dishware.getDirty("glass") >= 50 },
+    description: "Own 100 glasses (clean or dirty).",
+    predicate: (g) => g.dishware.getClean("glass") + g.dishware.getDirty("glass") >= 100 },
   { id: "dish-150-glasses", name: "Bar-Stocked", category: "dishware",
-    description: "Own 150 glasses.",
-    predicate: (g) => g.dishware.getClean("glass") + g.dishware.getDirty("glass") >= 150 },
+    description: "Own 400 glasses.",
+    predicate: (g) => g.dishware.getClean("glass") + g.dishware.getDirty("glass") >= 400 },
   { id: "dish-t3", name: "Tier 3 Tableware", category: "dishware",
     description: "Buy a tier-3 plate or glass set.",
     predicate: (g) => ownsTier(g, "plate", 3) || ownsTier(g, "glass", 3) },
@@ -586,11 +594,11 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
 
   // ─── SOCIAL (6) ─── chat + visit cross-player loop.
   { id: "social-chat-10", name: "Chatterbox", category: "social",
-    description: "Send 10 chat messages.",
-    predicate: (g) => g.playerCounters.chatsSent >= 10 },
+    description: "Send 25 chat messages.",
+    predicate: (g) => g.playerCounters.chatsSent >= 25 },
   { id: "social-chat-50", name: "Town Crier", category: "social",
-    description: "Send 50 chat messages.",
-    predicate: (g) => g.playerCounters.chatsSent >= 50 },
+    description: "Send 150 chat messages.",
+    predicate: (g) => g.playerCounters.chatsSent >= 150 },
   { id: "social-visit-1", name: "Nosy Neighbor", category: "social",
     description: "Visit another player's restaurant.",
     predicate: (g) => g.playerCounters.visitsOut >= 1 },
@@ -623,11 +631,11 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
     description: "Trigger the boost button for the first time.",
     predicate: (g) => g.playerCounters.boostsUsed >= 1 },
   { id: "boost-10", name: "Hype Master", category: "boost",
-    description: "Trigger the boost button 10 times.",
-    predicate: (g) => g.playerCounters.boostsUsed >= 10 },
+    description: "Trigger the boost button 40 times.",
+    predicate: (g) => g.playerCounters.boostsUsed >= 40 },
   { id: "boost-50", name: "Marketing Genius", category: "boost",
-    description: "Trigger the boost button 50 times.",
-    predicate: (g) => g.playerCounters.boostsUsed >= 50 },
+    description: "Trigger the boost button 200 times.",
+    predicate: (g) => g.playerCounters.boostsUsed >= 200 },
 ];
 
 // Phase I (H.100) — Stamp cashReward on each achievement at module
