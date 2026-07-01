@@ -4372,7 +4372,7 @@ export class SpacetimeClient {
                 && Math.abs(this.pendingServerLedger) >= 0.01) {
               const amt = this.pendingServerLedger;
               this.game.economy.recordTransaction(
-                amt >= 0 ? "Service income" : "Operating costs (cloud)",
+                amt >= 0 ? "Meal sales & tips" : "Supplies & running costs",
                 amt,
               );
               this.pendingServerLedger = 0;

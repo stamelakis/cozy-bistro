@@ -5,7 +5,7 @@ const maxTransactionLogEntries = 5000;
 
 export type EarnReason = "payment" | "refund" | "grant" | "offline" | "achievement";
 export type SpendReason = "ingredients" | "staff" | "unlock" | "decor" | "rent";
-export type ForceSpendReason = "rent" | "charge" | "restock" | "salary";
+export type ForceSpendReason = "rent" | "wages" | "charge" | "restock" | "salary";
 
 export class EconomySystem {
   private money: number;
@@ -150,9 +150,10 @@ export class EconomySystem {
     this.dailyExpensesTotal += amount;
     const label =
       reason === "rent" ? "Rent"
-      : reason === "restock" ? "Auto-shop restock (offline)"
-      : reason === "salary" ? "Staff salary (offline)"
-      : "Forced charge";
+      : reason === "wages" ? "Staff wages"
+      : reason === "restock" ? "Ingredient restock"
+      : reason === "salary" ? "Staff wages (offline)"
+      : "Cash adjustment";
     this.recordTransaction(label, -amount);
   }
 

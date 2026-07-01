@@ -1460,7 +1460,13 @@ export class StaffRouter {
   snapshotStatus(): { character: AnimatedCharacter; role: "chef" | "waiter" | "barman"; label: string }[] {
     const out: { character: AnimatedCharacter; role: "chef" | "waiter" | "barman"; label: string }[] = [];
     for (const c of this.chefs) out.push({ character: c.character, role: "chef", label: chefLabel(c.state) });
-    for (const w of this.waiters) out.push({ character: w.character, role: "waiter", label: waiterLabel(w) });
+    for (const w of this.waiters) {
+      // A food ticket flips to "delivering" the instant the plate is picked
+      // up at the pass, so it tells the fetch leg from the carry leg.
+      const carrying = w.ticketId != null
+        && this.tickets.some((t) => t.id === w.ticketId && t.state === "delivering");
+      out.push({ character: w.character, role: "waiter", label: waiterLabel(w, carrying) });
+    }
     for (const b of this.barmen) out.push({ character: b.character, role: "barman", label: barmanLabel(b) });
     return out;
   }
@@ -4176,20 +4182,23 @@ function barmanLabel(b: StaffActor): string {
   }
 }
 
-function waiterLabel(w: StaffActor): string {
-  // Use the active task type (take-order / wash / serve) to label the
-  // bubble — without it every movingToWork waiter just said "→ pickup"
-  // and the player couldn't tell who was taking an order from who was
-  // grabbing a plate.
+function waiterLabel(w: StaffActor, carrying: boolean): string {
+  // Spell out each of the waiter's jobs — take an order, fetch then serve a
+  // dish, bus a dirty table, wash up — so the player can read at a glance
+  // what a waiter is doing instead of a bare "pickup" / "serving".
   switch (w.state) {
     case "movingToWork":
-      if (w.takeOrderRequest) return "📋 → order";
-      if (w.washTrip) return w.washTrip.phase === "pickup" ? "🧽 → dirty" : "🧽 → wash";
-      return "→ pickup";
+      if (w.takeOrderRequest) return "📋 → take order";
+      if (w.washTrip) return w.washTrip.phase === "pickup" ? "🧽 → grab dirty dish" : "🧼 → to sink";
+      if (w.cleanSeatUid) return "🧽 → clear table";
+      // Food run: before pickup the waiter walks to the kitchen to FETCH the
+      // cooked dish; once carrying it (ticket "delivering") they head to the seat.
+      return carrying ? "🍽️ → serve table" : "🍳 → fetch dish";
     case "working":
-      if (w.takeOrderRequest) return "📋 ordering";
-      if (w.washTrip) return "🧽 washing";
-      return "🍽️ serving";
+      if (w.takeOrderRequest) return "📋 taking order";
+      if (w.washTrip) return "🧼 washing up";
+      if (w.cleanSeatUid) return "🧹 clearing table";
+      return "🍽️ serving dish";
     // Phase 9.28 — walking back to rest reads as idle: no bubble, not
     // counted as "working" on the panel.
     case "returningHome": return "";

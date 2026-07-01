@@ -103,6 +103,19 @@ export class LedgerModal {
     header.appendChild(btnGroup);
     body.appendChild(header);
 
+    // Legend — the money paths post under a few named lines, so spell out
+    // what each one means (the old "Service income" / "Operating costs
+    // (cloud)" lines told the player nothing about wages, rent, or supplies).
+    const legend = document.createElement("div");
+    legend.innerHTML =
+      "<b>Meal sales &amp; tips</b> = customer income. Costs: <b>Staff wages</b>, " +
+      "<b>Rent</b> (starts after a grace period), <b>Ingredient restock</b>, and " +
+      "<b>Supplies &amp; running costs</b> (auto, settled on the server).";
+    Object.assign(legend.style, {
+      fontSize: "10px", opacity: "0.6", lineHeight: "1.45", marginBottom: "8px",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(legend);
+
     this.listEl = document.createElement("div");
     Object.assign(this.listEl.style, {
       flex: "1",

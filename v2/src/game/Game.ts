@@ -448,7 +448,7 @@ export class Game {
       const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
       if (payroll.charge > 0) {
         const couldPay = this.economy.getMoney() >= payroll.charge;
-        this.economy.forceSpendMoney(payroll.charge, "charge"); // floors at $0
+        this.economy.forceSpendMoney(payroll.charge, "wages"); // floors at $0
         if (!couldPay) {
           // No-negative-money: payroll couldn't be covered → BENCH all active
           // staff (they keep upgrades, stop drawing wages + vanish from the
