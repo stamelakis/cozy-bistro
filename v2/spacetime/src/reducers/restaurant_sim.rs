@@ -18,12 +18,12 @@ use crate::tables::{
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover,
+    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover, money_event,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    SeatSlot, SeatAppeal, StaffActor, MoneyCutover,
+    SeatSlot, SeatAppeal, StaffActor, MoneyCutover, MoneyEvent,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -603,8 +603,9 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     /// Daily rent in cents per luxury tier. Mirrors RENT_BY_TIER in
     /// src/game/Game.ts (×100 to keep integer math here).
     const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
-    /// Mirrors RENT_GRACE_DAYS in Game.ts — days 1..GRACE are free.
-    const RENT_GRACE_DAYS: u32 = 30;
+    /// Mirrors GRACE_DAYS in Game.ts — days 1..GRACE are free (no rent).
+    /// Wages are client-only, so the server just needs the rent grace here.
+    const RENT_GRACE_DAYS: u32 = 14;
     /// Owner-offline window. Mirrors the 30s pingPresence threshold.
     const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000;
 
@@ -712,10 +713,12 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     // Path B — the history blob only changes when a day rolled; the
     // no-roll path moves the existing value through `..r` untouched
     // (no clone in the every-tick write).
+    let rent_old_balance = r.cloud_money_cents;
+    let rent_new_balance = r.cloud_money_cents.saturating_sub(rent_to_charge_cents).max(0);
     let mut updated = Restaurant {
         day_elapsed_ms: elapsed,
         pending_days_advanced: pending,
-        cloud_money_cents: r.cloud_money_cents.saturating_sub(rent_to_charge_cents).max(0),
+        cloud_money_cents: rent_new_balance,
         cloud_daily_revenue_cents: new_daily_rev,
         cloud_daily_expenses_cents: new_daily_exp,
         cloud_daily_served: new_daily_served,
@@ -732,6 +735,8 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         updated.cloud_day_history_json = Some(json);
     }
     ctx.db.restaurant().id().update(updated);
+    // Ledger — the offline rent debit as its own line (no-op when 0).
+    record_money_event(ctx, rid, "rent", rent_new_balance - rent_old_balance, rent_new_balance);
     if day_rolled {
         log::info!(
             "tick_day_clock: rid {} appended {} day-history record(s) (last ended day {})",
@@ -944,6 +949,56 @@ fn split_top_level_json_items(inner: &str) -> Vec<&str> {
 /// admin flips it via set_money_cutover_active.
 fn money_cutover_active(ctx: &ReducerContext) -> bool {
     ctx.db.money_cutover().id().find(1u32).map(|m| m.active).unwrap_or(false)
+}
+
+/// Server ledger — append one itemized money event, then keep the table
+/// bounded. Called by EVERY server write to a restaurant's
+/// cloud_money_cents so the client can render a per-line ledger (Staff
+/// wages / Rent / Meal sale / Ingredient restock / …) instead of the
+/// opaque net-delta lump the money cutover otherwise leaves it with.
+/// `amount_cents` is SIGNED (negative = a cost); `balance_after_cents` is
+/// cloud_money_cents AFTER the write. No-op on a zero amount.
+pub(crate) fn record_money_event(
+    ctx: &ReducerContext,
+    restaurant_id: u64,
+    kind: &str,
+    amount_cents: i64,
+    balance_after_cents: i64,
+) {
+    if amount_cents == 0 {
+        return;
+    }
+    ctx.db.money_event().insert(MoneyEvent {
+        id: 0, // auto_inc
+        restaurant_id,
+        at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        kind: kind.to_string(),
+        amount_cents,
+        balance_after_cents,
+    });
+    prune_money_events(ctx, restaurant_id);
+}
+
+/// Keep a restaurant's ledger to the newest LEDGER_KEEP rows. Scans only
+/// the one restaurant's events (btree index), so it's bounded by the cap.
+fn prune_money_events(ctx: &ReducerContext, restaurant_id: u64) {
+    const LEDGER_KEEP: usize = 200;
+    let mut rows: Vec<(u64, i64)> = ctx
+        .db
+        .money_event()
+        .restaurant_id()
+        .filter(restaurant_id)
+        .map(|e| (e.id, e.at_micros))
+        .collect();
+    if rows.len() <= LEDGER_KEEP {
+        return;
+    }
+    // Oldest first (timestamp, then id), delete the excess.
+    rows.sort_by_key(|(id, at)| (*at, *id));
+    let excess = rows.len() - LEDGER_KEEP;
+    for (id, _) in rows.into_iter().take(excess) {
+        ctx.db.money_event().id().delete(id);
+    }
 }
 
 /// Anti-cheat B/C — flip the global money-cutover switch. Admin-only
@@ -2430,6 +2485,8 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
     let added_daily_revenue = added_tip.saturating_add(added_revenue);
     let added_daily_served: u32 = 1;
 
+    let rollup_rid = r.id;
+    let rollup_old_balance = r.cloud_money_cents;
     ctx.db.restaurant().id().update(Restaurant {
         // ── Pending counters (foreground client drains on reconnect) ──
         pending_served: r.pending_served.saturating_add(pending_served_inc),
@@ -2449,6 +2506,13 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         cloud_daily_tips_cents: r.cloud_daily_tips_cents.saturating_add(added_tip),
         ..r
     });
+    // Ledger — split the credit into a meal-sale line + a tip line.
+    if added_revenue > 0 {
+        record_money_event(ctx, rollup_rid, "sale", added_revenue, rollup_old_balance + added_revenue);
+    }
+    if added_tip > 0 {
+        record_money_event(ctx, rollup_rid, "tip", added_tip, rollup_old_balance + added_revenue + added_tip);
+    }
     log::info!(
         "accumulate_pending_visit_rollup: guest {} → restaurant {} (rating={}, tip={} cents, revenue={} cents, angry={}, pending_active={})",
         g.id, g.restaurant_id, rating, added_tip, added_revenue, is_angry_leave, pending_active,
@@ -3364,6 +3428,9 @@ pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(
         last_grant_micros: now,
         ..r
     });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "grant", bonus_cents, rr.cloud_money_cents);
+    }
     log::info!(
         "claim_starter_grant: restaurant {} granted {} cents (kind-based)",
         restaurant_id, bonus_cents,
@@ -3398,6 +3465,9 @@ pub fn claim_low_balance_grant(ctx: &ReducerContext, restaurant_id: u64) -> Resu
         last_low_balance_grant_micros: now,
         ..r
     });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "grant", AMOUNT_CENTS, rr.cloud_money_cents);
+    }
     Ok(())
 }
 
@@ -3417,6 +3487,9 @@ pub fn admin_adjust_money(ctx: &ReducerContext, restaurant_id: u64, delta_cents:
         cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents),
         ..r
     });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "admin", delta_cents, rr.cloud_money_cents);
+    }
     Ok(())
 }
 
@@ -3461,6 +3534,9 @@ pub fn claim_recycle(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), Str
         last_recycle_micros: now,
         ..r
     });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "recycle", RECYCLE_REWARD_CENTS, rr.cloud_money_cents);
+    }
     Ok(())
 }
 
@@ -3489,6 +3565,9 @@ pub fn claim_achievement(ctx: &ReducerContext, restaurant_id: u64, reward_cents:
         cumulative_achievement_cents: r.cumulative_achievement_cents.saturating_add(credited),
         ..r
     });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "achievement", credited, rr.cloud_money_cents);
+    }
     Ok(())
 }
 
@@ -3579,12 +3658,15 @@ fn try_restock_pantry(
             let new_cloud_money_cents = r.cloud_money_cents.saturating_sub(accrued_cents).max(0);
             // Phase 7.6 — track restock expense in today's daily total.
             let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(accrued_cents);
+            let restock_delta = new_cloud_money_cents - r.cloud_money_cents;
             ctx.db.restaurant().id().update(Restaurant {
                 pending_restock_cost_cents: new_total,
                 cloud_money_cents: new_cloud_money_cents,
                 cloud_daily_expenses_cents: new_cloud_daily_expenses,
                 ..r
             });
+            // Ledger — the auto-restock cost as its own line.
+            record_money_event(ctx, restaurant_id, "restock", restock_delta, new_cloud_money_cents);
         }
     }
     log::info!(
@@ -3953,38 +4035,28 @@ pub fn consume_pending_salary(
     Ok(())
 }
 
-/// Phase H.45 — Per-restaurant tick.  When the owner has been offline
-/// past the threshold AND a base payroll rate has been mirrored AND
-/// the restaurant has staff, accrue cents into pending_salary_cost_cents.
-///
-/// On the very first tick after offline (last_salary_tick_micros == 0),
-/// just seed last_salary_tick to now and return — we don't bill for
-/// the seam between online and offline.  Subsequent ticks compute
-/// elapsed × per-min and add to the accumulator.
+/// Per-restaurant staff-wage tick. Phase 2 (money migration) — wages are
+/// SERVER-AUTHORITATIVE and charged CONTINUOUSLY whether the owner is online
+/// or offline; the client no longer bills payroll locally. Paused while the
+/// restaurant is CLOSED and during the opening grace period (day <= GRACE).
+/// Debits cloud_money_cents directly + logs a "wages" money_event; the client
+/// adopts the delta via the restaurant subscription. No-negative: pays only
+/// what's on hand, benching the roster if it can't cover payroll. Seeds
+/// last_salary_tick on the first tick (no seam bill).
 fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
-    if r.cloud_base_payroll_per_min_cents <= 0 { return; }
-    // Staff wages pause while the restaurant is CLOSED (player toggle).
-    let open = ctx.db.player_save().identity().find(r.owner)
-        .map(|s| s.restaurant_open).unwrap_or(true);
-    if !open { return; }
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
-    let owner_online = ctx.db.player().identity().find(r.owner)
-        .map(|pl| (now_micros - pl.last_seen_at.to_micros_since_unix_epoch()) < SALARY_OFFLINE_THRESHOLD_MICROS)
-        .unwrap_or(false);
-    if owner_online {
-        // If the client is online, ensure last_salary_tick_micros is
-        // reset so future offline accruals start fresh.  This is the
-        // backstop if the client somehow didn't fire
-        // reset_salary_tick_clock on connect.
+    // Read the save once for open-state + day-number (grace check).
+    let save = ctx.db.player_save().identity().find(r.owner);
+    // Wages pause while the restaurant is CLOSED — reset the clock so
+    // reopening doesn't bill one lump for the whole closed stretch.
+    let open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
+    if !open {
         if r.last_salary_tick_micros != 0 {
-            ctx.db.restaurant().id().update(Restaurant {
-                last_salary_tick_micros: 0,
-                ..r
-            });
+            ctx.db.restaurant().id().update(Restaurant { last_salary_tick_micros: 0, ..r });
         }
         return;
     }
+    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
     // Seed the accumulator on the first offline tick.
     if r.last_salary_tick_micros == 0 {
         ctx.db.restaurant().id().update(Restaurant {
@@ -4012,7 +4084,10 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
         });
         return;
     }
-    let total_per_min_cents = r.cloud_base_payroll_per_min_cents
+    // Rate falls back to the $6/staff/min default when the client hasn't
+    // mirrored a custom rate (cloud_base_payroll_per_min_cents == 0).
+    let base_rate = if r.cloud_base_payroll_per_min_cents > 0 { r.cloud_base_payroll_per_min_cents } else { 600 };
+    let total_per_min_cents = base_rate
         .saturating_mul(headcount)
         .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
     let elapsed = now_micros.saturating_sub(r.last_salary_tick_micros);
@@ -4023,6 +4098,18 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let total = r.pending_salary_remainder_x.saturating_add(micros_cents);
     let whole_cents = total / MICROS_PER_MINUTE;
     let new_remainder = total % MICROS_PER_MINUTE;
+    // Opening grace: days 1..GRACE are wage-free. Advance the clock (so grace
+    // ending doesn't bill one lump) but skip the charge entirely.
+    const GRACE_DAYS: u32 = 14; // mirrors GRACE_DAYS in Game.ts + tick_day_clock
+    let day_number = save.as_ref().map(|s| s.day_number).unwrap_or(1);
+    if day_number <= GRACE_DAYS {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_salary_tick_micros: now_micros,
+            pending_salary_remainder_x: new_remainder,
+            ..r
+        });
+        return;
+    }
     // No-negative-money — never let payroll push the balance below $0.
     // Pay only what's on hand; if that can't cover payroll, BENCH every
     // active member (is_deactivated = true) so they stop drawing wages and
@@ -4031,17 +4118,17 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     let on_hand = r.cloud_money_cents.max(0);
     let pay = whole_cents.min(on_hand);
     let benched = pay < whole_cents;
-    let new_pending = r.pending_salary_cost_cents.saturating_add(pay);
     let new_cloud_money_cents = (on_hand - pay).max(0);
     let new_cloud_daily_expenses = r.cloud_daily_expenses_cents.saturating_add(pay);
     ctx.db.restaurant().id().update(Restaurant {
-        pending_salary_cost_cents: new_pending,
         pending_salary_remainder_x: new_remainder,
         last_salary_tick_micros: now_micros,
         cloud_money_cents: new_cloud_money_cents,
         cloud_daily_expenses_cents: new_cloud_daily_expenses,
         ..r
     });
+    // Ledger — the (offline) wage debit as its own line.
+    record_money_event(ctx, rid, "wages", -pay, new_cloud_money_cents);
     if benched {
         for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
             if !m.is_deactivated {

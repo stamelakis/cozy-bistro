@@ -443,28 +443,11 @@ export class Game {
     // for save compat but not draining it here.
     // Payroll runs continuously while staff are hired. tickSalary takes
     // a millisecond timestamp and internally rate-limits its own charges.
-    if (this.restaurantOpen) {
-      // tickSalary still runs during the grace period so its 5-second
-      // cadence clock keeps pace — skipping it would bill one lump the
-      // moment grace ends. We just don't APPLY the charge until fixed costs
-      // switch on (day GRACE_DAYS+1); until then staff work for free.
-      const payroll = this.staff.tickSalary(this.day.getTotalPlaySeconds() * 1000, this.admin.payrollPerStaffPerMinute);
-      if (payroll.charge > 0 && !this.isInGracePeriod()) {
-        const couldPay = this.economy.getMoney() >= payroll.charge;
-        this.economy.forceSpendMoney(payroll.charge, "wages"); // floors at $0
-        if (!couldPay) {
-          // No-negative-money: payroll couldn't be covered → BENCH all active
-          // staff (they keep upgrades, stop drawing wages + vanish from the
-          // restaurant). The player takes the $500 grant and reactivates at will.
-          const benched = this.staff.deactivateAllActive();
-          for (const m of benched) this.onStaffMemberFired?.(m.id, m.role);
-        }
-      }
-    } else {
-      // Restaurant CLOSED — wages are PAUSED. Reset the accumulator so
-      // reopening doesn't bill a lump sum for the whole closed gap.
-      this.staff.resetSalaryTick();
-    }
+    // Phase 2 (money migration) — staff wages are charged SERVER-SIDE now
+    // (tick_salary: continuous, grace-aware, benches when broke). The client
+    // no longer bills payroll locally — it adopts the debit via the
+    // cloud_money delta and the roster's is_deactivated flags via the staff
+    // subscription. The HUD still shows the per-minute rate (a pure read).
     // Tick any in-flight staff training. Deadlines are wall-clock so
     // we always pass Date.now() through inside tickTraining; this
     // call just polls. Each completed level fires a floating-text
