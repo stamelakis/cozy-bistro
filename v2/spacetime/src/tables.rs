@@ -1267,6 +1267,27 @@ pub struct ActiveTicket {
 /// client's HiredStaffMember already uses; mapping back from a
 /// server row to its local actor is a direct string match (no
 /// auto_inc correlation needed).
+/// Admin diagnostics — cumulative ms staff spend in each activity, keyed by
+/// (restaurant, role, activity). Written every sim tick by tick_staff_actor
+/// (one upsert per actor; the table stays tiny — restaurants × roles × ~10
+/// activities). Lets an admin dashboard / `spacetime sql` read "where does
+/// staff time go" for EVERY restaurant automatically, without poking each
+/// client's console. Cumulative since publish (reload/clear to reset).
+#[table(name = staff_stat, public)]
+pub struct StaffStat {
+    /// "{restaurant_id}:{role}:{activity}" — composite key for cheap upsert.
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// "chef" | "waiter" | "barman" | "errand".
+    pub role: String,
+    /// Activity bucket (staff_activity_key): idle / → fetch dish / serving / washing / …
+    pub activity: String,
+    /// Cumulative milliseconds staff of this role spent in this activity.
+    pub total_ms: i64,
+}
+
 #[table(name = staff_actor, public)]
 pub struct StaffActor {
     /// Matches HiredStaffMember.id on the client. Stable across the
@@ -1705,6 +1726,32 @@ pub struct MoneyCutover {
     #[primary_key]
     pub id: u32,
     pub active: bool,
+}
+
+/// Server-authoritative itemized money ledger. Every write to a
+/// restaurant's cloud_money_cents also appends one row here with a short
+/// label (`kind`) + signed amount + the resulting balance, so the client
+/// can render a per-line ledger (Staff wages / Rent / Meal sale /
+/// Ingredient restock / …) instead of the opaque net-delta lump the money
+/// cutover otherwise leaves it with. Pruned to the newest LEDGER_KEEP rows
+/// per restaurant (see prune_money_events) so it can't grow unbounded.
+#[table(name = money_event, public)]
+pub struct MoneyEvent {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// Unix micros when recorded — the client sorts + timestamps by this.
+    pub at_micros: i64,
+    /// Machine label: "wages", "rent", "sale", "tip", "restock",
+    /// "furniture", "ingredients", "upgrade", "hire", "boost", "theme",
+    /// "unlock", "grant", "achievement", "recycle", "admin", "refund".
+    pub kind: String,
+    /// Signed cents: negative = a cost, positive = income.
+    pub amount_cents: i64,
+    /// cloud_money_cents AFTER this event, for a running-balance column.
+    pub balance_after_cents: i64,
 }
 
 /// Phase H.53 — Per-restaurant per-recipe upgrade level.  Mirrors

@@ -558,6 +558,15 @@ export const StaffActor = __t.object("StaffActor", {
 });
 export type StaffActor = __Infer<typeof StaffActor>;
 
+export const StaffStat = __t.object("StaffStat", {
+  id: __t.string(),
+  restaurantId: __t.u64(),
+  role: __t.string(),
+  activity: __t.string(),
+  totalMs: __t.i64(),
+});
+export type StaffStat = __Infer<typeof StaffStat>;
+
 export const VisitEvent = __t.object("VisitEvent", {
   id: __t.u64(),
   visitor: __t.identity(),

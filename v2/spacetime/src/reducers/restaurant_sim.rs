@@ -18,12 +18,12 @@ use crate::tables::{
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, weather_state, money_cutover, money_event,
+    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, staff_stat, weather_state, money_cutover, money_event,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    SeatSlot, SeatAppeal, StaffActor, MoneyCutover, MoneyEvent,
+    SeatSlot, SeatAppeal, StaffActor, StaffStat, MoneyCutover, MoneyEvent,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -5725,8 +5725,59 @@ fn actor_walk_speed(ctx: &ReducerContext, role: &str, member_id: &str) -> f32 {
 /// mode. When isServerSim("staff") flips on for the owner (Phase
 /// H.3), the client stops mirroring position and the server takes
 /// full ownership.
+/// Admin diagnostics — the activity bucket a staff actor is currently in,
+/// derived from its server state + task fields. Mirrors the client's
+/// waiterActivityKey so the dashboard vocabulary matches the in-game labels.
+fn staff_activity_key(a: &StaffActor) -> &'static str {
+    match a.state.as_str() {
+        "idle" => "idle",
+        "returningHome" => "returning",
+        "movingToWork" => {
+            if a.take_order_guest_id.is_some() { "→ take order" }
+            else if a.wash_phase.as_str() == "pickup" { "→ grab dirty" }
+            else if !a.wash_phase.is_empty() { "→ to sink" }
+            else if a.role.as_str() == "chef" { "→ stove" }
+            else if a.role.as_str() == "barman" { "→ bar" }
+            else if a.ticket_id.is_some() {
+                if a.delivery_phase.as_deref() == Some("deliver") { "→ serve" } else { "→ fetch dish" }
+            } else { "→ work" }
+        }
+        "working" => {
+            if a.take_order_guest_id.is_some() { "taking order" }
+            else if !a.wash_phase.is_empty() { "washing" }
+            else if a.role.as_str() == "chef" { "cooking" }
+            else if a.role.as_str() == "barman" { "mixing" }
+            else if a.ticket_id.is_some() { "serving" }
+            else { "working" }
+        }
+        _ => "other",
+    }
+}
+
 fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     let Some(a) = ctx.db.staff_actor().member_id().find(member_id.to_string()) else { return };
+    // Admin diagnostics — accumulate this frame's dt into the actor's current
+    // activity bucket (per restaurant + role) so "where does staff time go" is
+    // captured for every restaurant. One upsert per actor per tick.
+    if dt_ms > 0 {
+        let activity = staff_activity_key(&a);
+        let key = format!("{}:{}:{}", a.restaurant_id, a.role, activity);
+        match ctx.db.staff_stat().id().find(key.clone()) {
+            Some(s) => {
+                let total_ms = s.total_ms.saturating_add(dt_ms);
+                ctx.db.staff_stat().id().update(StaffStat { total_ms, ..s });
+            }
+            None => {
+                ctx.db.staff_stat().insert(StaffStat {
+                    id: key,
+                    restaurant_id: a.restaurant_id,
+                    role: a.role.clone(),
+                    activity: activity.to_string(),
+                    total_ms: dt_ms,
+                });
+            }
+        }
+    }
     // Hard interior clamp for non-errand staff — runs every tick, including
     // for idle actors. Errands legitimately walk out to the road to shop, but
     // a waiter / chef / barman should NEVER be outside the walls. An already-
