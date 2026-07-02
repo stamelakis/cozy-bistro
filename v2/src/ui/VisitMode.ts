@@ -302,6 +302,11 @@ export class VisitMode {
    * Populated alongside the interior render; used by the wash-cycle
    * ring visualizer to resolve a dishwasher's uid → coords. */
   private furniturePosByUid: Map<string, { x: number; z: number; floor: number }> = new Map();
+  /** Visit-mode focused storey (0 = ground). Mirrors WorldScene.focusedStorey
+   * for the host's own scene: the FloorSelector drives it during a visit so a
+   * multi-floor host shows one floor (+ those below) instead of every storey
+   * piled on top of each other. Reset to 0 on each new visit build. */
+  private visitFocusedStorey = 0;
   /** Wall ghost-swap tracker — mirrors the host's
    * WorldScene.updateWallVisibility. Each floor owns a solid wallMat
    * (theme-driven), a transparent ghostMat (cloned with opacity 0.15
@@ -1420,6 +1425,9 @@ export class VisitMode {
     // src/scene/wallBuilder so visit + host walls are guaranteed to
     // match. Door/window edges come from the save snapshot's
     // furniture list — same source the host reads from its registry.
+    // New visit — start focused on the ground floor so a multi-floor host
+    // opens clean (upper storeys hidden until the FloorSelector picks them).
+    this.visitFocusedStorey = 0;
     const expansionLevel = readExpansionLevelFromSave(save);
     const wallSourcePlacements: OpeningSourcePlacement[] = (save.furniture ?? []).map((p) => ({
       defId: p.furnitureId,
@@ -1507,6 +1515,10 @@ export class VisitMode {
         // visited interiors render lamp GLBs as dark static geometry
         // — host shows them glowing.
         attachLampLight(model, def.id);
+        // Tag with its storey + respect the current focus so async-loaded
+        // upper-floor furniture is hidden until the visitor picks that floor.
+        model.userData.storey = floor;
+        model.visible = floor <= this.visitFocusedStorey;
         this.visitorRoot.add(model);
       } catch (err) {
         console.warn(`[Visit] failed to load ${def.id}:`, err);
@@ -1889,20 +1901,27 @@ export class VisitMode {
     const buildStorey = (floorIdx: number): void => {
       const baseY = floorIdx * STOREY_HEIGHT;
       const { wallMat, ghostMat, floorMat } = materialForFloor(floorIdx);
+      // Each storey's shell (slab + walls) lives in a group tagged with its
+      // index so setFocusedStorey can hide the floors above the focused one —
+      // without this the visit renders every storey at once and they overlap.
+      const storeyGroup = new THREE.Group();
+      storeyGroup.userData.storey = floorIdx;
+      storeyGroup.visible = floorIdx <= this.visitFocusedStorey;
+      root.add(storeyGroup);
       // Slab (upper storeys only — ground floor has its own floor mesh).
       if (floorIdx > 0) {
         const slab = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
         slab.rotation.x = -Math.PI / 2;
         slab.position.set(0.5, baseY, 0.5);
         slab.receiveShadow = true;
-        root.add(slab);
+        storeyGroup.add(slab);
       } else {
         // Ground floor: PlaneGeometry with the theme-driven floor mat.
         const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, W), floorMat);
         floor.rotation.x = -Math.PI / 2;
         floor.position.set(0.5, 0.0, 0.5);
         floor.receiveShadow = true;
-        root.add(floor);
+        storeyGroup.add(floor);
       }
       // 4 perimeter walls. Build via the shared wallBuilder so doors +
       // windows in the save snapshot cut the same gap shapes the host
@@ -1914,7 +1933,7 @@ export class VisitMode {
         front: [], back: [], left: [], right: [],
       };
       for (const dir of ["front", "back", "left", "right"] as const) {
-        perDir[dir] = buildPerimeterWallSegments(root, dir,
+        perDir[dir] = buildPerimeterWallSegments(storeyGroup, dir,
           floorOpenings[dir].doors,
           floorOpenings[dir].windows, {
             yOffset: baseY,
@@ -1982,6 +2001,20 @@ export class VisitMode {
     // footprint. Host's WorldScene also keeps the flat plane hidden
     // (line 2008) once the mansard is built.
     void roofMat;
+  }
+
+  /** Visit-mode floor focus — mirrors WorldScene.applyStoreyVisibility on the
+   * host's own scene: show the focused storey + everything below it, hide the
+   * storeys above (which would otherwise pile on top from the iso angle).
+   * The FloorSelector drives this during a visit via Engine. Toggles the
+   * per-storey shell groups + the storey-tagged furniture. */
+  setFocusedStorey(idx: number): void {
+    this.visitFocusedStorey = Math.max(0, idx);
+    if (!this.visitorRoot) return;
+    for (const child of this.visitorRoot.children) {
+      const s = (child.userData as { storey?: number } | undefined)?.storey;
+      if (typeof s === "number") child.visible = s <= this.visitFocusedStorey;
+    }
   }
 }
 

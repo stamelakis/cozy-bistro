@@ -1236,7 +1236,15 @@ export class Engine {
     // When the FloorSelector switches storeys mid-build, teleport the
     // active placement preview to the new floor so the player doesn't
     // have to wiggle the mouse to refresh the ghost's Y.
-    this.floorSelector.onFocusChanged = () => buildMenu.refreshFocusedFloor();
+    this.floorSelector.onFocusChanged = () => {
+      buildMenu.refreshFocusedFloor();
+      // During a visit the FloorSelector drives the VISITED restaurant (the
+      // player's own scene is hidden), so mirror the focus onto the visit
+      // scene — otherwise a multi-floor host renders every storey stacked.
+      if (this.visitMode.isVisiting()) {
+        this.visitMode.setFocusedStorey(this.scene.getFocusedStorey());
+      }
+    };
     buildMenu.onDoorPlaced = (model) => {
       this.scene.attachDoorPanel(model);
       // Door event invalidates the front-wall layout — rebuild every
