@@ -19,11 +19,12 @@ import type { HiredStaffMember, IngredientStock, LuxuryTier, RecipeDefinition, S
 /** Highest luxury tier the player can unlock. */
 const MAX_LUXURY_TIER: LuxuryTier = 5;
 /** Cost to go from tier N to tier N+1: BASE * GROWTH^(N-1).
- * Tier 2 = $10k, tier 3 = $20k, tier 4 = $40k, tier 5 = $80k.
- * Tuned so each tier is a real money sink rather than something the
- * player walks past on day two. */
+ * Growth ~4.64/tier (= 100^(1/3)) so the four expansions run
+ * $10k → $46k → $215k → ~$1M: the first stays a reachable early goal,
+ * the last is a genuine endgame grind. Was ×2 ($10k→$80k), which the
+ * player walked past too fast. */
 const EXPANSION_BASE_COST = 10000;
-const EXPANSION_GROWTH = 2;
+const EXPANSION_GROWTH = 4.64;
 
 /** Default seconds between automatic dish-wash ticks. Sinks and
  * dishwashers placed in the registry shorten this — see
