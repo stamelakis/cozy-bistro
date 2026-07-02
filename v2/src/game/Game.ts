@@ -626,7 +626,11 @@ export class Game {
     // GRACE_DAYS+1 (i.e. days 1..GRACE_DAYS are free — no rent AND, in
     // the update() payroll path, no wages either).
     if (chargeRent && dayNumber > GRACE_DAYS && this.restaurantOpen) {
-      this.economy.forceSpendMoney(this.getDailyRent(), "rent");
+      // Phase 3 (money migration) — rent is charged SERVER-SIDE now
+      // (charge_rent computes RENT_BY_TIER + debits + logs the event). The
+      // client just triggers it on its rollover and adopts the cloud delta;
+      // the server re-checks grace/open so a stray call can't over-charge.
+      this.economy.chargeRent();
     }
     const revenue = this.economy.getDailyRevenue();
     const expenses = this.economy.getDailyExpenses();

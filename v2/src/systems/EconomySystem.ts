@@ -183,6 +183,14 @@ export class EconomySystem {
     else { this.earnMoney(amount, "refund"); }
   }
 
+  /** Phase 3 (money migration) — trigger the server-authoritative rent charge
+   * on a day-rollover. The server computes RENT_BY_TIER, debits it, and logs a
+   * "rent" event; the client adopts the delta via the restaurant subscription.
+   * No-op if the cloud isn't connected. */
+  chargeRent(): void {
+    this.cloud?.chargeRent();
+  }
+
   /** Admin money adjust (AdminModal dev buttons). delta may be negative. */
   adminAdjust(delta: number): void {
     if (isServerSim("money")) { this.cloud?.adminAdjustMoney(Math.round(delta * 100)); }

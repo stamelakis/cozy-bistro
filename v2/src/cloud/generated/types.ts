@@ -298,6 +298,16 @@ export const MoneyCutover = __t.object("MoneyCutover", {
 });
 export type MoneyCutover = __Infer<typeof MoneyCutover>;
 
+export const MoneyEvent = __t.object("MoneyEvent", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  atMicros: __t.i64(),
+  kind: __t.string(),
+  amountCents: __t.i64(),
+  balanceAfterCents: __t.i64(),
+});
+export type MoneyEvent = __Infer<typeof MoneyEvent>;
+
 export const PantryStock = __t.object("PantryStock", {
   key: __t.string(),
   restaurantId: __t.u64(),

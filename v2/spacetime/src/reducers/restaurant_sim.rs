@@ -1020,6 +1020,43 @@ pub fn set_money_cutover_active(ctx: &ReducerContext, active: bool) -> Result<()
     Ok(())
 }
 
+/// Phase 3 (money migration) — server-authoritative rent charge. The client
+/// calls this once on each ONLINE day-rollover (past grace) so the rent AMOUNT
+/// is decided server-side, not by the client. Offline rent stays in
+/// tick_day_clock; the client passes chargeRent=false on reconnect so the two
+/// never double-charge. Owner-only; no-negative floor; matches tick_day_clock's
+/// RENT_BY_TIER_CENTS table. Paused while CLOSED or during the grace period.
+#[reducer]
+pub fn charge_rent(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can be charged rent".into());
+    }
+    const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
+    const GRACE_DAYS: u32 = 14;
+    let save = ctx.db.player_save().identity().find(r.owner);
+    let open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
+    let day = save.as_ref().map(|s| s.day_number).unwrap_or(1);
+    if !open || day <= GRACE_DAYS {
+        return Ok(());
+    }
+    let tier = save.as_ref().map(|s| s.luxury_tier).unwrap_or(1).min(5).max(1) as usize;
+    let rent_cents = RENT_BY_TIER_CENTS[tier];
+    if rent_cents <= 0 {
+        return Ok(());
+    }
+    let new_balance = r.cloud_money_cents.saturating_sub(rent_cents).max(0);
+    let charged = r.cloud_money_cents.saturating_sub(new_balance); // actual (no-negative)
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: new_balance,
+        cloud_daily_expenses_cents: r.cloud_daily_expenses_cents.saturating_add(charged),
+        ..r
+    });
+    record_money_event(ctx, restaurant_id, "rent", -charged, new_balance);
+    Ok(())
+}
+
 /// Phase H.32 — Client pushes its absolute current money in cents.
 /// Observational mirror only — does NOT make the server authoritative
 /// for the economy. The intent is to give other clients (visit mode,

@@ -1100,6 +1100,19 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase 3 (money migration) — server-authoritative rent. Called on each
+   * ONLINE day-rollover; the server computes RENT_BY_TIER + debits + logs a
+   * "rent" money_event (grace/open re-checked server-side, no-negative floor).
+   * The client adopts the debit via the restaurant subscription. */
+  chargeRent(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.chargeRent({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] chargeRent failed:", e);
+    }
+  }
+
   /** Anti-cheat B/C (income 2/5) — low-balance grant. Server checks the
    * balance + 24h cooldown; no-ops when not due. */
   claimLowBalanceGrant(): void {

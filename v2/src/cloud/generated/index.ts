@@ -53,6 +53,7 @@ import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
 import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
+import ChargeRentReducer from "./charge_rent_reducer";
 import ClaimAchievementReducer from "./claim_achievement_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
 import ClaimDirtyPileReducer from "./claim_dirty_pile_reducer";
@@ -178,6 +179,7 @@ import IngredientCostRow from "./ingredient_cost_table";
 import LayoutPresetRow from "./layout_preset_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import MoneyCutoverRow from "./money_cutover_table";
+import MoneyEventRow from "./money_event_table";
 import PantryStockRow from "./pantry_stock_table";
 import PantryTargetRow from "./pantry_target_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
@@ -539,6 +541,20 @@ const tablesSchema = __schema({
       { name: 'money_cutover_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, MoneyCutoverRow),
+  money_event: __table({
+    name: 'money_event',
+    indexes: [
+      { accessor: 'id', name: 'money_event_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'money_event_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'money_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, MoneyEventRow),
   pantry_stock: __table({
     name: 'pantry_stock',
     indexes: [
@@ -818,6 +834,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
   __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
+  __reducerSchema("charge_rent", ChargeRentReducer),
   __reducerSchema("claim_achievement", ClaimAchievementReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
   __reducerSchema("claim_dirty_pile", ClaimDirtyPileReducer),
