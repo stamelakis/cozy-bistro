@@ -328,6 +328,10 @@ interface StaffActor {
    * Undefined until the first mirror — that ensures the very first
    * publish always fires regardless of values. */
   lastMirrorFingerprint?: string;
+  /** Diagnostics — cumulative ms spent in each waiter activity, keyed by
+   * waiterActivityKey(). Filled by accumulateWaiterActivity each frame from the
+   * (server-mirrored) state so time bottlenecks are visible via waiterTimes(). */
+  activityMs?: Record<string, number>;
 }
 
 /** Snapshot of a placed stove the router can assign a chef to. */
@@ -2386,6 +2390,59 @@ export class StaffRouter {
     }
   }
 
+  private waiterActivityLogTimer = 0;
+  private waiterActivityGlobalSet = false;
+
+  /** Add this frame's dt to the waiter's current-activity bucket. */
+  private accumulateWaiterActivity(w: StaffActor, dt: number): void {
+    const carrying = w.ticketId != null
+      && this.tickets.some((t) => t.id === w.ticketId && t.state === "delivering");
+    const key = waiterActivityKey(w, carrying);
+    const m = (w.activityMs ??= {});
+    m[key] = (m[key] ?? 0) + dt * 1000;
+  }
+
+  /** Install the console hook once + auto-dump the breakdown every ~90s. */
+  private maybeLogWaiterActivity(dt: number): void {
+    if (!this.waiterActivityGlobalSet) {
+      (globalThis as unknown as { waiterTimes?: () => void }).waiterTimes = () => this.logWaiterActivity();
+      this.waiterActivityGlobalSet = true;
+    }
+    this.waiterActivityLogTimer += dt;
+    if (this.waiterActivityLogTimer >= 90) {
+      this.waiterActivityLogTimer = 0;
+      this.logWaiterActivity();
+    }
+  }
+
+  /** Console breakdown of where waiter time goes: an AGGREGATE table (spot the
+   * bottleneck) + a per-waiter table. Percentages are of tracked time. Reload
+   * the page to reset the counters. */
+  logWaiterActivity(): void {
+    if (this.waiters.length === 0) { console.log("[waiterTimes] no waiters yet"); return; }
+    const agg: Record<string, number> = {};
+    let grand = 0;
+    for (const w of this.waiters) {
+      for (const [k, v] of Object.entries(w.activityMs ?? {})) { agg[k] = (agg[k] ?? 0) + v; grand += v; }
+    }
+    if (grand === 0) { console.log("[waiterTimes] nothing tracked yet — wait a bit"); return; }
+    const aggTable: Record<string, { seconds: number; percent: string }> = {};
+    for (const [k, v] of Object.entries(agg).sort((a, b) => b[1] - a[1])) {
+      aggTable[k] = { seconds: Math.round(v / 1000), percent: `${((v / grand) * 100).toFixed(1)}%` };
+    }
+    console.log(`[waiterTimes] ${this.waiters.length} waiter(s), ${Math.round(grand / 1000)}s tracked — where the time goes:`);
+    console.table(aggTable);
+    const perWaiter: Record<string, Record<string, string>> = {};
+    this.waiters.forEach((w, i) => {
+      const m = w.activityMs ?? {};
+      const tot = Object.values(m).reduce((a, b) => a + b, 0) || 1;
+      const row: Record<string, string> = {};
+      for (const [k, v] of Object.entries(m).sort((a, b) => b[1] - a[1])) row[k] = `${((v / tot) * 100).toFixed(0)}%`;
+      perWaiter[w.memberId ?? `waiter-${i}`] = row;
+    });
+    console.table(perWaiter);
+  }
+
   update(dt: number): void {
     // Phase 9.65 (staff migration Pass 6) — full server ownership. The
     // server runs the staff state machine + pathfinding (Passes 1-5); the
@@ -2399,6 +2456,11 @@ export class StaffRouter {
       for (const c of this.chefs) this.renderActorFromServer(c, dt);
       for (const b of this.barmen) this.renderActorFromServer(b, dt);
       for (const w of this.waiters) this.renderActorFromServer(w, dt);
+      // Diagnostics — accumulate where each waiter's time goes (from the
+      // mirrored server state) so bottlenecks surface. Call waiterTimes() in
+      // the browser console for a breakdown; also auto-logged every ~90s.
+      for (const w of this.waiters) this.accumulateWaiterActivity(w, dt);
+      this.maybeLogWaiterActivity(dt);
       return;
     }
     // ⚠ DEAD IN PRODUCTION since 2026-06-27 (commit 460f442): staffMove is
@@ -4179,6 +4241,25 @@ function barmanLabel(b: StaffActor): string {
     case "working":       return "🍸 mixing";
     case "returningHome": return ""; // Phase 9.28 — winding down = idle
     default:              return "";
+  }
+}
+
+/** Stable diagnostic key for a waiter's current activity — mirrors
+ * waiterLabel's branching, consumed by accumulateWaiterActivity. */
+function waiterActivityKey(w: StaffActor, carrying: boolean): string {
+  switch (w.state) {
+    case "movingToWork":
+      if (w.takeOrderRequest) return "→ take order";
+      if (w.washTrip) return w.washTrip.phase === "pickup" ? "→ grab dirty" : "→ to sink";
+      if (w.cleanSeatUid) return "→ clear table";
+      return carrying ? "→ serve (carrying)" : "→ fetch dish";
+    case "working":
+      if (w.takeOrderRequest) return "taking order";
+      if (w.washTrip) return "washing";
+      if (w.cleanSeatUid) return "clearing table";
+      return "serving";
+    case "returningHome": return "returning";
+    default: return "idle";
   }
 }
 
