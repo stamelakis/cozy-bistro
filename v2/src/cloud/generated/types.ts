@@ -567,6 +567,19 @@ export const StaffStat = __t.object("StaffStat", {
 });
 export type StaffStat = __Infer<typeof StaffStat>;
 
+export const StatSnapshot = __t.object("StatSnapshot", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  atMicros: __t.i64(),
+  ownerOnline: __t.bool(),
+  cloudMoneyCents: __t.i64(),
+  dailyServed: __t.u32(),
+  dailyLost: __t.u32(),
+  guestsJson: __t.string(),
+  staffJson: __t.string(),
+});
+export type StatSnapshot = __Infer<typeof StatSnapshot>;
+
 export const VisitEvent = __t.object("VisitEvent", {
   id: __t.u64(),
   visitor: __t.identity(),

@@ -199,6 +199,7 @@ import SeatAppealRow from "./seat_appeal_table";
 import SeatSlotRow from "./seat_slot_table";
 import StaffActorRow from "./staff_actor_table";
 import StaffStatRow from "./staff_stat_table";
+import StatSnapshotRow from "./stat_snapshot_table";
 import VisitEventRow from "./visit_event_table";
 import WeatherStateRow from "./weather_state_table";
 
@@ -798,6 +799,20 @@ const tablesSchema = __schema({
       { name: 'staff_stat_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, StaffStatRow),
+  stat_snapshot: __table({
+    name: 'stat_snapshot',
+    indexes: [
+      { accessor: 'id', name: 'stat_snapshot_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'stat_snapshot_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'stat_snapshot_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, StatSnapshotRow),
   visit_event: __table({
     name: 'visit_event',
     indexes: [

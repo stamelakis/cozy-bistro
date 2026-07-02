@@ -1288,6 +1288,31 @@ pub struct StaffStat {
     pub total_ms: i64,
 }
 
+/// Admin diagnostics — periodic TIME-SERIES snapshot (~every 60s per
+/// restaurant, written by restaurant_tick) of the live state so a dashboard
+/// can graph history over time even when nobody's watching: customer counts
+/// by state, staff counts by activity (both as JSON {"key":count}), owner
+/// online/offline, money, and today's served/lost. Pruned to ~12h/restaurant.
+#[table(name = stat_snapshot, public)]
+pub struct StatSnapshot {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    /// Unix micros of the snapshot (the x-axis).
+    pub at_micros: i64,
+    /// Was the owner's client online (last_seen < 30s) at snapshot time?
+    pub owner_online: bool,
+    pub cloud_money_cents: i64,
+    pub daily_served: u32,
+    pub daily_lost: u32,
+    /// JSON {"state": count} — active guests by state at snapshot time.
+    pub guests_json: String,
+    /// JSON {"activity": count} — staff by activity at snapshot time.
+    pub staff_json: String,
+}
+
 #[table(name = staff_actor, public)]
 pub struct StaffActor {
     /// Matches HiredStaffMember.id on the client. Stable across the

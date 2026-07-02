@@ -18,12 +18,12 @@ use crate::tables::{
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
-    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, staff_stat, weather_state, money_cutover, money_event,
+    restaurant_tick_state, seat_slot, seat_appeal, staff_actor, staff_stat, stat_snapshot, weather_state, money_cutover, money_event,
     ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
-    SeatSlot, SeatAppeal, StaffActor, StaffStat, MoneyCutover, MoneyEvent,
+    SeatSlot, SeatAppeal, StaffActor, StaffStat, StatSnapshot, MoneyCutover, MoneyEvent,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -292,6 +292,66 @@ pub fn drop_tick_schedule(ctx: &ReducerContext, restaurant_id: u64) {
 ///   - tick_guest_state for each active_guest
 ///
 /// Subsequent phases add tickets, staff, etc.
+/// Admin diagnostics — compact JSON {"key":count,...} from a state→count map.
+fn json_from_counts(m: &std::collections::BTreeMap<String, u32>) -> String {
+    let mut s = String::from("{");
+    let mut first = true;
+    for (k, v) in m {
+        if !first { s.push(','); }
+        first = false;
+        s.push('"');
+        for ch in k.chars() {
+            if ch == '"' || ch == '\\' { s.push('\\'); }
+            s.push(ch);
+        }
+        s.push_str("\":");
+        s.push_str(&v.to_string());
+    }
+    s.push('}');
+    s
+}
+
+/// Admin diagnostics — write one time-series row (guest + staff state
+/// distribution, owner-online, money, served/lost) into stat_snapshot for the
+/// stats dashboard, then prune to ~12h of history for this restaurant.
+fn write_stat_snapshot(ctx: &ReducerContext, rid: u64, now: Timestamp) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000; // 30 s
+    let now_micros = now.to_micros_since_unix_epoch();
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| now_micros - pl.last_seen_at.to_micros_since_unix_epoch() < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    let mut guests: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for g in ctx.db.active_guest().restaurant_id().filter(rid) {
+        *guests.entry(g.state.clone()).or_insert(0) += 1;
+    }
+    let mut staff: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for a in ctx.db.staff_actor().restaurant_id().filter(rid) {
+        *staff.entry(staff_activity_key(&a).to_string()).or_insert(0) += 1;
+    }
+    ctx.db.stat_snapshot().insert(StatSnapshot {
+        id: 0,
+        restaurant_id: rid,
+        at_micros: now_micros,
+        owner_online,
+        cloud_money_cents: r.cloud_money_cents,
+        daily_served: r.cloud_daily_served,
+        daily_lost: r.cloud_daily_lost,
+        guests_json: json_from_counts(&guests),
+        staff_json: json_from_counts(&staff),
+    });
+    const KEEP: usize = 720; // ~12h at 1/min
+    let mut rows: Vec<(u64, i64)> = ctx.db.stat_snapshot().restaurant_id().filter(rid)
+        .map(|s| (s.id, s.at_micros)).collect();
+    if rows.len() > KEEP {
+        rows.sort_by_key(|(id, at)| (*at, *id));
+        let excess = rows.len() - KEEP;
+        for (id, _) in rows.into_iter().take(excess) {
+            ctx.db.stat_snapshot().id().delete(id);
+        }
+    }
+}
+
 #[reducer]
 pub fn restaurant_tick(
     ctx: &ReducerContext,
@@ -322,18 +382,28 @@ pub fn restaurant_tick(
     // Upsert tick-state — first tick after schedule creation INSERTs;
     // every tick after UPDATEs. Tick count helps dev tools / logs
     // confirm the schedule is genuinely firing.
-    if let Some(existing) = ctx.db.restaurant_tick_state().restaurant_id().find(rid) {
+    let new_tick_count = if let Some(existing) = ctx.db.restaurant_tick_state().restaurant_id().find(rid) {
+        let n = existing.tick_count.saturating_add(1);
         ctx.db.restaurant_tick_state().restaurant_id().update(RestaurantTickState {
             restaurant_id: rid,
             last_tick_at: now,
-            tick_count: existing.tick_count.saturating_add(1),
+            tick_count: n,
         });
+        n
     } else {
         ctx.db.restaurant_tick_state().insert(RestaurantTickState {
             restaurant_id: rid,
             last_tick_at: now,
             tick_count: 1,
         });
+        1
+    };
+    // Admin diagnostics — periodic time-series snapshot (~every 60s) of the
+    // customer + staff distribution + owner-online + money for the stats
+    // dashboard. Cadence off tick_count so no extra timer field is needed
+    // (120 × ~500ms ≈ 60s).
+    if new_tick_count % 120 == 0 {
+        write_stat_snapshot(ctx, rid, now);
     }
 
     // Phase B+ logic slots in below here, gated on subsystem flags
