@@ -1198,8 +1198,15 @@ pub fn bump_cloud_money(
     // push below $0 only debits down to $0), so the ledger line matches the
     // real balance move.
     let applied_delta = new_balance - r.cloud_money_cents;
+    // Phase M.4 — a client spend is a real daily cost. Fold it into
+    // cloud_daily_expenses so the daily-trends panel's Net finally includes
+    // supplies/ingredients (before, only the itemized ledger saw them).
+    // Positive bumps are rejected under the cutover, so this only ever adds
+    // costs; the guard keeps a rare positive from shrinking expenses.
+    let expense_add = if applied_delta < 0 { -applied_delta } else { 0 };
     ctx.db.restaurant().id().update(Restaurant {
         cloud_money_cents: new_balance,
+        cloud_daily_expenses_cents: r.cloud_daily_expenses_cents.saturating_add(expense_add),
         ..r
     });
     // Phase M.3 — client-side spends (ingredient auto-shop, furniture,
@@ -1245,23 +1252,15 @@ pub fn sync_cloud_daily_totals(
     if r.owner != ctx.sender {
         return Err("Only the owner can sync cloud daily totals".into());
     }
-    if revenue_cents < 0 || expenses_cents < 0 {
-        return Err("daily totals cannot be negative".into());
-    }
-    if r.cloud_daily_revenue_cents == revenue_cents
-        && r.cloud_daily_expenses_cents == expenses_cents
-        && r.cloud_daily_served == served
-        && r.cloud_daily_lost == lost
-    {
-        return Ok(()); // idempotent
-    }
-    ctx.db.restaurant().id().update(Restaurant {
-        cloud_daily_revenue_cents: revenue_cents,
-        cloud_daily_expenses_cents: expenses_cents,
-        cloud_daily_served: served,
-        cloud_daily_lost: lost,
-        ..r
-    });
+    // Phase M.4 — the server now accumulates today's revenue (sale+tip via
+    // the visit rollup), expenses (wages+rent+restock+supplies), and
+    // served/lost itself, every tick, online AND offline. The foreground
+    // client's local totals MISSED ingredient/supply cost, so letting this
+    // sync OVERWRITE the server's counters is exactly what made the daily-
+    // trends panel show fake profit while the balance bled. Ignore the
+    // client's values now — the server is authoritative. Kept as an
+    // owner-gated no-op so existing clients that still call it don't error.
+    let _ = (revenue_cents, expenses_cents, served, lost);
     Ok(())
 }
 
@@ -5469,10 +5468,23 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     // and works it off. Matches Game.forceSpendMoney semantics used
     // for rent / salary.
     if total_cost_cents > 0 {
+        let new_balance = r.cloud_money_cents.saturating_sub(total_cost_cents).max(0);
+        let applied = r.cloud_money_cents - new_balance; // actual debit after the $0 floor
         ctx.db.restaurant().id().update(Restaurant {
-            cloud_money_cents: r.cloud_money_cents.saturating_sub(total_cost_cents).max(0),
+            cloud_money_cents: new_balance,
+            // Phase M.4 — the server-side errand restock IS the game's real
+            // cost of goods (the continuous auto-shop). It debited cloud_money
+            // silently — no ledger line, not in daily expenses — which is
+            // exactly the ~$800/min the daily-trends panel was blind to (and
+            // why its Net looked like profit while the balance bled). Fold it
+            // into today's expenses + log an "Ingredient restock" event so the
+            // panel Net and the itemized ledger both finally see it.
+            cloud_daily_expenses_cents: r.cloud_daily_expenses_cents.saturating_add(applied),
             ..r
         });
+        if applied > 0 {
+            record_money_event(ctx, rid, "restock", -applied, new_balance);
+        }
     }
 
     // Freeze the trip list into CSV: "id:units,id:units,...".
