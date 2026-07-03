@@ -4272,7 +4272,16 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
         .saturating_mul(headcount)
         .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
     let elapsed = now_micros.saturating_sub(r.last_salary_tick_micros);
-    if elapsed <= 0 { return; }
+    // Phase M.3 — throttle wage CHARGING to ~10s chunks. Per-tick wages
+    // were by far the dominant money_event (~120/min), burying every other
+    // line and shrinking the itemized ledger's visible history to ~1 min
+    // (money_event is pruned to ~200 rows). Charging + recording in 10s
+    // chunks cuts that ~20x. The balance drains at the SAME rate — it just
+    // steps down in ~$40 increments instead of per-tick cents, which is
+    // imperceptible against a normal balance. Accrual is automatic: we
+    // leave last_salary_tick_micros untouched until a chunk fires, so no
+    // wage-time is lost. (Also subsumes the old `elapsed <= 0` guard.)
+    if elapsed < 10_000_000 { return; }
     // accrual_x = pending_remainder_x + total_per_min × elapsed
     // (units of cents × micros / minute)
     let micros_cents = total_per_min_cents.saturating_mul(elapsed);
