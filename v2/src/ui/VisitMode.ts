@@ -1406,6 +1406,28 @@ export class VisitMode {
       console.warn("[Visit] failed to parse visited save:", e);
       return;
     }
+    // Phase M.5 — override the save snapshot with the host's LIVE server
+    // furniture (placed_furniture). The save can be stale (host rearranged
+    // since their last publish), which left seated guests — drawn from the
+    // LIVE server — sitting on chairs that, to the visitor, weren't there
+    // ("invisible chairs"). placed_furniture is the SAME source the guests'
+    // seats come from, so furniture + guests always align. Falls back to the
+    // save blob when the owner's rows aren't in the subscription yet. Runs
+    // BEFORE the empty-furniture bail so a stale/empty save still renders.
+    const serverFurniture = this.cloud?.listPlacedFurnitureByOwnerHex(plot.ownerHex) ?? [];
+    if (serverFurniture.length > 0) {
+      save.furniture = serverFurniture.map((f) => ({
+        uid: f.uid,
+        furnitureId: f.defId,
+        // SavedFurniture.position.y is world Z (legacy 2D-grid naming);
+        // downstream reads position.y as z.
+        position: { x: f.x, y: f.z },
+        // SavedFurniture.rotation is DEGREES (downstream does *π/180);
+        // placed_furniture.rotY is radians, so convert.
+        rotation: (f.rotY * 180) / Math.PI,
+        floor: f.floor,
+      }));
+    }
     if (!save.furniture || !Array.isArray(save.furniture)) return;
 
     // Visitor root lives INSIDE worldRoot at the plot's local

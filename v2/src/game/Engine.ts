@@ -2145,6 +2145,14 @@ export class Engine {
       const dx = x - DOOR_X, dz = z - DOOR_Z;
       return dx * dx + dz * dz <= NEAR_SQ;
     };
+    // Phase M.6 — guests + staff are SERVER-driven now and rendered through
+    // the CharacterAnimator, NOT the client spawner/router lists below (which
+    // are empty under the server sim). That's why the door had stopped opening
+    // for real customers. Check the rendered characters directly (floor 0 =
+    // the entrance) so it swings for anyone actually walking through it.
+    if (this.scene.animator.anyNear(DOOR_X, DOOR_Z, 1.5, 0, WorldScene.getStoreyHeight())) {
+      return true;
+    }
     if (this.spawner) {
       for (const g of this.spawner.snapshotMovable()) {
         if (check(g.character.groundPos.x, g.character.groundPos.y)) return true;

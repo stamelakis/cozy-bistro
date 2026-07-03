@@ -2380,6 +2380,41 @@ export class SpacetimeClient {
     return out;
   }
 
+  /** Phase M.5 — placed_furniture for a VISITED restaurant (by owner hex),
+   * so Visit Mode renders the host's CURRENT server furniture instead of a
+   * stale save snapshot. This is the SAME source the host's guests are
+   * seated from (placed_furniture → seat_slot), so chairs and seated guests
+   * always align — no more "invisible chairs" when the host rearranged since
+   * their last save publish. Returns [] if the owner's restaurant or its
+   * furniture rows aren't in the subscription yet (caller falls back to the
+   * save blob). */
+  listPlacedFurnitureByOwnerHex(ownerHex: string): PlacedFurnitureRow[] {
+    if (!this.conn) return [];
+    const target = ownerHex.toLowerCase();
+    let rid: bigint | null = null;
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (r.owner.toHexString().toLowerCase() === target) { rid = r.id; break; }
+      }
+    } catch { /* restaurant table not wired */ }
+    if (rid == null) return [];
+    const out: PlacedFurnitureRow[] = [];
+    try {
+      for (const f of this.conn.db.placed_furniture.iter()) {
+        if (f.restaurantId !== rid) continue;
+        out.push({
+          uid: f.uid,
+          defId: f.defId,
+          x: f.x, z: f.z, rotY: f.rotY, floor: f.floor,
+          parentUid: f.parentUid,
+          slotIndex: f.slotIndex,
+          localRotY: f.localRotY,
+        });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
   placeFurniture(args: {
     uid: string;
     defId: string;

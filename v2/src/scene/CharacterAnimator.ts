@@ -139,6 +139,26 @@ export class CharacterAnimator {
     if (i >= 0) this.characters.splice(i, 1);
   }
 
+  /** Phase M.6 — is any live character within `radius` metres of world
+   * (x, z) on `floor`? The entrance-door proximity check uses this so the
+   * door opens for SERVER-driven guests + staff, which are rendered here
+   * but no longer live in the client spawner/router lists that the old
+   * check read (so the door had stopped opening for real customers).
+   * Floor-gated via _baseY so an upper-storey character directly above the
+   * door doesn't trigger it. */
+  anyNear(x: number, z: number, radius: number, floor: number, storeyHeight: number): boolean {
+    const rSq = radius * radius;
+    const h = storeyHeight > 0 ? storeyHeight : 3;
+    for (const c of this.characters) {
+      if (c._keepHidden) continue;
+      if (Math.round((c._baseY ?? 0) / h) !== floor) continue;
+      const dx = c.groundPos.x - x;
+      const dz = c.groundPos.y - z;
+      if (dx * dx + dz * dz <= rSq) return true;
+    }
+    return false;
+  }
+
   update(dt: number): void {
     this.elapsed += dt;
     // Phase I (perf) — recompute the frustum from the camera's

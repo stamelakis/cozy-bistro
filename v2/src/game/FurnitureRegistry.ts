@@ -880,6 +880,18 @@ export class FurnitureRegistry {
         // StaffRouter's interior box [-4.2, 5.2] minus 0.15. Filtering here —
         // the single seat source — keeps invalid slots out of the server mirror.
         if (sx < -4.05 || sx > 5.05 || sz < -4.05 || sz > 5.05) continue;
+        // Also reject seats sitting in the ground-floor ENTRANCE doorway.
+        // Guests walk in/out through the south-wall opening at (x≈0, z≈5.45);
+        // the wall-clearance loosening above re-allowed a table's wall-side
+        // slot to land right in that gap, so the guest renders "sitting on
+        // nothing" in the doorway. Exclude a ~0.9 m bubble around the door,
+        // FLOOR 0 ONLY — upper storeys have no entrance (just stairs), so
+        // their south-wall seats stay valid.
+        if (it.floor === 0) {
+          const ddx = sx - 0.0;
+          const ddz = sz - 5.45;
+          if (ddx * ddx + ddz * ddz < 0.9 * 0.9) continue;
+        }
         out.push({
           tableUid: it.uid,
           slotIndex: i,
