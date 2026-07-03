@@ -1193,10 +1193,26 @@ pub fn bump_cloud_money(
     if delta_cents == 0 {
         return Ok(());
     }
+    let new_balance = r.cloud_money_cents.saturating_add(delta_cents).max(0);
+    // Actual applied change after the no-negative floor (a spend that would
+    // push below $0 only debits down to $0), so the ledger line matches the
+    // real balance move.
+    let applied_delta = new_balance - r.cloud_money_cents;
     ctx.db.restaurant().id().update(Restaurant {
-        cloud_money_cents: r.cloud_money_cents.saturating_add(delta_cents).max(0),
+        cloud_money_cents: new_balance,
         ..r
     });
+    // Phase M.3 — client-side spends (ingredient auto-shop, furniture,
+    // upgrades) reach the server as this net-negative bump. They debit the
+    // cloud balance but never had a ledger line, so the itemized ledger
+    // (which reads money_event) was blind to them — the player saw
+    // wages/rent/sales but not their biggest variable cost. Record each
+    // applied bump as a "supplies" event so it finally shows up. Positive
+    // bumps are rejected above under the cutover, so this is a spend in
+    // practice; the guard just avoids a zero-amount row.
+    if applied_delta != 0 {
+        record_money_event(ctx, restaurant_id, "supplies", applied_delta, new_balance);
+    }
     Ok(())
 }
 

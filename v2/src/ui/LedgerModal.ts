@@ -108,11 +108,10 @@ export class LedgerModal {
     // (cloud)" lines told the player nothing about wages, rent, or supplies).
     const legend = document.createElement("div");
     legend.innerHTML =
-      "Money is settled on the server; the client sees the <b>net</b> change, posted " +
-      "every few seconds. <b>Meal sales &amp; tips</b> = a window where income won; " +
-      "<b>Supplies &amp; running costs</b> = a window where costs won — that line bundles " +
-      "<b>staff wages + rent + ingredient restock</b> together (they aren't split out yet). " +
-      "One-off buys like <b>Unlock purchase</b> post on their own.";
+      "Every line is one money event settled on the server, newest first. Income: " +
+      "<b>Meal sales</b> + <b>Tips</b>. Costs: <b>Staff wages</b>, <b>Rent</b>, " +
+      "<b>Ingredient restock</b>, and <b>Supplies &amp; running costs</b> " +
+      "(auto-shop ingredients, furniture, upgrades).";
     Object.assign(legend.style, {
       fontSize: "10px", opacity: "0.6", lineHeight: "1.45", marginBottom: "8px",
     } as Partial<CSSStyleDeclaration>);
@@ -141,12 +140,22 @@ export class LedgerModal {
    * download. Filename includes the current day so multiple exports
    * don't overwrite. */
   private downloadCsv(): void {
-    const log = this.game.economy.getTransactionLog();
-    const rows: string[] = ["time,iso,transaction,amount,balance"];
-    for (const e of log) {
-      const iso = new Date(e.at).toISOString();
-      const safeTxn = `"${e.transaction.replace(/"/g, '""')}"`;
-      rows.push(`${e.at},${iso},${safeTxn},${e.amount},${e.balance}`);
+    const events = this.game.economy.cloud?.getMoneyEvents() ?? [];
+    const rows: string[] = ["time,iso,category,amount,balance"];
+    if (events.length > 0) {
+      for (const e of events) {
+        const ms = e.atMicros / 1000;
+        const iso = new Date(ms).toISOString();
+        const cat = `"${labelForKind(e.kind).replace(/"/g, '""')}"`;
+        rows.push(`${Math.round(ms)},${iso},${cat},${(e.amountCents / 100).toFixed(2)},${(e.balanceAfterCents / 100).toFixed(2)}`);
+      }
+    } else {
+      const log = this.game.economy.getTransactionLog();
+      for (const e of log) {
+        const iso = new Date(e.at).toISOString();
+        const safeTxn = `"${e.transaction.replace(/"/g, '""')}"`;
+        rows.push(`${e.at},${iso},${safeTxn},${e.amount},${e.balance}`);
+      }
     }
     const csv = rows.join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -163,6 +172,53 @@ export class LedgerModal {
 
   private refresh(): void {
     this.listEl.innerHTML = "";
+    // Phase M.3 — prefer the server's itemized money_event ledger. Each row
+    // is one categorized income/cost, so the player sees real lines (wages,
+    // rent, ingredient restock, supplies, sales, tips) instead of the lossy
+    // ~10s net-delta client log. Fall back to that client log only when the
+    // server ledger hasn't synced yet (pre-publish build / fresh connect).
+    const events = this.game.economy.cloud?.getMoneyEvents() ?? [];
+    if (events.length > 0) {
+      for (const e of events.slice(0, MAX_ROWS)) {
+        const row = document.createElement("div");
+        Object.assign(row.style, {
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "10px",
+          padding: "4px 8px",
+          borderBottom: "1px solid rgba(255,245,220,0.06)",
+        } as Partial<CSSStyleDeclaration>);
+        const time = document.createElement("span");
+        time.textContent = formatTime(e.atMicros / 1000);
+        Object.assign(time.style, { opacity: "0.6", minWidth: "60px" } as Partial<CSSStyleDeclaration>);
+        const label = document.createElement("span");
+        label.textContent = labelForKind(e.kind);
+        label.style.flex = "1";
+        const dollars = e.amountCents / 100;
+        const amount = document.createElement("span");
+        amount.textContent = `${dollars >= 0 ? "+" : "−"}$${Math.abs(dollars).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+        Object.assign(amount.style, {
+          fontVariantNumeric: "tabular-nums",
+          color: dollars >= 0 ? "#a8e2a8" : "#f0c8a0",
+          minWidth: "58px",
+          textAlign: "right",
+        } as Partial<CSSStyleDeclaration>);
+        const balance = document.createElement("span");
+        balance.textContent = `bal $${Math.round(e.balanceAfterCents / 100).toLocaleString()}`;
+        Object.assign(balance.style, {
+          opacity: "0.55",
+          fontVariantNumeric: "tabular-nums",
+          minWidth: "76px",
+          textAlign: "right",
+        } as Partial<CSSStyleDeclaration>);
+        row.appendChild(time);
+        row.appendChild(label);
+        row.appendChild(amount);
+        row.appendChild(balance);
+        this.listEl.appendChild(row);
+      }
+      return;
+    }
     const log = this.game.economy.getTransactionLog();
     if (log.length === 0) {
       const empty = document.createElement("div");
@@ -202,6 +258,24 @@ export class LedgerModal {
       row.appendChild(balance);
       this.listEl.appendChild(row);
     }
+  }
+}
+
+/** Map a money_event `kind` (server's record_money_event tags) to a
+ * human label for the ledger. */
+function labelForKind(kind: string): string {
+  switch (kind) {
+    case "sale": return "Meal sales";
+    case "tip": return "Tips";
+    case "wages": return "Staff wages";
+    case "rent": return "Rent";
+    case "restock": return "Ingredient restock";
+    case "supplies": return "Supplies & running costs";
+    case "grant": return "Starter grant";
+    case "achievement": return "Achievement reward";
+    case "recycle": return "Furniture refund";
+    case "admin": return "Admin adjustment";
+    default: return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Other";
   }
 }
 

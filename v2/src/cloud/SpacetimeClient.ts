@@ -1086,6 +1086,44 @@ export class SpacetimeClient {
     }
   }
 
+  /** Phase M.3 — the server's ITEMIZED money ledger for this restaurant.
+   * Every income + cost is a row tagged with a `kind`
+   * (sale/tip/wages/rent/restock/supplies/grant/achievement/recycle/admin),
+   * with the exact amount + resulting balance. The LedgerModal renders
+   * these as real categorized lines instead of the lossy ~10s net-delta
+   * transaction log. Newest-first (id is auto_inc → descending = reverse
+   * chronological). Server prunes to ~200 rows per restaurant. */
+  getMoneyEvents(): Array<{
+    atMicros: number;
+    kind: string;
+    amountCents: number;
+    balanceAfterCents: number;
+  }> {
+    if (!this.conn || this.restaurantId == null) return [];
+    const rid = this.restaurantId;
+    const rows: Array<{
+      id: bigint;
+      atMicros: number;
+      kind: string;
+      amountCents: number;
+      balanceAfterCents: number;
+    }> = [];
+    try {
+      for (const e of this.conn.db.money_event.iter()) {
+        if (e.restaurantId !== rid) continue;
+        rows.push({
+          id: e.id,
+          atMicros: Number(e.atMicros),
+          kind: e.kind,
+          amountCents: Number(e.amountCents),
+          balanceAfterCents: Number(e.balanceAfterCents),
+        });
+      }
+    } catch { /* money_event not synced yet (pre-publish build) */ }
+    rows.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    return rows.map(({ id: _id, ...rest }) => rest);
+  }
+
   /** Anti-cheat B/C — fire the server-authoritative recurring starter
    * grant. The server enforces the 3h cooldown + plot-size amount and
    * credits cloud_money_cents; the client adopts via the restaurant
