@@ -2088,13 +2088,24 @@ fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
         .collect();
     if ready_ids.is_empty() { return; }
 
-    // Idle waiters with no current ticket binding.
+    // Idle waiters with NO current task of any kind. Phase M.15 — full
+    // mutual exclusion. This used to check only `ticket_id.is_none()`, but
+    // try_dispatch_take_order runs earlier in the SAME tick and stamps
+    // `take_order_guest_id` (leaving ticket_id null), so that waiter still
+    // passed here and got a delivery piled on top of the take-order — the
+    // root of "one waiter does two things at once / actions in random
+    // order / teleports as its target is replanned mid-task". Now a waiter
+    // claimed by ANY earlier dispatch (take-order, seat-clean, wash) is
+    // excluded, so each waiter carries exactly one task at a time.
     let mut idle_waiters: Vec<StaffActor> = ctx.db
         .staff_actor()
         .restaurant_id().filter(rid)
         .filter(|a| a.role == "waiter"
             && a.state == "idle"
-            && a.ticket_id.is_none())
+            && a.ticket_id.is_none()
+            && a.take_order_guest_id.is_none()
+            && a.wash_target_uid.is_empty()
+            && a.clean_seat_uid.is_none())
         .collect();
     if idle_waiters.is_empty() { return; }
 
@@ -4842,7 +4853,8 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64, max_dispatch: usize) 
             && a.state == "idle"
             && a.ticket_id.is_none()
             && a.take_order_guest_id.is_none()
-            && a.wash_target_uid.is_empty())
+            && a.wash_target_uid.is_empty()
+            && a.clean_seat_uid.is_none()) // Phase M.15 — one task per waiter
         .collect();
     if idle_waiters.is_empty() { return; }
 
@@ -5035,7 +5047,8 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
             && a.state == "idle"
             && a.ticket_id.is_none()
             && a.take_order_guest_id.is_none()
-            && a.wash_target_uid.is_empty())
+            && a.wash_target_uid.is_empty()
+            && a.clean_seat_uid.is_none()) // Phase M.15 — one task per waiter
         .collect();
     if idle_waiters.is_empty() { return; }
 

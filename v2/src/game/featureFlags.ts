@@ -61,6 +61,14 @@ export interface ServerSimFlags {
    * ?serverSim=all to the URL (enables this on top of the on-by-default
    * mirror flags); roll back by removing the param. */
   staffMove: boolean;
+  /** Guest migration cutover (mirrors staffMove) — when ON the SERVER fully
+   * owns the guest state machine + spawning + locomotion: the client stops
+   * running its local GuestSpawner sim and instead renders each guest from
+   * the subscribed active_guest row (position lerp + state-driven pose/bubble),
+   * and stops mirroring local guest state UP (that upward mirror was clobbering
+   * the server's authoritative state — the 0-eating divergence). Opt-in
+   * (default false) until proven via ?serverSim=all, then flipped default-on. */
+  guestMove: boolean;
 }
 
 const STORAGE_KEY = "cozy-bistro.featureFlags.serverSim";
@@ -147,6 +155,9 @@ const DEFAULTS: ServerSimFlags = {
   // staff from the server pose; the legacy local locomotion path only
   // runs if explicitly disabled with ?serverSim=staffMove-off equivalents.
   staffMove: true,
+  // Guest migration cutover — DEFAULT-OFF until proven via ?serverSim=all,
+  // then flipped to true. Mirrors the staffMove rollout.
+  guestMove: false,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
@@ -163,21 +174,21 @@ function parseFlagList(raw: string | null | undefined): Partial<ServerSimFlags> 
   if (!raw) return {};
   const trimmed = raw.trim().toLowerCase();
   if (trimmed === "" || trimmed === "off" || trimmed === "none" || trimmed === "false") {
-    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false };
+    return { guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false, guestMove: false };
   }
   if (trimmed === "all" || trimmed === "on" || trimmed === "true") {
-    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true, money: true, staffMove: true };
+    return { guests: true, tickets: true, staff: true, dishware: true, furniture: true, money: true, staffMove: true, guestMove: true };
   }
   // Explicit list: start from all-off, then enable the listed
   // subsystems. Result: only the listed ones are on.
   const out: ServerSimFlags = {
-    guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false,
+    guests: false, tickets: false, staff: false, dishware: false, furniture: false, money: false, staffMove: false, guestMove: false,
   };
   for (const tok of trimmed.split(",")) {
     const key = tok.trim();
     if (key === "guests" || key === "tickets" || key === "staff"
         || key === "dishware" || key === "furniture" || key === "money"
-        || key === "staffMove") {
+        || key === "staffMove" || key === "guestMove") {
       out[key] = true;
     }
   }
