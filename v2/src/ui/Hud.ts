@@ -22,6 +22,7 @@ export interface TimeControl {
 /** Modal openers + the audio + reset hooks Engine wires in. */
 export interface HudActions {
   openLedger: () => void;
+  openAnalytics: () => void;
   openHelp: () => void;
   openStats: () => void;
   openAchievements: () => void;
@@ -471,6 +472,13 @@ export class Hud {
           "Lists payments in (customer orders), payments out (rent, wages, ingredient runs, " +
           "furniture purchases). Use it to figure out where your money is going.",
         click: this.actions.openLedger,     tint: "rgba(200, 180, 120, 0.22)" },
+      { icon: "📈 Analytics",  title:
+          "ANALYTICS — customers + staff over time.\n" +
+          "Two graphs from the server's per-minute snapshots: how many customers were in each " +
+          "state, and what your staff were doing, across the last several hours — with a band " +
+          "marking when you were online vs offline. Spot bottlenecks and see if anything shifts " +
+          "while you're away.",
+        click: this.actions.openAnalytics,  tint: "rgba(140, 200, 160, 0.22)" },
       { icon: "👋 Social",     title:
           "SOCIAL — friends + leaderboards.\n" +
           "See other players on this server, send friend requests by username, browse the daily " +

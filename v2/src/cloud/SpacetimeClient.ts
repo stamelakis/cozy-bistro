@@ -1126,6 +1126,50 @@ export class SpacetimeClient {
     return rows.map(({ id: _id, ...rest }) => rest);
   }
 
+  /** Phase M.11 — the server's time-series snapshots for this restaurant
+   * (one row per ~minute, recorded continuously server-side even while the
+   * owner is offline). Each row carries the customer-state counts
+   * (guestsJson), staff-activity counts (staffJson), the owner-online flag,
+   * money, and served/lost — the raw material for the analytics dashboard's
+   * over-time graphs. Oldest-first (ascending time). Server prunes to ~12h. */
+  getStatSnapshots(): Array<{
+    atMicros: number;
+    ownerOnline: boolean;
+    cloudMoneyCents: number;
+    dailyServed: number;
+    dailyLost: number;
+    guestsJson: string;
+    staffJson: string;
+  }> {
+    if (!this.conn || this.restaurantId == null) return [];
+    const rid = this.restaurantId;
+    const rows: Array<{
+      atMicros: number;
+      ownerOnline: boolean;
+      cloudMoneyCents: number;
+      dailyServed: number;
+      dailyLost: number;
+      guestsJson: string;
+      staffJson: string;
+    }> = [];
+    try {
+      for (const s of this.conn.db.stat_snapshot.iter()) {
+        if (s.restaurantId !== rid) continue;
+        rows.push({
+          atMicros: Number(s.atMicros),
+          ownerOnline: s.ownerOnline,
+          cloudMoneyCents: Number(s.cloudMoneyCents),
+          dailyServed: s.dailyServed,
+          dailyLost: s.dailyLost,
+          guestsJson: s.guestsJson,
+          staffJson: s.staffJson,
+        });
+      }
+    } catch { /* stat_snapshot not synced yet (pre-publish build) */ }
+    rows.sort((a, b) => a.atMicros - b.atMicros);
+    return rows;
+  }
+
   /** Anti-cheat B/C — fire the server-authoritative recurring starter
    * grant. The server enforces the 3h cooldown + plot-size amount and
    * credits cloud_money_cents; the client adopts via the restaurant

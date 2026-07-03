@@ -27,6 +27,7 @@ import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
+import { AnalyticsModal } from "../ui/AnalyticsModal";
 import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
@@ -121,6 +122,7 @@ export class Engine {
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
+  readonly analyticsModal: AnalyticsModal;
   readonly helpModal: HelpModal;
   readonly statsModal: StatsModal;
   readonly achievementsModal: AchievementsModal;
@@ -660,6 +662,7 @@ export class Engine {
       setTimeScale: (s) => this.setTimeScale(s),
     }, {
       openLedger: () => this.ledgerModal.show(),
+      openAnalytics: () => this.analyticsModal.show(),
       openHelp: () => this.helpModal.show(),
       openStats: () => this.statsModal.show(),
       openAchievements: () => this.achievementsModal.show(),
@@ -930,6 +933,7 @@ export class Engine {
       this.sfx.gong();
     };
     this.ledgerModal = new LedgerModal(container, this.game);
+    this.analyticsModal = new AnalyticsModal(container, this.game);
     this.helpModal = new HelpModal(container);
     // Hard block: HelpModal won't open while the game is still
     // auth-gated, regardless of who calls show(). Stops the welcome
