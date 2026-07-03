@@ -144,10 +144,11 @@ const AUTOSHOP_INTERVAL = 4;
 const AUTOSHOP_MAX_PER_TRIP = 10;
 /** Each recipe-upgrade level adds this much to satisfactionEffect. */
 const UPGRADE_SATISFACTION_PER_LEVEL = 1.5;
-/** Base profit per tier. Phase 9.56 — the per-tier step is now $0.50
- *  (was $1.00): tier 1 → $3, then +$0.50/tier up to tier 5 → $5.
- *  Indexed by tier 1..5 (index 0 unused). */
-const TIER_BASE_PROFIT = [0, 3, 3.5, 4, 4.5, 5];
+/** Base profit per tier. Phase M.14 — REVERTED the 9.56 softening: the
+ *  per-tier step is back to $1.00 (tier 1 → $3, then +$1/tier up to tier 5
+ *  → $7). Indexed by tier 1..5 (index 0 unused). MUST match the server's
+ *  TIER_BASE_PROFIT_CENTS. */
+const TIER_BASE_PROFIT = [0, 3, 4, 5, 6, 7];
 
 /**
  * Top-level game logic. Owns the rule-system instances and drives them per
@@ -303,6 +304,14 @@ export class Game {
    * · Y cooking" so the player can see throughput when staff happens to
    * be idle right now. */
   getTicketStats?: () => { queued: number; cooking: number; ready: number; delivering: number };
+  /** Server-truth per-recipe breakdown for the Kitchen panel hover tooltips
+   * (active_ticket grouped by recipe, folded into queued/cooking/delivering).
+   * Null when the cloud isn't ready. */
+  getTicketBreakdown?: () => {
+    queued: Record<string, number>;
+    cooking: Record<string, number>;
+    delivering: Record<string, number>;
+  } | null;
   /** Per-chef backlog accessor — count of queued + cooking tickets
    * routed to this specific chef. StaffPanel shows it as a small
    * badge next to each chef's name so the player can see who's

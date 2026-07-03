@@ -1199,6 +1199,10 @@ export class Engine {
       }
       return { queued, cooking, ready, delivering };
     };
+    // Kitchen-panel hover breakdown — server truth only (active_ticket
+    // grouped by recipe). No local fallback: if the cloud isn't ready the
+    // tooltip just says "unavailable" rather than showing diverged sim data.
+    this.game.getTicketBreakdown = () => this.cloud?.getServerTicketBreakdown() ?? null;
     // Per-chef backlog accessor — StaffPanel reads this every HUD
     // tick to show "🍳 N" next to each chef's name. Returns 0 when
     // the router isn't ready yet (pre-staffReady) or the chef has

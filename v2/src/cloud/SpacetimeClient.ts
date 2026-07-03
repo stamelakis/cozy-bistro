@@ -234,7 +234,10 @@ export interface ActiveTicketRow {
 }
 import { DbConnection, type SubscriptionEventContext, type ErrorContext } from "./generated";
 import { Identity } from "spacetimedb";
-import { isServerSim } from "../game/featureFlags";
+// featureFlags/isServerSim import removed (Phase M.14): the server-truth
+// readouts below no longer gate on the serverSim flags — they read the
+// subscribed server tables unconditionally so the panels reflect server
+// state even under a ?serverSim override or a diverged local sim.
 
 /** Base prefix for the stored auth token.  The actual storage key is
  * `<TOKEN_KEY_BASE>:<host-slug>` so each SpacetimeDB host gets its
@@ -5078,7 +5081,7 @@ export class SpacetimeClient {
    * sim) → null for anything else so the local count stands. */
   getServerStaffWorkingCount(role: string): number | null {
     if (role !== "chef" && role !== "waiter" && role !== "barman") return null;
-    if (!isServerSim("staff") || !this.conn || this.restaurantId == null) return null;
+    if (!this.conn || this.restaurantId == null) return null;
     const rid = this.restaurantId;
     try {
       let n = 0;
@@ -5094,7 +5097,7 @@ export class SpacetimeClient {
    * vocabulary (the server says waitingChef / pickedUp where the panel
    * says queued / delivering). */
   getServerTicketStats(): { queued: number; cooking: number; ready: number; delivering: number } | null {
-    if (!isServerSim("tickets") || !this.conn || this.restaurantId == null) return null;
+    if (!this.conn || this.restaurantId == null) return null;
     const rid = this.restaurantId;
     try {
       let queued = 0, cooking = 0, ready = 0, delivering = 0;
@@ -5111,6 +5114,36 @@ export class SpacetimeClient {
     } catch { return null; }
   }
 
+  /** Per-recipe breakdown of my restaurant's active tickets, folded into the
+   * Kitchen panel's three display buckets (queued / cooking / delivering —
+   * "ready" rides under delivering, matching the pipeline line). Powers the
+   * hover tooltips. Null when the cloud isn't ready. */
+  getServerTicketBreakdown(): {
+    queued: Record<string, number>;
+    cooking: Record<string, number>;
+    delivering: Record<string, number>;
+  } | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    const rid = this.restaurantId;
+    try {
+      const queued: Record<string, number> = {};
+      const cooking: Record<string, number> = {};
+      const delivering: Record<string, number> = {};
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId !== rid) continue;
+        const key = t.recipeId ?? "?";
+        let bucket: Record<string, number> | null = null;
+        switch (t.state) {
+          case "queued": case "waitingChef": bucket = queued; break;
+          case "cooking": bucket = cooking; break;
+          case "ready": case "delivering": case "pickedUp": bucket = delivering; break;
+        }
+        if (bucket) bucket[key] = (bucket[key] ?? 0) + 1;
+      }
+      return { queued, cooking, delivering };
+    } catch { return null; }
+  }
+
   /** A chef's in-flight cook load (non-bar tickets the server has on
    * them). Returns 0 legitimately when they hold none; null only when the
    * cloud isn't ready. */
@@ -5124,7 +5157,7 @@ export class SpacetimeClient {
   }
 
   private serverCookBacklog(memberId: string, bar: boolean): number | null {
-    if (!isServerSim("tickets") || !this.conn || this.restaurantId == null) return null;
+    if (!this.conn || this.restaurantId == null) return null;
     const rid = this.restaurantId;
     try {
       let n = 0;
@@ -5141,7 +5174,7 @@ export class SpacetimeClient {
    * a delivery ticket + a take-order + a wash trip (max 3). Null when not
    * registered server-side → local fallback. */
   getServerWaiterBacklog(memberId: string): number | null {
-    if (!isServerSim("staff") || !this.conn || this.restaurantId == null) return null;
+    if (!this.conn || this.restaurantId == null) return null;
     const rid = this.restaurantId;
     try {
       for (const a of this.conn.db.staff_actor.iter()) {

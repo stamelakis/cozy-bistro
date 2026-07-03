@@ -3095,7 +3095,7 @@ fn build_server_order(
 /// TIER_BASE_PROFIT in Game.ts. Phase 9.56 — per-tier step softened to
 /// $0.50 (was $1.00): [0, 3, 3.5, 4, 4.5, 5] × 100. Indexed by recipe
 /// tier (1..5); tier 0 is a degenerate "unknown" with no profit bonus.
-const TIER_BASE_PROFIT_CENTS: [i64; 6] = [0, 300, 350, 400, 450, 500];
+const TIER_BASE_PROFIT_CENTS: [i64; 6] = [0, 300, 400, 500, 600, 700];
 
 /// Phase H.53 — Satisfaction bonus per upgrade level, × 100.
 /// Matches the client's UPGRADE_SATISFACTION_PER_LEVEL = 1.5.

@@ -50,6 +50,12 @@ export class StockStatusWidget {
   private readonly storageCaret: HTMLElement;
   private readonly storageTooltip: HTMLElement;
   private readonly pipeline: HTMLElement;
+  /** Kitchen-pipeline hover segments — built lazily once (buildPipelineSegments)
+   * then mutated in place so the native tooltip isn't dismissed by the
+   * per-frame update(). Cleared back to undefined whenever the kitchen idles. */
+  private pipeQueued?: HTMLSpanElement;
+  private pipeCooking?: HTMLSpanElement;
+  private pipeDelivering?: HTMLSpanElement;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
@@ -472,16 +478,70 @@ export class StockStatusWidget {
     // Phase I (H.81) — Emoji moved to section header; this line just
     // shows the numbers in the queued · cooking · delivering order.
     const ts = this.game.getTicketStats?.();
-    if (ts) {
-      const totalTickets = ts.queued + ts.cooking + ts.ready + ts.delivering;
-      this.pipeline.style.opacity = totalTickets > 0 ? "1" : "0.55";
-      this.pipeline.style.color = totalTickets > 0 ? "#a8e2a8" : "#fff5dc";
-      this.pipeline.textContent = totalTickets > 0
-        ? `${ts.queued} queued · ${ts.cooking} cooking · ${ts.ready + ts.delivering} delivering`
-        : "Kitchen idle";
+    const totalTickets = ts ? ts.queued + ts.cooking + ts.ready + ts.delivering : 0;
+    if (ts && totalTickets > 0) {
+      const bd = this.game.getTicketBreakdown?.() ?? null;
+      this.pipeline.style.opacity = "1";
+      this.pipeline.style.color = "#a8e2a8";
+      // Lazily build the 3 hoverable segments once; afterwards only mutate
+      // their text + title so a hover isn't interrupted by a DOM rebuild.
+      if (!this.pipeQueued) this.buildPipelineSegments();
+      this.setSeg(this.pipeQueued!, ts.queued, "queued", bd?.queued);
+      this.setSeg(this.pipeCooking!, ts.cooking, "cooking", bd?.cooking);
+      // "ready" (cooked, awaiting a waiter) rides under delivering, matching
+      // the folded count — and the breakdown bucket folds it the same way.
+      this.setSeg(this.pipeDelivering!, ts.ready + ts.delivering, "delivering", bd?.delivering);
     } else {
-      this.pipeline.textContent = "";
+      // Idle / no data — drop the cached segments so the next busy frame
+      // rebuilds them, and show a plain label.
+      this.pipeQueued = undefined;
+      this.pipeCooking = undefined;
+      this.pipeDelivering = undefined;
+      this.pipeline.style.opacity = ts ? "0.55" : "0.85";
+      this.pipeline.style.color = "#fff5dc";
+      this.pipeline.textContent = ts ? "Kitchen idle" : "";
     }
+  }
+
+  /** Build the three hoverable Kitchen-pipeline segments (queued · cooking ·
+   * delivering) inside this.pipeline. Called once when the kitchen goes
+   * idle → busy; the segments then persist so their native tooltips survive
+   * the per-frame update(). */
+  private buildPipelineSegments(): void {
+    this.pipeline.textContent = "";
+    const mk = (): HTMLSpanElement => {
+      const s = document.createElement("span");
+      s.style.cursor = "help";
+      s.style.borderBottom = "1px dotted rgba(168,226,168,0.45)";
+      return s;
+    };
+    this.pipeQueued = mk();
+    this.pipeCooking = mk();
+    this.pipeDelivering = mk();
+    this.pipeline.appendChild(this.pipeQueued);
+    this.pipeline.appendChild(document.createTextNode(" · "));
+    this.pipeline.appendChild(this.pipeCooking);
+    this.pipeline.appendChild(document.createTextNode(" · "));
+    this.pipeline.appendChild(this.pipeDelivering);
+  }
+
+  /** Set one pipeline segment's visible count + its hover tooltip (the
+   * per-recipe breakdown for that bucket). */
+  private setSeg(el: HTMLSpanElement, n: number, label: string, bucket?: Record<string, number>): void {
+    el.textContent = `${n} ${label}`;
+    el.title = StockStatusWidget.breakdownTip(label, bucket);
+  }
+
+  /** Format a bucket's recipe→count map into a multi-line native-title
+   * tooltip, most-numerous first (e.g. "Golden Souffle  ×3\nTruffle Pizza  ×2").
+   * Native `title` honours the newlines. */
+  private static breakdownTip(label: string, bucket?: Record<string, number>): string {
+    if (!bucket) return `${label}: breakdown unavailable`;
+    const entries = Object.entries(bucket).sort((a, b) => b[1] - a[1]);
+    if (entries.length === 0) return `Nothing ${label}`;
+    return entries
+      .map(([id, n]) => `${id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}  ×${n}`)
+      .join("\n");
   }
 
   /** SELL-BACK — Sell ONE clean piece of (kind, tier) back at 50% of
