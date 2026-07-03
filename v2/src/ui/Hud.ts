@@ -289,12 +289,12 @@ export class Hud {
         tooltip: "Daily rent charged at day end. Grows with the size + tier of your " +
                  "restaurant. Track it against your daily revenue to know if you're " +
                  "profitable." },
-      { key: "wages", icon: "💵", label: "WAGES/MIN",
+      { key: "wages", icon: "💵", label: "WAGES/DAY",
         tint: "rgba(180, 200, 180, 0.14)", accent: "#bce0bc",
-        tooltip: "Total staff payroll per in-game minute, across every hired chef, " +
-                 "barman, waiter, and errand helper. Each training level adds +$1/min " +
-                 "to that member's wage. Charged continuously throughout the day; " +
-                 "compare to RENT to see your full fixed-cost burden." },
+        tooltip: "Total staff payroll per in-game DAY (a game-day is ~12 real " +
+                 "minutes), across every hired chef, barman, waiter, and errand " +
+                 "helper. Charged continuously through the day; shown per-day so it " +
+                 "lines up with RENT/DAY for your full fixed-cost burden." },
     ];
     for (const s of specs) {
       const card = document.createElement("div");
@@ -675,7 +675,11 @@ export class Hud {
     const headcount = this.game.staff.getTotalStaff();
     const perStaff = this.game.admin.payrollPerStaffPerMinute;
     const wagesPerMin = this.game.staff.getTotalPayrollPerMinute(perStaff);
-    this.fields.wages.textContent = `$${wagesPerMin}`;
+    // Show per GAME-DAY (×12 real-min/day) so this chip sits next to RENT/DAY
+    // in the same unit — a per-minute wage beside a per-day rent was the
+    // confusing mismatch the player flagged.
+    const GAME_MINUTES_PER_DAY = 12;
+    this.fields.wages.textContent = `$${Math.round(wagesPerMin * GAME_MINUTES_PER_DAY)}`;
     void headcount; // still useful nearby for future tooltip work
     // Functional seats — available now / total currently provisioned.
     // Spawner is optional on the very first frames so default to "—".
