@@ -353,7 +353,17 @@ export class Hud {
       borderRadius: "4px", cursor: "pointer", font: "inherit",
       fontSize: "11px", fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
-    btn.onclick = () => { this.spawner.setOpen(!this.spawner.isOpen()); this.update(); };
+    btn.onclick = () => {
+      // Confirm before toggling — closing/opening flips rent + wages and
+      // guest arrivals, so a stray click shouldn't silently do it.
+      const currentlyOpen = this.spawner.isOpen();
+      const msg = currentlyOpen
+        ? "Close the restaurant?\n\nGuests stop arriving and rent + staff wages PAUSE until you reopen. Guests already inside finish up."
+        : "Open the restaurant?\n\nGuests start arriving again and you resume paying rent + staff wages.";
+      if (!window.confirm(msg)) return;
+      this.spawner.setOpen(!currentlyOpen);
+      this.update();
+    };
     this.root.appendChild(btn);
     this.openCloseBtn = btn;
   }
