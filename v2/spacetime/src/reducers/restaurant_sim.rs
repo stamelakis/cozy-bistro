@@ -3057,6 +3057,13 @@ fn build_server_order(
     // Table guests get an optional drink course (~50%) when their floor
     // has bar service; a guest seated AT the bar orders a drink outright.
     let add_drink = allow_drink && bar_service && has_drink && !seat_at_bar;
+    // Phase M.9 — a guest seated AT the bar is the barman's domain: DRINK
+    // ONLY, no appetizer/dessert. Before this they got the drink anchor PLUS
+    // the normal appetizer/dessert rolls, so a bar-stool customer also waited
+    // on a chef (food) and sat for minutes while the barman "wasn't taking
+    // their order". Drink-only = the barman makes it + serves it straight
+    // over the counter.
+    let drink_only = seat_at_bar && bar_service && has_drink;
 
     // Need at least one category to anchor the order. A guest seated at a
     // bar anchors on a drink (barman makes + serves it, no waiter);
@@ -3074,10 +3081,10 @@ fn build_server_order(
             // can't return a &str into a string we don't own.
             // Just convert to owned and use String everywhere below.
             let key = keys[0].clone();
-            return build_order_from_anchor(ctx, restaurant_id, &by_cat, &key, hash, add_drink);
+            return build_order_from_anchor(ctx, restaurant_id, &by_cat, &key, hash, add_drink, drink_only);
         }
         else { return empty; };
-    build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash, add_drink)
+    build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash, add_drink, drink_only)
 }
 
 /// Phase H.53 — TIER_BASE_PROFIT in cents.  MUST match the client's
@@ -3113,6 +3120,7 @@ fn build_order_from_anchor(
     anchor_cat: &str,
     hash: u64,
     add_table_drink: bool,
+    drink_only: bool,
 ) -> (String, String, String, String, String) {
     let mut courses: Vec<&RecipeMeta> = Vec::new();
     // Phase M.1 — drink course first (served alongside the meal), for
@@ -3130,8 +3138,9 @@ fn build_order_from_anchor(
             }
         }
     }
-    // Appetizer roll (so it lands before the main if added).
-    if by_cat.contains_key("appetizer") && ((hash >> 8) % 10) < 3 {
+    // Appetizer roll (so it lands before the main if added). Skipped for a
+    // bar-seat drink-only order — the barman's customers get just the drink.
+    if !drink_only && by_cat.contains_key("appetizer") && ((hash >> 8) % 10) < 3 {
         let bucket = &by_cat["appetizer"];
         if !bucket.is_empty() {
             courses.push(&bucket[((hash >> 16) as usize) % bucket.len()]);
@@ -3143,8 +3152,8 @@ fn build_order_from_anchor(
             courses.push(&bucket[((hash >> 24) as usize) % bucket.len()]);
         }
     }
-    // Dessert roll last.
-    if by_cat.contains_key("dessert") && ((hash >> 32) % 10) < 3 {
+    // Dessert roll last. Skipped for a bar-seat drink-only order.
+    if !drink_only && by_cat.contains_key("dessert") && ((hash >> 32) % 10) < 3 {
         let bucket = &by_cat["dessert"];
         if !bucket.is_empty() {
             courses.push(&bucket[((hash >> 40) as usize) % bucket.len()]);
