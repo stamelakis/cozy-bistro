@@ -426,6 +426,22 @@ interface ActiveGuest {
    * null (the cloud row's patience countdown will despawn it on its
    * own). */
   serverMirrorId?: bigint;
+  /** Phase M.16 — guest cutover. Latest authoritative pose + state
+   * stashed off the subscribed active_guest row by reconcileCloudGuest,
+   * consumed by renderGuestFromServer when ?serverSim=guestMove is on.
+   * Mirrors the cloudX/cloudZ/cloudFloor/cloudState the StaffRouter
+   * stashes on a StaffActor (reconcileCloudStaffActor). cloudPrevX/Z +
+   * cloudInterp are the snapshot-interpolation anchors: prev = the
+   * pose we were gliding FROM, interp = the 0→1 clock across the ~0.5s
+   * server tick. Undefined until the first row arrives; unused while
+   * the flag is off. */
+  cloudX?: number;
+  cloudZ?: number;
+  cloudFloor?: number;
+  cloudState?: string;
+  cloudPrevX?: number;
+  cloudPrevZ?: number;
+  cloudInterp?: number;
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -1062,6 +1078,33 @@ export class GuestSpawner {
   update(dt: number): void {
     this.elapsed += dt;
     this.spawnCooldown -= dt;
+    // Phase M.16 — guest cutover (mirrors staffMove in StaffRouter.update).
+    // When ?serverSim=guestMove is on the SERVER fully owns guest spawning +
+    // the state machine + patience + locomotion (tick_guest_state /
+    // try_server_spawn_guest run every tick with no owner-online gate). The
+    // client stops running its local sim entirely and just renders each guest
+    // from its subscribed active_guest row: lerp the body toward the server
+    // pose, drive the pose/bubble from the server state. This early return
+    // skips the local spawn, the local state machine, the patience tick, AND
+    // streamGuestPositionsToCloud below — so the client can no longer clobber
+    // the server's authoritative state (the upward STATE mirror was the root
+    // of the "0 guests eating" divergence). Server-spawned rows still
+    // materialise locally via the onInsert → importCloudGuest bridge, and
+    // onDelete despawns them; those are flag-independent. Opt-in (default
+    // false); roll back by removing the URL param.
+    if (isServerSim("guestMove")) {
+      // Expire dirty-seat timers (pure local bookkeeping, never mirrored UP)
+      // then render every guest straight from its server row. No local spawn,
+      // no state machine, no patience tick, no position streaming — exactly
+      // like StaffRouter's staffMove branch.
+      if (this.dirtyUntil.size > 0) {
+        for (const [seatId, cleanAt] of this.dirtyUntil) {
+          if (cleanAt <= this.elapsed) this.dirtyUntil.delete(seatId);
+        }
+      }
+      for (const g of this.guests) this.renderGuestFromServer(g, dt);
+      return;
+    }
     // Flag semantics rewritten: the original `isServerSim("guests")`
     // intent was "skip local sim, server is authoritative". Phase H
     // proved that doesn't work — the server-side state machine for
@@ -1110,7 +1153,12 @@ export class GuestSpawner {
     // The cooldown still advances so when serverOwnsGuestSpawn is
     // off (admin override / future flag) the original cadence
     // applies; only the spawn call itself is gated.
-    const serverOwnsGuestSpawn = isServerSim("guests") && this.cloud?.isConnectionLive() === true;
+    // Phase M.16 — guestMove reaches here only if it's OFF (the early
+    // return above bails when it's on), so this expression is unchanged in
+    // practice; the extra term just documents that either flag hands spawn
+    // ownership to the server.
+    const serverOwnsGuestSpawn = (isServerSim("guests") || isServerSim("guestMove"))
+      && this.cloud?.isConnectionLive() === true;
     if (this.restaurantOpen && this.spawnCooldown <= 0 && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
       if (!serverOwnsGuestSpawn) {
         void this.spawnGuest();
@@ -1603,7 +1651,27 @@ export class GuestSpawner {
    * bridge is idempotent — re-applying the same row is a no-op. */
   private reconcileCloudGuest(row: import("../cloud/SpacetimeClient").ActiveGuestRow): void {
     const g = this.findLocalGuestByServerId(row.id);
-    if (!g) return;
+    if (!g) return; // no local guest yet — onInsert handles creation
+
+    // Phase M.16 — guest cutover. Stash the authoritative server pose +
+    // state so update()'s guestMove render loop (renderGuestFromServer)
+    // can lerp the body toward it and drive the pose/bubble from the
+    // server truth. Cheap; unused while guestMove is off (identical
+    // discipline to reconcileCloudStaffActor). Snapshot-interp: when the
+    // pose actually moves, shift the previous-pose anchor + reset the
+    // 0→1 interp clock so the body glides from the old pose to this one
+    // over the ~0.5s tick instead of snapping then stalling. First update
+    // (no prior pose) starts settled (interp 1).
+    if (g.cloudX === undefined
+        || Math.hypot(row.x - g.cloudX, row.z - (g.cloudZ ?? row.z)) > 1e-4) {
+      g.cloudPrevX = g.cloudX ?? row.x;
+      g.cloudPrevZ = g.cloudZ ?? row.z;
+      g.cloudInterp = g.cloudX === undefined ? 1 : 0;
+    }
+    g.cloudX = row.x;
+    g.cloudZ = row.z;
+    g.cloudFloor = row.floor;
+    g.cloudState = row.state;
 
     // Phase 9.32 — keep the local patience clock in lockstep with the
     // server's authoritative patience_ms so the countdown above a
@@ -2051,7 +2119,10 @@ export class GuestSpawner {
       // Under server-authoritative spawning the server fills the room on
       // its own clock — a local burst here races it into over-capacity and
       // a doubled arrival rate, so skip the burst in that mode.
-      const serverSpawns = isServerSim("guests") && this.cloud?.isConnectionLive() === true;
+      // Phase M.16 — guestMove also hands spawning to the server, so treat
+      // either flag as "server spawns" (matters when testing guestMove alone).
+      const serverSpawns = (isServerSim("guests") || isServerSim("guestMove"))
+        && this.cloud?.isConnectionLive() === true;
       const target = serverSpawns ? 0 : Math.min(3, Math.max(0, Math.floor(seats / 2) - liveGuests));
       let burstSpawned = 0;
       for (let i = 0; i < target; i += 1) {
@@ -2784,7 +2855,11 @@ export class GuestSpawner {
     // This was the LAST client-side guest spawn path — firing it
     // would double-spawn against the server's conversion within a
     // couple of seconds.
-    if (isServerSim("guests") && this.cloud?.isConnectionLive() === true) return;
+    // Phase M.16 — guestMove also hands spawning to the server, so gate
+    // this off when EITHER flag is on (testing ?serverSim=guestMove alone
+    // has `guests` off, but the server still owns spawns under guestMove).
+    if ((isServerSim("guests") || isServerSim("guestMove"))
+        && this.cloud?.isConnectionLive() === true) return;
     // Legacy local-sim path (flag off / cloud absent only).
     if (this.countAvailableSeats() <= 0 && !this.canAcceptWaitingGuest()) return;
     void this.spawnGuest(variantHint);
@@ -4118,6 +4193,88 @@ export class GuestSpawner {
     // StaffRouter.moveActor for the derivation.
     g.character.facingY = Math.atan2(-dx, -dz);
     g.character.action = "walk";
+  }
+
+  /** Phase M.16 — guest cutover. Render one guest purely from its
+   * subscribed active_guest row when ?serverSim=guestMove is on. The
+   * server owns the state machine + spawning + locomotion; here we just
+   * lerp the body toward the latest cloud pose, reparent on a floor
+   * change, anchor Y to the floor slab, face the travel direction, and
+   * drive the pose (sit/walk/idle) + the status bubble from the server
+   * state. Mirrors StaffRouter.renderActorFromServer. No local
+   * pathfinding, no streaming — so the client can't fight the server.
+   *
+   * CRUCIALLY it sets g.state = cloudStateToLocal(cloudState) so the
+   * status bubble (snapshotStatus / guestLabel) and the eating flag read
+   * SERVER truth — that's what finally makes the 🍽️/🍹 eating icons
+   * appear (the local sim used to say "seated/waiting" while the server
+   * had the guest eating, the 0-eating divergence). */
+  private renderGuestFromServer(g: ActiveGuest, dt: number): void {
+    if (g.cloudX === undefined || g.cloudZ === undefined) return; // no row yet
+    const STOREY = 3;
+    // Reparent into the new floor's storey group on a floor change so
+    // storey-focus visibility hides the guest when the player looks at a
+    // different floor (same helper the local mover uses across stairs).
+    if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
+      g.currentFloor = g.cloudFloor;
+      this.reparentCharacter?.(g.character, g.cloudFloor);
+    }
+    // Adopt the server state first so the bubble/eating flag reflect it and
+    // the pose selection below reads the mapped local state. The reconcile
+    // bridge still fires the discrete side effects (plate/chime/finalize) on
+    // its transitions; this just keeps the continuous state in lockstep.
+    if (g.cloudState) g.state = cloudStateToLocal(g.cloudState);
+    const pos = g.character.groundPos;
+    // Snapshot interpolation: glide from the previous server pose to the
+    // latest over the ~2 Hz tick interval (interp 0→1) so the body moves at a
+    // steady speed instead of teleport-then-stall.
+    const prevX = g.cloudPrevX ?? g.cloudX;
+    const prevZ = g.cloudPrevZ ?? g.cloudZ;
+    const GUEST_TICK_S = 0.5; // server guest tick ≈ 2 Hz
+    g.cloudInterp = Math.min(1, (g.cloudInterp ?? 1) + dt / GUEST_TICK_S);
+    const t = g.cloudInterp;
+    const tx = prevX + (g.cloudX - prevX) * t;
+    const tz = prevZ + (g.cloudZ - prevZ) * t;
+    // Snap on a real teleport / floor change; otherwise ease toward the
+    // (already-smooth) interpolated point to absorb any update jitter.
+    const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
+    if (jump > 2.5) {
+      pos.set(g.cloudX, g.cloudZ);
+    } else {
+      const alpha = Math.min(1, dt * 16);
+      pos.x += (tx - pos.x) * alpha;
+      pos.y += (tz - pos.y) * alpha;
+    }
+    // Anchor body Y to the floor slab (moveToward normally does this). Guests
+    // spawn at the Floor 0 door so _baseY IS the raw feet-lift; cache it as
+    // _feetLift the first time, consistent with the mover + the staff render.
+    if (g.character._feetLift == null) {
+      g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
+    }
+    const feetLift = g.character._feetLift;
+    const anchorY = g.currentFloor * STOREY + feetLift;
+    g.character.root.position.y = anchorY;
+    g.character._baseY = anchorY;
+    // Face + animate from the current segment's travel direction. "moving" =
+    // still gliding along a non-trivial segment; once arrived (t=1) with no
+    // new pose the guest reads as stopped.
+    const segX = g.cloudX - prevX;
+    const segZ = g.cloudZ - prevZ;
+    const moving = Math.hypot(segX, segZ) > 0.03 && t < 1;
+    if (moving) g.character.facingY = Math.atan2(-segX, -segZ);
+    // Pose from the (now server-driven) local state: seated/eating/waiting →
+    // "sit", anything mid-walk → "walk", otherwise "idle". SIT_STATES + the
+    // seat lift keep a seated guest on the cushion; a seated guest that the
+    // server still reports as slightly moving falls through to walk, which is
+    // fine (it'll settle to sit once t hits 1).
+    if (SIT_STATES.has(g.state) && !moving) {
+      g.character.action = "sit";
+      // Keep them facing the way the seat was set (seatFacingY) rather than a
+      // stale last-walk heading, matching how importCloudGuest seats them.
+      if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;
+    } else {
+      g.character.action = moving ? "walk" : "idle";
+    }
   }
 
   private distanceToTarget(g: ActiveGuest): number {

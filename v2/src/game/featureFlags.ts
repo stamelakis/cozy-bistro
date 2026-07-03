@@ -155,9 +155,14 @@ const DEFAULTS: ServerSimFlags = {
   // staff from the server pose; the legacy local locomotion path only
   // runs if explicitly disabled with ?serverSim=staffMove-off equivalents.
   staffMove: true,
-  // Guest migration cutover — DEFAULT-OFF until proven via ?serverSim=all,
-  // then flipped to true. Mirrors the staffMove rollout.
-  guestMove: false,
+  // Guest migration cutover — FLIPPED DEFAULT-ON 2026-07-04 (Phase M.16),
+  // the last subsystem to go server-authoritative. The client now renders
+  // guests purely from active_guest (reconcileCloudGuest + renderGuestFromServer
+  // in GuestSpawner) and no longer runs its local guest sim or mirrors guest
+  // state UP — that upward mirror was clobbering the server's authoritative
+  // state (the "0 guests eating" divergence). Roll back by setting this false
+  // and rebuilding (or ?serverSim=off for a single session).
+  guestMove: true,
 };
 
 /** Parse a "subsystem1,subsystem2" string into a partial flag map.
