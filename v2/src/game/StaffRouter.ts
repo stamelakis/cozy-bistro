@@ -254,6 +254,13 @@ interface StaffActor {
   cloudZ?: number;
   cloudFloor?: number;
   cloudState?: string;
+  /** Phase M.13 — server-mirrored task fields so the bubble label reflects
+   * what a SERVER-DRIVEN staffer is ACTUALLY doing (the old label read
+   * client-local fields that server actors never had). */
+  cloudDeliveryPhase?: string | null; // "pickup" (→ fetch) | "deliver" (→ serve) | null
+  cloudTakeOrderActive?: boolean;
+  cloudWashPhase?: string;            // "" | "pickup" (grab dirty) | "scrub" (at sink)
+  cloudCleanActive?: boolean;
   /** Phase 9.70 — snapshot-interp for the staffMove render: the pose BEFORE
    * the latest cloud update + a 0→1 clock advanced each frame, so the body
    * glides between the two most recent 2 Hz server poses instead of catching
@@ -1853,6 +1860,12 @@ export class StaffRouter {
     actor.cloudZ = row.z;
     actor.cloudFloor = row.floor;
     actor.cloudState = row.state;
+    // Phase M.13 — mirror the server task fields so the bubble label reads
+    // the REAL job (take order / fetch / serve / wash / clear), not a guess.
+    actor.cloudDeliveryPhase = row.deliveryPhase;
+    actor.cloudTakeOrderActive = row.takeOrderGuestId != null;
+    actor.cloudWashPhase = row.washPhase;
+    actor.cloudCleanActive = row.cleanSeatUid != null;
 
     // Case: server made a chef-claim / waiter-pickup decision for an
     // actor that is locally idle. With Phase 1's gating, the local idle
@@ -4280,18 +4293,35 @@ function waiterLabel(w: StaffActor, carrying: boolean): string {
   // Spell out each of the waiter's jobs — take an order, fetch then serve a
   // dish, bus a dirty table, wash up — so the player can read at a glance
   // what a waiter is doing instead of a bare "pickup" / "serving".
+  // Phase M.13 — derive from the SERVER-mirrored task fields so the label
+  // matches what a SERVER-DRIVEN waiter is actually doing. The old logic read
+  // client-local fields (takeOrderRequest / washTrip) that server waiters
+  // never had — so a waiter walking to TAKE AN ORDER mislabeled as "fetch
+  // dish", and fetch-vs-serve was guessed from the ticket state (true for
+  // BOTH legs) rather than the real delivery leg. Fall back to the local
+  // fields for any pure-local-sim path.
+  const takingOrder = w.cloudTakeOrderActive || !!w.takeOrderRequest;
+  const washPhase = (w.cloudWashPhase && w.cloudWashPhase.length > 0)
+    ? w.cloudWashPhase
+    : (w.washTrip ? w.washTrip.phase : "");
+  const washing = washPhase.length > 0;
+  const clearing = w.cloudCleanActive || !!w.cleanSeatUid;
+  // Real delivery leg: "deliver" = carrying to the seat, "pickup"/null = going
+  // to the kitchen to fetch. Fall back to `carrying` only when the server
+  // phase isn't mirrored (pure local sim).
+  const serving = w.cloudDeliveryPhase != null
+    ? w.cloudDeliveryPhase === "deliver"
+    : carrying;
   switch (w.state) {
     case "movingToWork":
-      if (w.takeOrderRequest) return "📋 → take order";
-      if (w.washTrip) return w.washTrip.phase === "pickup" ? "🧽 → grab dirty dish" : "🧼 → to sink";
-      if (w.cleanSeatUid) return "🧽 → clear table";
-      // Food run: before pickup the waiter walks to the kitchen to FETCH the
-      // cooked dish; once carrying it (ticket "delivering") they head to the seat.
-      return carrying ? "🍽️ → serve table" : "🍳 → fetch dish";
+      if (takingOrder) return "📋 → take order";
+      if (washing) return washPhase === "pickup" ? "🧽 → grab dirty dish" : "🧼 → to sink";
+      if (clearing) return "🧽 → clear table";
+      return serving ? "🍽️ → serve table" : "🍳 → fetch dish";
     case "working":
-      if (w.takeOrderRequest) return "📋 taking order";
-      if (w.washTrip) return "🧼 washing up";
-      if (w.cleanSeatUid) return "🧹 clearing table";
+      if (takingOrder) return "📋 taking order";
+      if (washing) return "🧼 washing up";
+      if (clearing) return "🧹 clearing table";
       return "🍽️ serving dish";
     // Phase 9.28 — walking back to rest reads as idle: no bubble, not
     // counted as "working" on the panel.

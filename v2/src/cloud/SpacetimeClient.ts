@@ -101,6 +101,10 @@ export interface StaffActorRow {
   assignedStoveUid: string;
   washTargetUid: string;
   washPhase: string;
+  /** Phase M.13 — "pickup" (walking to grab the cooked plate) | "deliver"
+   * (carrying it to the seat) | null. Lets the bubble distinguish fetch
+   * vs serve for server-driven waiters. */
+  deliveryPhase: string | null;
   /** Phase H Phase 4 — when the server's try_dispatch_take_order
    * picks a waiter to walk to a seated guest, this holds the target
    * guest's server-side id (null otherwise). The owner's bridge
@@ -2013,6 +2017,7 @@ export class SpacetimeClient {
           assignedStoveUid: a.assignedStoveUid,
           washTargetUid: a.washTargetUid,
           washPhase: a.washPhase,
+          deliveryPhase: a.deliveryPhase ?? null,
           takeOrderGuestId: a.takeOrderGuestId ?? null,
           errandPhase: a.errandPhase ?? null,
           cleanSeatUid: a.cleanSeatUid ?? null,
@@ -2046,6 +2051,7 @@ export class SpacetimeClient {
       faceY: number;
       ticketId: bigint | undefined;
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
+      deliveryPhase: string | undefined;
       takeOrderGuestId: bigint | undefined;
       errandPhase: string | undefined;
       cleanSeatUid: string | undefined;
@@ -2059,6 +2065,7 @@ export class SpacetimeClient {
       assignedStoveUid: r.assignedStoveUid,
       washTargetUid: r.washTargetUid,
       washPhase: r.washPhase,
+      deliveryPhase: r.deliveryPhase ?? null,
       takeOrderGuestId: r.takeOrderGuestId ?? null,
       errandPhase: r.errandPhase ?? null,
       cleanSeatUid: r.cleanSeatUid ?? null,
@@ -5027,6 +5034,7 @@ export class SpacetimeClient {
             assignedStoveUid: a.assignedStoveUid,
             washTargetUid: a.washTargetUid,
             washPhase: a.washPhase,
+            deliveryPhase: a.deliveryPhase ?? null,
             takeOrderGuestId: a.takeOrderGuestId ?? null,
             errandPhase: a.errandPhase ?? null,
             cleanSeatUid: a.cleanSeatUid ?? null,
