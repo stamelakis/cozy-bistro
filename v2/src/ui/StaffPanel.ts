@@ -11,6 +11,11 @@ import { attachTooltip } from "./tooltip";
  *
  * Footer: total payroll/min and total hire cost for next reinforcement.
  */
+/** A game-day is 720s = 12 real minutes, and wages are charged per real
+ * minute, so a per-game-day wage = per-minute × this. Keeps the "/day"
+ * payroll display comparable to the "/day" rent shown elsewhere. */
+const GAME_MINUTES_PER_DAY = 12;
+
 export class StaffPanel {
   private readonly root: HTMLElement;
   private readonly game: Game;
@@ -58,7 +63,7 @@ export class StaffPanel {
       "• Chef cooks orders at the stove. Each placed stove gets one chef; more chefs = more dishes/min.\n" +
       "• Waiter takes orders and brings food. Faster service when you have more waiters per table.\n" +
       "• Errand helper buys groceries when the pantry runs low (per the auto-shop list).\n" +
-      "Hire + Fire per role. Each role costs a per-minute wage paid from your cash (shown at the bottom). " +
+      "Hire + Fire per role. Each role costs a per-day wage paid from your cash (shown at the bottom). " +
       "Train staff in the Upgrades modal to raise their effective tier."
     );
 
@@ -489,7 +494,7 @@ export class StaffPanel {
       const lockTag = locked
         ? ` <span style="opacity:0.7;font-weight:600;font-size:10px;color:#ffd47a">🔒 tier ${unlockTier}</span>`
         : "";
-      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${rolePayroll}/min</span>${lockTag}`;
+      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${Math.round(rolePayroll * GAME_MINUTES_PER_DAY)}/day</span>${lockTag}`;
       row.activity.innerHTML = locked
         ? `<span style="opacity:0.5">Unlocks at tier ${unlockTier}</span>`
         : count === 0
@@ -501,8 +506,8 @@ export class StaffPanel {
       // 2 reads "Unlocks at tier 2" instead of just "disabled").
       const hireGate = this.game.canHireStaff(role);
       row.hire.title = hireGate.ok
-        ? `Hire ${label} ($${hireCost}) — adds $${perStaff}/min payroll`
-        : `${hireGate.reason} · would cost $${hireCost} + $${perStaff}/min`;
+        ? `Hire ${label} ($${hireCost}) — adds $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day payroll`
+        : `${hireGate.reason} · would cost $${hireCost} + $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day`;
       row.hire.disabled = !hireGate.ok;
       row.hire.style.opacity = hireGate.ok ? "1" : "0.4";
       // Per-member fire buttons (one per row in `members`) replaced
@@ -523,7 +528,7 @@ export class StaffPanel {
           ? ` · 📋 ${stats.queued} queued · 🍳 ${stats.cooking} cooking · 🍽 ${stats.delivering + stats.ready} delivering`
           : ` · idle — no pending tickets`;
         this.payrollLine.textContent =
-          `${totalCount} hired · $${totalPayroll}/min${queueLine}`;
+          `${totalCount} hired · $${Math.round(totalPayroll * GAME_MINUTES_PER_DAY)}/day${queueLine}`;
       }
     }
   }

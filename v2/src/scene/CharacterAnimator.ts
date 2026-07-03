@@ -212,6 +212,19 @@ export class CharacterAnimator {
       const offFloor = gateFloor !== undefined && Math.round(baseY / gateStoreyH) !== gateFloor;
       if (offFloor || c._keepHidden) {
         if (c.root.visible) c.root.visible = false;
+        // Phase M.2 — a hidden SKINNED character keeps advancing its mixer
+        // + sit/stand phase machine so it tracks the server action while
+        // off-screen. Without this the rigged controller freezes at its
+        // last pose (phase "up"), and every guest that arrived + sat on an
+        // unfocused floor snaps through the stand→sit transition ALL AT
+        // ONCE the moment the player switches to that floor. Keeping the
+        // mixer alive means a guest that sat off-screen is already in the
+        // seated loop on reveal. Static meshes hold their sculpted pose, so
+        // they need nothing here. This is CPU-only while hidden
+        // (root.visible=false → three.js skips the GPU skinning/draw), and
+        // skinned characters are a bounded minority (customers + staff in
+        // the restaurant), so the per-frame cost is small.
+        if (c.skeletal) c.skeletal.update(dt, effAction);
         continue;
       }
       if (!c.root.visible) c.root.visible = true;
