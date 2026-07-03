@@ -292,6 +292,10 @@ interface StaffActor {
    * cooking. Released on finish/abandon/fire so another chef can take
    * it. null between cooks. */
   assignedStoveUid?: string | null;
+  /** Phase M.8 — server-computed facing (radians) to hold WHILE WORKING at
+   * the station, so a chef/barman faces the stove/bar instead of freezing on
+   * their last-walk direction. Mirrored from StaffActor.face_y. */
+  faceY?: number;
   /** Chef only: uid of the most recent stove they cooked at. Used as
    * the anchor for their idle "loiter" zone — same vibe as the errand
    * helper hanging out near the supply counter. */
@@ -986,6 +990,8 @@ export class StaffRouter {
       if (knownState && row.assignedStoveUid && (actor.role === "chef" || actor.role === "barman")) {
         actor.assignedStoveUid = row.assignedStoveUid;
       }
+      // Phase M.8 — server-computed work-facing (toward the station).
+      actor.faceY = row.faceY;
       // ---- Wash trip ----
       // Best-effort: cloud only exposes the station uid + phase.  We
       // can't reconstruct the full WashTrip (needs dirty piece +
@@ -2379,6 +2385,13 @@ export class StaffRouter {
     // ("carry"), anything in motion = walk, otherwise idle.
     if (a.cloudState === "working" && !moving) {
       a.character.action = "carry";
+      // Phase M.8 — face what they're working ON (server-computed toward the
+      // station) instead of the frozen last-walk direction. Guarded on the
+      // station binding so it only applies to a chef/barman at their station,
+      // the only actors face_y is set for.
+      if (a.assignedStoveUid && a.faceY !== undefined) {
+        a.character.facingY = a.faceY;
+      }
     } else {
       a.character.action = moving ? "walk" : "idle";
     }

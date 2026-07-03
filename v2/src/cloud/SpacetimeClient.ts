@@ -95,6 +95,8 @@ export interface StaffActorRow {
   targetX: number;
   targetZ: number;
   targetFloor: number;
+  /** Phase M.8 — facing (radians) to hold while working at the station. */
+  faceY: number;
   ticketId: bigint | null;
   assignedStoveUid: string;
   washTargetUid: string;
@@ -1962,6 +1964,7 @@ export class SpacetimeClient {
           targetX: a.targetX,
           targetZ: a.targetZ,
           targetFloor: a.targetFloor,
+          faceY: a.faceY,
           ticketId: a.ticketId ?? null,
           assignedStoveUid: a.assignedStoveUid,
           washTargetUid: a.washTargetUid,
@@ -1996,6 +1999,7 @@ export class SpacetimeClient {
       memberId: string; restaurantId: bigint; role: string; state: string;
       x: number; z: number; floor: number;
       targetX: number; targetZ: number; targetFloor: number;
+      faceY: number;
       ticketId: bigint | undefined;
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
       takeOrderGuestId: bigint | undefined;
@@ -2006,6 +2010,7 @@ export class SpacetimeClient {
       memberId: r.memberId, role: r.role, state: r.state,
       x: r.x, z: r.z, floor: r.floor,
       targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
+      faceY: r.faceY,
       ticketId: r.ticketId ?? null,
       assignedStoveUid: r.assignedStoveUid,
       washTargetUid: r.washTargetUid,
@@ -4973,6 +4978,7 @@ export class SpacetimeClient {
             memberId: a.memberId, role: a.role, state: a.state,
             x: a.x, z: a.z, floor: a.floor,
             targetX: a.targetX, targetZ: a.targetZ, targetFloor: a.targetFloor,
+            faceY: a.faceY,
             ticketId: a.ticketId ?? null,
             assignedStoveUid: a.assignedStoveUid,
             washTargetUid: a.washTargetUid,

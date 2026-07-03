@@ -1872,6 +1872,11 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         // against a wall puts the +facing stand position outside, which the
         // per-tick clamp only corrects a frame later ("guy outside"). [bug-sweep]
         let (stand_x, stand_z) = (stand_x.clamp(-4.2_f32, 5.2_f32), stand_z.clamp(-4.2_f32, 5.2_f32));
+        // Phase M.8 — face the station while working (chef at the stove, barman
+        // at the bar counter) instead of freezing on the last-walk direction.
+        // θ = atan2(-dx, -dz) where (dx,dz) points from the stand spot to the
+        // station centre — same convention the client's move-facing uses.
+        let face_y = (-(station.x - stand_x)).atan2(-(station.z - stand_z));
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
@@ -1879,6 +1884,7 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
             target_x: stand_x,
             target_z: stand_z,
             target_floor: station.floor,
+            face_y,
             assigned_stove_uid: station_uid.clone(),
             ..actor
         });
@@ -9464,6 +9470,7 @@ pub fn register_staff_actor(
         ticket_id: None,
         x: spawn_x, z: spawn_z, floor: spawn_floor,
         target_x: home_x, target_z: home_z, target_floor: home_floor,
+        face_y: 0.0, // Phase M.8 — set on first work assignment (auto_claim)
         assigned_stove_uid: String::new(),
         last_stove_uid: String::new(),
         wash_target_uid: String::new(),

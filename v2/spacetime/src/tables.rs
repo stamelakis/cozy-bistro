@@ -1432,6 +1432,15 @@ pub struct StaffActor {
     /// of-struct + Option/None default keeps the publish additive.
     #[default(None::<String>)]
     pub clean_seat_uid: Option<String>,
+
+    /// Phase M.8 — facing angle (radians, game convention θ = atan2(-dx,-dz))
+    /// the actor holds WHILE WORKING at its spot: toward the station it
+    /// cooks/mixes at. The client applies it only while the actor is
+    /// stationary + working, so a chef faces the stove instead of freezing on
+    /// its last-walk direction. 0 until the first work assignment sets it.
+    /// (Appended at end-of-struct so the schema migration stays additive.)
+    #[default(0.0)]
+    pub face_y: f32,
 }
 
 /// Phase F — server-authoritative placed furniture. One row per item

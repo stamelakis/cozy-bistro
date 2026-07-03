@@ -38,4 +38,5 @@ export default __t.row({
   errandTripListCsv: __t.option(__t.string()).name("errand_trip_list_csv"),
   errandOffscreenUntilMicros: __t.i64().name("errand_offscreen_until_micros"),
   cleanSeatUid: __t.option(__t.string()).name("clean_seat_uid"),
+  faceY: __t.f32().name("face_y"),
 });
