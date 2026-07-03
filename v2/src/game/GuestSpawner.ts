@@ -773,7 +773,11 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
       const waitIcon = drinkTable ? "🥤" : "⏳";
       return `${prefix} ${waitIcon} ${secs}s`;
     }
-    case "eating":         return `${prefix} ${drinkTable ? "🥤" : "🍴"}`;
+    // Phase M.10 — actively consuming: distinct icon (🍽️ eating / 🍹 drinking)
+    // + no timer, and the bubble layer tints it green. Clearly set apart from
+    // the WAITING icons (⏳ / 🥤 + a ticking timer) so you can tell at a glance
+    // who's served-and-happy vs who's still waiting.
+    case "eating":         return `${prefix} ${drinkTable ? "🍹" : "🍽️"}`;
     case "walkingToToilet": return `${prefix} 🚻`;
     case "atToilet":        return `${prefix} 🚻`;
     case "walkingToSink":   return `${prefix} 🧼`;
@@ -2252,12 +2256,16 @@ export class GuestSpawner {
    * guest with a label + a panic flag so the bubble can flash red.
    * Looks up the seated table's surface so drink-table guests render
    * with the 🥤 icon instead of 🍴 / 📋. */
-  snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean }[] {
+  snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean; eating: boolean }[] {
     return this.guests.map((g) => ({
       id: g.id,
       character: g.character,
       label: guestLabel(g, this.tableSurfaceForGuest(g) === "drink"),
       panic: (g.state === "seated" || g.state === "waitingForFood") && g.patience < 12,
+      // Phase M.10 — flag the consuming state so the bubble layer can tint it
+      // green reliably (the old `label.startsWith("🍴")` check never matched —
+      // the archetype prefix comes first).
+      eating: g.state === "eating",
     }));
   }
 

@@ -2204,10 +2204,13 @@ export class Engine {
           key: `guest-${s.id}`,
           character: s.character,
           label: s.label,
-          // Red flash for guests about to leave angry; green for eating.
+          // Colour-code the state: RED = about to leave angry, GREEN =
+          // eating/drinking (happily consuming), default = waiting/ordering.
+          // (Was `label.startsWith("🍴")`, which never matched — the archetype
+          // prefix comes first — so eating never actually went green.)
           bg: s.panic
             ? "rgba(160, 40, 40, 0.9)"
-            : (s.label.startsWith("🍴") ? "rgba(50, 110, 60, 0.85)" : undefined),
+            : (s.eating ? "rgba(50, 110, 60, 0.85)" : undefined),
         });
       });
     }
