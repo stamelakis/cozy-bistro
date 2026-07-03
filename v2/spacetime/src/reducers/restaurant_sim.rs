@@ -3003,6 +3003,9 @@ fn build_server_order(
     ctx: &ReducerContext,
     restaurant_id: u64,
     hash: u64,
+    seat_floor: u32,
+    seat_at_bar: bool,
+    allow_drink: bool,
 ) -> (String, String, String, String, String) {
     let empty = (String::new(), String::new(), String::new(), String::new(), String::new());
     let menu = match ctx.db.active_menu().restaurant_id().find(restaurant_id) {
@@ -3023,9 +3026,23 @@ fn build_server_order(
             by_cat.entry(m.category.clone()).or_default().push(m);
         }
     }
-    // Need at least one "main" or "drink" to anchor the order.
-    let anchor_cat = if by_cat.contains_key("main") { "main" }
-        else if by_cat.contains_key("drink") { "drink" }
+    // Phase M.1 — drinks are made by a BARMAN at a bar counter. Only
+    // route drink demand to a floor that can actually fulfil it (≥1
+    // bar-counter + ≥1 barman assigned there), so bar-less / barman-less
+    // floors keep the pre-M.1 food-only behavior instead of stamping
+    // un-makeable "bar" tickets that queue forever.
+    let bar_service = floor_has_bar_service(ctx, restaurant_id, seat_floor);
+    let has_drink = by_cat.contains_key("drink");
+    // Table guests get an optional drink course (~50%) when their floor
+    // has bar service; a guest seated AT the bar orders a drink outright.
+    let add_drink = allow_drink && bar_service && has_drink && !seat_at_bar;
+
+    // Need at least one category to anchor the order. A guest seated at a
+    // bar anchors on a drink (barman makes + serves it, no waiter);
+    // everyone else anchors on a main (falling back to a drink-only menu).
+    let anchor_cat = if seat_at_bar && bar_service && has_drink { "drink" }
+        else if by_cat.contains_key("main") { "main" }
+        else if has_drink { "drink" }
         else if !by_cat.is_empty() {
             // Fallback: pick whatever category we do have.
             // Determinism via sorted iteration so resume produces
@@ -3036,10 +3053,10 @@ fn build_server_order(
             // can't return a &str into a string we don't own.
             // Just convert to owned and use String everywhere below.
             let key = keys[0].clone();
-            return build_order_from_anchor(ctx, restaurant_id, &by_cat, &key, hash);
+            return build_order_from_anchor(ctx, restaurant_id, &by_cat, &key, hash, add_drink);
         }
         else { return empty; };
-    build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash)
+    build_order_from_anchor(ctx, restaurant_id, &by_cat, anchor_cat, hash, add_drink)
 }
 
 /// Phase H.53 — TIER_BASE_PROFIT in cents.  MUST match the client's
@@ -3074,9 +3091,25 @@ fn build_order_from_anchor(
     by_cat: &std::collections::HashMap<String, Vec<RecipeMeta>>,
     anchor_cat: &str,
     hash: u64,
+    add_table_drink: bool,
 ) -> (String, String, String, String, String) {
     let mut courses: Vec<&RecipeMeta> = Vec::new();
-    // Appetizer roll first (so it lands before the main if added).
+    // Phase M.1 — drink course first (served alongside the meal), for
+    // table guests on a bar-service floor, ~50% of them. Skipped when the
+    // anchor already IS a drink (bar-seat guest) so we don't double-pour.
+    // The hash is mixed first so the roll still varies when `hash` is a
+    // small auto-inc guest id (the lazy build_server_order fallback).
+    if add_table_drink && anchor_cat != "drink" {
+        if let Some(bucket) = by_cat.get("drink") {
+            if !bucket.is_empty() {
+                let dh = hash.wrapping_mul(2654435761);
+                if (dh >> 20) % 10 < 5 {
+                    courses.push(&bucket[((dh >> 28) as usize) % bucket.len()]);
+                }
+            }
+        }
+    }
+    // Appetizer roll (so it lands before the main if added).
     if by_cat.contains_key("appetizer") && ((hash >> 8) % 10) < 3 {
         let bucket = &by_cat["appetizer"];
         if !bucket.is_empty() {
@@ -3100,7 +3133,14 @@ fn build_order_from_anchor(
         return (String::new(), String::new(), String::new(), String::new(), String::new());
     }
     let recipes: Vec<String> = courses.iter().map(|c| c.recipe_id.clone()).collect();
-    let appliances: Vec<String> = courses.iter().map(|c| c.appliance.clone()).collect();
+    // Phase M.1 — a drink is prepared by a barman at the bar, so stamp its
+    // ticket appliance "bar" regardless of the recipe's own appliance
+    // (coffee/blender/counter). That routes it to the barman pool in
+    // auto_claim_queued_tickets; delivery then splits on seat_at_bar
+    // (bar seat → barman serves direct, table → waiter runs it out).
+    let appliances: Vec<String> = courses.iter().map(|c| {
+        if c.category == "drink" { "bar".to_string() } else { c.appliance.clone() }
+    }).collect();
     let cooks: Vec<String> = courses.iter().map(|c| c.base_cook_seconds_ms.to_string()).collect();
     // H.53 — apply upgrade-level price and satisfaction bonuses
     // per course.  Mirrors the client's effective formulas:
@@ -3130,6 +3170,24 @@ fn build_order_from_anchor(
         prices.join(","),
         sats.join(","),
     )
+}
+
+/// Phase M.1 — can `floor` in restaurant `rid` actually serve drinks?
+/// True only when it has at least one bar-counter (a def that
+/// `def_provides` maps to "bar") AND at least one barman whose
+/// home_floor is that floor. auto_claim_queued_tickets requires both to
+/// be co-located on the ticket's seat_floor to make a "bar" ticket, so
+/// gating order generation on the same condition keeps us from stamping
+/// drink courses that would queue forever on a bar-less / barman-less
+/// floor.
+fn floor_has_bar_service(ctx: &ReducerContext, rid: u64, floor: u32) -> bool {
+    let has_bar = ctx.db.placed_furniture().restaurant_id().filter(rid)
+        .any(|f| f.floor == floor && def_provides(&f.def_id) == Some("bar"));
+    if !has_bar {
+        return false;
+    }
+    ctx.db.staff_actor().restaurant_id().filter(rid)
+        .any(|a| a.role == "barman" && a.home_floor == floor)
 }
 
 /// Phase H.38 — Client seeds the customer_archetype catalog at boot.
@@ -7160,9 +7218,16 @@ pub(crate) fn try_spawn_arrival_guest(
     // empty CSVs gracefully if either isn't available (e.g. brand-
     // new restaurant pre-foreground), in which case the guest will
     // still sit + leave on patience timeout — pre-H.40 behavior.
+    // Phase M.1 — pass the assigned seat so the builder can add a
+    // barman-made drink (and route bar-seat guests to a drink order).
+    // wait-mode spawns have no concrete seat yet (seat_uid empty), so we
+    // suppress the drink to avoid a floor mismatch when they're promoted.
+    let seat_is_bar = !seat_uid.is_empty()
+        && ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
+            .map(|s| s.at_bar).unwrap_or(false);
     let (order_recipes_csv, order_appliances_csv, order_cooks_csv,
          order_prices_csv, order_satisfactions_csv)
-        = build_server_order(ctx, restaurant_id, h);
+        = build_server_order(ctx, restaurant_id, h, seat_floor, seat_is_bar, !wait_mode);
     let order_appliances_opt = if order_appliances_csv.is_empty() { None } else { Some(order_appliances_csv) };
     let order_cooks_opt = if order_cooks_csv.is_empty() { None } else { Some(order_cooks_csv) };
     let order_prices_opt = if order_prices_csv.is_empty() { None } else { Some(order_prices_csv) };
@@ -8718,7 +8783,7 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
     let g_owned: ActiveGuest;
     let g: &ActiveGuest = if g.order_recipes.split(',').all(|s| s.trim().is_empty()) {
         let (recipes_csv, appliances_csv, cooks_csv, prices_csv, sats_csv)
-            = build_server_order(ctx, g.restaurant_id, g.id);
+            = build_server_order(ctx, g.restaurant_id, g.id, g.seat_floor, g.seat_at_bar, true);
         if recipes_csv.is_empty() {
             // Catalog not seeded or empty menu — bail. Guest will sit
             // in waitingForFood until patience runs out and leaves,
