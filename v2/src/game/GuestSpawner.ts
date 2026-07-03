@@ -725,7 +725,7 @@ function pickNearestOnSameFloorFirst<T extends { floor: number }>(
 // Quick Lunch → 1.3× Foodie). SERVE patience resets at the start of
 // every course so multi-course orders don't accumulate pressure.
 const ORDER_PATIENCE_BASE_SECONDS = 60;
-const SERVE_PATIENCE_BASE_SECONDS = 90;
+const SERVE_PATIENCE_BASE_SECONDS = 180; // DOUBLED (was 90) — twice as long to wait for food delivery. Mirror: server SERVE_PATIENCE_BASE_MS.
 
 /** Seats stay dirty for this many seconds after a guest leaves before a
  * new guest can sit. Adds a visible turnaround beat between meals. */

@@ -109,7 +109,7 @@ const ORDER_PATIENCE_BASE_MS: i64 = 60_000; // 60 s
 /// SERVE_PATIENCE_BASE_SECONDS. The server bumps patience_ms to this
 /// (× the multiplier) on the ordering → waitingForFood transition AND
 /// at each course boundary (eating → seated), matching the client.
-const SERVE_PATIENCE_BASE_MS: i64 = 90_000; // 90 s
+const SERVE_PATIENCE_BASE_MS: i64 = 180_000; // 180 s — DOUBLED (was 90 s) so guests give the kitchen twice as long to deliver food before leaving angry. Mirror: client SERVE_PATIENCE_BASE_SECONDS.
 /// Compute the scaled patience pool from a base value and a guest's
 /// stored multiplier (×100). 150 means 1.5×, so 60000 × 150 / 100 =
 /// 90000 ms. Clamped to a sane floor so a wildly low multiplier
@@ -8022,7 +8022,19 @@ fn try_assign_seat_for(
                         sc += if matches { 60.0 } else { -40.0 };
                     }
                 }
-                sc - dist.min(100.0) * 0.15
+                // Phase M.7 — DON'T pull guests toward the door. The old
+                // `- dist*0.15` tiebreaker filled the room entrance-first,
+                // which reads as "seats filling bottom to top". Use a
+                // deterministic per-seat jitter instead so equal-appeal seats
+                // fill in a SCATTERED order across the whole room. Taste still
+                // dominates (diet ±60, window +20, decor variable); the jitter
+                // (0..12) only breaks ties. `dist` stays used by the None arm.
+                let mut jh: u64 = 1469598103934665603; // FNV-1a offset basis
+                for b in s.seat_uid.bytes() {
+                    jh = (jh ^ b as u64).wrapping_mul(1099511628211);
+                }
+                let jitter = (jh % 1000) as f32 / 1000.0 * 12.0;
+                sc + jitter
             }
         };
         if score > best_score {
