@@ -108,9 +108,11 @@ export class LedgerModal {
     // (cloud)" lines told the player nothing about wages, rent, or supplies).
     const legend = document.createElement("div");
     legend.innerHTML =
-      "<b>Meal sales &amp; tips</b> = customer income. Costs: <b>Staff wages</b>, " +
-      "<b>Rent</b> (starts after a grace period), <b>Ingredient restock</b>, and " +
-      "<b>Supplies &amp; running costs</b> (auto, settled on the server).";
+      "Money is settled on the server; the client sees the <b>net</b> change, posted " +
+      "every few seconds. <b>Meal sales &amp; tips</b> = a window where income won; " +
+      "<b>Supplies &amp; running costs</b> = a window where costs won — that line bundles " +
+      "<b>staff wages + rent + ingredient restock</b> together (they aren't split out yet). " +
+      "One-off buys like <b>Unlock purchase</b> post on their own.";
     Object.assign(legend.style, {
       fontSize: "10px", opacity: "0.6", lineHeight: "1.45", marginBottom: "8px",
     } as Partial<CSSStyleDeclaration>);
