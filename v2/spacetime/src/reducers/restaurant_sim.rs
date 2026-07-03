@@ -1795,27 +1795,31 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         for f in ctx.db.placed_furniture().restaurant_id().filter(rid) {
             if def_provides(&f.def_id) != Some(ticket.appliance.as_str()) { continue; }
             if occupied.contains(&f.uid) { continue; }
-            // Phase 9.55 — STRICT per-floor staffing (replaces the 9.41
-            // SEAT_FLOOR_BIAS "soft preference"). The dish is cooked on the
-            // ORDER's floor, full stop: skip every station on another floor.
-            // The CHEF must also be assigned to that floor (filter below).
-            // A chef may still move between free stations ON ITS OWN FLOOR
-            // (the player chose "keep station sharing"), but never crosses
-            // floors. If the order's floor has no chef or no free station,
-            // the order waits — the player staffs each floor they seat on.
-            if f.floor != ticket.seat_floor { continue; }
-            // Cheapest same-floor chef for this candidate station.
+            // Phase M.12 — CROSS-FLOOR cooking (replaces the 9.55 strict
+            // per-floor rule). A station on ANY floor can make this ticket:
+            // the chef/barman cooks at their OWN floor's station, then a
+            // waiter carries the plate across floors to the guest (the waiter
+            // picker + delivery legs already handle floor changes). We
+            // strongly PREFER the guest's own floor via a big penalty, so we
+            // only reach to another floor when the seat floor genuinely can't
+            // make the dish — e.g. the single grill / pizza-oven the whole
+            // restaurant shares. Before this, a grill/pizza order on a floor
+            // with no such station queued FOREVER while chefs stood idle at
+            // their stoves ("20 queued + chefs idle").
+            let cross_floor_penalty = if f.floor == ticket.seat_floor { 0.0 } else { 1000.0 };
+            // Cheapest chef/barman assigned to THIS station's floor.
             let mut local_best: Option<(usize, f32)> = None;
             for (i, a) in pool.iter().enumerate() {
-                if a.home_floor != ticket.seat_floor { continue; }
+                if a.home_floor != f.floor { continue; }
                 let d = staff_dist_to(a, f.x, f.z, f.floor);
                 if local_best.map(|(_, bd)| d < bd).unwrap_or(true) {
                     local_best = Some((i, d));
                 }
             }
             if let Some((ai, d)) = local_best {
-                if best.as_ref().map(|(_, _, bd)| d < *bd).unwrap_or(true) {
-                    best = Some((f, ai, d));
+                let score = d + cross_floor_penalty;
+                if best.as_ref().map(|(_, _, bd)| score < *bd).unwrap_or(true) {
+                    best = Some((f, ai, score));
                 }
             }
         }
