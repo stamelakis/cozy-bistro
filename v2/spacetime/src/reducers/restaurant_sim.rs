@@ -7084,6 +7084,20 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // "successfully visited" bonuses.
     let new_wc_completed = g.wc_completed || wc_cycle_completed;
 
+    // Phase M.16 — write the body FLOOR. It was preserved by `..g`, so a guest
+    // whose seat is on an upper floor kept its floor-0 SPAWN value while its
+    // x/z walked to the seat — and the guest-cutover client now renders that
+    // server floor directly, so the guest appeared at floor 0 on the upper
+    // seat's x/z ("sitting on an imaginary chair through another floor").
+    // Confirmed via live active_guest: eating guests had floor=0 but
+    // seat_floor/target_floor=1. Movement is straight-line with no stairs, so
+    // snap the floor to the target's floor once the body has REACHED it (an
+    // anchored/seated guest is at its seat every tick, so it settles to
+    // seat_floor). Mirrors how tick_staff_actor pins floor on arrival.
+    let reached_target = (effective_target_x - new_x).abs() < 0.06
+        && (effective_target_z - new_z).abs() < 0.06;
+    let new_floor = if reached_target { effective_target_floor } else { g.floor };
+
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
         state_clock_ms: final_clock,
@@ -7091,6 +7105,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         order_index: new_order_index,
         x: new_x,
         z: new_z,
+        floor: new_floor,
         // H.12 — apply server fallback seat assignment if it fired.
         // When assigned_target is None, these read back to the
         // existing row values (no change).
