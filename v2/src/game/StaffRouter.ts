@@ -4310,12 +4310,22 @@ function waiterLabel(w: StaffActor, carrying: boolean): string {
   // dish", and fetch-vs-serve was guessed from the ticket state (true for
   // BOTH legs) rather than the real delivery leg. Fall back to the local
   // fields for any pure-local-sim path.
-  const takingOrder = w.cloudTakeOrderActive || !!w.takeOrderRequest;
+  // Phase M.16 — under staffMove (the shipped default) read the SERVER-mirrored
+  // fields ONLY. The local fields (takeOrderRequest / washTrip / cleanSeatUid)
+  // are maintained by the local sim, which no longer RUNS under staffMove, so
+  // they go stale and never clear: a waiter that finished a take-order
+  // server-side kept the "📋 taking order" bubble because the stale local
+  // takeOrderRequest OR'd it back true even though cloudTakeOrderActive was
+  // correctly false (confirmed via live staff_actor: no waiter held a take-order
+  // yet one rendered "taking order"). Only consult the local fields on the
+  // pure-local-sim path (staffMove off).
+  const serverDriven = isServerSim("staffMove");
+  const takingOrder = serverDriven ? !!w.cloudTakeOrderActive : (w.cloudTakeOrderActive || !!w.takeOrderRequest);
   const washPhase = (w.cloudWashPhase && w.cloudWashPhase.length > 0)
     ? w.cloudWashPhase
-    : (w.washTrip ? w.washTrip.phase : "");
+    : (serverDriven ? "" : (w.washTrip ? w.washTrip.phase : ""));
   const washing = washPhase.length > 0;
-  const clearing = w.cloudCleanActive || !!w.cleanSeatUid;
+  const clearing = serverDriven ? !!w.cloudCleanActive : (w.cloudCleanActive || !!w.cleanSeatUid);
   // Real delivery leg: "deliver" = carrying to the seat, "pickup"/null = going
   // to the kitchen to fetch. Fall back to `carrying` only when the server
   // phase isn't mirrored (pure local sim).
