@@ -2251,6 +2251,22 @@ export class GuestSpawner {
       usedToilet: false,
       reservedDishTiers,
       serverMirrorId: row.id,
+      // Phase M.16 — seed the guest-cutover cloud pose/state from THIS row so
+      // renderGuestFromServer (update()'s guestMove branch) anchors the body to
+      // the correct FLOOR from frame one. Without this the cloud* fields are
+      // undefined until the next active_guest onUpdate, so renderGuestFromServer
+      // early-returns, `_baseY` is never set, and the animator's floor gate
+      // (round(_baseY/storeyHeight)) defaults the guest to floor 0 — an
+      // upper-storey guest imported on reload then "sits in a chair on the
+      // ground floor". Settled interp (prev = cur, interp = 1) so the body
+      // doesn't glide in from the origin on the first frame.
+      cloudX: character.groundPos.x,
+      cloudZ: character.groundPos.y,
+      cloudFloor: row.floor,
+      cloudState: row.state,
+      cloudPrevX: character.groundPos.x,
+      cloudPrevZ: character.groundPos.y,
+      cloudInterp: 1,
       // Mark mirror flags as already-settled so periodic mirror
       // doesn't re-push.  Cloud already has these values.
       orderMirrored: order.length > 0,
