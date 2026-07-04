@@ -1716,6 +1716,16 @@ export class StaffRouter {
       onDelete: (id) => this.reconcileCloudTicketDelete(id),
     });
     this.cloud.subscribeStaffActorChanges({
+      // Phase M.16 — reconcile on INSERT too, not just UPDATE. The initial
+      // subscription delivers existing rows as INSERTS, and idle staff rows
+      // rarely change afterwards, so an onUpdate-only bridge left their
+      // cloudX/cloudZ/cloudFloor unstashed after a reload. renderActorFromServer
+      // then early-returned on the missing pose, `_baseY` stayed unset, and the
+      // animator's floor gate dumped an idle upper-floor chef/waiter/barman
+      // onto the ground floor ("staff standing on the wrong floor"). Same fix
+      // shape as seeding the guest cloud pose at import; reconcile is idempotent
+      // so the extra call is harmless. (The ticket bridge above already does this.)
+      onInsert: (row) => this.reconcileCloudStaffActor(row),
       onUpdate: (row) => this.reconcileCloudStaffActor(row),
     });
     console.log("[Router/Bridge] server-authoritative bridge attached");
