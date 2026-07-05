@@ -6629,11 +6629,25 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
             log::info!("guest {} gave up at overflow chair — transitioning to leaving", g.id);
             return;
         }
-        // Mid-wait: just decrement the waiting clock alongside the
-        // standard clock advance. Flow through to the position step
-        // below in case the client moved the guest's body separately
-        // (e.g. they shuffled to a different overflow chair).
-        let (new_x, new_z) = (g.x, g.z); // anchored to the chair
+        // Mid-wait: WALK the guest toward its assigned waiting spot
+        // (target_x/z) instead of freezing at the current position.
+        // Phase M.18 — under the full server sim a wait-mode guest is
+        // spawned AT the door (0, ~5.45) with its waiting spot over at
+        // (±1.8, 4.85); the old anchor-to-(g.x,g.z) pinned it in the
+        // doorway forever — the "people sitting in front of the door"
+        // the player kept seeing. (In the retired client sim the local
+        // GuestSpawner walked it to the chair first, so anchoring was
+        // fine.) Stepping toward the target walks it in; once it lands
+        // the step is a no-op so it still parks on the waiting spot.
+        // Same reused stepper as walkingIn guests (which enter from the
+        // same z=5.45 spawn), so the off-grid doorway start is handled
+        // identically. Waiting area is floor 0 → next_step_multi is a
+        // plain obstacle-aware same-floor step (no stair traverse).
+        let (new_x, new_z, _wf, _ws) = next_step_multi(
+            ctx, g.restaurant_id, g.x, g.z, g.floor, g.on_stair,
+            g.target_x, g.target_z, g.target_floor,
+            GUEST_SPEED, dt_ms,
+        );
         ctx.db.active_guest().id().update(ActiveGuest {
             state_clock_ms: new_clock,
             patience_ms: new_patience,
