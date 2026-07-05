@@ -78,6 +78,28 @@ export interface AnimatedCharacter {
    * its height crosses into the upper storey's bucket ("goes halfway up then
    * disappears"). */
   _onStair?: boolean;
+  /** Phase M.19 — last body opacity the animator applied [0,1]. Lets the
+   * stair-fade skip re-traversing a character whose opacity hasn't changed. */
+  _opacity?: number;
+  /** Phase M.19 — set once the character's GLB materials have been cloned into
+   * per-instance copies (so fading THIS body doesn't fade every other guest
+   * sharing the model's materials — SkeletonUtils.clone shares them). Only a
+   * character that has actually faded (climbed a stair) ever pays this. */
+  _matCloned?: boolean;
+}
+
+/** Phase M.19 — stair-fade band, in storeys of height above the focused floor.
+ * A climbing body is fully opaque until it's this far up the flight (0.5 = the
+ * half-way point, roughly where the head first reaches the ceiling), then fades
+ * out, fully gone by STAIR_FADE_END (1.0 = the far slab / ceiling it exits
+ * through). Symmetric below, so a body descending into view fades back in. */
+const STAIR_FADE_START = 0.5;
+const STAIR_FADE_END = 1.0;
+
+/** Smooth Hermite ramp: 0 for x<=a, 1 for x>=b, eased S-curve between. */
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
 export class CharacterAnimator {
@@ -165,6 +187,44 @@ export class CharacterAnimator {
     return false;
   }
 
+  /** Phase M.19 — set a character's whole-body opacity [0,1] for the stair
+   * fade. The first time a body actually fades, its GLB materials are cloned
+   * into per-instance copies — SkeletonUtils.clone SHARES materials across
+   * every guest of the same model, so mutating a shared material would fade
+   * them all. Skips the work when opacity is unchanged, and only flips the
+   * `transparent` flag (a shader recompile) at the fade's start/end, never
+   * per-frame — the intermediate frames just tween `opacity`. */
+  private applyCharacterOpacity(c: AnimatedCharacter, opacity: number): void {
+    const o = Math.max(0, Math.min(1, opacity));
+    const prev = c._opacity ?? 1;
+    if (prev === o) return;
+    // A never-faded body being (re)set to opaque needs nothing — its shared
+    // materials are already opaque; don't clone them just to write opacity=1.
+    if (o >= 1 && !c._matCloned) { c._opacity = 1; return; }
+    if (!c._matCloned) {
+      c.root.traverse((obj) => {
+        const m = obj as THREE.Mesh;
+        if (!m.isMesh) return;
+        m.material = Array.isArray(m.material)
+          ? m.material.map((mm) => mm.clone())
+          : (m.material as THREE.Material).clone();
+      });
+      c._matCloned = true;
+    }
+    const transparent = o < 1;
+    const toggle = transparent !== (prev < 1);
+    c.root.traverse((obj) => {
+      const m = obj as THREE.Mesh;
+      if (!m.isMesh) return;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const mm of mats as THREE.Material[]) {
+        mm.opacity = o;
+        if (toggle) { mm.transparent = transparent; mm.needsUpdate = true; }
+      }
+    });
+    c._opacity = o;
+  }
+
   update(dt: number): void {
     this.elapsed += dt;
     // Phase I (perf) — recompute the frustum from the camera's
@@ -236,13 +296,32 @@ export class CharacterAnimator {
       // toward the nearer slab, so they pop in/out at the half-way point
       // — acceptable for a brief transit, and matches their bubble.
       // Phase M.17 — a character actively climbing a flight is EXEMPT from the
-      // floor-focus gate so the WHOLE climb stays visible; otherwise it vanishes
-      // at the half-way point as baseY crosses into the upper storey's bucket
-      // ("goes halfway up then disappears"). It re-enters the gate the moment it
-      // steps off the stairs (on_stair clears) onto the destination floor.
-      const offFloor = gateFloor !== undefined && !c._onStair
-        && Math.round(baseY / gateStoreyH) !== gateFloor;
-      if (offFloor || c._keepHidden) {
+      // hard floor-focus gate so the WHOLE climb stays visible; otherwise it
+      // vanished at the half-way point as baseY crossed into the upper storey's
+      // bucket ("goes halfway up then disappears").
+      // Phase M.19 — but rather than POP out at the top of the climb, a climbing
+      // body now FADES: opacity ramps to 0 over the top of the flight as the
+      // body passes up through the focused floor's ceiling (STAIR_FADE_START..
+      // END, measured in storeys above the focused slab), and fades back IN
+      // symmetrically when a body descends into view or climbs into the focused
+      // floor. Every NON-climbing character still uses the hard 0/1 gate, so
+      // the per-frame opacity/material work only ever touches actual climbers.
+      let bodyFade = 1;
+      let show: boolean;
+      if (c._keepHidden) {
+        show = false;
+      } else if (gateFloor === undefined) {
+        show = true;                    // exterior view — every floor renders
+      } else if (c._onStair) {
+        // Distance of the feet above the focused slab, in storeys (0 = on it,
+        // 1 = a full storey up, at the ceiling/next slab it exits through).
+        const rel = Math.abs(baseY / gateStoreyH - gateFloor);
+        bodyFade = 1 - smoothstep(STAIR_FADE_START, STAIR_FADE_END, rel);
+        show = bodyFade > 0.02;
+      } else {
+        show = Math.round(baseY / gateStoreyH) === gateFloor;
+      }
+      if (!show) {
         if (c.root.visible) c.root.visible = false;
         // Phase M.2 — a hidden SKINNED character keeps advancing its mixer
         // + sit/stand phase machine so it tracks the server action while
@@ -260,6 +339,10 @@ export class CharacterAnimator {
         continue;
       }
       if (!c.root.visible) c.root.visible = true;
+      // Phase M.19 — apply the stair fade, or restore full opacity for a body
+      // that faded on a previous climb. A never-faded character (bodyFade==1,
+      // no cloned materials) skips this entirely — zero cost on the common path.
+      if (c._matCloned || bodyFade < 1) this.applyCharacterOpacity(c, bodyFade);
 
       // Skinned guests must keep their mixer advancing on EVERY visible
       // frame, so they are handled BEFORE the frustum cull. The cull below
