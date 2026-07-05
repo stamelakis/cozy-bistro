@@ -43,6 +43,16 @@ export function riggedStaffModel(role: string): string | undefined {
 const RIGGED_SCALE = 0.9;
 const FORWARD_OFFSET = Math.PI;
 
+/** Phase M.21 — walk-clip cadence match. The walk loops are authored in place
+ * (no root motion), so their stride reads right only at one ground speed; drive
+ * the action's `timeScale` by the body's actual speed so the feet track the
+ * travel instead of skating. REF_WALK_SPEED is the speed at which timeScale = 1
+ * looks planted (≈ the sim's GUEST_SPEED 1.5 m/s); MIN/MAX clamp so a stalled
+ * body doesn't freeze mid-stride and a fast one doesn't sprint. */
+const REF_WALK_SPEED = 1.5;
+const WALK_SCALE_MIN = 0.35;
+const WALK_SCALE_MAX = 2.4;
+
 /** Map a clip's GLB name to the controller's canonical state name. */
 function normalizeClip(name: string): string {
   const n = name.toLowerCase().replace(/[\s_]+/g, "");
@@ -116,9 +126,20 @@ export class RiggedController {
     this.currentName = name;
   }
 
-  /** Called each visible frame by CharacterAnimator (after cull). */
-  update(dt: number, action: CharacterAction): void {
+  /** Called each visible frame by CharacterAnimator (after cull). `speed` is the
+   * body's smoothed ground speed (m/s) — scales the walk clip so the stride
+   * matches the travel. */
+  update(dt: number, action: CharacterAction, speed = REF_WALK_SPEED): void {
     this.mixer.update(dt);
+    // Match the walk loop's cadence to the ground speed (no foot-skating). Only
+    // while genuinely walking (phase "up", so not mid sit/stand and not using
+    // the walk clip as a fallback stand-idle) — otherwise play it at 1×.
+    const walkAct = this.actions.get("walk");
+    if (walkAct) {
+      walkAct.timeScale = (action === "walk" && this.phase === "up")
+        ? Math.max(WALK_SCALE_MIN, Math.min(WALK_SCALE_MAX, speed / REF_WALK_SPEED))
+        : 1;
+    }
     if (!this.hasSit) {
       // Staff / standing NPCs: the work gesture (cook / mix / serve at a
       // station) plays only while working (StaffRouter sets action "carry");

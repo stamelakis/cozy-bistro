@@ -20,7 +20,9 @@ export type CharacterAction = "idle" | "walk" | "sit" | "carry";
  * procedural pose. RiggedCharacter's RiggedController (the GLB cast) satisfies
  * this structurally, so the animator stays decoupled from the concrete class. */
 export interface SkeletalDriver {
-  update(dt: number, action: CharacterAction): void;
+  /** `speed` (m/s, optional) scales the walk clip's playback so the stride
+   * matches the ground travel — no foot-skating / moon-walking. */
+  update(dt: number, action: CharacterAction, speed?: number): void;
   stop(): void;
   /** True while a one-shot transition (sit-down / stand-up) is playing, so the
    * mover holds position instead of sliding the body through it. Optional —
@@ -59,6 +61,13 @@ export interface AnimatedCharacter {
    * moonwalks in place against the furniture. */
   _animPrevX?: number;
   _animPrevZ?: number;
+  /** Phase M.21 — smoothed ground speed (m/s), and how long the body has been
+   * essentially still (ms). The walk clip's playback rate is scaled by _speed
+   * so the stride matches the travel (no skating), and the walk→idle gate waits
+   * out _stillMs so a brief position stall between 2 Hz server ticks doesn't
+   * flip to idle and restart the walk cycle ("momentary glitch"). */
+  _speed?: number;
+  _stillMs?: number;
   /** Raw "lift the feet off the ground" offset, independent of any
    * storey-Y. Captured at add-time as (_baseY − homeFloor × STOREY)
    * for upper-floor staff, or simply _baseY for guests / ground-floor
@@ -101,6 +110,17 @@ export interface AnimatedCharacter {
  * body descending into the focused floor fades back in. */
 const STAIR_FADE_START = 0.3;
 const STAIR_FADE_END = 0.95;
+
+/** Phase M.21 — walk-animation smoothing. Server pushes body positions at 2 Hz;
+ * the client interpolates, but a late tick briefly stalls the body. WALK_STILL_SQ
+ * is the per-frame travel² below which the body counts as "not moving"; the
+ * walk→idle switch only fires after WALK_IDLE_GRACE_MS of continuous stillness,
+ * so an inter-tick stall doesn't flip to idle and reset the walk cycle.
+ * SPEED_SMOOTH_S is the EMA time-constant for the ground speed that drives the
+ * walk clip's timeScale. */
+const WALK_STILL_SQ = 0.000025; // (5 mm/frame)² — same threshold as before
+const WALK_IDLE_GRACE_MS = 280;
+const SPEED_SMOOTH_S = 0.12;
 
 export class CharacterAnimator {
   private readonly characters: AnimatedCharacter[] = [];
@@ -280,8 +300,19 @@ export class CharacterAnimator {
       const movedSq = (c.groundPos.x - prevX) ** 2 + (c.groundPos.y - prevZ) ** 2;
       c._animPrevX = c.groundPos.x;
       c._animPrevZ = c.groundPos.y;
+      // Phase M.21 — smoothed ground speed (drives the walk clip's playback rate
+      // so the stride matches the travel) + a stillness timer with hysteresis.
+      const instSpeed = dt > 0 ? Math.sqrt(movedSq) / dt : 0;
+      c._speed = (c._speed ?? instSpeed)
+        + (instSpeed - (c._speed ?? instSpeed)) * Math.min(1, dt / SPEED_SMOOTH_S);
+      if (movedSq < WALK_STILL_SQ) c._stillMs = (c._stillMs ?? 0) + dt * 1000;
+      else c._stillMs = 0;
+      // Only fall back to "idle" once the body has been still for a sustained
+      // stretch — a brief stall between 2 Hz server ticks keeps playing "walk"
+      // (previously it flipped every stall, reset()-ing the walk cycle → the
+      // "restart the animation / momentary glitch" the player saw).
       const effAction: CharacterAction =
-        c.action === "walk" && movedSq < 0.000025 ? "idle" : c.action;
+        c.action === "walk" && (c._stillMs ?? 0) >= WALK_IDLE_GRACE_MS ? "idle" : c.action;
       c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
       c.root.rotation.set(0, c.facingY, 0);
 
@@ -337,7 +368,7 @@ export class CharacterAnimator {
         // (root.visible=false → three.js skips the GPU skinning/draw), and
         // skinned characters are a bounded minority (customers + staff in
         // the restaurant), so the per-frame cost is small.
-        if (c.skeletal) c.skeletal.update(dt, effAction);
+        if (c.skeletal) c.skeletal.update(dt, effAction, c._speed);
         continue;
       }
       if (!c.root.visible) c.root.visible = true;
@@ -367,7 +398,7 @@ export class CharacterAnimator {
         // guests get the equivalent via the "sit" case in tickCharacter, which
         // the skeletal path skips.
         if (c.action === "sit" && c.seatHeight) c.root.position.y += c.seatHeight;
-        c.skeletal.update(dt, effAction);
+        c.skeletal.update(dt, effAction, c._speed);
         continue;
       }
 
