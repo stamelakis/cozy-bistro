@@ -95,6 +95,12 @@ export interface StaffActorRow {
   targetX: number;
   targetZ: number;
   targetFloor: number;
+  /** True ONLY while the actor is actively climbing a flight of stairs
+   * (server-streamed `on_stair`). Distinct from being anywhere inside
+   * the stairwell footprint — false while crossing a landing between
+   * flights on a multi-floor trip, so the client's height ramp keys off
+   * this instead of a geometric bounding box. */
+  onStair: boolean;
   /** Phase M.8 — facing (radians) to hold while working at the station. */
   faceY: number;
   ticketId: bigint | null;
@@ -141,6 +147,11 @@ export interface ActiveGuestRow {
   targetX: number;
   targetZ: number;
   targetFloor: number;
+  /** True ONLY while the guest is actively climbing a flight of stairs
+   * (server-streamed `on_stair`). Used by the client height ramp so a
+   * guest crossing a landing between flights on a multi-floor trip
+   * doesn't get spuriously lifted. */
+  onStair: boolean;
   seatUid: string;
   /** Phase H.A — Position where a plate should sit when this guest
    * is eating. Pre-H.A wasn't surfaced because the host's local sim
@@ -2015,6 +2026,7 @@ export class SpacetimeClient {
           targetX: a.targetX,
           targetZ: a.targetZ,
           targetFloor: a.targetFloor,
+          onStair: a.onStair,
           faceY: a.faceY,
           ticketId: a.ticketId ?? null,
           assignedStoveUid: a.assignedStoveUid,
@@ -2051,6 +2063,7 @@ export class SpacetimeClient {
       memberId: string; restaurantId: bigint; role: string; state: string;
       x: number; z: number; floor: number;
       targetX: number; targetZ: number; targetFloor: number;
+      onStair: boolean;
       faceY: number;
       ticketId: bigint | undefined;
       assignedStoveUid: string; washTargetUid: string; washPhase: string;
@@ -2063,6 +2076,7 @@ export class SpacetimeClient {
       memberId: r.memberId, role: r.role, state: r.state,
       x: r.x, z: r.z, floor: r.floor,
       targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
+      onStair: r.onStair,
       faceY: r.faceY,
       ticketId: r.ticketId ?? null,
       assignedStoveUid: r.assignedStoveUid,
@@ -2114,6 +2128,7 @@ export class SpacetimeClient {
       patienceMs: bigint;
       x: number; z: number; floor: number;
       targetX: number; targetZ: number; targetFloor: number;
+      onStair: boolean;
       seatUid: string;
       seatX: number; seatZ: number; seatFloor: number;
       plateX: number; plateZ: number;
@@ -2125,6 +2140,7 @@ export class SpacetimeClient {
       patienceMs: r.patienceMs,
       x: r.x, z: r.z, floor: r.floor,
       targetX: r.targetX, targetZ: r.targetZ, targetFloor: r.targetFloor,
+      onStair: r.onStair,
       seatUid: r.seatUid,
       seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor,
       plateX: r.plateX, plateZ: r.plateZ,
@@ -4981,6 +4997,7 @@ export class SpacetimeClient {
             patienceMs: g.patienceMs,
             x: g.x, z: g.z, floor: g.floor,
             targetX: g.targetX, targetZ: g.targetZ, targetFloor: g.targetFloor,
+            onStair: g.onStair,
             seatUid: g.seatUid,
             seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
             plateX: g.plateX, plateZ: g.plateZ,
@@ -5032,6 +5049,7 @@ export class SpacetimeClient {
             memberId: a.memberId, role: a.role, state: a.state,
             x: a.x, z: a.z, floor: a.floor,
             targetX: a.targetX, targetZ: a.targetZ, targetFloor: a.targetFloor,
+            onStair: a.onStair,
             faceY: a.faceY,
             ticketId: a.ticketId ?? null,
             assignedStoveUid: a.assignedStoveUid,

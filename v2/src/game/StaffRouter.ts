@@ -274,6 +274,11 @@ interface StaffActor {
    * ramps the body Y along the steps by z-position. The server walks the
    * body through the stairwell gradually; the client just picks the height. */
   cloudTargetFloor?: number;
+  /** Phase — precise server `on_stair` flag: true ONLY while actively
+   * climbing a flight. The render height ramp gates on this instead of a
+   * geometric stairwell bounding box, so an actor crossing a landing
+   * between flights on a multi-floor trip isn't spuriously lifted. */
+  cloudOnStair?: boolean;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -1876,6 +1881,7 @@ export class StaffRouter {
     actor.cloudZ = row.z;
     actor.cloudFloor = row.floor;
     actor.cloudTargetFloor = row.targetFloor;
+    actor.cloudOnStair = row.onStair;
     actor.cloudState = row.state;
     // Phase M.13 — mirror the server task fields so the bubble label reads
     // the REAL job (take order / fetch / serve / wash / clear), not a guess.
@@ -2408,9 +2414,8 @@ export class StaffRouter {
     // by z-position (the server walks the body through gradually; the normal
     // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
     const tf = a.cloudTargetFloor;
-    const inStairwell = pos.x >= -4.5 && pos.x <= -2.5 && pos.y >= -4.2 && pos.y <= -0.5;
     let anchorY: number;
-    if (tf !== undefined && tf !== a.currentFloor && inStairwell) {
+    if (a.cloudOnStair && tf !== undefined && tf !== a.currentFloor) {
       const lowerFloor = tf > a.currentFloor ? a.currentFloor : a.currentFloor - 1;
       const hFrac = Math.max(0, Math.min(1, (pos.y + 1) / -3));
       anchorY = (lowerFloor + hFrac) * STOREY + feetLift;

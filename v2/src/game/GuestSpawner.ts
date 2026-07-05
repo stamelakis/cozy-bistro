@@ -448,6 +448,11 @@ interface ActiveGuest {
    * Y along the steps by z-position. The server walks the body through the
    * stairwell gradually; the client just picks the height. */
   cloudTargetFloor?: number;
+  /** Phase — precise server `on_stair` flag: true ONLY while actively
+   * climbing a flight. The render height ramp gates on this instead of a
+   * geometric stairwell bounding box, so a guest crossing a landing
+   * between flights on a multi-floor trip isn't spuriously lifted. */
+  cloudOnStair?: boolean;
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -1678,6 +1683,7 @@ export class GuestSpawner {
     g.cloudZ = row.z;
     g.cloudFloor = row.floor;
     g.cloudTargetFloor = row.targetFloor;
+    g.cloudOnStair = row.onStair;
     g.cloudState = row.state;
 
     // Phase 9.32 — keep the local patience clock in lockstep with the
@@ -4279,9 +4285,8 @@ export class GuestSpawner {
     // by z-position (the server walks the body through gradually; the normal
     // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
     const tf = g.cloudTargetFloor;
-    const inStairwell = pos.x >= -4.5 && pos.x <= -2.5 && pos.y >= -4.2 && pos.y <= -0.5;
     let anchorY: number;
-    if (tf !== undefined && tf !== g.currentFloor && inStairwell) {
+    if (g.cloudOnStair && tf !== undefined && tf !== g.currentFloor) {
       const lowerFloor = tf > g.currentFloor ? g.currentFloor : g.currentFloor - 1;
       const hFrac = Math.max(0, Math.min(1, (pos.y + 1) / -3));
       anchorY = (lowerFloor + hFrac) * STOREY + feetLift;
