@@ -442,10 +442,14 @@ interface ActiveGuest {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
-  /** Phase M.17 — storey the body is climbing FROM during a server-driven
-   * stair hop, so renderGuestFromServer ramps Y from it to cloudFloor over the
-   * pose interp instead of snapping. Undefined when not on the stairs. */
-  stairFromFloor?: number;
+  /** Phase M.17 — an in-progress client-side stair CLIMB (fixed ~0.8 s). The
+   * server hops the flight in one tick then walks the guest on, so the client
+   * animates the walk up the steps itself, holding the body on the stairs
+   * regardless of server pose rate. Undefined when not on the stairs. */
+  stairClimb?: {
+    fromX: number; fromZ: number; toX: number; toZ: number;
+    fromFloor: number; toFloor: number; elapsed: number;
+  };
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -4236,22 +4240,48 @@ export class GuestSpawner {
     // storey-focus visibility hides the guest when the player looks at a
     // different floor (same helper the local mover uses across stairs).
     if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
-      // Phase M.17 — a cross-floor server hop lands on a stair tile; record the
-      // storey being LEFT so the body ramps up the stairs over this pose's
-      // interp instead of snapping the storey (non-stair changes still snap).
-      g.stairFromFloor = nearStairTile(g.cloudX, g.cloudZ) ? g.currentFloor : undefined;
+      // Phase M.17 — cross-floor stair CLIMB. Detect the server hop (floor
+      // change landing on a stair tile) and start a FIXED-duration client climb
+      // (~0.8 s); the server does the flight in one tick + walks on, so an
+      // interp-linked ramp gets cut short by the next pose → snaps. A non-stair
+      // change (reload reparent) just reparents + snaps below.
+      const fromFloor = g.currentFloor;
       g.currentFloor = g.cloudFloor;
       this.reparentCharacter?.(g.character, g.cloudFloor);
+      g.stairClimb = nearStairTile(g.cloudX, g.cloudZ)
+        ? { fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
+            toX: g.cloudX, toZ: g.cloudZ, fromFloor, toFloor: g.cloudFloor, elapsed: 0 }
+        : undefined;
     }
-    // Adopt the server state first so the bubble/eating flag reflect it and
-    // the pose selection below reads the mapped local state. The reconcile
-    // bridge still fires the discrete side effects (plate/chime/finalize) on
-    // its transitions; this just keeps the continuous state in lockstep.
+    // Adopt the server state so the bubble/eating flag + pose read server truth.
     if (g.cloudState) g.state = cloudStateToLocal(g.cloudState);
+    // Cache the raw feet-lift once (guests spawn at the Floor 0 door → _baseY is
+    // the raw lift), consistent with the mover + the staff render.
+    if (g.character._feetLift == null) {
+      g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
+    }
+    const feetLift = g.character._feetLift;
+    // Active climb — drive the body up the steps over the fixed duration,
+    // IGNORING the (already-past-the-stairs) server pose until it completes.
+    if (g.stairClimb) {
+      const c = g.stairClimb;
+      c.elapsed += dt;
+      const s = Math.min(1, c.elapsed / 0.8);
+      const cpos = g.character.groundPos;
+      cpos.x = c.fromX + (c.toX - c.fromX) * s;
+      cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
+      const cy = (c.fromFloor + (c.toFloor - c.fromFloor) * s) * STOREY + feetLift;
+      g.character.root.position.y = cy;
+      g.character._baseY = cy;
+      const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
+      if (Math.hypot(cdx, cdz) > 0.01) g.character.facingY = Math.atan2(-cdx, -cdz);
+      g.character.action = "walk";
+      if (s >= 1) g.stairClimb = undefined;
+      return; // ignore the server pose while climbing
+    }
     const pos = g.character.groundPos;
-    // Snapshot interpolation: glide from the previous server pose to the
-    // latest over the ~2 Hz tick interval (interp 0→1) so the body moves at a
-    // steady speed instead of teleport-then-stall.
+    // Snapshot interpolation: glide from the previous server pose to the latest
+    // over the ~2 Hz tick interval (interp 0→1) — steady speed, no teleport+stall.
     const prevX = g.cloudPrevX ?? g.cloudX;
     const prevZ = g.cloudPrevZ ?? g.cloudZ;
     const GUEST_TICK_S = 0.5; // server guest tick ≈ 2 Hz
@@ -4259,37 +4289,17 @@ export class GuestSpawner {
     const t = g.cloudInterp;
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;
-    // Snap on a real teleport; otherwise ease toward the (already-smooth)
-    // interpolated point. Phase M.17 — but DON'T snap during a stair climb: let
-    // the interp glide the body from the stair entry to the exit landing
-    // (paired with the Y ramp below) so it visibly walks up the steps.
+    // Snap on a real teleport; otherwise ease toward the interpolated point.
     const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
-    if (jump > 2.5 && g.stairFromFloor === undefined) {
+    if (jump > 2.5) {
       pos.set(g.cloudX, g.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
       pos.x += (tx - pos.x) * alpha;
       pos.y += (tz - pos.y) * alpha;
     }
-    // Anchor body Y to the floor slab (moveToward normally does this). Guests
-    // spawn at the Floor 0 door so _baseY IS the raw feet-lift; cache it as
-    // _feetLift the first time, consistent with the mover + the staff render.
-    if (g.character._feetLift == null) {
-      g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
-    }
-    const feetLift = g.character._feetLift;
-    // Phase M.17 — during a stair hop, RAMP Y from the departing storey to the
-    // arrival storey over the pose interp so the guest visibly climbs instead
-    // of popping up; cleared when the climb completes or the pose leaves the
-    // stair.
-    let anchorY: number;
-    if (g.stairFromFloor !== undefined) {
-      const climbFloor = g.stairFromFloor + (g.currentFloor - g.stairFromFloor) * t;
-      anchorY = climbFloor * STOREY + feetLift;
-      if (t >= 1 || !nearStairTile(g.cloudX, g.cloudZ)) g.stairFromFloor = undefined;
-    } else {
-      anchorY = g.currentFloor * STOREY + feetLift;
-    }
+    // Anchor body Y to the floor slab (moveToward normally does this).
+    const anchorY = g.currentFloor * STOREY + feetLift;
     g.character.root.position.y = anchorY;
     g.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =

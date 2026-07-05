@@ -268,11 +268,16 @@ interface StaffActor {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
-  /** Phase M.17 — while a server-driven stair hop is in progress this holds
-   * the storey the body is climbing FROM, so renderActorFromServer ramps Y
-   * from that floor to cloudFloor over the pose's interp instead of snapping
-   * the storey. Undefined when not on the stairs. */
-  stairFromFloor?: number;
+  /** Phase M.17 — an in-progress client-side stair CLIMB. The server hops the
+   * whole flight in one tick then walks the actor on, so the client animates
+   * the walk up the steps itself over a FIXED duration (~0.8 s), holding the
+   * body on the stairs regardless of how fast new server poses arrive (an
+   * interp-linked ramp gets cut short by the next pose → snaps). Undefined when
+   * not on the stairs. */
+  stairClimb?: {
+    fromX: number; fromZ: number; toX: number; toZ: number;
+    fromFloor: number; toFloor: number; elapsed: number;
+  };
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -2366,20 +2371,42 @@ export class StaffRouter {
   private renderActorFromServer(a: StaffActor, dt: number): void {
     if (a.cloudX === undefined || a.cloudZ === undefined) return; // no row yet
     const STOREY = 3;
+    const feetLift = a.character._feetLift ?? 0;
+    // Phase M.17 — cross-floor stair CLIMB. A server hop lands on a stair tile
+    // with a floor change; the server does the whole flight in one tick then
+    // walks the actor on, so the CLIENT animates the walk up the steps itself
+    // over a fixed ~0.8 s, holding the body on the stairs regardless of how
+    // fast the next server pose arrives (an interp-linked ramp gets cut short
+    // by the next pose → snaps). A non-stair floor change (reload reparent)
+    // just reparents + snaps below.
     if (a.cloudFloor !== undefined && a.cloudFloor !== a.currentFloor) {
-      // Phase M.17 — a cross-floor server hop lands on a stair tile; record the
-      // storey being LEFT so the body ramps up the stairs over this pose's
-      // interp (below) instead of snapping the whole storey. A non-stair floor
-      // change (e.g. a reload reparent) has no stair tile → snap as before.
-      a.stairFromFloor = nearStairTile(a.cloudX, a.cloudZ) ? a.currentFloor : undefined;
+      const fromFloor = a.currentFloor;
       a.currentFloor = a.cloudFloor;
       this.reparentCharacter?.(a.character, a.cloudFloor);
+      a.stairClimb = nearStairTile(a.cloudX, a.cloudZ)
+        ? { fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
+            toX: a.cloudX, toZ: a.cloudZ, fromFloor, toFloor: a.cloudFloor, elapsed: 0 }
+        : undefined;
+    }
+    if (a.stairClimb) {
+      const c = a.stairClimb;
+      c.elapsed += dt;
+      const s = Math.min(1, c.elapsed / 0.8);
+      const cpos = a.character.groundPos;
+      cpos.x = c.fromX + (c.toX - c.fromX) * s;
+      cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
+      const cy = (c.fromFloor + (c.toFloor - c.fromFloor) * s) * STOREY + feetLift;
+      a.character.root.position.y = cy;
+      a.character._baseY = cy;
+      const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
+      if (Math.hypot(cdx, cdz) > 0.01) a.character.facingY = Math.atan2(-cdx, -cdz);
+      a.character.action = "walk";
+      if (s >= 1) a.stairClimb = undefined;
+      return; // ignore the (already-past-the-stairs) server pose while climbing
     }
     const pos = a.character.groundPos;
-    // Snapshot interpolation: glide from the previous server pose to the
-    // latest over the 2 Hz tick interval (interp 0→1), so the body moves at a
-    // steady speed instead of the old exponential lerp that covered the
-    // ~1.4 m/tick gap in ~250 ms and then stalled ("teleport + pause").
+    // Snapshot interpolation: glide from the previous server pose to the latest
+    // over the 2 Hz tick interval (interp 0→1) — steady speed, no teleport+pause.
     const prevX = a.cloudPrevX ?? a.cloudX;
     const prevZ = a.cloudPrevZ ?? a.cloudZ;
     const STAFF_TICK_S = 0.5; // server staff tick = 2 Hz
@@ -2387,13 +2414,9 @@ export class StaffRouter {
     const t = a.cloudInterp;
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
-    // Snap on a real teleport / floor change; otherwise ease toward the
-    // (already-smooth) interpolated point to absorb any update jitter.
-    // Phase M.17 — DON'T snap during a stair climb; let the snapshot interp
-    // glide the body from the stair entry to the exit landing so it visibly
-    // walks up the steps (paired with the Y ramp below).
+    // Snap on a real teleport; otherwise ease toward the interpolated point.
     const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
-    if (jump > 2.5 && a.stairFromFloor === undefined) {
+    if (jump > 2.5) {
       pos.set(a.cloudX, a.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
@@ -2406,19 +2429,7 @@ export class StaffRouter {
     if (pos.y < INTERIOR_MIN_Z) pos.y = INTERIOR_MIN_Z;
     else if (pos.y > INTERIOR_MAX_Z) pos.y = INTERIOR_MAX_Z;
     // Anchor body Y to the floor slab (moveActor normally does this).
-    // Phase M.17 — during a stair hop, RAMP Y from the departing storey to the
-    // arrival storey over the pose interp so the body visibly climbs instead of
-    // popping up. Cleared once the climb completes (t≥1) or the cloud pose
-    // leaves the stair (the actor walks on toward its destination).
-    const feetLift = a.character._feetLift ?? 0;
-    let anchorY: number;
-    if (a.stairFromFloor !== undefined) {
-      const climbFloor = a.stairFromFloor + (a.currentFloor - a.stairFromFloor) * t;
-      anchorY = climbFloor * STOREY + feetLift;
-      if (t >= 1 || !nearStairTile(a.cloudX, a.cloudZ)) a.stairFromFloor = undefined;
-    } else {
-      anchorY = a.currentFloor * STOREY + feetLift;
-    }
+    const anchorY = a.currentFloor * STOREY + feetLift;
     a.character.root.position.y = anchorY;
     a.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =
