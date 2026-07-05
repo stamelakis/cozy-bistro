@@ -68,6 +68,17 @@ export const STAIR_BOTTOM_TILE = { x: -4, z: -1 };
  * clean entry point to the upper floor proper. */
 export const STAIR_TOP_TILE = { x: -3, z: -4 };
 
+/** Phase M.17 — is (x, z) within `r` metres of either stair landing tile?
+ * The server-render climb detection uses this to distinguish a cross-floor
+ * STAIR hop (whose landing is always a stair tile → ramp the body up the
+ * stairs) from an ordinary floor change such as a reload reparent (→ snap). */
+export function nearStairTile(x: number, z: number, r = 1.2): boolean {
+  const r2 = r * r;
+  const distBottom = (x - STAIR_BOTTOM_TILE.x) ** 2 + (z - STAIR_BOTTOM_TILE.z) ** 2;
+  const distTop = (x - STAIR_TOP_TILE.x) ** 2 + (z - STAIR_TOP_TILE.z) ** 2;
+  return distBottom <= r2 || distTop <= r2;
+}
+
 /** Grid bounds inside the restaurant — cells (x, z) with both axes in
  * [-4, 5]. The building's exterior walls sit at half-integer
  * coordinates, so the playable tiles are exactly these 100. */

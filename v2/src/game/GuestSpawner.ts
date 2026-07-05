@@ -17,7 +17,7 @@ import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste, customerArchetypes } from "../data/customerArchetypes";
 import { RESTAURANT_THEMES } from "../data/themes";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD, nearStairTile } from "./Pathfinding";
 
 /** A dirty plate or glass left on a table by a departed customer. The
  * waiter wash loop claims one by id, walks to its position to "pick it
@@ -442,6 +442,10 @@ interface ActiveGuest {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Phase M.17 — storey the body is climbing FROM during a server-driven
+   * stair hop, so renderGuestFromServer ramps Y from it to cloudFloor over the
+   * pose interp instead of snapping. Undefined when not on the stairs. */
+  stairFromFloor?: number;
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -4232,6 +4236,10 @@ export class GuestSpawner {
     // storey-focus visibility hides the guest when the player looks at a
     // different floor (same helper the local mover uses across stairs).
     if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
+      // Phase M.17 — a cross-floor server hop lands on a stair tile; record the
+      // storey being LEFT so the body ramps up the stairs over this pose's
+      // interp instead of snapping the storey (non-stair changes still snap).
+      g.stairFromFloor = nearStairTile(g.cloudX, g.cloudZ) ? g.currentFloor : undefined;
       g.currentFloor = g.cloudFloor;
       this.reparentCharacter?.(g.character, g.cloudFloor);
     }
@@ -4251,10 +4259,12 @@ export class GuestSpawner {
     const t = g.cloudInterp;
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;
-    // Snap on a real teleport / floor change; otherwise ease toward the
-    // (already-smooth) interpolated point to absorb any update jitter.
+    // Snap on a real teleport; otherwise ease toward the (already-smooth)
+    // interpolated point. Phase M.17 — but DON'T snap during a stair climb: let
+    // the interp glide the body from the stair entry to the exit landing
+    // (paired with the Y ramp below) so it visibly walks up the steps.
     const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
-    if (jump > 2.5) {
+    if (jump > 2.5 && g.stairFromFloor === undefined) {
       pos.set(g.cloudX, g.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
@@ -4268,7 +4278,18 @@ export class GuestSpawner {
       g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
     }
     const feetLift = g.character._feetLift;
-    const anchorY = g.currentFloor * STOREY + feetLift;
+    // Phase M.17 — during a stair hop, RAMP Y from the departing storey to the
+    // arrival storey over the pose interp so the guest visibly climbs instead
+    // of popping up; cleared when the climb completes or the pose leaves the
+    // stair.
+    let anchorY: number;
+    if (g.stairFromFloor !== undefined) {
+      const climbFloor = g.stairFromFloor + (g.currentFloor - g.stairFromFloor) * t;
+      anchorY = climbFloor * STOREY + feetLift;
+      if (t >= 1 || !nearStairTile(g.cloudX, g.cloudZ)) g.stairFromFloor = undefined;
+    } else {
+      anchorY = g.currentFloor * STOREY + feetLift;
+    }
     g.character.root.position.y = anchorY;
     g.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =

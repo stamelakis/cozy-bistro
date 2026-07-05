@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { isServerSim } from "./featureFlags";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD, nearStairTile } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 import { recipes } from "../data/recipes";
 
@@ -268,6 +268,11 @@ interface StaffActor {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Phase M.17 — while a server-driven stair hop is in progress this holds
+   * the storey the body is climbing FROM, so renderActorFromServer ramps Y
+   * from that floor to cloudFloor over the pose's interp instead of snapping
+   * the storey. Undefined when not on the stairs. */
+  stairFromFloor?: number;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -2362,6 +2367,11 @@ export class StaffRouter {
     if (a.cloudX === undefined || a.cloudZ === undefined) return; // no row yet
     const STOREY = 3;
     if (a.cloudFloor !== undefined && a.cloudFloor !== a.currentFloor) {
+      // Phase M.17 — a cross-floor server hop lands on a stair tile; record the
+      // storey being LEFT so the body ramps up the stairs over this pose's
+      // interp (below) instead of snapping the whole storey. A non-stair floor
+      // change (e.g. a reload reparent) has no stair tile → snap as before.
+      a.stairFromFloor = nearStairTile(a.cloudX, a.cloudZ) ? a.currentFloor : undefined;
       a.currentFloor = a.cloudFloor;
       this.reparentCharacter?.(a.character, a.cloudFloor);
     }
@@ -2379,8 +2389,11 @@ export class StaffRouter {
     const tz = prevZ + (a.cloudZ - prevZ) * t;
     // Snap on a real teleport / floor change; otherwise ease toward the
     // (already-smooth) interpolated point to absorb any update jitter.
+    // Phase M.17 — DON'T snap during a stair climb; let the snapshot interp
+    // glide the body from the stair entry to the exit landing so it visibly
+    // walks up the steps (paired with the Y ramp below).
     const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
-    if (jump > 2.5) {
+    if (jump > 2.5 && a.stairFromFloor === undefined) {
       pos.set(a.cloudX, a.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
@@ -2393,8 +2406,19 @@ export class StaffRouter {
     if (pos.y < INTERIOR_MIN_Z) pos.y = INTERIOR_MIN_Z;
     else if (pos.y > INTERIOR_MAX_Z) pos.y = INTERIOR_MAX_Z;
     // Anchor body Y to the floor slab (moveActor normally does this).
+    // Phase M.17 — during a stair hop, RAMP Y from the departing storey to the
+    // arrival storey over the pose interp so the body visibly climbs instead of
+    // popping up. Cleared once the climb completes (t≥1) or the cloud pose
+    // leaves the stair (the actor walks on toward its destination).
     const feetLift = a.character._feetLift ?? 0;
-    const anchorY = a.currentFloor * STOREY + feetLift;
+    let anchorY: number;
+    if (a.stairFromFloor !== undefined) {
+      const climbFloor = a.stairFromFloor + (a.currentFloor - a.stairFromFloor) * t;
+      anchorY = climbFloor * STOREY + feetLift;
+      if (t >= 1 || !nearStairTile(a.cloudX, a.cloudZ)) a.stairFromFloor = undefined;
+    } else {
+      anchorY = a.currentFloor * STOREY + feetLift;
+    }
     a.character.root.position.y = anchorY;
     a.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =
