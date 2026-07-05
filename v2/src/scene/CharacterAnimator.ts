@@ -88,19 +88,19 @@ export interface AnimatedCharacter {
   _matCloned?: boolean;
 }
 
-/** Phase M.19 — stair-fade band, in storeys of height above the focused floor.
- * A climbing body is fully opaque until it's this far up the flight (0.5 = the
- * half-way point, roughly where the head first reaches the ceiling), then fades
- * out, fully gone by STAIR_FADE_END (1.0 = the far slab / ceiling it exits
- * through). Symmetric below, so a body descending into view fades back in. */
-const STAIR_FADE_START = 0.5;
-const STAIR_FADE_END = 1.0;
-
-/** Smooth Hermite ramp: 0 for x<=a, 1 for x>=b, eased S-curve between. */
-function smoothstep(a: number, b: number, x: number): number {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-}
+/** Phase M.19/M.20 — stair-fade band, in storeys of feet-height above the
+ * focused floor. A climbing body is fully opaque until it's STAIR_FADE_START up
+ * the flight, then dissolves LINEARLY, fully gone by STAIR_FADE_END. The fade
+ * MUST finish before the top (END < 1): the whole climb happens in the focused
+ * floor's always-visible mount, but at the top landing the body reparents into
+ * the upper storey's GROUP, which is hidden while this floor is focused — so a
+ * fade tail past the top can't render. A flight takes ~2 s to climb (sqrt(10)
+ * units at walk speed), so this band is a steady, clearly-visible ~1.4 s
+ * dissolve. LINEAR, not eased — a smoothstep compressed the perceptible drop
+ * into a blink near the middle ("too fast to notice"). Symmetric below, so a
+ * body descending into the focused floor fades back in. */
+const STAIR_FADE_START = 0.3;
+const STAIR_FADE_END = 0.95;
 
 export class CharacterAnimator {
   private readonly characters: AnimatedCharacter[] = [];
@@ -295,17 +295,18 @@ export class CharacterAnimator {
       // work the cull would have done. A character mid-stair rounds
       // toward the nearer slab, so they pop in/out at the half-way point
       // — acceptable for a brief transit, and matches their bubble.
-      // Phase M.17 — a character actively climbing a flight is EXEMPT from the
-      // hard floor-focus gate so the WHOLE climb stays visible; otherwise it
-      // vanished at the half-way point as baseY crossed into the upper storey's
-      // bucket ("goes halfway up then disappears").
-      // Phase M.19 — but rather than POP out at the top of the climb, a climbing
-      // body now FADES: opacity ramps to 0 over the top of the flight as the
-      // body passes up through the focused floor's ceiling (STAIR_FADE_START..
-      // END, measured in storeys above the focused slab), and fades back IN
-      // symmetrically when a body descends into view or climbs into the focused
-      // floor. Every NON-climbing character still uses the hard 0/1 gate, so
-      // the per-frame opacity/material work only ever touches actual climbers.
+      // Phase M.17 — a climbing body stays visible through the WHOLE flight
+      // (exempt from the hard floor-focus gate, which would otherwise pop it out
+      // at the half-way point as baseY crossed into the upper storey's bucket).
+      // Phase M.19/M.20 — and rather than popping at the top, it DISSOLVES: a
+      // linear opacity ramp over STAIR_FADE_START..END of the flight (in storeys
+      // above the focused slab) as the body passes up through the ceiling, fully
+      // gone JUST BEFORE the top. The whole fade runs while the body is still in
+      // the focused floor's always-visible mount; at the landing it reparents
+      // into the upper storey's group (hidden while this floor is focused), so
+      // the ramp deliberately finishes before then. Symmetric below → a body
+      // descending into view fades back in. Non-climbing characters keep the
+      // instant hard 0/1 gate, so opacity/material work only touches climbers.
       let bodyFade = 1;
       let show: boolean;
       if (c._keepHidden) {
@@ -313,10 +314,11 @@ export class CharacterAnimator {
       } else if (gateFloor === undefined) {
         show = true;                    // exterior view — every floor renders
       } else if (c._onStair) {
-        // Distance of the feet above the focused slab, in storeys (0 = on it,
-        // 1 = a full storey up, at the ceiling/next slab it exits through).
+        // Feet-height above the focused slab, in storeys (0 = on it, 1 = a full
+        // storey up at the ceiling it exits through).
         const rel = Math.abs(baseY / gateStoreyH - gateFloor);
-        bodyFade = 1 - smoothstep(STAIR_FADE_START, STAIR_FADE_END, rel);
+        bodyFade = 1 - Math.max(0, Math.min(1,
+          (rel - STAIR_FADE_START) / (STAIR_FADE_END - STAIR_FADE_START)));
         show = bodyFade > 0.02;
       } else {
         show = Math.round(baseY / gateStoreyH) === gateFloor;
@@ -339,9 +341,9 @@ export class CharacterAnimator {
         continue;
       }
       if (!c.root.visible) c.root.visible = true;
-      // Phase M.19 — apply the stair fade, or restore full opacity for a body
-      // that faded on a previous climb. A never-faded character (bodyFade==1,
-      // no cloned materials) skips this entirely — zero cost on the common path.
+      // Phase M.19 — apply the stair dissolve, or restore full opacity for a
+      // body that faded on a previous climb (matCloned). A never-faded, fully
+      // opaque character skips this entirely — zero cost on the common path.
       if (c._matCloned || bodyFade < 1) this.applyCharacterOpacity(c, bodyFade);
 
       // Skinned guests must keep their mixer advancing on EVERY visible
