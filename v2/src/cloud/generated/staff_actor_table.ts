@@ -39,4 +39,5 @@ export default __t.row({
   errandOffscreenUntilMicros: __t.i64().name("errand_offscreen_until_micros"),
   cleanSeatUid: __t.option(__t.string()).name("clean_seat_uid"),
   faceY: __t.f32().name("face_y"),
+  onStair: __t.bool().name("on_stair"),
 });

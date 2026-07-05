@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { isServerSim } from "./featureFlags";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 import { recipes } from "../data/recipes";
 
@@ -268,20 +268,12 @@ interface StaffActor {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
-  /** Phase M.17 — an in-progress client-side stair CLIMB. The server hops the
-   * whole flight in one tick then walks the actor on, so the client animates
-   * the walk up the steps itself over a FIXED duration (~0.8 s), holding the
-   * body on the stairs regardless of how fast new server poses arrive (an
-   * interp-linked ramp gets cut short by the next pose → snaps). Undefined when
-   * not on the stairs. */
-  stairClimb?: {
-    fromX: number; fromZ: number; toX: number; toZ: number;
-    fromFloor: number; toFloor: number; elapsed: number;
-  };
-  /** Phase M.17 — brief window after a stair climb during which the render
-   * EASES (doesn't snap) toward the server pose, so the walk from the stair
-   * landing to the far destination glides instead of teleporting. */
-  stairEaseUntil?: number;
+  /** Phase M.17 — the server's TARGET floor for this actor (stashed from
+   * the staff_actor row alongside cloudFloor). When it differs from the
+   * currentFloor and the body is inside the stairwell footprint, the render
+   * ramps the body Y along the steps by z-position. The server walks the
+   * body through the stairwell gradually; the client just picks the height. */
+  cloudTargetFloor?: number;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -1883,6 +1875,7 @@ export class StaffRouter {
     actor.cloudX = row.x;
     actor.cloudZ = row.z;
     actor.cloudFloor = row.floor;
+    actor.cloudTargetFloor = row.targetFloor;
     actor.cloudState = row.state;
     // Phase M.13 — mirror the server task fields so the bubble label reads
     // the REAL job (take order / fetch / serve / wash / clear), not a guess.
@@ -2376,55 +2369,15 @@ export class StaffRouter {
     if (a.cloudX === undefined || a.cloudZ === undefined) return; // no row yet
     const STOREY = 3;
     const feetLift = a.character._feetLift ?? 0;
-    // Phase M.17 — cross-floor stair CLIMB. Under the cutover the server ONLY
-    // flips `floor` at a stair landing, so ANY floor change here is a stair hop.
-    // Animate a fixed ~0.8 s climb from the body's current pos (it followed the
-    // walk TO the stair) up to the fixed stair EXIT tile on the new floor —
-    // using the KNOWN tile, not cloudX/Z, because the server may already have
-    // stepped the actor one step past the stair before this pose was sampled
-    // (which left the old nearStairTile check false → the climb snapped). The
-    // client holds the body on the steps regardless of how fast poses arrive.
+    // Under the cutover the server walks the body GRADUALLY through the
+    // stairwell (position steps smoothly between the two landing tiles) and
+    // only flips `floor` once the actor reaches the top. So a floor change
+    // here just needs the reparent — the normal position lerp below follows
+    // the server pose, and the geometric Y ramp (further down) picks the
+    // body height from where it is in the stairwell.
     if (a.cloudFloor !== undefined && a.cloudFloor !== a.currentFloor) {
-      const fromFloor = a.currentFloor;
       a.currentFloor = a.cloudFloor;
       this.reparentCharacter?.(a.character, a.cloudFloor);
-      // Phase M.17 — the server hops up/down EVERY flight almost instantly
-      // (F0->F1->F2->F3 in one burst), so if a climb is already running in the
-      // SAME direction, EXTEND it to the new floor instead of restarting it —
-      // restarting jumped the body floor-to-floor (the "teleport up"). The x/z
-      // exit is the same stacked stair tile on every storey, so only toFloor
-      // grows; the duration below scales with the flight count.
-      const existing = a.stairClimb;
-      const sameDir = existing !== undefined
-        && (a.cloudFloor > existing.fromFloor) === (existing.toFloor > existing.fromFloor);
-      if (existing && sameDir) {
-        existing.toFloor = a.cloudFloor;
-      } else {
-        const exit = a.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
-        a.stairClimb = {
-          fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
-          toX: exit.x, toZ: exit.z, fromFloor, toFloor: a.cloudFloor, elapsed: 0,
-        };
-      }
-    }
-    if (a.stairClimb) {
-      const c = a.stairClimb;
-      c.elapsed += dt;
-      // Duration scales with the flight count → a 0->3 trip is one long
-      // continuous climb, not three restarts.
-      const dur = Math.max(0.5, Math.abs(c.toFloor - c.fromFloor) * 0.7);
-      const s = Math.min(1, c.elapsed / dur);
-      const cpos = a.character.groundPos;
-      cpos.x = c.fromX + (c.toX - c.fromX) * s;
-      cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
-      const cy = (c.fromFloor + (c.toFloor - c.fromFloor) * s) * STOREY + feetLift;
-      a.character.root.position.y = cy;
-      a.character._baseY = cy;
-      const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
-      if (Math.hypot(cdx, cdz) > 0.01) a.character.facingY = Math.atan2(-cdx, -cdz);
-      a.character.action = "walk";
-      if (s >= 1) { a.stairClimb = undefined; a.stairEaseUntil = 0.5; }
-      return; // ignore the (already-past-the-stairs) server pose while climbing
     }
     const pos = a.character.groundPos;
     // Snapshot interpolation: glide from the previous server pose to the latest
@@ -2437,11 +2390,8 @@ export class StaffRouter {
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
     // Snap on a real teleport; otherwise ease toward the interpolated point.
-    // Phase M.17 — after a climb, EASE (don't snap) for a brief grace so the
-    // walk from the stair landing to a far destination glides, not teleports.
-    if (a.stairEaseUntil && a.stairEaseUntil > 0) a.stairEaseUntil -= dt;
     const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
-    if (jump > 2.5 && !(a.stairEaseUntil && a.stairEaseUntil > 0)) {
+    if (jump > 2.5) {
       pos.set(a.cloudX, a.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
@@ -2454,7 +2404,19 @@ export class StaffRouter {
     if (pos.y < INTERIOR_MIN_Z) pos.y = INTERIOR_MIN_Z;
     else if (pos.y > INTERIOR_MAX_Z) pos.y = INTERIOR_MAX_Z;
     // Anchor body Y to the floor slab (moveActor normally does this).
-    const anchorY = a.currentFloor * STOREY + feetLift;
+    // Phase M.17 — in the stairwell + crossing floors → ramp Y along the steps
+    // by z-position (the server walks the body through gradually; the normal
+    // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
+    const tf = a.cloudTargetFloor;
+    const inStairwell = pos.x >= -4.5 && pos.x <= -2.5 && pos.y >= -4.2 && pos.y <= -0.5;
+    let anchorY: number;
+    if (tf !== undefined && tf !== a.currentFloor && inStairwell) {
+      const lowerFloor = tf > a.currentFloor ? a.currentFloor : a.currentFloor - 1;
+      const hFrac = Math.max(0, Math.min(1, (pos.y + 1) / -3));
+      anchorY = (lowerFloor + hFrac) * STOREY + feetLift;
+    } else {
+      anchorY = a.currentFloor * STOREY + feetLift;
+    }
     a.character.root.position.y = anchorY;
     a.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =

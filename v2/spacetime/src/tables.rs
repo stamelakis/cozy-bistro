@@ -1181,6 +1181,15 @@ pub struct ActiveGuest {
     /// bool — migration-safe end-of-struct add.
     #[default(false)]
     pub wc_completed: bool,
+
+    /// Phase M.17 (gradual stairs) — true WHILE the guest is mid-flight in
+    /// the stairwell, so tick_guest_state keeps stepping straight toward the
+    /// exit landing instead of re-pathing backward to the stair entry each
+    /// tick. Set when the body reaches the stair entry, cleared when it lands
+    /// on the next floor. Default false; primitive bool — migration-safe
+    /// end-of-struct add.
+    #[default(false)]
+    pub on_stair: bool,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
@@ -1441,6 +1450,15 @@ pub struct StaffActor {
     /// (Appended at end-of-struct so the schema migration stays additive.)
     #[default(0.0)]
     pub face_y: f32,
+
+    /// Phase M.17 (gradual stairs) — true WHILE the actor is mid-flight in
+    /// the stairwell, so tick_staff_actor keeps stepping straight toward the
+    /// exit landing instead of re-pathing backward to the stair entry each
+    /// tick. Set when the body reaches the stair entry, cleared when it lands
+    /// on the next floor. Default false; primitive bool — migration-safe
+    /// end-of-struct add.
+    #[default(false)]
+    pub on_stair: bool,
 }
 
 /// Phase F — server-authoritative placed furniture. One row per item

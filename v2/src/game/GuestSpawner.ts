@@ -17,7 +17,7 @@ import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste, customerArchetypes } from "../data/customerArchetypes";
 import { RESTAURANT_THEMES } from "../data/themes";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
 /** A dirty plate or glass left on a table by a departed customer. The
  * waiter wash loop claims one by id, walks to its position to "pick it
@@ -442,18 +442,12 @@ interface ActiveGuest {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
-  /** Phase M.17 — an in-progress client-side stair CLIMB (fixed ~0.8 s). The
-   * server hops the flight in one tick then walks the guest on, so the client
-   * animates the walk up the steps itself, holding the body on the stairs
-   * regardless of server pose rate. Undefined when not on the stairs. */
-  stairClimb?: {
-    fromX: number; fromZ: number; toX: number; toZ: number;
-    fromFloor: number; toFloor: number; elapsed: number;
-  };
-  /** Phase M.17 — brief post-climb window during which the render EASES (not
-   * snaps) toward the server pose, so the walk from the stair landing to a far
-   * seat glides instead of teleporting. */
-  stairEaseUntil?: number;
+  /** Phase M.17 — the server's TARGET floor for this guest (stashed from the
+   * active_guest row alongside cloudFloor). When it differs from currentFloor
+   * and the body is inside the stairwell footprint, the render ramps the body
+   * Y along the steps by z-position. The server walks the body through the
+   * stairwell gradually; the client just picks the height. */
+  cloudTargetFloor?: number;
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -1683,6 +1677,7 @@ export class GuestSpawner {
     g.cloudX = row.x;
     g.cloudZ = row.z;
     g.cloudFloor = row.floor;
+    g.cloudTargetFloor = row.targetFloor;
     g.cloudState = row.state;
 
     // Phase 9.32 — keep the local patience clock in lockstep with the
@@ -4243,28 +4238,14 @@ export class GuestSpawner {
     // Reparent into the new floor's storey group on a floor change so
     // storey-focus visibility hides the guest when the player looks at a
     // different floor (same helper the local mover uses across stairs).
+    // Under the cutover the server walks the body GRADUALLY through the
+    // stairwell and only flips `floor` once the guest reaches the top. So a
+    // floor change here just needs the reparent — the normal position lerp
+    // below follows the server pose, and the geometric Y ramp (further down)
+    // picks the body height from where it is in the stairwell.
     if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
-      const fromFloor = g.currentFloor;
       g.currentFloor = g.cloudFloor;
       this.reparentCharacter?.(g.character, g.cloudFloor);
-      // Phase M.17 — the server hops up/down EVERY flight almost instantly
-      // (F0->F1->F2->F3 in one burst), so if a climb is already running in the
-      // SAME direction, EXTEND it to the new floor instead of restarting it —
-      // restarting jumped the body floor-to-floor (the "teleport up"). Only
-      // toFloor grows (the stair exit tile is stacked on every storey); the
-      // duration scales with the flight count.
-      const existing = g.stairClimb;
-      const sameDir = existing !== undefined
-        && (g.cloudFloor > existing.fromFloor) === (existing.toFloor > existing.fromFloor);
-      if (existing && sameDir) {
-        existing.toFloor = g.cloudFloor;
-      } else {
-        const exit = g.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
-        g.stairClimb = {
-          fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
-          toX: exit.x, toZ: exit.z, fromFloor, toFloor: g.cloudFloor, elapsed: 0,
-        };
-      }
     }
     // Adopt the server state so the bubble/eating flag + pose read server truth.
     if (g.cloudState) g.state = cloudStateToLocal(g.cloudState);
@@ -4274,27 +4255,6 @@ export class GuestSpawner {
       g.character._feetLift = g.character._baseY ?? g.character.root.position.y;
     }
     const feetLift = g.character._feetLift;
-    // Active climb — drive the body up the steps over the fixed duration,
-    // IGNORING the (already-past-the-stairs) server pose until it completes.
-    if (g.stairClimb) {
-      const c = g.stairClimb;
-      c.elapsed += dt;
-      // Duration scales with the flight count → a 0->3 trip is one long
-      // continuous climb, not three restarts.
-      const dur = Math.max(0.5, Math.abs(c.toFloor - c.fromFloor) * 0.7);
-      const s = Math.min(1, c.elapsed / dur);
-      const cpos = g.character.groundPos;
-      cpos.x = c.fromX + (c.toX - c.fromX) * s;
-      cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
-      const cy = (c.fromFloor + (c.toFloor - c.fromFloor) * s) * STOREY + feetLift;
-      g.character.root.position.y = cy;
-      g.character._baseY = cy;
-      const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
-      if (Math.hypot(cdx, cdz) > 0.01) g.character.facingY = Math.atan2(-cdx, -cdz);
-      g.character.action = "walk";
-      if (s >= 1) { g.stairClimb = undefined; g.stairEaseUntil = 0.5; }
-      return; // ignore the server pose while climbing
-    }
     const pos = g.character.groundPos;
     // Snapshot interpolation: glide from the previous server pose to the latest
     // over the ~2 Hz tick interval (interp 0→1) — steady speed, no teleport+stall.
@@ -4306,11 +4266,8 @@ export class GuestSpawner {
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;
     // Snap on a real teleport; otherwise ease toward the interpolated point.
-    // Phase M.17 — after a climb, EASE (don't snap) for a brief grace so the
-    // walk from the stair landing to a far seat glides, not teleports.
-    if (g.stairEaseUntil && g.stairEaseUntil > 0) g.stairEaseUntil -= dt;
     const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
-    if (jump > 2.5 && !(g.stairEaseUntil && g.stairEaseUntil > 0)) {
+    if (jump > 2.5) {
       pos.set(g.cloudX, g.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
@@ -4318,7 +4275,19 @@ export class GuestSpawner {
       pos.y += (tz - pos.y) * alpha;
     }
     // Anchor body Y to the floor slab (moveToward normally does this).
-    const anchorY = g.currentFloor * STOREY + feetLift;
+    // Phase M.17 — in the stairwell + crossing floors → ramp Y along the steps
+    // by z-position (the server walks the body through gradually; the normal
+    // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
+    const tf = g.cloudTargetFloor;
+    const inStairwell = pos.x >= -4.5 && pos.x <= -2.5 && pos.y >= -4.2 && pos.y <= -0.5;
+    let anchorY: number;
+    if (tf !== undefined && tf !== g.currentFloor && inStairwell) {
+      const lowerFloor = tf > g.currentFloor ? g.currentFloor : g.currentFloor - 1;
+      const hFrac = Math.max(0, Math.min(1, (pos.y + 1) / -3));
+      anchorY = (lowerFloor + hFrac) * STOREY + feetLift;
+    } else {
+      anchorY = g.currentFloor * STOREY + feetLift;
+    }
     g.character.root.position.y = anchorY;
     g.character._baseY = anchorY;
     // Face + animate from the current segment's travel direction. "moving" =

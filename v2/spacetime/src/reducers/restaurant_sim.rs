@@ -6068,12 +6068,12 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     // (they walk OUT to the off-grid road). Empty/blocked path → straight-line
     // fallback inside the helper, so a miss never freezes anyone.
     let walk_speed = actor_walk_speed(ctx, &a.role, &a.member_id);
-    let (mut new_x, mut new_z, mut stepped_floor) = if a.role == "errand" {
+    let (mut new_x, mut new_z, mut stepped_floor, mut stepped_on_stair) = if a.role == "errand" {
         let (nx, nz) = step_toward_target(a.x, a.z, a.target_x, a.target_z, walk_speed, dt_ms);
-        (nx, nz, a.target_floor)
+        (nx, nz, a.target_floor, false)
     } else {
         next_step_multi(
-            ctx, a.restaurant_id, a.x, a.z, a.floor,
+            ctx, a.restaurant_id, a.x, a.z, a.floor, a.on_stair,
             a.target_x, a.target_z, a.target_floor, walk_speed, dt_ms,
         )
     };
@@ -6093,6 +6093,7 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         new_x = a.target_x;
         new_z = a.target_z;
         stepped_floor = a.target_floor;
+        stepped_on_stair = false;
     }
 
     // Phase H.3 + H.8 — auto state flips on arrival. Base transitions:
@@ -6126,6 +6127,9 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         // the storey). Same-floor tasks keep their floor; idle/returning
         // actors carry their home floor.
         floor: stepped_floor,
+        // Phase M.17 — persist the mid-stair latch so next tick keeps
+        // stepping straight toward the exit landing (no backward re-path).
+        on_stair: stepped_on_stair,
         state: new_state,
         state_clock_ms: if advance_clock {
             new_clock.saturating_add(dt_ms)
@@ -6727,11 +6731,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // to the stairs, climb the flight, continue on the next floor, flipping
     // `floor` at the landing — instead of straight-lining cross-floor. Anchored
     // (seated / eating / WC) guests hold their seat and keep their floor.
-    let (new_x, new_z, stepped_floor) = if anchored {
-        (g.x, g.z, g.floor)
+    let (new_x, new_z, stepped_floor, stepped_on_stair) = if anchored {
+        (g.x, g.z, g.floor, false)
     } else {
         next_step_multi(
-            ctx, g.restaurant_id, g.x, g.z, g.floor,
+            ctx, g.restaurant_id, g.x, g.z, g.floor, g.on_stair,
             effective_target_x, effective_target_z, effective_target_floor,
             GUEST_SPEED, dt_ms,
         )
@@ -7093,6 +7097,9 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         x: new_x,
         z: new_z,
         floor: stepped_floor,
+        // Phase M.17 — persist the mid-stair latch so next tick keeps
+        // stepping straight toward the exit landing (no backward re-path).
+        on_stair: stepped_on_stair,
         // H.12 — apply server fallback seat assignment if it fired.
         // When assigned_target is None, these read back to the
         // existing row values (no change).
@@ -7384,6 +7391,7 @@ pub(crate) fn try_spawn_arrival_guest(
         will_wash_only,
         washed_hands: false,
         wc_completed: false,
+        on_stair: false,
     });
     log::info!(
         "try_spawn_arrival_guest: spawned guest at seat {} in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
@@ -8133,29 +8141,32 @@ fn next_path_step(ctx: &ReducerContext, rid: u64, x: f32, z: f32, tx: f32, tz: f
     (tx, tz)
 }
 
-/// Phase M.17 — cross-floor movement that WALKS THE STAIRS. Routes (obstacle-
-/// aware) to the stair entry on the current floor, then climbs the single
-/// flight to the opposite landing on the next floor — advancing `floor` one
-/// storey at a time (a 0→2 trip climbs flight by flight). Same-floor callers
-/// get the normal obstacle-aware step. Returns (new_x, new_z, new_floor).
+/// Phase M.17 — cross-floor movement that WALKS THE STAIRS, GRADUALLY. Routes
+/// (obstacle-aware) to the stair entry on the current floor, then steps the
+/// body across the flight toward the opposite landing on the next floor over
+/// several ticks (~1 s / flight at walk speed), flipping `floor` only once the
+/// body reaches the exit landing — advancing one storey at a time (a 0→2 trip
+/// climbs flight by flight). Same-floor callers get the normal obstacle-aware
+/// step. Returns (new_x, new_z, new_floor, on_stair).
 ///
-/// STATELESS by design: the flight climb is ATOMIC — the tick the body reaches
-/// the stair entry it lands at the exit tile on the next floor, so there is
-/// never a mid-stair tick for a re-derived path to route BACKWARD to the entry
-/// (the failure that forces the client's local sim to cache the path + guard
-/// mid-stair replans). The smooth visible climb is interpolated client-side
-/// over that landing step (renderActorFromServer / renderGuestFromServer).
+/// STATEFUL via `on_stair`: while the body is mid-flight the caller passes
+/// on_stair=true back in, and this fn keeps stepping STRAIGHT toward the exit
+/// landing WITHOUT re-pathing — so a mid-stair tick can never derive a path
+/// that routes BACKWARD to the entry (the failure that forced the old atomic
+/// hop). The visible climb is the real per-tick body movement now, which the
+/// client interpolates smoothly (renderActorFromServer / renderGuestFromServer)
+/// instead of animating a one-tick teleport.
 fn next_step_multi(
     ctx: &ReducerContext, rid: u64,
-    x: f32, z: f32, floor: u32,
+    x: f32, z: f32, floor: u32, on_stair: bool,
     tx: f32, tz: f32, target_floor: u32,
     speed: f32, dt_ms: i64,
-) -> (f32, f32, u32) {
+) -> (f32, f32, u32, bool) {
     if floor == target_floor {
         // Common case — same-floor obstacle-aware step, floor unchanged.
         let (wx, wz) = next_path_step(ctx, rid, x, z, tx, tz, floor);
         let (nx, nz) = step_toward_target(x, z, wx, wz, speed, dt_ms);
-        return (nx, nz, floor);
+        return (nx, nz, floor, false);
     }
     use crate::reducers::pathfinding::{STAIR_BOTTOM_TILE, STAIR_TOP_TILE};
     let ascending = target_floor > floor;
@@ -8168,16 +8179,30 @@ fn next_step_multi(
     };
     let next_floor = if ascending { floor + 1 } else { floor - 1 };
     let (entry_x, entry_z) = (entry_i.0 as f32, entry_i.1 as f32);
-    // Route (obstacle-aware) toward the stair entry on this floor.
-    let (wx, wz) = next_path_step(ctx, rid, x, z, entry_x, entry_z, floor);
-    let (nx, nz) = step_toward_target(x, z, wx, wz, speed, dt_ms);
-    // Reached the entry this tick → climb the flight: land at the exit tile on
-    // the next floor. Atomic, so no mid-stair tick re-paths backward.
-    let at_entry = (entry_x - nx).abs() < 0.3 && (entry_z - nz).abs() < 0.3;
-    if at_entry {
-        (exit_i.0 as f32, exit_i.1 as f32, next_floor)
+    let (exit_x, exit_z) = (exit_i.0 as f32, exit_i.1 as f32);
+    if !on_stair {
+        // Walk (obstacle-aware) to the stair entry on THIS floor.
+        let at_entry = (entry_x - x).abs() < 0.3 && (entry_z - z).abs() < 0.3;
+        if at_entry {
+            // Reached the entry -> begin GRADUAL climb toward the exit.
+            let (nx, nz) = step_toward_target(x, z, exit_x, exit_z, speed, dt_ms);
+            (nx, nz, floor, true)
+        } else {
+            let (wx, wz) = next_path_step(ctx, rid, x, z, entry_x, entry_z, floor);
+            let (nx, nz) = step_toward_target(x, z, wx, wz, speed, dt_ms);
+            (nx, nz, floor, false)
+        }
     } else {
-        (nx, nz, floor)
+        // Mid-stair: keep stepping straight toward the exit landing (NO
+        // re-path, so we don't route backward). Flip floor + clear on_stair
+        // once we reach the exit landing on the next floor.
+        let (nx, nz) = step_toward_target(x, z, exit_x, exit_z, speed, dt_ms);
+        let at_exit = (exit_x - nx).abs() < 0.3 && (exit_z - nz).abs() < 0.3;
+        if at_exit {
+            (nx, nz, next_floor, false)
+        } else {
+            (nx, nz, floor, true)
+        }
     }
 }
 
@@ -8557,6 +8582,8 @@ pub fn spawn_guest(
         // to distinguish "trip completed" from "gave up." False at
         // spawn; the wcWashing → seated transition flips it.
         wc_completed: false,
+        // Phase M.17 — not mid-stair at spawn.
+        on_stair: false,
     });
     Ok(())
 }
@@ -9560,6 +9587,7 @@ pub fn register_staff_actor(
         errand_offscreen_until_micros: 0,
         clean_seat_uid: None, // Phase 9.45 — not cleaning at spawn
         spawned_at: ctx.timestamp,
+        on_stair: false, // Phase M.17 — not mid-stair at spawn
     });
     Ok(())
 }

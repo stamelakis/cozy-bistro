@@ -81,6 +81,7 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   willWashOnly: __t.bool(),
   washedHands: __t.bool(),
   wcCompleted: __t.bool(),
+  onStair: __t.bool(),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
@@ -556,6 +557,7 @@ export const StaffActor = __t.object("StaffActor", {
   errandOffscreenUntilMicros: __t.i64(),
   cleanSeatUid: __t.option(__t.string()),
   faceY: __t.f32(),
+  onStair: __t.bool(),
 });
 export type StaffActor = __Infer<typeof StaffActor>;
 

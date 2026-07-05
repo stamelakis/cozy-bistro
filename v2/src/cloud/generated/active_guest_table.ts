@@ -62,4 +62,5 @@ export default __t.row({
   willWashOnly: __t.bool().name("will_wash_only"),
   washedHands: __t.bool().name("washed_hands"),
   wcCompleted: __t.bool().name("wc_completed"),
+  onStair: __t.bool().name("on_stair"),
 });
