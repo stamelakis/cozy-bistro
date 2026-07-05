@@ -450,6 +450,10 @@ interface ActiveGuest {
     fromX: number; fromZ: number; toX: number; toZ: number;
     fromFloor: number; toFloor: number; elapsed: number;
   };
+  /** Phase M.17 — brief post-climb window during which the render EASES (not
+   * snaps) toward the server pose, so the walk from the stair landing to a far
+   * seat glides instead of teleporting. */
+  stairEaseUntil?: number;
   /** Compact "state|targetX|targetZ|floor" fingerprint of the last
    * mirror published to the cloud. streamGuestPositionsToCloud uses
    * this to fire the updateGuestPosition reducer immediately when
@@ -4240,22 +4244,27 @@ export class GuestSpawner {
     // storey-focus visibility hides the guest when the player looks at a
     // different floor (same helper the local mover uses across stairs).
     if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
-      // Phase M.17 — ANY floor change under the cutover is a stair hop (the
-      // server only flips `floor` at the stair). Animate a fixed ~0.8 s climb
-      // from the body's current pos (it followed the walk TO the stair) up to
-      // the fixed stair EXIT tile on the new floor — using the KNOWN tile, not
-      // cloudX/Z, because the server may already have stepped the guest one
-      // step past the stair before this pose was sampled (which left the old
-      // nearStairTile check false → the climb snapped).
       const fromFloor = g.currentFloor;
       g.currentFloor = g.cloudFloor;
       this.reparentCharacter?.(g.character, g.cloudFloor);
-      const exit = g.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
-      g.stairClimb = {
-        fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
-        toX: exit.x, toZ: exit.z, fromFloor, toFloor: g.cloudFloor, elapsed: 0,
-      };
-      console.log(`[stairClimb] guest ${g.id} F${fromFloor}->F${g.cloudFloor}`);
+      // Phase M.17 — the server hops up/down EVERY flight almost instantly
+      // (F0->F1->F2->F3 in one burst), so if a climb is already running in the
+      // SAME direction, EXTEND it to the new floor instead of restarting it —
+      // restarting jumped the body floor-to-floor (the "teleport up"). Only
+      // toFloor grows (the stair exit tile is stacked on every storey); the
+      // duration scales with the flight count.
+      const existing = g.stairClimb;
+      const sameDir = existing !== undefined
+        && (g.cloudFloor > existing.fromFloor) === (existing.toFloor > existing.fromFloor);
+      if (existing && sameDir) {
+        existing.toFloor = g.cloudFloor;
+      } else {
+        const exit = g.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
+        g.stairClimb = {
+          fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
+          toX: exit.x, toZ: exit.z, fromFloor, toFloor: g.cloudFloor, elapsed: 0,
+        };
+      }
     }
     // Adopt the server state so the bubble/eating flag + pose read server truth.
     if (g.cloudState) g.state = cloudStateToLocal(g.cloudState);
@@ -4270,7 +4279,10 @@ export class GuestSpawner {
     if (g.stairClimb) {
       const c = g.stairClimb;
       c.elapsed += dt;
-      const s = Math.min(1, c.elapsed / 0.8);
+      // Duration scales with the flight count → a 0->3 trip is one long
+      // continuous climb, not three restarts.
+      const dur = Math.max(0.5, Math.abs(c.toFloor - c.fromFloor) * 0.7);
+      const s = Math.min(1, c.elapsed / dur);
       const cpos = g.character.groundPos;
       cpos.x = c.fromX + (c.toX - c.fromX) * s;
       cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
@@ -4280,7 +4292,7 @@ export class GuestSpawner {
       const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
       if (Math.hypot(cdx, cdz) > 0.01) g.character.facingY = Math.atan2(-cdx, -cdz);
       g.character.action = "walk";
-      if (s >= 1) g.stairClimb = undefined;
+      if (s >= 1) { g.stairClimb = undefined; g.stairEaseUntil = 0.5; }
       return; // ignore the server pose while climbing
     }
     const pos = g.character.groundPos;
@@ -4294,8 +4306,11 @@ export class GuestSpawner {
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;
     // Snap on a real teleport; otherwise ease toward the interpolated point.
+    // Phase M.17 — after a climb, EASE (don't snap) for a brief grace so the
+    // walk from the stair landing to a far seat glides, not teleports.
+    if (g.stairEaseUntil && g.stairEaseUntil > 0) g.stairEaseUntil -= dt;
     const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
-    if (jump > 2.5) {
+    if (jump > 2.5 && !(g.stairEaseUntil && g.stairEaseUntil > 0)) {
       pos.set(g.cloudX, g.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);

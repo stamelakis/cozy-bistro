@@ -278,6 +278,10 @@ interface StaffActor {
     fromX: number; fromZ: number; toX: number; toZ: number;
     fromFloor: number; toFloor: number; elapsed: number;
   };
+  /** Phase M.17 — brief window after a stair climb during which the render
+   * EASES (doesn't snap) toward the server pose, so the walk from the stair
+   * landing to the far destination glides instead of teleporting. */
+  stairEaseUntil?: number;
   /** Last consumed waypoint — used to anchor the start of a stair
    * Y interpolation. */
   prevWaypoint?: MultiFloorPathStep;
@@ -2384,17 +2388,32 @@ export class StaffRouter {
       const fromFloor = a.currentFloor;
       a.currentFloor = a.cloudFloor;
       this.reparentCharacter?.(a.character, a.cloudFloor);
-      const exit = a.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
-      a.stairClimb = {
-        fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
-        toX: exit.x, toZ: exit.z, fromFloor, toFloor: a.cloudFloor, elapsed: 0,
-      };
-      console.log(`[stairClimb] staff ${a.memberId} F${fromFloor}->F${a.cloudFloor}`);
+      // Phase M.17 — the server hops up/down EVERY flight almost instantly
+      // (F0->F1->F2->F3 in one burst), so if a climb is already running in the
+      // SAME direction, EXTEND it to the new floor instead of restarting it —
+      // restarting jumped the body floor-to-floor (the "teleport up"). The x/z
+      // exit is the same stacked stair tile on every storey, so only toFloor
+      // grows; the duration below scales with the flight count.
+      const existing = a.stairClimb;
+      const sameDir = existing !== undefined
+        && (a.cloudFloor > existing.fromFloor) === (existing.toFloor > existing.fromFloor);
+      if (existing && sameDir) {
+        existing.toFloor = a.cloudFloor;
+      } else {
+        const exit = a.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
+        a.stairClimb = {
+          fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
+          toX: exit.x, toZ: exit.z, fromFloor, toFloor: a.cloudFloor, elapsed: 0,
+        };
+      }
     }
     if (a.stairClimb) {
       const c = a.stairClimb;
       c.elapsed += dt;
-      const s = Math.min(1, c.elapsed / 0.8);
+      // Duration scales with the flight count → a 0->3 trip is one long
+      // continuous climb, not three restarts.
+      const dur = Math.max(0.5, Math.abs(c.toFloor - c.fromFloor) * 0.7);
+      const s = Math.min(1, c.elapsed / dur);
       const cpos = a.character.groundPos;
       cpos.x = c.fromX + (c.toX - c.fromX) * s;
       cpos.y = c.fromZ + (c.toZ - c.fromZ) * s;
@@ -2404,7 +2423,7 @@ export class StaffRouter {
       const cdx = c.toX - c.fromX, cdz = c.toZ - c.fromZ;
       if (Math.hypot(cdx, cdz) > 0.01) a.character.facingY = Math.atan2(-cdx, -cdz);
       a.character.action = "walk";
-      if (s >= 1) a.stairClimb = undefined;
+      if (s >= 1) { a.stairClimb = undefined; a.stairEaseUntil = 0.5; }
       return; // ignore the (already-past-the-stairs) server pose while climbing
     }
     const pos = a.character.groundPos;
@@ -2418,8 +2437,11 @@ export class StaffRouter {
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
     // Snap on a real teleport; otherwise ease toward the interpolated point.
+    // Phase M.17 — after a climb, EASE (don't snap) for a brief grace so the
+    // walk from the stair landing to a far destination glides, not teleports.
+    if (a.stairEaseUntil && a.stairEaseUntil > 0) a.stairEaseUntil -= dt;
     const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
-    if (jump > 2.5) {
+    if (jump > 2.5 && !(a.stairEaseUntil && a.stairEaseUntil > 0)) {
       pos.set(a.cloudX, a.cloudZ);
     } else {
       const alpha = Math.min(1, dt * 16);
