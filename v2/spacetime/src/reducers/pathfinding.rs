@@ -363,6 +363,16 @@ pub(crate) fn compute_blocked(
         }
     }
 
+    // Phase M.17 — block the procedural STAIRCASE column on every floor (the
+    // upper slabs have a hole punched here, so those cells are over the void
+    // anyway). Same-floor pathing then routes AROUND the stairwell instead of
+    // clipping through it. The landing tiles STAIR_BOTTOM_TILE (-4,-1) and
+    // STAIR_TOP_TILE (-3,-4) stay clear — find_multi_floor_path routes the
+    // cross-floor legs to them. Mirrors the client's computeBlocked.
+    cells.insert((-4, -2));
+    cells.insert((-4, -3));
+    cells.insert((-4, -4));
+
     (cells, edges)
 }
 

@@ -294,6 +294,16 @@ export class Pathfinding {
         cells.add(`${cell.x},${cell.z}`);
       }
     }
+    // Phase M.17 — the STAIRCASE is procedural geometry (not furniture), so it
+    // was never in the blocked set → same-floor pathing routed staff/helpers
+    // straight THROUGH the stairwell. Block the stair-column cells on EVERY
+    // floor (the upper slabs have a hole punched here, so those cells are over
+    // the void anyway). The LANDING tiles STAIR_BOTTOM_TILE (-4,-1) and
+    // STAIR_TOP_TILE (-3,-4) stay clear — they're the cross-floor entry/exit
+    // that findMultiFloorPath routes to.
+    cells.add("-4,-2");
+    cells.add("-4,-3");
+    cells.add("-4,-4");
     return { cells, edges };
   }
 
