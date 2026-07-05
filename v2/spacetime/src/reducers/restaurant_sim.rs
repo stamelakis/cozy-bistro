@@ -4877,11 +4877,15 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64, max_dispatch: usize) 
             "try_dispatch_take_order: waiter {} → guest {} seat ({:.2}, {:.2}, f{})",
             actor_id, g.id, g.seat_x, g.seat_z, g.seat_floor,
         );
+        // Phase M.22 — stand at the nearest free tile to the DISH spot, not on
+        // the (blocked) seat, so the waiter walks up and takes the order from
+        // arm's reach instead of clipping onto the guest.
+        let (serve_x, serve_z) = serve_stand_tile(ctx, rid, g.plate_x, g.plate_z, g.seat_floor);
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
-            target_x: g.seat_x,
-            target_z: g.seat_z,
+            target_x: serve_x,
+            target_z: serve_z,
             target_floor: g.seat_floor,
             take_order_guest_id: Some(g.id),
             ..actor
@@ -4968,11 +4972,14 @@ fn try_dispatch_seat_clean(ctx: &ReducerContext, rid: u64) {
             "try_dispatch_seat_clean: waiter {} → bus seat {} ({:.2},{:.2}) floor {}",
             actor.member_id, seat_uid, sx, sz, sf,
         );
+        // Phase M.22 — bus from the nearest free tile beside the table, not on
+        // the (blocked) seat cell.
+        let (bus_x, bus_z) = serve_stand_tile(ctx, rid, sx, sz, sf);
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
-            target_x: sx,
-            target_z: sz,
+            target_x: bus_x,
+            target_z: bus_z,
             target_floor: sf,
             clean_seat_uid: Some(seat_uid),
             ..actor
@@ -6267,11 +6274,20 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
         ), false);
     };
     if phase == "pickup" {
-        // Plate grabbed — walk to seat. Ticket stays in "delivering";
-        // only the waiter's target advances.
+        // Plate grabbed — walk to the SERVE tile: the nearest free cell to the
+        // dish spot (the guest's plate on the table), NOT the blocked seat
+        // itself. Phase M.22 — stops the waiter clipping through furniture and
+        // standing on the customer to plate the dish. Falls back to the seat if
+        // the guest row is gone (cascade will send the waiter home next tick).
+        let (dish_x, dish_z) = ctx.db.active_guest().id().find(ticket.guest_id)
+            .map(|g| (g.plate_x, g.plate_z))
+            .unwrap_or((ticket.seat_x, ticket.seat_z));
+        let (serve_x, serve_z) =
+            serve_stand_tile(ctx, ticket.restaurant_id, dish_x, dish_z, ticket.seat_floor);
+        // Ticket stays in "delivering"; only the waiter's target advances.
         return ((
             "movingToWork".to_string(), 0,
-            ticket.seat_x, ticket.seat_z, ticket.seat_floor,
+            serve_x, serve_z, ticket.seat_floor,
             Some("deliver".to_string()), Some(ticket_id),
         ), false);
     }
@@ -8134,6 +8150,19 @@ const GUEST_SPEED: f32 = 1.5;
 /// pathfinder cell — far enough below "at rest" to read clean to
 /// subscribers, large enough not to wobble on f32 drift.
 const STEP_SNAP_EPS: f32 = 0.125;
+
+/// Phase M.22 — the tile a waiter should STAND on to serve a course, take an
+/// order, or bus a seat: the nearest free, walkable cell to the dish spot (the
+/// plate on the table). The chair AND the table are BLOCKING nav cells, so
+/// targeting the seat itself made `find_path` fall back to a straight line ONTO
+/// the guest — the waiter clipping through furniture and standing on the
+/// customer's tile. Snapping to the nearest clear cell lets the waiter path
+/// there cleanly (obstacle-aware) and serve from arm's reach, approaching from
+/// whichever side is accessible. Serving "from a distance" (a couple tiles out
+/// when the table is boxed in) is intended. Same-floor; returns (x, z).
+fn serve_stand_tile(ctx: &ReducerContext, rid: u64, dish_x: f32, dish_z: f32, floor: u32) -> (f32, f32) {
+    crate::reducers::pathfinding::snap_to_clear(ctx, rid, dish_x, dish_z, floor)
+}
 
 /// Phase 9.64 (staff migration Pass 3-5) — the next world point to walk
 /// toward when path-following: the first waypoint on the A* path that's
