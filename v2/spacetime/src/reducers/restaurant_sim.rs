@@ -6060,46 +6060,40 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
         tick_seat_clean(ctx, a, dt_ms);
         return;
     }
-    // H.52 — waiter walk speed includes training multiplier.
-    // Phase 9.64 (staff migration Pass 3-5) — chefs/waiters/barmen now PATH
-    // around furniture + walls instead of straight-lining through them (the
-    // root of the "staff stuck / clipping / stranded outside" reports).
-    // Recompute the path each tick (no stored path to desync); aim at the
-    // next waypoint. Same-floor only — cross-floor keeps the straight step
-    // (the client's stair anim covers it). Errands already branched out
-    // above (they walk OUT to the road, off the interior grid). Empty/
-    // blocked path → straight-line fallback, so a miss never freezes anyone.
-    let (step_tx, step_tz) = if a.role != "errand" && a.floor == a.target_floor {
-        next_path_step(ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z, a.floor)
+    // Phase 9.64 — chefs/waiters/barmen PATH around furniture on their floor.
+    // Phase M.17 — and now WALK THE STAIRS across floors (next_step_multi):
+    // route to the stair, climb the flight, continue on the next floor,
+    // flipping `floor` at the landing — instead of straight-lining diagonally
+    // through the building and snapping the floor. Errands still straight-line
+    // (they walk OUT to the off-grid road). Empty/blocked path → straight-line
+    // fallback inside the helper, so a miss never freezes anyone.
+    let walk_speed = actor_walk_speed(ctx, &a.role, &a.member_id);
+    let (mut new_x, mut new_z, mut stepped_floor) = if a.role == "errand" {
+        let (nx, nz) = step_toward_target(a.x, a.z, a.target_x, a.target_z, walk_speed, dt_ms);
+        (nx, nz, a.target_floor)
     } else {
-        (a.target_x, a.target_z)
+        next_step_multi(
+            ctx, a.restaurant_id, a.x, a.z, a.floor,
+            a.target_x, a.target_z, a.target_floor, walk_speed, dt_ms,
+        )
     };
-    let (new_x, new_z) = step_toward_target(
-        a.x, a.z, step_tx, step_tz,
-        actor_walk_speed(ctx, &a.role, &a.member_id),
-        dt_ms,
-    );
-    // Phase 9.66 — STUCK-STAFF WATCHDOG. An actor that's been moving toward
-    // its target for far longer than any real walk has an UNREACHABLE one —
-    // the inside of a closed / circular bar ring, a station boxed in by
-    // furniture, a cross-floor spot, etc. Under the staffMove cutover the
-    // client no longer runs its own stuck-recovery, so nothing rescues it
-    // and it loops the walk animation forever ("barman endlessly trying to
-    // get into his circular bar"). Snap it ONTO the target so it arrives +
-    // starts working / goes idle. The row update below already pins floor =
-    // target_floor, so this also rescues cross-floor strands. 15 s is far
-    // longer than any legitimate same- or cross-floor walk.
+    // Phase 9.66 — STUCK-STAFF WATCHDOG. An actor moving toward an UNREACHABLE
+    // target (boxed-in station, closed bar ring, unreachable stair, etc.) for
+    // far longer than any real walk gets snapped ONTO the target so it arrives
+    // instead of looping the walk forever. Snaps the floor too (cross-floor
+    // strand rescue). 15 s is longer than any legitimate walk, including a
+    // multi-flight stair climb.
     let moving_state = a.state == "movingToWork" || a.state == "returningHome";
-    let (new_x, new_z) = if moving_state && a.state_clock_ms > 15_000
+    if moving_state && a.state_clock_ms > 15_000
         && ((a.target_x - new_x).abs() > 0.05 || (a.target_z - new_z).abs() > 0.05) {
         log::info!(
             "tick_staff_actor: {} stuck {} {}ms — snapping to target ({:.1},{:.1})",
             a.member_id, a.state, a.state_clock_ms, a.target_x, a.target_z,
         );
-        (a.target_x, a.target_z)
-    } else {
-        (new_x, new_z)
-    };
+        new_x = a.target_x;
+        new_z = a.target_z;
+        stepped_floor = a.target_floor;
+    }
 
     // Phase H.3 + H.8 — auto state flips on arrival. Base transitions:
     //   - movingToWork → working when the actor reaches target.
@@ -6124,15 +6118,14 @@ fn tick_staff_actor(ctx: &ReducerContext, member_id: &str, dt_ms: i64) {
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
-        // Phase 9.46 — the server now owns the body for busy actors (the
-        // client mirror is ignored for them), so it must own the FLOOR
-        // too or a cross-floor waiter would keep its pre-trip storey
-        // forever. The abstract server model walks straight to the
-        // target with a stair-distance penalty, so the actor is
-        // conceptually on its target's floor for the whole leg — snap
-        // floor to target_floor. Same-floor tasks (the common case) are
-        // a no-op; idle/returning actors carry their home floor here.
-        floor: new_target_floor,
+        // Phase 9.46 / M.17 — the server owns the body FLOOR for busy actors.
+        // `stepped_floor` comes from next_step_multi: it stays on the current
+        // storey while the body walks to / along the stairs and flips at the
+        // landing, so the actor renders on the floor its body is actually on
+        // (was: snapped to target_floor for the entire leg, which teleported
+        // the storey). Same-floor tasks keep their floor; idle/returning
+        // actors carry their home floor.
+        floor: stepped_floor,
         state: new_state,
         state_clock_ms: if advance_clock {
             new_clock.saturating_add(dt_ms)
@@ -6729,16 +6722,18 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         g.state.as_str(),
         "seated" | "ordering" | "eating" | "wcSitting" | "wcWashing"
     );
-    let (new_x, new_z) = if anchored {
-        (g.x, g.z)
+    // Phase 9.69 — route around furniture on the guest's own floor.
+    // Phase M.17 — and WALK THE STAIRS across floors (next_step_multi): route
+    // to the stairs, climb the flight, continue on the next floor, flipping
+    // `floor` at the landing — instead of straight-lining cross-floor. Anchored
+    // (seated / eating / WC) guests hold their seat and keep their floor.
+    let (new_x, new_z, stepped_floor) = if anchored {
+        (g.x, g.z, g.floor)
     } else {
-        // Phase 9.69 — route around furniture on the guest's own floor
-        // instead of clipping straight through tables. Cross-floor legs
-        // stay straight-line (stairs are handled by the floor pin).
-        path_step_same_floor(
-            ctx, g.restaurant_id, g.x, g.z,
-            effective_target_x, effective_target_z,
-            g.floor, effective_target_floor, GUEST_SPEED, dt_ms,
+        next_step_multi(
+            ctx, g.restaurant_id, g.x, g.z, g.floor,
+            effective_target_x, effective_target_z, effective_target_floor,
+            GUEST_SPEED, dt_ms,
         )
     };
 
@@ -7084,20 +7079,12 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // "successfully visited" bonuses.
     let new_wc_completed = g.wc_completed || wc_cycle_completed;
 
-    // Phase M.16 — write the body FLOOR. It was preserved by `..g`, so a guest
-    // whose seat is on an upper floor kept its floor-0 SPAWN value while its
-    // x/z walked to the seat — and the guest-cutover client now renders that
-    // server floor directly, so the guest appeared at floor 0 on the upper
-    // seat's x/z ("sitting on an imaginary chair through another floor").
-    // Confirmed via live active_guest: eating guests had floor=0 but
-    // seat_floor/target_floor=1. Movement is straight-line with no stairs, so
-    // snap the floor to the target's floor once the body has REACHED it (an
-    // anchored/seated guest is at its seat every tick, so it settles to
-    // seat_floor). Mirrors how tick_staff_actor pins floor on arrival.
-    let reached_target = (effective_target_x - new_x).abs() < 0.06
-        && (effective_target_z - new_z).abs() < 0.06;
-    let new_floor = if reached_target { effective_target_floor } else { g.floor };
-
+    // Phase M.16 / M.17 — write the body FLOOR (was preserved by `..g`, so an
+    // upper-floor guest kept its floor-0 spawn value and the cutover client
+    // rendered it at floor 0 on the upper seat's x/z — the "imaginary chair").
+    // `stepped_floor` comes from next_step_multi (the movement step above): it
+    // stays on the current storey while the body walks to / along the stairs
+    // and flips at the landing, settling to seat_floor once the guest sits.
     ctx.db.active_guest().id().update(ActiveGuest {
         state: final_state,
         state_clock_ms: final_clock,
@@ -7105,7 +7092,7 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         order_index: new_order_index,
         x: new_x,
         z: new_z,
-        floor: new_floor,
+        floor: stepped_floor,
         // H.12 — apply server fallback seat assignment if it fired.
         // When assigned_target is None, these read back to the
         // existing row values (no change).
@@ -8144,6 +8131,54 @@ fn next_path_step(ctx: &ReducerContext, rid: u64, x: f32, z: f32, tx: f32, tz: f
         }
     }
     (tx, tz)
+}
+
+/// Phase M.17 — cross-floor movement that WALKS THE STAIRS. Routes (obstacle-
+/// aware) to the stair entry on the current floor, then climbs the single
+/// flight to the opposite landing on the next floor — advancing `floor` one
+/// storey at a time (a 0→2 trip climbs flight by flight). Same-floor callers
+/// get the normal obstacle-aware step. Returns (new_x, new_z, new_floor).
+///
+/// STATELESS by design: the flight climb is ATOMIC — the tick the body reaches
+/// the stair entry it lands at the exit tile on the next floor, so there is
+/// never a mid-stair tick for a re-derived path to route BACKWARD to the entry
+/// (the failure that forces the client's local sim to cache the path + guard
+/// mid-stair replans). The smooth visible climb is interpolated client-side
+/// over that landing step (renderActorFromServer / renderGuestFromServer).
+fn next_step_multi(
+    ctx: &ReducerContext, rid: u64,
+    x: f32, z: f32, floor: u32,
+    tx: f32, tz: f32, target_floor: u32,
+    speed: f32, dt_ms: i64,
+) -> (f32, f32, u32) {
+    if floor == target_floor {
+        // Common case — same-floor obstacle-aware step, floor unchanged.
+        let (wx, wz) = next_path_step(ctx, rid, x, z, tx, tz, floor);
+        let (nx, nz) = step_toward_target(x, z, wx, wz, speed, dt_ms);
+        return (nx, nz, floor);
+    }
+    use crate::reducers::pathfinding::{STAIR_BOTTOM_TILE, STAIR_TOP_TILE};
+    let ascending = target_floor > floor;
+    // Entry = the stair endpoint on THIS floor; exit = the endpoint on the
+    // next floor (they swap for going down).
+    let (entry_i, exit_i) = if ascending {
+        (STAIR_BOTTOM_TILE, STAIR_TOP_TILE)
+    } else {
+        (STAIR_TOP_TILE, STAIR_BOTTOM_TILE)
+    };
+    let next_floor = if ascending { floor + 1 } else { floor - 1 };
+    let (entry_x, entry_z) = (entry_i.0 as f32, entry_i.1 as f32);
+    // Route (obstacle-aware) toward the stair entry on this floor.
+    let (wx, wz) = next_path_step(ctx, rid, x, z, entry_x, entry_z, floor);
+    let (nx, nz) = step_toward_target(x, z, wx, wz, speed, dt_ms);
+    // Reached the entry this tick → climb the flight: land at the exit tile on
+    // the next floor. Atomic, so no mid-stair tick re-paths backward.
+    let at_entry = (entry_x - nx).abs() < 0.3 && (entry_z - nz).abs() < 0.3;
+    if at_entry {
+        (exit_i.0 as f32, exit_i.1 as f32, next_floor)
+    } else {
+        (nx, nz, floor)
+    }
 }
 
 /// Same-floor pathfinding step: route around furniture toward (tx,tz)

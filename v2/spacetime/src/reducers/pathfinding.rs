@@ -96,9 +96,10 @@ const MAX_ITERATIONS: u32 = 500;
 pub(crate) const PATH_ARRIVAL_THRESHOLD: f32 = 0.2;
 
 /// LOWER-floor stair landing tile (cell directly south of the bottom step).
-const STAIR_BOTTOM_TILE: (i32, i32) = (-4, -1);
+/// pub(crate) so the movement tick (next_step_multi) can route to the stairs.
+pub(crate) const STAIR_BOTTOM_TILE: (i32, i32) = (-4, -1);
 /// UPPER-floor stair landing tile (cell directly east of the top step).
-const STAIR_TOP_TILE: (i32, i32) = (-3, -4);
+pub(crate) const STAIR_TOP_TILE: (i32, i32) = (-3, -4);
 
 /// 4-connected neighbours, in the SAME order as the client's NEIGHBOURS
 /// array. Order matters for determinism of which equal-cost path wins.
