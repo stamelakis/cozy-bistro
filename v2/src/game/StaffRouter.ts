@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { isServerSim } from "./featureFlags";
 import type { AnimatedCharacter } from "../scene/CharacterAnimator";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD, nearStairTile } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
 import type { DishKind } from "../data/dishwareCatalog";
 import { recipes } from "../data/recipes";
 
@@ -2372,21 +2372,24 @@ export class StaffRouter {
     if (a.cloudX === undefined || a.cloudZ === undefined) return; // no row yet
     const STOREY = 3;
     const feetLift = a.character._feetLift ?? 0;
-    // Phase M.17 — cross-floor stair CLIMB. A server hop lands on a stair tile
-    // with a floor change; the server does the whole flight in one tick then
-    // walks the actor on, so the CLIENT animates the walk up the steps itself
-    // over a fixed ~0.8 s, holding the body on the stairs regardless of how
-    // fast the next server pose arrives (an interp-linked ramp gets cut short
-    // by the next pose → snaps). A non-stair floor change (reload reparent)
-    // just reparents + snaps below.
+    // Phase M.17 — cross-floor stair CLIMB. Under the cutover the server ONLY
+    // flips `floor` at a stair landing, so ANY floor change here is a stair hop.
+    // Animate a fixed ~0.8 s climb from the body's current pos (it followed the
+    // walk TO the stair) up to the fixed stair EXIT tile on the new floor —
+    // using the KNOWN tile, not cloudX/Z, because the server may already have
+    // stepped the actor one step past the stair before this pose was sampled
+    // (which left the old nearStairTile check false → the climb snapped). The
+    // client holds the body on the steps regardless of how fast poses arrive.
     if (a.cloudFloor !== undefined && a.cloudFloor !== a.currentFloor) {
       const fromFloor = a.currentFloor;
       a.currentFloor = a.cloudFloor;
       this.reparentCharacter?.(a.character, a.cloudFloor);
-      a.stairClimb = nearStairTile(a.cloudX, a.cloudZ)
-        ? { fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
-            toX: a.cloudX, toZ: a.cloudZ, fromFloor, toFloor: a.cloudFloor, elapsed: 0 }
-        : undefined;
+      const exit = a.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
+      a.stairClimb = {
+        fromX: a.character.groundPos.x, fromZ: a.character.groundPos.y,
+        toX: exit.x, toZ: exit.z, fromFloor, toFloor: a.cloudFloor, elapsed: 0,
+      };
+      console.log(`[stairClimb] staff ${a.memberId} F${fromFloor}->F${a.cloudFloor}`);
     }
     if (a.stairClimb) {
       const c = a.stairClimb;

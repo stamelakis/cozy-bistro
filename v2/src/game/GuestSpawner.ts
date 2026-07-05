@@ -17,7 +17,7 @@ import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste, customerArchetypes } from "../data/customerArchetypes";
 import { RESTAURANT_THEMES } from "../data/themes";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
-import { PATH_ARRIVAL_THRESHOLD, nearStairTile } from "./Pathfinding";
+import { PATH_ARRIVAL_THRESHOLD, STAIR_BOTTOM_TILE, STAIR_TOP_TILE } from "./Pathfinding";
 
 /** A dirty plate or glass left on a table by a departed customer. The
  * waiter wash loop claims one by id, walks to its position to "pick it
@@ -4240,18 +4240,22 @@ export class GuestSpawner {
     // storey-focus visibility hides the guest when the player looks at a
     // different floor (same helper the local mover uses across stairs).
     if (g.cloudFloor !== undefined && g.cloudFloor !== g.currentFloor) {
-      // Phase M.17 — cross-floor stair CLIMB. Detect the server hop (floor
-      // change landing on a stair tile) and start a FIXED-duration client climb
-      // (~0.8 s); the server does the flight in one tick + walks on, so an
-      // interp-linked ramp gets cut short by the next pose → snaps. A non-stair
-      // change (reload reparent) just reparents + snaps below.
+      // Phase M.17 — ANY floor change under the cutover is a stair hop (the
+      // server only flips `floor` at the stair). Animate a fixed ~0.8 s climb
+      // from the body's current pos (it followed the walk TO the stair) up to
+      // the fixed stair EXIT tile on the new floor — using the KNOWN tile, not
+      // cloudX/Z, because the server may already have stepped the guest one
+      // step past the stair before this pose was sampled (which left the old
+      // nearStairTile check false → the climb snapped).
       const fromFloor = g.currentFloor;
       g.currentFloor = g.cloudFloor;
       this.reparentCharacter?.(g.character, g.cloudFloor);
-      g.stairClimb = nearStairTile(g.cloudX, g.cloudZ)
-        ? { fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
-            toX: g.cloudX, toZ: g.cloudZ, fromFloor, toFloor: g.cloudFloor, elapsed: 0 }
-        : undefined;
+      const exit = g.cloudFloor > fromFloor ? STAIR_TOP_TILE : STAIR_BOTTOM_TILE;
+      g.stairClimb = {
+        fromX: g.character.groundPos.x, fromZ: g.character.groundPos.y,
+        toX: exit.x, toZ: exit.z, fromFloor, toFloor: g.cloudFloor, elapsed: 0,
+      };
+      console.log(`[stairClimb] guest ${g.id} F${fromFloor}->F${g.cloudFloor}`);
     }
     // Adopt the server state so the bubble/eating flag + pose read server truth.
     if (g.cloudState) g.state = cloudStateToLocal(g.cloudState);
