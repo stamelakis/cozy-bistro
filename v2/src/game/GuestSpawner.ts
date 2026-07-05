@@ -4285,6 +4285,10 @@ export class GuestSpawner {
     // by z-position (the server walks the body through gradually; the normal
     // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
     const tf = g.cloudTargetFloor;
+    // Phase M.17 — flag the character as climbing so the animator's floor-focus
+    // gate keeps it visible through the WHOLE climb (else it vanishes at the
+    // half-way point when baseY crosses into the upper storey's bucket).
+    g.character._onStair = g.cloudOnStair === true;
     let anchorY: number;
     if (g.cloudOnStair && tf !== undefined && tf !== g.currentFloor) {
       const lowerFloor = tf > g.currentFloor ? g.currentFloor : g.currentFloor - 1;

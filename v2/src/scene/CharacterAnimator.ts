@@ -72,6 +72,12 @@ export interface AnimatedCharacter {
    * instead of writing root.visible directly, so the animator stays the
    * single authority for visibility and ANDs floor-focus with this. */
   _keepHidden?: boolean;
+  /** Phase M.17 — true while the actor is actively climbing a flight (mirrors
+   * the server on_stair flag). Exempts the character from the floor-focus gate
+   * so the WHOLE climb stays visible, instead of vanishing at the midpoint when
+   * its height crosses into the upper storey's bucket ("goes halfway up then
+   * disappears"). */
+  _onStair?: boolean;
 }
 
 export class CharacterAnimator {
@@ -229,7 +235,13 @@ export class CharacterAnimator {
       // work the cull would have done. A character mid-stair rounds
       // toward the nearer slab, so they pop in/out at the half-way point
       // — acceptable for a brief transit, and matches their bubble.
-      const offFloor = gateFloor !== undefined && Math.round(baseY / gateStoreyH) !== gateFloor;
+      // Phase M.17 — a character actively climbing a flight is EXEMPT from the
+      // floor-focus gate so the WHOLE climb stays visible; otherwise it vanishes
+      // at the half-way point as baseY crosses into the upper storey's bucket
+      // ("goes halfway up then disappears"). It re-enters the gate the moment it
+      // steps off the stairs (on_stair clears) onto the destination floor.
+      const offFloor = gateFloor !== undefined && !c._onStair
+        && Math.round(baseY / gateStoreyH) !== gateFloor;
       if (offFloor || c._keepHidden) {
         if (c.root.visible) c.root.visible = false;
         // Phase M.2 — a hidden SKINNED character keeps advancing its mixer

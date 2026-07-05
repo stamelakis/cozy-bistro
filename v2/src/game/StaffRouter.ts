@@ -2414,6 +2414,10 @@ export class StaffRouter {
     // by z-position (the server walks the body through gradually; the normal
     // lerp handles x/z). Flight rises z=-1 (bottom) → z=-4 (top).
     const tf = a.cloudTargetFloor;
+    // Phase M.17 — flag the character as climbing so the animator's floor-focus
+    // gate keeps it visible through the WHOLE climb (else it vanishes at the
+    // half-way point when baseY crosses into the upper storey's bucket).
+    a.character._onStair = a.cloudOnStair === true;
     let anchorY: number;
     if (a.cloudOnStair && tf !== undefined && tf !== a.currentFloor) {
       const lowerFloor = tf > a.currentFloor ? a.currentFloor : a.currentFloor - 1;
