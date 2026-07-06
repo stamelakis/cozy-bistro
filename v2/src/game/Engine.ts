@@ -2078,7 +2078,40 @@ export class Engine {
       if (dp.defId !== "int-doorway" && dp.defId !== "door") continue;
       if (seen.has(dp.model)) continue;   // already animated via the registry
       if (!dp.model.parent) continue;     // discarded (saved game replaced it)
+      seen.add(dp.model);
       candidates.push({ uid: `demo:${dp.defId}:${dp.x}:${dp.z}`, defId: dp.defId, x: dp.x, z: dp.z, rotY: dp.rotY, floor: 0, model: dp.model });
+    }
+    // Phase M.31.2 — belt-and-suspenders: also animate any hinge panel that is
+    // physically in the scene but tracked by NEITHER the registry NOR demo
+    // placements. The starter front door lands here — WorldScene adds it to the
+    // scene, but if registerExisting skips its cell as "occupied" it never
+    // becomes a registry item, so the loops above miss it and it never opens
+    // (confirmed via __DOOR_DEBUG: the candidate list was all int-doorways, no
+    // "door"). Scanning the scene graph for userData.panel catches the front
+    // door no matter how the bookkeeping lost it. Throttled to ~1 s (doors
+    // rarely appear/disappear); per frame it's just the proximity test.
+    {
+      const cacheHost = this as unknown as { _looseDoorAt?: number; _looseDoors?: THREE.Object3D[] };
+      const nowMs = performance.now();
+      if (!cacheHost._looseDoors || nowMs - (cacheHost._looseDoorAt ?? 0) > 1000) {
+        cacheHost._looseDoorAt = nowMs;
+        const found: THREE.Object3D[] = [];
+        this.scene.threeScene.traverse((o) => {
+          if ((o.userData as { panel?: unknown }).panel) found.push(o);
+        });
+        cacheHost._looseDoors = found;
+      }
+      const wp = new THREE.Vector3();
+      const wq = new THREE.Quaternion();
+      const we = new THREE.Euler(0, 0, 0, "YXZ");
+      const storeyH = WorldScene.getStoreyHeight();
+      for (const m of cacheHost._looseDoors) {
+        if (seen.has(m) || !m.parent) continue;   // already tracked, or removed
+        seen.add(m);
+        m.getWorldPosition(wp);
+        we.setFromQuaternion(m.getWorldQuaternion(wq));
+        candidates.push({ uid: `loose:${m.uuid}`, defId: "door", x: wp.x, z: wp.z, rotY: we.y, floor: Math.max(0, Math.round(wp.y / storeyH)), model: m });
+      }
     }
     if (candidates.length === 0) {
       this.scene.updateInternalDoors(doors, dt);
