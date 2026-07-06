@@ -5094,11 +5094,14 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
         "try_dispatch_wash_trip: waiter {} pickup at seat {} ({:.2},{:.2}) → station {} ({:.2},{:.2})",
         member_id, seat.uid, seat.x, seat.z, station_uid, station.x, station.z,
     );
+    // Phase M.22 — grab the dirty plates from the nearest free tile beside the
+    // table, not on the (blocked) seat cell.
+    let (pick_x, pick_z) = serve_stand_tile(ctx, rid, seat.x, seat.z, seat.floor);
     ctx.db.staff_actor().member_id().update(StaffActor {
         state: "movingToWork".to_string(),
         state_clock_ms: 0,
-        target_x: seat.x,
-        target_z: seat.z,
+        target_x: pick_x,
+        target_z: pick_z,
         target_floor: seat.floor,
         wash_target_uid: station_uid,
         wash_phase: "pickup".to_string(),
@@ -5171,13 +5174,17 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                     });
                     return;
                 };
+                // Phase M.22 — load from the nearest free tile beside the wash
+                // station, not on the (blocked) appliance cell.
+                let (drop_x, drop_z) =
+                    serve_stand_tile(ctx, a.restaurant_id, station.x, station.z, station.floor);
                 ctx.db.staff_actor().member_id().update(StaffActor {
                     x: new_x,
                     z: new_z,
                     state: "movingToWork".to_string(),
                     state_clock_ms: 0,
-                    target_x: station.x,
-                    target_z: station.z,
+                    target_x: drop_x,
+                    target_z: drop_z,
                     target_floor: station.floor,
                     wash_phase: "drop".to_string(),
                     ..a
