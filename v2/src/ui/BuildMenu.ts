@@ -200,6 +200,26 @@ export class BuildMenu {
   private collapsed = false;
   /** Which tier tab is currently active. */
   private selectedTier: LuxuryTier = 1;
+  /** Drill-down state: null = show the CATEGORY tile grid; a category = show
+   * that category's item tiles (with a back button). */
+  private selectedCategory: FurnitureDef["category"] | null = null;
+  /** Category taxonomy — order, labels, and an emoji for the category tiles. */
+  private static readonly CATEGORY_ORDER: FurnitureDef["category"][] = [
+    "table", "chair", "stove", "wash", "appliance", "counter", "bar", "storage",
+    "wall", "door", "bathroom", "decoration", "plant", "lamp",
+  ];
+  private static readonly CATEGORY_LABELS: Record<FurnitureDef["category"], string> = {
+    table: "Tables", chair: "Chairs", stove: "Cooking", wash: "Dishwashing",
+    appliance: "Appliances", counter: "Counters", bar: "Bar", storage: "Storage",
+    wall: "Walls & Partitions", door: "Doors & Windows",
+    bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
+  };
+  private static readonly CATEGORY_ICONS: Record<FurnitureDef["category"], string> = {
+    table: "🍽️", chair: "🪑", stove: "🔥", wash: "🚰",
+    appliance: "🔌", counter: "🍰", bar: "🍸", storage: "📦",
+    wall: "🧱", door: "🚪", bathroom: "🚽", decoration: "🖼️",
+    plant: "🪴", lamp: "💡",
+  };
   /** Title bar DOM element — text + arrow updated on collapse toggle.
    * Also exposed as the drag-handle for PanelDragResize. */
   titleEl?: HTMLDivElement;
@@ -500,7 +520,7 @@ export class BuildMenu {
     // per-category open/closed flag lives inside renderTierContent's
     // closure, so a fresh render is the cleanest "forget what was
     // expanded" path — same effect as toggling tiers.
-    if (!this.collapsed) this.renderTierContent();
+    if (!this.collapsed) { this.selectedCategory = null; this.renderTierContent(); }
   }
 
   /** Sync the title text with the collapse state. */
@@ -565,6 +585,7 @@ export class BuildMenu {
       if (unlocked) {
         btn.onclick = () => {
           this.selectedTier = tier;
+          this.selectedCategory = null; // back to the category grid for the new tier
           this.renderTierTabs();
           this.renderTierContent();
         };
@@ -582,78 +603,105 @@ export class BuildMenu {
   private renderTierContent(): void {
     if (!this.tierContentEl) return;
     this.tierContentEl.innerHTML = "";
-    const categoryOrder: FurnitureDef["category"][] = [
-      "table", "chair", "stove", "wash", "appliance", "counter", "bar", "storage",
-      "wall", "door", "bathroom", "decoration", "plant", "lamp",
-    ];
-    const categoryLabels: Record<FurnitureDef["category"], string> = {
-      table: "Tables", chair: "Chairs", stove: "Cooking", wash: "Dishwashing",
-      appliance: "Appliances", counter: "Counters", bar: "Bar", storage: "Storage",
-      wall: "Walls & Partitions", door: "Doors & Windows",
-      bathroom: "Bathroom", decoration: "Decor", plant: "Plants", lamp: "Lighting",
-    };
-    // Every category starts collapsed — the panel now fills the full
-    // right edge of the viewport, so the player skim-reads the headers
-    // and expands what they care about instead of having one section
-    // pre-opened to set the scroll position.
-    for (const cat of categoryOrder) {
-      const items = furnitureCatalog.filter(
+    if (this.selectedCategory === null) this.renderCategoryGrid();
+    else this.renderCategoryItems(this.selectedCategory);
+  }
+
+  /** A grid of CATEGORY tiles for the active tier — icon + label + item count.
+   * Click a non-empty tile to drill into its items. Empty categories (0 items
+   * in this tier) show dimmed and non-clickable, so the full taxonomy is still
+   * visible at a glance. */
+  private renderCategoryGrid(): void {
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid",
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+      gap: "6px",
+      padding: "2px 2px 4px",
+    } as Partial<CSSStyleDeclaration>);
+    for (const cat of BuildMenu.CATEGORY_ORDER) {
+      const count = furnitureCatalog.filter(
         (d) => d.category === cat && inferQualityTier(d) === this.selectedTier,
-      );
-      const empty = items.length === 0;
-      let open = false;
-      const header = document.createElement("div");
-      Object.assign(header.style, {
-        marginTop: "8px",
-        marginBottom: "3px",
-        padding: "3px 4px",
-        fontSize: "11px",
-        fontWeight: "700",
-        // Dim empty headers so the eye can skip them — but keep the row
-        // visible so the player knows the category exists in this tier.
-        opacity: empty ? "0.45" : "0.85",
-        letterSpacing: "0.05em",
-        textTransform: "uppercase",
-        cursor: "pointer",
-        background: "rgba(255,245,220,0.05)",
-        borderRadius: "3px",
-        userSelect: "none",
+      ).length;
+      const empty = count === 0;
+      const tile = document.createElement("button");
+      tile.disabled = empty;
+      Object.assign(tile.style, {
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", gap: "3px",
+        minWidth: "0", padding: "12px 6px",
+        background: "rgba(255,245,220,0.06)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.16)",
+        borderRadius: "6px",
+        cursor: empty ? "default" : "pointer",
+        font: "inherit",
+        opacity: empty ? "0.4" : "1",
       } as Partial<CSSStyleDeclaration>);
-      const itemsWrap = document.createElement("div");
-      itemsWrap.style.display = open ? "block" : "none";
-      const refreshHeader = (): void => {
-        header.textContent = `${open ? "▾" : "▸"} ${categoryLabels[cat]} (${items.length})`;
-      };
-      refreshHeader();
-      header.onclick = () => {
-        open = !open;
-        itemsWrap.style.display = open ? "block" : "none";
-        refreshHeader();
-      };
-      this.tierContentEl.appendChild(header);
-      if (empty) {
-        const placeholder = document.createElement("div");
-        placeholder.textContent = "no items in this tier yet";
-        Object.assign(placeholder.style, {
-          opacity: "0.5",
-          fontStyle: "italic",
-          fontSize: "11px",
-          padding: "4px 6px 6px 14px",
-        } as Partial<CSSStyleDeclaration>);
-        itemsWrap.appendChild(placeholder);
-      } else {
-        const grid = document.createElement("div");
-        Object.assign(grid.style, {
-          display: "grid",
-          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          gap: "6px",
-          padding: "2px 2px 6px",
-        } as Partial<CSSStyleDeclaration>);
-        for (const def of items) this.appendItemTile(grid, def);
-        itemsWrap.appendChild(grid);
+      const icon = document.createElement("div");
+      icon.textContent = BuildMenu.CATEGORY_ICONS[cat];
+      Object.assign(icon.style, { fontSize: "26px", lineHeight: "1" } as Partial<CSSStyleDeclaration>);
+      tile.appendChild(icon);
+      const label = document.createElement("div");
+      label.textContent = BuildMenu.CATEGORY_LABELS[cat];
+      Object.assign(label.style, {
+        fontSize: "11px", fontWeight: "600", textAlign: "center", lineHeight: "1.15",
+      } as Partial<CSSStyleDeclaration>);
+      tile.appendChild(label);
+      const cnt = document.createElement("div");
+      cnt.textContent = empty ? "—" : `${count} item${count === 1 ? "" : "s"}`;
+      Object.assign(cnt.style, { fontSize: "10px", opacity: "0.65" } as Partial<CSSStyleDeclaration>);
+      tile.appendChild(cnt);
+      if (!empty) {
+        tile.onmouseenter = () => { tile.style.background = "rgba(255,245,220,0.14)"; tile.style.borderColor = "rgba(255,245,220,0.4)"; };
+        tile.onmouseleave = () => { tile.style.background = "rgba(255,245,220,0.06)"; tile.style.borderColor = "rgba(255,245,220,0.16)"; };
+        tile.onclick = () => { this.selectedCategory = cat; this.renderTierContent(); };
       }
-      this.tierContentEl.appendChild(itemsWrap);
+      grid.appendChild(tile);
     }
+    this.tierContentEl!.appendChild(grid);
+  }
+
+  /** The item tiles for one category (active tier), with a back button to
+   * return to the category grid. */
+  private renderCategoryItems(cat: FurnitureDef["category"]): void {
+    const back = document.createElement("button");
+    back.textContent = `← ${BuildMenu.CATEGORY_ICONS[cat]} ${BuildMenu.CATEGORY_LABELS[cat]}`;
+    Object.assign(back.style, {
+      display: "block", width: "100%", textAlign: "left",
+      margin: "0 0 6px 0", padding: "6px 8px",
+      background: "rgba(255,245,220,0.09)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.2)",
+      borderRadius: "5px", cursor: "pointer",
+      font: "inherit", fontSize: "12px", fontWeight: "700", letterSpacing: "0.02em",
+    } as Partial<CSSStyleDeclaration>);
+    back.onmouseenter = () => { back.style.background = "rgba(255,245,220,0.17)"; };
+    back.onmouseleave = () => { back.style.background = "rgba(255,245,220,0.09)"; };
+    back.onclick = () => { this.selectedCategory = null; this.renderTierContent(); };
+    this.tierContentEl!.appendChild(back);
+
+    const items = furnitureCatalog.filter(
+      (d) => d.category === cat && inferQualityTier(d) === this.selectedTier,
+    );
+    if (items.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = "No items in this tier yet.";
+      Object.assign(empty.style, {
+        opacity: "0.5", fontStyle: "italic", fontSize: "11px", padding: "6px",
+      } as Partial<CSSStyleDeclaration>);
+      this.tierContentEl!.appendChild(empty);
+      return;
+    }
+    const grid = document.createElement("div");
+    Object.assign(grid.style, {
+      display: "grid",
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+      gap: "6px",
+      padding: "2px 2px 6px",
+    } as Partial<CSSStyleDeclaration>);
+    for (const def of items) this.appendItemTile(grid, def);
+    this.tierContentEl!.appendChild(grid);
   }
 
   /** Render a single catalog row inside a category section. Same
