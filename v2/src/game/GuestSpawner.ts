@@ -1675,8 +1675,15 @@ export class GuestSpawner {
     // (no prior pose) starts settled (interp 1).
     if (g.cloudX === undefined
         || Math.hypot(row.x - g.cloudX, row.z - (g.cloudZ ?? row.z)) > 1e-4) {
-      g.cloudPrevX = g.cloudX ?? row.x;
-      g.cloudPrevZ = g.cloudZ ?? row.z;
+      // Phase M.23 — anchor the new interp segment to where the BODY ACTUALLY
+      // IS right now (rendered groundPos), not the previous server target
+      // (g.cloudX). At 2 Hz the body usually hasn't finished gliding to the old
+      // target when the next update lands, so starting the segment from the old
+      // target snapped the body forward each tick — the per-tick micro-jump
+      // behind the "glitchy" movement. From the live groundPos each segment is a
+      // clean glide that self-corrects any residual lag with no jump.
+      g.cloudPrevX = g.character?.groundPos.x ?? g.cloudX ?? row.x;
+      g.cloudPrevZ = g.character?.groundPos.y ?? g.cloudZ ?? row.z;
       g.cloudInterp = g.cloudX === undefined ? 1 : 0;
     }
     g.cloudX = row.x;
@@ -4271,14 +4278,19 @@ export class GuestSpawner {
     const t = g.cloudInterp;
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;
-    // Snap on a real teleport; otherwise ease toward the interpolated point.
-    const jump = Math.hypot(g.cloudX - pos.x, g.cloudZ - pos.y);
-    if (jump > 2.5) {
+    // Phase M.23 — PURE linear snapshot interp: glide at constant speed straight
+    // from the segment start (where the body WAS when this server update landed,
+    // stashed by reconcileCloudGuest) to the latest server pose. The old code
+    // used prev = the OLD server TARGET plus a per-frame exponential chase
+    // (pos += (tx − pos) * dt*16); at 2 Hz the body rarely reached the old
+    // target before the next update, so each tick snapped it forward AND the
+    // chase pulsed the speed / lagged worse on high-refresh displays — the
+    // "glitchy" walk. A big segment jump = a real teleport (floor / respawn).
+    if (Math.hypot(g.cloudX - prevX, g.cloudZ - prevZ) > 2.5) {
       pos.set(g.cloudX, g.cloudZ);
     } else {
-      const alpha = Math.min(1, dt * 16);
-      pos.x += (tx - pos.x) * alpha;
-      pos.y += (tz - pos.y) * alpha;
+      pos.x = tx;
+      pos.y = tz;
     }
     // Anchor body Y to the floor slab (moveToward normally does this).
     // Phase M.17 — in the stairwell + crossing floors → ramp Y along the steps
@@ -4317,7 +4329,12 @@ export class GuestSpawner {
       // stale last-walk heading, matching how importCloudGuest seats them.
       if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;
     } else {
-      g.character.action = moving ? "walk" : "idle";
+      // Phase M.23 — stay "walk" while travelling. Don't drop to "idle" just
+      // because THIS 2 Hz segment finished (t=1) between updates: that flipped
+      // walk↔idle every tick and RESET the walk cycle (the glitchy restart). A
+      // genuinely stopped body (waiting/arrived) is settled to idle by the
+      // animator's movement hysteresis (WALK_IDLE_GRACE_MS) instead.
+      g.character.action = "walk";
     }
   }
 

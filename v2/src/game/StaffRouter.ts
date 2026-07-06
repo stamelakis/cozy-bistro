@@ -1873,8 +1873,13 @@ export class StaffRouter {
     // then stalling. First update (no prior pose) starts settled (interp 1).
     if (actor.cloudX === undefined
         || Math.hypot(row.x - actor.cloudX, row.z - (actor.cloudZ ?? row.z)) > 1e-4) {
-      actor.cloudPrevX = actor.cloudX ?? row.x;
-      actor.cloudPrevZ = actor.cloudZ ?? row.z;
+      // Phase M.23 — anchor the new interp segment to where the body ACTUALLY is
+      // (rendered groundPos), not the previous server target. At 2 Hz the body
+      // rarely finished the old segment before this update, so starting from the
+      // old target snapped it forward each tick (the "glitchy" walk). From the
+      // live groundPos each segment is a clean, self-correcting glide.
+      actor.cloudPrevX = actor.character?.groundPos.x ?? actor.cloudX ?? row.x;
+      actor.cloudPrevZ = actor.character?.groundPos.y ?? actor.cloudZ ?? row.z;
       actor.cloudInterp = actor.cloudX === undefined ? 1 : 0;
     }
     actor.cloudX = row.x;
@@ -2395,14 +2400,17 @@ export class StaffRouter {
     const t = a.cloudInterp;
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
-    // Snap on a real teleport; otherwise ease toward the interpolated point.
-    const jump = Math.hypot(a.cloudX - pos.x, a.cloudZ - pos.y);
-    if (jump > 2.5) {
+    // Phase M.23 — PURE linear snapshot interp (see renderGuestFromServer): glide
+    // at constant speed from the segment start (the body's position when this
+    // server update landed, stashed by reconcileCloudStaffActor) to the latest
+    // server pose. The old prev=OLD-TARGET + exponential chase snapped the body
+    // forward each 2 Hz tick and pulsed the speed — the "glitchy" walk. A big
+    // segment jump = a real teleport (floor change / respawn) → snap.
+    if (Math.hypot(a.cloudX - prevX, a.cloudZ - prevZ) > 2.5) {
       pos.set(a.cloudX, a.cloudZ);
     } else {
-      const alpha = Math.min(1, dt * 16);
-      pos.x += (tx - pos.x) * alpha;
-      pos.y += (tz - pos.y) * alpha;
+      pos.x = tx;
+      pos.y = tz;
     }
     // Containment belt-and-braces (the server already clamps to the box).
     if (pos.x < INTERIOR_MIN_X) pos.x = INTERIOR_MIN_X;
@@ -2446,6 +2454,13 @@ export class StaffRouter {
       if (a.assignedStoveUid && a.faceY !== undefined) {
         a.character.facingY = a.faceY;
       }
+    } else if (a.cloudState === "movingToWork" || a.cloudState === "returningHome") {
+      // Phase M.23 — travelling → stay "walk" across the 2 Hz segment boundaries.
+      // Was `moving ? "walk" : "idle"`, which flip-flopped to idle at every t=1
+      // between updates and RESET the walk cycle (the glitchy restart). The
+      // animator's movement hysteresis (WALK_IDLE_GRACE_MS) settles a genuinely
+      // stuck/arrived actor to idle instead.
+      a.character.action = "walk";
     } else {
       a.character.action = moving ? "walk" : "idle";
     }
