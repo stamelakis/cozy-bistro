@@ -216,7 +216,7 @@ export class BuildMenu {
   };
   private static readonly CATEGORY_ICONS: Record<FurnitureDef["category"], string> = {
     table: "🍽️", chair: "🪑", stove: "🔥", wash: "🚰",
-    appliance: "🔌", counter: "🍰", bar: "🍸", storage: "📦",
+    appliance: "🔌", counter: "🔪", bar: "🍸", storage: "📦",
     wall: "🧱", door: "🚪", bathroom: "🚽", decoration: "🖼️",
     plant: "🪴", lamp: "💡",
   };

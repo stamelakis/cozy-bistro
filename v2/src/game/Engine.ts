@@ -2052,55 +2052,56 @@ export class Engine {
    * per door, and only mutates panels that actually changed (via the
    * scene's lerp). */
   private updateInteriorDoorways(dt: number): void {
-    const items = this.registry.snapshotItems();
     const doors: { uid: string; model: THREE.Object3D; open: boolean }[] = [];
-    if (items.length === 0) {
+    // Phase M.31.1 — collect every door in the scene from BOTH sources:
+    //   • registry.snapshotItems() — player-placed doors, plus the starter
+    //     front door once registerExisting folds it in (new game) or the save
+    //     restores it.
+    //   • scene.demoPlacements — the STARTER front door itself. This is the
+    //     bug behind "the front door never opens": the default door is a demo
+    //     placement, and until/unless it's registered it is NOT in
+    //     snapshotItems(), so the old loop skipped it entirely. Dedup by model
+    //     identity (after registerExisting the demo door IS the registry item —
+    //     same object) so a door in both lists animates once, and skip demo
+    //     models with no parent (discarded on a saved-game load).
+    const seen = new Set<THREE.Object3D>();
+    const candidates: {
+      uid: string; defId: string; x: number; z: number; rotY: number;
+      floor: number; model: THREE.Object3D;
+    }[] = [];
+    for (const it of this.registry.snapshotItems()) {
+      if (it.defId !== "int-doorway" && it.defId !== "door") continue;
+      seen.add(it.model);
+      candidates.push({ uid: it.uid, defId: it.defId, x: it.x, z: it.z, rotY: it.rotY, floor: it.floor ?? 0, model: it.model });
+    }
+    for (const dp of this.scene.demoPlacements) {
+      if (dp.defId !== "int-doorway" && dp.defId !== "door") continue;
+      if (seen.has(dp.model)) continue;   // already animated via the registry
+      if (!dp.model.parent) continue;     // discarded (saved game replaced it)
+      candidates.push({ uid: `demo:${dp.defId}:${dp.x}:${dp.z}`, defId: dp.defId, x: dp.x, z: dp.z, rotY: dp.rotY, floor: 0, model: dp.model });
+    }
+    if (candidates.length === 0) {
       this.scene.updateInternalDoors(doors, dt);
       return;
     }
-    // Phase M.31 — the ACTUALLY-RENDERED characters, not the local
-    // spawner/router lists (which are EMPTY under the server-driven cutover —
-    // that's the real reason doors stopped opening). snapshotPositions already
-    // drops seated actors (a diner near a door shouldn't flap it) and tags each
-    // with the storey it's on, so a Floor-1 actor can't open a Floor-0 door.
+    // The ACTUALLY-RENDERED characters (server-driven under the cutover — the
+    // local spawner/router lists are empty). snapshotPositions drops seated
+    // actors and tags each with its storey.
     const positions = this.scene.animator.snapshotPositions();
-    // Per-door trigger zone: a thin corridor along the door's local
-    // passage axis. In the door's local frame:
-    //   |local_x| < PANEL_HALF   → inside the door's own column along
-    //                              the wall (an actor walking parallel
-    //                              to the wall on a neighbouring cell
-    //                              has |local_x| ≥ 1 and is excluded)
-    //   |local_z| < PASSAGE_HALF → within the door cell + the two
-    //                              passage cells (one tile on each
-    //                              side that an actor would actually
-    //                              step on to enter)
-    // The previous radius-1.5 check fired for any actor in a 3-tile
-    // bubble — including waiting customers on adjacent chairs.
+    // Per-door trigger zone in the door's local frame: |local_x| along the
+    // wall panel, |local_z| through the doorway. PANEL_HALF gives a little
+    // slack so a guest whose path is a touch off-centre still triggers it;
+    // still < 1 so an actor on a neighbouring cell walking parallel is excluded.
     const PASSAGE_HALF = 1.4;
-    const PANEL_HALF   = 0.5;
-    for (const it of items) {
-      // Phase M.31 — the front door ("door") now animates through the SAME
-      // per-door proximity path as interior doorways: each door opens for
-      // whoever is near THAT door, at its ACTUAL position. Fixes the old
-      // single-panel / hardcoded-(0,5.5) design that broke with a moved or
-      // duplicate door (one stuck open, the other never opening).
-      if (it.defId !== "int-doorway" && it.defId !== "door") continue;
+    const PANEL_HALF   = 0.65;
+    for (const it of candidates) {
       const cosR = Math.cos(it.rotY);
       const sinR = Math.sin(it.rotY);
-      const doorFloor = it.floor ?? 0;
       let open = false;
       for (const p of positions) {
-        // Cross-floor characters can't trigger this door. Without
-        // this filter a guest walking on Floor 1 would flap the
-        // door panel of any Floor 0 door with the same XZ — the
-        // visible "doors twitching from people who can't reach
-        // them" bug.
-        if (p.floor !== doorFloor) continue;
+        if (p.floor !== it.floor) continue; // can't trigger a door on another storey
         const dx = p.x - it.x;
         const dz = p.z - it.z;
-        // Project the actor's offset into the door's local frame
-        // (inverse Y-axis rotation by rotY). local_x runs along the
-        // door's wall panel; local_z runs through the doorway.
         const localX = cosR * dx - sinR * dz;
         const localZ = sinR * dx + cosR * dz;
         if (Math.abs(localX) < PANEL_HALF && Math.abs(localZ) < PASSAGE_HALF) {
@@ -2110,6 +2111,32 @@ export class Engine {
       doors.push({ uid: it.uid, model: it.model, open });
     }
     this.scene.updateInternalDoors(doors, dt);
+    // Diagnostic — enable in the browser console with `window.__DOOR_DEBUG = true`.
+    // Throttled to ~1.5 s. Reports, per door: position, whether its hinge panel
+    // was found, current open decision, and the nearest rendered character —
+    // so a single console snapshot tells us which link in the chain is failing.
+    if ((window as unknown as { __DOOR_DEBUG?: boolean }).__DOOR_DEBUG) {
+      const self = this as unknown as { _doorDbgAt?: number };
+      const now = performance.now();
+      if (now - (self._doorDbgAt ?? 0) > 1500) {
+        self._doorDbgAt = now;
+        const hasPanel = (m: THREE.Object3D): boolean => {
+          let found = !!(m.userData as { panel?: unknown }).panel;
+          if (!found) m.traverse((o) => { if (!found && (o.userData as { panel?: unknown }).panel) found = true; });
+          return found;
+        };
+        const report = candidates.map((c, i) => {
+          let nearest = Infinity;
+          for (const p of positions) {
+            if (p.floor !== c.floor) continue;
+            nearest = Math.min(nearest, Math.hypot(p.x - c.x, p.z - c.z));
+          }
+          return { defId: c.defId, x: c.x, z: c.z, floor: c.floor, rotY: +c.rotY.toFixed(2), open: doors[i].open, panel: hasPanel(c.model), nearestChar: nearest === Infinity ? null : +nearest.toFixed(2) };
+        });
+        // eslint-disable-next-line no-console
+        console.info(`[doorDebug] chars=${positions.length} doors=`, report);
+      }
+    }
   }
 
   /** Build a fresh status-bubble list from the routers' + spawner's
