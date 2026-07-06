@@ -8,6 +8,7 @@ import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 import { closeMobileSheets } from "./MobileUI";
 import { attachTooltip } from "./tooltip";
+import { FurnitureThumbnails } from "./FurnitureThumbnails";
 
 /** A single user action that can be undone. The BuildMenu records one of
  * these for every place / sell / move / auto-arrange, capped at MAX_UNDO. */
@@ -79,6 +80,8 @@ export class BuildMenu {
   private readonly camera: THREE.Camera;
   private readonly canvas: HTMLCanvasElement;
   private readonly registry: FurnitureRegistry;
+  /** Renders per-item 3-D thumbnails for the tile grid (lazy + cached). */
+  private readonly thumbnails: FurnitureThumbnails;
 
   /** Past actions the player can undo. Capped at MAX_UNDO; oldest dropped. */
   private undoStack: UndoEntry[] = [];
@@ -227,6 +230,7 @@ export class BuildMenu {
     this.camera = camera;
     this.canvas = canvas;
     this.registry = registry;
+    this.thumbnails = new FurnitureThumbnails(loader);
     this.buildPanel(parent);
     this.attachInput();
   }
@@ -239,7 +243,7 @@ export class BuildMenu {
       position: "fixed",
       top: "12px",
       right: "12px",
-      width: "260px",
+      width: "300px",
       // Fill the full right edge of the viewport when expanded — the
       // PantryPanel at bottom-right is short enough that the player
       // can scroll past it inside the build menu's own scroll area.
@@ -638,7 +642,15 @@ export class BuildMenu {
         } as Partial<CSSStyleDeclaration>);
         itemsWrap.appendChild(placeholder);
       } else {
-        for (const def of items) this.appendItemButton(itemsWrap, def);
+        const grid = document.createElement("div");
+        Object.assign(grid.style, {
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "6px",
+          padding: "2px 2px 6px",
+        } as Partial<CSSStyleDeclaration>);
+        for (const def of items) this.appendItemTile(grid, def);
+        itemsWrap.appendChild(grid);
       }
       this.tierContentEl.appendChild(itemsWrap);
     }
@@ -648,47 +660,97 @@ export class BuildMenu {
    * button layout the panel had before (name + cost on the left, drink
    * badge on the right), just factored out so renderTierContent can
    * reuse it. */
-  private appendItemButton(into: HTMLElement, def: FurnitureDef): void {
-    const btn = document.createElement("button");
-    btn.textContent = "";
-    Object.assign(btn.style, {
+  private appendItemTile(into: HTMLElement, def: FurnitureDef): void {
+    const tile = document.createElement("button");
+    Object.assign(tile.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
+      gap: "4px",
+      minWidth: "0",
+      padding: "6px",
+      background: "rgba(255,245,220,0.06)",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.16)",
+      borderRadius: "6px",
+      cursor: "pointer",
+      font: "inherit",
+      textAlign: "center",
+    } as Partial<CSSStyleDeclaration>);
+
+    // Thumbnail box (square) — the rendered 3-D picture of the real item.
+    // A "…" placeholder shows until the async render resolves.
+    const thumb = document.createElement("div");
+    Object.assign(thumb.style, {
+      width: "100%",
+      aspectRatio: "1 / 1",
+      borderRadius: "4px",
+      background: "rgba(0,0,0,0.22)",
       display: "flex",
       alignItems: "center",
-      justifyContent: "space-between",
-      gap: "6px",
-      width: "100%",
-      margin: "0 0 3px 0",
-      padding: "5px 8px",
-      background: "rgba(255,245,220,0.08)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.18)",
-      borderRadius: "4px",
-      textAlign: "left",
-      cursor: "pointer",
-      fontSize: "12px",
+      justifyContent: "center",
+      overflow: "hidden",
     } as Partial<CSSStyleDeclaration>);
-    const nameSpan = document.createElement("span");
-    nameSpan.textContent = `${def.name} — $${scaledCost(def)}`;
-    btn.appendChild(nameSpan);
+    const spinner = document.createElement("div");
+    spinner.textContent = "…";
+    Object.assign(spinner.style, { opacity: "0.4", fontSize: "16px" } as Partial<CSSStyleDeclaration>);
+    thumb.appendChild(spinner);
+    const img = document.createElement("img");
+    img.alt = def.name;
+    Object.assign(img.style, {
+      width: "100%", height: "100%", objectFit: "contain",
+      opacity: "0", transition: "opacity 160ms ease",
+    } as Partial<CSSStyleDeclaration>);
+    thumb.appendChild(img);
+    this.thumbnails.get(def).then((url) => {
+      img.src = url;
+      img.style.opacity = "1";
+      spinner.remove();
+    }).catch(() => { spinner.textContent = "🪑"; spinner.style.fontSize = "22px"; });
+    tile.appendChild(thumb);
+
+    // Name — clamped to ~2 lines.
+    const name = document.createElement("div");
+    name.textContent = def.name;
+    Object.assign(name.style, {
+      fontSize: "10.5px", fontWeight: "600", lineHeight: "1.2",
+      maxHeight: "2.4em", overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    tile.appendChild(name);
+
+    // Cost + optional drinks-only marker.
+    const meta = document.createElement("div");
+    Object.assign(meta.style, {
+      display: "flex", alignItems: "center", justifyContent: "center", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const cost = document.createElement("span");
+    cost.textContent = `$${scaledCost(def)}`;
+    Object.assign(cost.style, { fontSize: "11px", fontWeight: "700", color: "#ffd47a" } as Partial<CSSStyleDeclaration>);
+    meta.appendChild(cost);
     if (def.surface === "drink") {
       const badge = document.createElement("span");
-      badge.textContent = "🥤 Drinks only";
-      Object.assign(badge.style, {
-        fontSize: "10px",
-        padding: "1px 6px",
-        borderRadius: "999px",
-        background: "rgba(120, 180, 220, 0.18)",
-        border: "1px solid rgba(120, 180, 220, 0.55)",
-        color: "#c8e0f0",
-        whiteSpace: "nowrap",
-        letterSpacing: "0.02em",
-      } as Partial<CSSStyleDeclaration>);
-      btn.appendChild(badge);
+      badge.textContent = "🥤";
+      badge.title = "Drinks only";
+      badge.style.fontSize = "11px";
+      meta.appendChild(badge);
     }
-    btn.onmouseenter = () => { btn.style.background = "rgba(255,245,220,0.16)"; };
-    btn.onmouseleave = () => { btn.style.background = "rgba(255,245,220,0.08)"; };
-    btn.onclick = () => this.startPlacing(def);
-    into.appendChild(btn);
+    tile.appendChild(meta);
+
+    tile.onmouseenter = () => {
+      tile.style.background = "rgba(255,245,220,0.14)";
+      tile.style.borderColor = "rgba(255,245,220,0.4)";
+    };
+    tile.onmouseleave = () => {
+      tile.style.background = "rgba(255,245,220,0.06)";
+      tile.style.borderColor = "rgba(255,245,220,0.16)";
+    };
+    tile.onclick = () => this.startPlacing(def);
+    attachTooltip(tile,
+      `${def.name} — $${scaledCost(def)}\n` +
+      `${def.size.width}×${def.size.depth} tile${def.size.width * def.size.depth === 1 ? "" : "s"}` +
+      (def.surface === "drink" ? " · serves drinks only" : "") +
+      "\nClick, then click the floor to place. R = rotate.");
+    into.appendChild(tile);
   }
 
   private toggleMoveMode(): void {
