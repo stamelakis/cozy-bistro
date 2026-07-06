@@ -442,6 +442,10 @@ interface ActiveGuest {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Phase M.27 — one-shot latch: true once we've flipped a toilet-sitter to
+   * face OUT of the toilet (opposite their walk-in heading). Cleared when they
+   * leave the toilet, so the flip fires once per visit and doesn't spin. */
+  _toiletFacingSet?: boolean;
   /** Phase M.17 — the server's TARGET floor for this guest (stashed from the
    * active_guest row alongside cloudFloor). When it differs from currentFloor
    * and the body is inside the stairwell footprint, the render ramps the body
@@ -4325,12 +4329,25 @@ export class GuestSpawner {
     // seat lift keep a seated guest on the cushion; a seated guest that the
     // server still reports as slightly moving falls through to walk, which is
     // fine (it'll settle to sit once t hits 1).
-    if (SIT_STATES.has(g.state) && !moving) {
+    if (g.state === "atToilet") {
+      // Phase M.27 — sitting on the toilet: face OUT, not toward the dining
+      // seat (seatFacingY) nor into the wall behind the bowl. The guest always
+      // approaches the toilet from its open side (can't cross the wall), so the
+      // correct out-facing is the REVERSE of the walk-in heading. Flip once on
+      // arrival (when the walk stops), then hold — don't spin every frame.
+      g.character.action = "sit";
+      if (!moving && !g._toiletFacingSet) {
+        g.character.facingY += Math.PI;
+        g._toiletFacingSet = true;
+      }
+    } else if (SIT_STATES.has(g.state) && !moving) {
+      if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       g.character.action = "sit";
       // Keep them facing the way the seat was set (seatFacingY) rather than a
       // stale last-walk heading, matching how importCloudGuest seats them.
       if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;
     } else {
+      if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       // Phase M.23 — stay "walk" while travelling. Don't drop to "idle" just
       // because THIS 2 Hz segment finished (t=1) between updates: that flipped
       // walk↔idle every tick and RESET the walk cycle (the glitchy restart). A
