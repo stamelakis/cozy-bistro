@@ -2148,7 +2148,10 @@ export class Engine {
   /** True if any guest/errand/pedestrian is within ~1.5 units of the
    * front door (0, 5). Used to swing it open. */
   private anyoneNearDoor(): boolean {
-    const DOOR_X = 0, DOOR_Z = 5, NEAR_SQ = 1.5 * 1.5;
+    // Door sits at (0, 5.5) (front-wall gap). Radius 1.7 so it opens a touch
+    // before an arriving guest reaches the front tile (z≈5.95) and stays open
+    // through the walk-through.
+    const DOOR_X = 0, DOOR_Z = 5.5, NEAR_SQ = 1.7 * 1.7;
     const check = (x: number, z: number) => {
       const dx = x - DOOR_X, dz = z - DOOR_Z;
       return dx * dx + dz * dz <= NEAR_SQ;
@@ -2158,7 +2161,7 @@ export class Engine {
     // are empty under the server sim). That's why the door had stopped opening
     // for real customers. Check the rendered characters directly (floor 0 =
     // the entrance) so it swings for anyone actually walking through it.
-    if (this.scene.animator.anyNear(DOOR_X, DOOR_Z, 1.5, 0, WorldScene.getStoreyHeight())) {
+    if (this.scene.animator.anyNear(DOOR_X, DOOR_Z, 1.7, 0, WorldScene.getStoreyHeight())) {
       return true;
     }
     if (this.spawner) {
@@ -3930,6 +3933,15 @@ export class Engine {
     this.sfx.setLoopActive("fryer",      activeAppliances.has("fryer"));
     this.sfx.setLoopActive("oven",       activeAppliances.has("oven"));
     this.sfx.setLoopActive("pizza-oven", activeAppliances.has("pizza-oven"));
+    // Phase M.30 — belt-and-suspenders capture: if the front-door hinge wasn't
+    // grabbed on load (e.g. the furniture streamed in from the server
+    // subscription rather than the save-restore path that calls
+    // attachDoorPanel), find the door in the registry and capture it now, so
+    // the panel can actually swing. Stops once captured.
+    if (!this.scene.hasDoorPanel()) {
+      const door = this.registry.snapshotItems().find((it) => it.defId === "door");
+      if (door) this.scene.attachDoorPanel(door.model);
+    }
     // Open the door when a guest, errand helper, or pedestrian is close.
     this.scene.setDoorOpen(this.anyoneNearDoor());
     // Animate interior doorways — any placed int-doorway opens when a

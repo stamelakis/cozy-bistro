@@ -383,8 +383,24 @@ export class WorldScene {
     }
   }
 
+  /** True once the front-door's hinge panel has been captured, so Engine can
+   * stop retrying the lazy capture. */
+  hasDoorPanel(): boolean {
+    return this.doorPanel != null;
+  }
+
   attachDoorPanel(model: THREE.Object3D): void {
-    const panel = model.userData?.panel as THREE.Object3D | undefined;
+    let panel = model.userData?.panel as THREE.Object3D | undefined;
+    if (!panel) {
+      // The hinge may sit on a NESTED child if the registry wrapped the door
+      // model in a positioning/rotation container — search descendants so the
+      // capture still succeeds.
+      model.traverse((o) => {
+        if (panel) return;
+        const p = (o.userData as { panel?: THREE.Object3D } | undefined)?.panel;
+        if (p) panel = p;
+      });
+    }
     if (panel) {
       this.doorPanel = panel;
       // Reset open state so the new panel doesn't snap to whatever

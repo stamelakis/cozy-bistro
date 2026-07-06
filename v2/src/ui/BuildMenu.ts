@@ -615,7 +615,7 @@ export class BuildMenu {
     const grid = document.createElement("div");
     Object.assign(grid.style, {
       display: "grid",
-      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
       gap: "6px",
       padding: "2px 2px 4px",
     } as Partial<CSSStyleDeclaration>);
@@ -696,7 +696,7 @@ export class BuildMenu {
     const grid = document.createElement("div");
     Object.assign(grid.style, {
       display: "grid",
-      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
       gap: "6px",
       padding: "2px 2px 6px",
     } as Partial<CSSStyleDeclaration>);
