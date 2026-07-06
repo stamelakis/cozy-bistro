@@ -5127,9 +5127,12 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     const WASH_DROP_DWELL_MS: i64 = 1_000;
 
     // H.52 — waiter walk-speed gets +10% per training level.
-    let (new_x, new_z) = path_step_same_floor(
-        ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z,
-        a.floor, a.target_floor,
+    // Phase M.27 — obstacle + stair-aware step (was path_step_same_floor). Wash
+    // trips are dispatched same-floor, so normally a same-floor obstacle step;
+    // this walks the stairs correctly if a leg is ever cross-floor.
+    let (new_x, new_z, stepped_floor, stepped_on_stair) = next_step_multi(
+        ctx, a.restaurant_id, a.x, a.z, a.floor, a.on_stair,
+        a.target_x, a.target_z, a.target_floor,
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
@@ -5141,6 +5144,8 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
         ctx.db.staff_actor().member_id().update(StaffActor {
             x: new_x,
             z: new_z,
+            floor: stepped_floor,
+            on_stair: stepped_on_stair,
             state: "working".to_string(),
             state_clock_ms: 0,
             ..a
@@ -5165,6 +5170,8 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                     ctx.db.staff_actor().member_id().update(StaffActor {
                         x: new_x,
                         z: new_z,
+                        floor: stepped_floor,
+                        on_stair: false,
                         state: "returningHome".to_string(),
                         state_clock_ms: 0,
                         target_x: hx,
@@ -5184,6 +5191,8 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 ctx.db.staff_actor().member_id().update(StaffActor {
                     x: new_x,
                     z: new_z,
+                    floor: stepped_floor,
+                    on_stair: false,
                     state: "movingToWork".to_string(),
                     state_clock_ms: 0,
                     target_x: drop_x,
@@ -5236,6 +5245,8 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
             ctx.db.staff_actor().member_id().update(StaffActor {
                 x: new_x,
                 z: new_z,
+                floor: stepped_floor,
+                on_stair: false,
                 state: "returningHome".to_string(),
                 state_clock_ms: 0,
                 target_x: hx,
@@ -5254,6 +5265,8 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
+        floor: stepped_floor,
+        on_stair: stepped_on_stair,
         state_clock_ms: new_clock,
         ..a
     });
@@ -5294,9 +5307,13 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
         return;
     }
 
-    let (new_x, new_z) = path_step_same_floor(
-        ctx, a.restaurant_id, a.x, a.z, a.target_x, a.target_z,
-        a.floor, a.target_floor,
+    // Phase M.27 — obstacle-AWARE + stair-aware step (was path_step_same_floor,
+    // which straight-lines across floors). Bussing is dispatched per-floor so
+    // this is normally a same-floor obstacle step, but this makes it walk the
+    // stairs correctly if the target is ever on another storey.
+    let (new_x, new_z, stepped_floor, stepped_on_stair) = next_step_multi(
+        ctx, a.restaurant_id, a.x, a.z, a.floor, a.on_stair,
+        a.target_x, a.target_z, a.target_floor,
         actor_walk_speed(ctx, &a.role, &a.member_id),
         dt_ms,
     );
@@ -5308,6 +5325,8 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
         ctx.db.staff_actor().member_id().update(StaffActor {
             x: new_x,
             z: new_z,
+            floor: stepped_floor,
+            on_stair: stepped_on_stair,
             state: "working".to_string(),
             state_clock_ms: 0,
             ..a
@@ -5333,6 +5352,8 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
         ctx.db.staff_actor().member_id().update(StaffActor {
             x: new_x,
             z: new_z,
+            floor: stepped_floor,
+            on_stair: false,
             state: "returningHome".to_string(),
             state_clock_ms: 0,
             target_x: hx,
@@ -5348,6 +5369,8 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
     ctx.db.staff_actor().member_id().update(StaffActor {
         x: new_x,
         z: new_z,
+        floor: stepped_floor,
+        on_stair: stepped_on_stair,
         state_clock_ms: new_clock,
         ..a
     });
