@@ -2133,8 +2133,11 @@ export class Engine {
           }
           return { defId: c.defId, x: c.x, z: c.z, floor: c.floor, rotY: +c.rotY.toFixed(2), open: doors[i].open, panel: hasPanel(c.model), nearestChar: nearest === Infinity ? null : +nearest.toFixed(2) };
         });
+        // Stringify so the whole thing prints as ONE copy-pasteable line
+        // (console object-args collapse to {…} and can't be read from a
+        // screenshot).
         // eslint-disable-next-line no-console
-        console.info(`[doorDebug] chars=${positions.length} doors=`, report);
+        console.info(`[doorDebug] chars=${positions.length} ` + JSON.stringify(report));
       }
     }
   }
