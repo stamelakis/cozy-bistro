@@ -767,6 +767,13 @@ pub(crate) fn snap_to_clear(
                 }
                 let cx = rx + dx;
                 let cz = rz + dz;
+                // Phase M.26 — stay INSIDE the nav grid (the restaurant interior).
+                // A cell outside the walls has no furniture so reads "unblocked",
+                // but it's unreachable — picking it sent actors clipping through
+                // the wall to the grass ("teleported outside the restaurant").
+                if cx < GRID_MIN || cx > GRID_MAX || cz < GRID_MIN || cz > GRID_MAX {
+                    continue;
+                }
                 if blocked(cx, cz) {
                     continue;
                 }

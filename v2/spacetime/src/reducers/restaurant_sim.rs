@@ -2127,12 +2127,15 @@ fn auto_assign_ready_tickets(ctx: &ReducerContext, rid: u64) {
             state_clock_ms: 0,
             ..ticket
         });
+        // Phase M.26 — stand at a reachable tile beside the pickup spot (the
+        // plate at the chef's station), not on the blocked station/chef cell.
+        let (pk_x, pk_z) = serve_stand_tile(ctx, rid, waiter.x, waiter.z, pickup_x, pickup_z, pickup_floor);
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
             ticket_id: Some(ticket_id),
-            target_x: pickup_x,
-            target_z: pickup_z,
+            target_x: pk_x,
+            target_z: pk_z,
             target_floor: pickup_floor,
             delivery_phase: Some("pickup".to_string()),
             ..waiter
@@ -4880,7 +4883,7 @@ fn try_dispatch_take_order(ctx: &ReducerContext, rid: u64, max_dispatch: usize) 
         // Phase M.22 — stand at the nearest free tile to the DISH spot, not on
         // the (blocked) seat, so the waiter walks up and takes the order from
         // arm's reach instead of clipping onto the guest.
-        let (serve_x, serve_z) = serve_stand_tile(ctx, rid, g.plate_x, g.plate_z, g.seat_floor);
+        let (serve_x, serve_z) = serve_stand_tile(ctx, rid, actor.x, actor.z, g.plate_x, g.plate_z, g.seat_floor);
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
@@ -4974,7 +4977,7 @@ fn try_dispatch_seat_clean(ctx: &ReducerContext, rid: u64) {
         );
         // Phase M.22 — bus from the nearest free tile beside the table, not on
         // the (blocked) seat cell.
-        let (bus_x, bus_z) = serve_stand_tile(ctx, rid, sx, sz, sf);
+        let (bus_x, bus_z) = serve_stand_tile(ctx, rid, actor.x, actor.z, sx, sz, sf);
         ctx.db.staff_actor().member_id().update(StaffActor {
             state: "movingToWork".to_string(),
             state_clock_ms: 0,
@@ -5096,7 +5099,7 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
     );
     // Phase M.22 — grab the dirty plates from the nearest free tile beside the
     // table, not on the (blocked) seat cell.
-    let (pick_x, pick_z) = serve_stand_tile(ctx, rid, seat.x, seat.z, seat.floor);
+    let (pick_x, pick_z) = serve_stand_tile(ctx, rid, actor.x, actor.z, seat.x, seat.z, seat.floor);
     ctx.db.staff_actor().member_id().update(StaffActor {
         state: "movingToWork".to_string(),
         state_clock_ms: 0,
@@ -5177,7 +5180,7 @@ fn tick_wash_trip(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
                 // Phase M.22 — load from the nearest free tile beside the wash
                 // station, not on the (blocked) appliance cell.
                 let (drop_x, drop_z) =
-                    serve_stand_tile(ctx, a.restaurant_id, station.x, station.z, station.floor);
+                    serve_stand_tile(ctx, a.restaurant_id, new_x, new_z, station.x, station.z, station.floor);
                 ctx.db.staff_actor().member_id().update(StaffActor {
                     x: new_x,
                     z: new_z,
@@ -6290,7 +6293,7 @@ fn advance_waiter_leg(ctx: &ReducerContext, a: &StaffActor, phase: &str)
             .map(|g| (g.plate_x, g.plate_z))
             .unwrap_or((ticket.seat_x, ticket.seat_z));
         let (serve_x, serve_z) =
-            serve_stand_tile(ctx, ticket.restaurant_id, dish_x, dish_z, ticket.seat_floor);
+            serve_stand_tile(ctx, ticket.restaurant_id, a.x, a.z, dish_x, dish_z, ticket.seat_floor);
         // Ticket stays in "delivering"; only the waiter's target advances.
         return ((
             "movingToWork".to_string(), 0,
@@ -8191,16 +8194,30 @@ const GUEST_SPEED: f32 = 1.5;
 /// subscribers, large enough not to wobble on f32 drift.
 const STEP_SNAP_EPS: f32 = 0.125;
 
-/// Phase M.22 — the tile a waiter should STAND on to serve a course, take an
-/// order, or bus a seat: the nearest free, walkable cell to the dish spot (the
-/// plate on the table). The chair AND the table are BLOCKING nav cells, so
-/// targeting the seat itself made `find_path` fall back to a straight line ONTO
-/// the guest — the waiter clipping through furniture and standing on the
-/// customer's tile. Snapping to the nearest clear cell lets the waiter path
-/// there cleanly (obstacle-aware) and serve from arm's reach, approaching from
-/// whichever side is accessible. Serving "from a distance" (a couple tiles out
-/// when the table is boxed in) is intended. Same-floor; returns (x, z).
-fn serve_stand_tile(ctx: &ReducerContext, rid: u64, dish_x: f32, dish_z: f32, floor: u32) -> (f32, f32) {
+/// Phase M.22 / M.26 — the tile an actor (`from_x`,`from_z`) should STAND on to
+/// serve a course, take an order, bus a seat, or load a wash station: a REACHABLE
+/// free cell adjacent to the dish/target spot. The chair/table/appliance itself
+/// is a BLOCKING nav cell, so targeting it made the actor clip onto it.
+///
+/// It returns the waypoint JUST BEFORE the (blocked) target cell on the A* path
+/// FROM the actor — which is, by construction, in-grid and reachable without
+/// crossing a wall. This is what stops the earlier bug where `snap_to_clear`
+/// (which only knows cell-blocks, not wall EDGES or grid BOUNDS) picked a "free"
+/// cell across a wall / OUTSIDE the building, and the actor then straight-lined
+/// THROUGH the wall to reach it ("teleported outside the restaurant to take an
+/// order"). Falls back to `snap_to_clear` (now grid-clamped) for the open /
+/// already-adjacent / unreachable cases where the path is a single hop.
+fn serve_stand_tile(
+    ctx: &ReducerContext, rid: u64,
+    from_x: f32, from_z: f32,
+    dish_x: f32, dish_z: f32, floor: u32,
+) -> (f32, f32) {
+    let path = crate::reducers::pathfinding::find_path(ctx, rid, from_x, from_z, dish_x, dish_z, floor);
+    if path.len() >= 2 {
+        // Last waypoint is the exact (blocked) dish spot; the one before it is a
+        // walkable neighbour the actor can actually reach → stand there.
+        return path[path.len() - 2];
+    }
     crate::reducers::pathfinding::snap_to_clear(ctx, rid, dish_x, dish_z, floor)
 }
 
