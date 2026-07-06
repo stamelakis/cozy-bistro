@@ -6767,11 +6767,27 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
             (None, None, None)
         };
 
+    // Phase M.29 — DOOR ENTRY. For the first DOOR_ENTRY_MS of a fresh arrival's
+    // walkingIn (still outside/at the door, z >= door_z), the target is the tile
+    // in FRONT of the door: they walk there and dwell while the client swings
+    // the door open, then it flips to the seat and they walk through. The
+    // z-gate excludes promoted overflow guests (already inside), who head
+    // straight to their seat via the walkingIn branch below.
+    let door_entry = g.state == "walkingIn" && !g.seat_uid.is_empty()
+        && new_clock < DOOR_ENTRY_MS && g.z >= g.door_z;
     let (effective_target_x, effective_target_z, effective_target_floor) =
-        match (wc_target_x, assigned_target) {
-            (Some(tx), _) => (tx, wc_target_z.unwrap(), wc_target_floor.unwrap()),
-            (None, Some((tx, tz, tf))) => (tx, tz, tf),
-            (None, None) => (g.target_x, g.target_z, g.target_floor),
+        if door_entry {
+            (g.door_x, g.door_z + DOOR_FRONT_GAP, 0)
+        } else if g.state == "walkingIn" && !g.seat_uid.is_empty() {
+            // Past the door (or promoted from waiting) → head to the assigned
+            // seat, NOT the stale row target (which was the door-front tile).
+            (g.seat_x, g.seat_z, g.seat_floor)
+        } else {
+            match (wc_target_x, assigned_target) {
+                (Some(tx), _) => (tx, wc_target_z.unwrap(), wc_target_floor.unwrap()),
+                (None, Some((tx, tz, tf))) => (tx, tz, tf),
+                (None, None) => (g.target_x, g.target_z, g.target_floor),
+            }
         };
 
     // Phase H.2 — server steps the guest's body toward target_x/z
@@ -6868,7 +6884,9 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         // state="walkingIn" via update_guest_position, the server's
         // next arrival check fires again, and the state ping-pongs.
         // 500 ms is one client mirror-cycle worth of grace.
-        "walkingIn" if arrived && new_clock >= WALKING_IN_MIN_MS =>
+        // Phase M.29 — but NOT while door_entry (arrived at the door-front tile,
+        // still dwelling for the door): only seat once they've reached the seat.
+        "walkingIn" if arrived && new_clock >= WALKING_IN_MIN_MS && !door_entry =>
             Some(("seated".to_string(), 0)),
         // seated → ordering after a brief dwell (the guest reads the
         // menu). Same SEATED_DWELL_MS the client uses (TIME_TO_ORDER).
@@ -7390,6 +7408,17 @@ pub(crate) fn try_spawn_arrival_guest(
     let order_prices_opt = if order_prices_csv.is_empty() { None } else { Some(order_prices_csv) };
     let order_sats_opt = if order_satisfactions_csv.is_empty() { None } else { Some(order_satisfactions_csv) };
 
+    // Phase M.29 — door entry vs wait-mode spawn. A SEATED arrival spawns
+    // OUTSIDE the door and targets the tile in front of it (tick_guest_state's
+    // door-entry logic holds them there while the door opens, then routes to
+    // the seat). A WAIT-MODE (overflow queue) guest spawns at the door heading
+    // straight to its wait spot (seat_x/seat_z), unchanged.
+    let (spawn_z, init_target_x, init_target_z, init_target_floor) = if wait_mode {
+        (door_z, seat_x, seat_z, seat_floor)
+    } else {
+        (door_z + DOOR_SPAWN_GAP, door_x, door_z + DOOR_FRONT_GAP, 0u32)
+    };
+
     ctx.db.active_guest().insert(ActiveGuest {
         id: 0, // auto_inc
         restaurant_id,
@@ -7432,15 +7461,14 @@ pub(crate) fn try_spawn_arrival_guest(
         plate_x: seat_x,
         plate_z: seat_z,
         x: door_x,
-        z: door_z,
+        // Phase M.29 — spawn_z/init_target_* computed above: seated arrivals
+        // spawn OUTSIDE + target the door-front tile; wait-mode spawns at the
+        // door + targets its wait spot.
+        z: spawn_z,
         floor: 0,
-        // Target the assigned seat so tick_guest_state walks them
-        // there. Without this they'd sit at the door (target = door)
-        // until the H.12 fallback re-picked a seat after the grace
-        // period — wasting cycles and looking glitchy.
-        target_x: seat_x,
-        target_z: seat_z,
-        target_floor: seat_floor,
+        target_x: init_target_x,
+        target_z: init_target_z,
+        target_floor: init_target_floor,
         // H.40 — pre-populate the order CSVs so the guest actually
         // orders something. Empty string here = "no menu / no meta
         // seeded yet"; guest will sit and leave on patience timeout.
@@ -7648,6 +7676,14 @@ fn dish_satisfaction_x100(kind: &str, tier: u32) -> i64 {
 /// flight mirror reverts to walkingIn. 500ms covers one client
 /// position-stream tick.
 const WALKING_IN_MIN_MS: i64 = 500;
+/// Phase M.29 — door-entry choreography. An arriving guest spawns DOOR_SPAWN_GAP
+/// tiles OUTSIDE the door, walks to the tile DOOR_FRONT_GAP out (right in front
+/// of it), and dwells there until DOOR_ENTRY_MS has elapsed — the client swings
+/// the door open meanwhile — THEN heads to the seat and walks through. So they
+/// visibly wait for the door instead of materialising at the threshold.
+const DOOR_FRONT_GAP: f32 = 0.5;
+const DOOR_SPAWN_GAP: f32 = 1.4;
+const DOOR_ENTRY_MS: i64 = 1_400;
 /// Grace period before the server's fallback seat assignment fires.
 /// Longer than WALKING_IN_MIN_MS because the client may pick a seat
 /// AFTER the mirror catches up — 1.5s gives the local sim ~15 ticks
