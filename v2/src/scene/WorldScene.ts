@@ -366,7 +366,19 @@ export class WorldScene {
       live.add(d.uid);
       let entry = this.internalDoorState.get(d.uid);
       if (!entry) {
-        const panel = (d.model.userData as { panel?: THREE.Object3D }).panel;
+        // The hinge is normally on the model's own userData, but the registry
+        // may wrap the door in a positioning/rotation container (that's why
+        // the front-door capture searches descendants) — so fall back to a
+        // descendant scan. Without this the front door ("door") would silently
+        // never animate when it came in wrapped.
+        let panel = (d.model.userData as { panel?: THREE.Object3D }).panel;
+        if (!panel) {
+          d.model.traverse((o) => {
+            if (panel) return;
+            const p = (o.userData as { panel?: THREE.Object3D } | undefined)?.panel;
+            if (p) panel = p;
+          });
+        }
         if (!panel) continue;
         entry = { panel, openAmount: 0 };
         this.internalDoorState.set(d.uid, entry);
@@ -4498,12 +4510,11 @@ export class WorldScene {
         const tier = p.tier ?? 0;
         if (!this.tierGroups.has(tier)) this.tierGroups.set(tier, []);
         this.tierGroups.get(tier)!.push(model);
-        // Capture the front-door's hinge sub-object for open/close animation.
-        // The procedural front-door exposes the panel hinge via userData.panel.
-        if (p.id === "door" && p.x === 0 && p.z === 5.5) {
-          const panel = model.userData?.panel as THREE.Object3D | undefined;
-          if (panel) this.doorPanel = panel;
-        }
+        // Phase M.31 — the front door is now animated per-door by
+        // Engine.updateInteriorDoorways (reading model.userData.panel keyed by
+        // uid), same as interior doorways. We deliberately do NOT capture
+        // this.doorPanel anymore: leaving it null keeps the legacy single-door
+        // lerp in update() a no-op, so the two mechanisms can't fight.
         // Per-stove flames are reconciled every frame by the Engine via
         // syncStoveFlames(registry.getCookingStoves()) — no need to pin
         // one here. Demo-stove placements show up in the registry just

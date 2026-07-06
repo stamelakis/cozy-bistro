@@ -1087,16 +1087,13 @@ export class Engine {
         // floor 0 (ground).
         floor: p.floor,
       }));
-      // After restore, the demo's door (with its hinge panel captured)
-      // gets removed and the save's restored door comes in fresh —
-      // re-capture the hinge panel so setDoorOpen actually animates it.
-      // Same dance for the stove + cooking flame: pin the flame to the
-      // restored stove model so it sits on the actual burner instead
-      // of the default fallback height.
+      // Phase M.31 — no door-panel re-capture on restore anymore; the front
+      // door animates per-door via updateInteriorDoorways off the live model's
+      // userData.panel, so a freshly-restored door just works.
       //
-      // Walk the restored items to re-attach scene refs (door panel,
-      // lamp lighting). Per-stove flames don't need a save-time pin
-      // anymore — syncStoveFlames picks them up the next frame.
+      // Walk the restored items to re-attach scene refs (lamp lighting).
+      // Per-stove flames don't need a save-time pin anymore —
+      // syncStoveFlames picks them up the next frame.
       //
       // CRITICAL: capture this promise on `furnitureRestorePromise` so
       // the LATER restoreFromCloud() call can await it.  Without the
@@ -1107,7 +1104,6 @@ export class Engine {
       // the move) won the race.
       this.furnitureRestorePromise = this.registry.restore(restored).then(() => {
         for (const it of this.registry.snapshotItems()) {
-          if (it.defId === "door") this.scene.attachDoorPanel(it.model);
           // Re-register lamps so a freshly-loaded save still gets the
           // night illumination on every placed lamp without the player
           // having to move them. Category lookup beats id-by-id checks
@@ -1253,9 +1249,10 @@ export class Engine {
         this.visitMode.setFocusedStorey(this.scene.getFocusedStorey());
       }
     };
-    buildMenu.onDoorPlaced = (model) => {
-      this.scene.attachDoorPanel(model);
-      // Door event invalidates the front-wall layout — rebuild every
+    buildMenu.onDoorPlaced = () => {
+      // Phase M.31 — no panel capture here anymore; the door animates per-door
+      // via updateInteriorDoorways. Door event invalidates the front-wall
+      // layout — rebuild every
       // perimeter wall so the gap + lintel land in the right places
       // and any window cuts on neighbouring walls stay correct.
       // heldUid is non-null mid-move (pickup fires onDoorRemoved with
@@ -2061,47 +2058,12 @@ export class Engine {
       this.scene.updateInternalDoors(doors, dt);
       return;
     }
-    // Snapshot every walkable actor's ground position + which floor
-    // they're standing on. SKIP pinned guests (waiting for a seat,
-    // seated, eating, on the toilet, etc.) — they're stationary by
-    // intent and shouldn't make a nearby door flap open. Only actors
-    // actually walking somewhere can "want" to pass through a door.
-    // The floor is derived from the character's model Y so a guest
-    // on Floor 1 can't open a Floor 0 door directly below them.
-    const storeyH = WorldScene.getStoreyHeight();
-    const floorOf = (root: THREE.Object3D): number => {
-      const f = Math.round(root.position.y / storeyH);
-      return Math.max(0, Math.min(WorldScene.getNumStoreys() - 1, f));
-    };
-    const positions: { x: number; z: number; floor: number }[] = [];
-    if (this.spawner) {
-      for (const g of this.spawner.snapshotMovable()) {
-        if (g.pinned) continue;
-        positions.push({
-          x: g.character.groundPos.x,
-          z: g.character.groundPos.y,
-          floor: floorOf(g.character.root),
-        });
-      }
-    }
-    if (this.router) {
-      for (const s of this.router.snapshotStatus()) {
-        positions.push({
-          x: s.character.groundPos.x,
-          z: s.character.groundPos.y,
-          floor: floorOf(s.character.root),
-        });
-      }
-    }
-    if (this.errand) {
-      for (const h of this.errand.snapshotStatus()) {
-        positions.push({
-          x: h.character.groundPos.x,
-          z: h.character.groundPos.y,
-          floor: floorOf(h.character.root),
-        });
-      }
-    }
+    // Phase M.31 — the ACTUALLY-RENDERED characters, not the local
+    // spawner/router lists (which are EMPTY under the server-driven cutover —
+    // that's the real reason doors stopped opening). snapshotPositions already
+    // drops seated actors (a diner near a door shouldn't flap it) and tags each
+    // with the storey it's on, so a Floor-1 actor can't open a Floor-0 door.
+    const positions = this.scene.animator.snapshotPositions();
     // Per-door trigger zone: a thin corridor along the door's local
     // passage axis. In the door's local frame:
     //   |local_x| < PANEL_HALF   → inside the door's own column along
@@ -2117,7 +2079,12 @@ export class Engine {
     const PASSAGE_HALF = 1.4;
     const PANEL_HALF   = 0.5;
     for (const it of items) {
-      if (it.defId !== "int-doorway") continue;
+      // Phase M.31 — the front door ("door") now animates through the SAME
+      // per-door proximity path as interior doorways: each door opens for
+      // whoever is near THAT door, at its ACTUAL position. Fixes the old
+      // single-panel / hardcoded-(0,5.5) design that broke with a moved or
+      // duplicate door (one stuck open, the other never opening).
+      if (it.defId !== "int-doorway" && it.defId !== "door") continue;
       const cosR = Math.cos(it.rotY);
       const sinR = Math.sin(it.rotY);
       const doorFloor = it.floor ?? 0;
@@ -2143,48 +2110,6 @@ export class Engine {
       doors.push({ uid: it.uid, model: it.model, open });
     }
     this.scene.updateInternalDoors(doors, dt);
-  }
-
-  /** True if any guest/errand/pedestrian is within ~1.5 units of the
-   * front door (0, 5). Used to swing it open. */
-  private anyoneNearDoor(): boolean {
-    // Door sits at (0, 5.5) (front-wall gap). Radius 1.7 so it opens a touch
-    // before an arriving guest reaches the front tile (z≈5.95) and stays open
-    // through the walk-through.
-    const DOOR_X = 0, DOOR_Z = 5.5, NEAR_SQ = 1.7 * 1.7;
-    const check = (x: number, z: number) => {
-      const dx = x - DOOR_X, dz = z - DOOR_Z;
-      return dx * dx + dz * dz <= NEAR_SQ;
-    };
-    // Phase M.6 — guests + staff are SERVER-driven now and rendered through
-    // the CharacterAnimator, NOT the client spawner/router lists below (which
-    // are empty under the server sim). That's why the door had stopped opening
-    // for real customers. Check the rendered characters directly (floor 0 =
-    // the entrance) so it swings for anyone actually walking through it.
-    if (this.scene.animator.anyNear(DOOR_X, DOOR_Z, 1.7, 0, WorldScene.getStoreyHeight())) {
-      return true;
-    }
-    if (this.spawner) {
-      for (const g of this.spawner.snapshotMovable()) {
-        if (check(g.character.groundPos.x, g.character.groundPos.y)) return true;
-      }
-    }
-    if (this.pedestrians) {
-      for (const p of this.pedestrians.snapshotMovable()) {
-        if (check(p.character.groundPos.x, p.character.groundPos.y)) return true;
-      }
-    }
-    if (this.sharedPedestrians) {
-      for (const p of this.sharedPedestrians.snapshotMovable()) {
-        if (check(p.character.groundPos.x, p.character.groundPos.y)) return true;
-      }
-    }
-    if (this.errand) {
-      for (const h of this.errand.snapshotStatus()) {
-        if (check(h.character.groundPos.x, h.character.groundPos.y)) return true;
-      }
-    }
-    return false;
   }
 
   /** Build a fresh status-bubble list from the routers' + spawner's
@@ -3933,19 +3858,10 @@ export class Engine {
     this.sfx.setLoopActive("fryer",      activeAppliances.has("fryer"));
     this.sfx.setLoopActive("oven",       activeAppliances.has("oven"));
     this.sfx.setLoopActive("pizza-oven", activeAppliances.has("pizza-oven"));
-    // Phase M.30 — belt-and-suspenders capture: if the front-door hinge wasn't
-    // grabbed on load (e.g. the furniture streamed in from the server
-    // subscription rather than the save-restore path that calls
-    // attachDoorPanel), find the door in the registry and capture it now, so
-    // the panel can actually swing. Stops once captured.
-    if (!this.scene.hasDoorPanel()) {
-      const door = this.registry.snapshotItems().find((it) => it.defId === "door");
-      if (door) this.scene.attachDoorPanel(door.model);
-    }
-    // Open the door when a guest, errand helper, or pedestrian is close.
-    this.scene.setDoorOpen(this.anyoneNearDoor());
-    // Animate interior doorways — any placed int-doorway opens when a
-    // guest or staff member is close enough to walk through.
+    // Phase M.31 — the FRONT door is now animated per-door inside
+    // updateInteriorDoorways (alongside interior doorways), each opening for
+    // whoever is near THAT door. Replaces the old single-panel hardcoded-(0,5.5)
+    // setDoorOpen path that broke with moved / duplicate doors.
     this.updateInteriorDoorways(dt);
     // Push the current weather id BEFORE applyDayNight so the lighting
     // tint matches today's roll. setWeather is a no-op when nothing

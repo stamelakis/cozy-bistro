@@ -207,6 +207,22 @@ export class CharacterAnimator {
     return false;
   }
 
+  /** Phase M.31 — ground positions + storey of every rendered (non-hidden,
+   * non-seated) character. The per-door proximity check in Engine reads this so
+   * doors respond to the ACTUAL rendered actors under the server-driven cutover
+   * (the local spawner/router lists it used to read are empty then). Seated
+   * actors are skipped — they're parked by intent and shouldn't flap a door. */
+  snapshotPositions(): { x: number; z: number; floor: number }[] {
+    const h = this.getStoreyHeight?.() ?? 3;
+    const out: { x: number; z: number; floor: number }[] = [];
+    for (const c of this.characters) {
+      if (c._keepHidden) continue;
+      if (c.action === "sit") continue;
+      out.push({ x: c.groundPos.x, z: c.groundPos.y, floor: Math.round((c._baseY ?? 0) / h) });
+    }
+    return out;
+  }
+
   /** Phase M.19 — set a character's whole-body opacity [0,1] for the stair
    * fade. The first time a body actually fades, its GLB materials are cloned
    * into per-instance copies — SkeletonUtils.clone SHARES materials across
