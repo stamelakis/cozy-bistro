@@ -442,6 +442,11 @@ interface ActiveGuest {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Phase M.28 — measured server-update interval (s) + last arrival time (ms),
+   * so the render interpolates over the REAL interval instead of a fixed 0.5s
+   * (the server tick slows under load → a fixed guess stalls then zips). */
+  cloudTickS?: number;
+  cloudLastMs?: number;
   /** Phase M.27 — one-shot latch: true once we've flipped a toilet-sitter to
    * face OUT of the toilet (opposite their walk-in heading). Cleared when they
    * leave the toilet, so the flip fires once per visit and doesn't spin. */
@@ -1679,6 +1684,17 @@ export class GuestSpawner {
     // 0→1 interp clock so the body glides from the old pose to this one
     // over the ~0.5s tick instead of snapping then stalling. First update
     // (no prior pose) starts settled (interp 1).
+    // Phase M.28 — measure the REAL interval between server updates (this row
+    // updates every tick) so the render lerps over it instead of a fixed 0.5s.
+    const nowMs = performance.now();
+    if (g.cloudLastMs !== undefined) {
+      const gap = (nowMs - g.cloudLastMs) / 1000;
+      if (gap > 0.05) {
+        g.cloudTickS = g.cloudTickS ? g.cloudTickS * 0.6 + gap * 0.4 : gap;
+        g.cloudTickS = Math.max(0.2, Math.min(1.1, g.cloudTickS));
+      }
+    }
+    g.cloudLastMs = nowMs;
     if (g.cloudX === undefined
         || Math.hypot(row.x - g.cloudX, row.z - (g.cloudZ ?? row.z)) > 1e-4) {
       // Phase M.23 — anchor the new interp segment to where the BODY ACTUALLY
@@ -4279,8 +4295,11 @@ export class GuestSpawner {
     // over the ~2 Hz tick interval (interp 0→1) — steady speed, no teleport+stall.
     const prevX = g.cloudPrevX ?? g.cloudX;
     const prevZ = g.cloudPrevZ ?? g.cloudZ;
-    const GUEST_TICK_S = 0.5; // server guest tick ≈ 2 Hz
-    g.cloudInterp = Math.min(1, (g.cloudInterp ?? 1) + dt / GUEST_TICK_S);
+    // Phase M.28 — interp over the MEASURED update interval (reconcile), not a
+    // fixed 0.5s, so a load-slowed server tick glides smoothly instead of
+    // finishing early and stalling. Falls back to 0.5s until first measured.
+    const guestTickS = g.cloudTickS ?? 0.5;
+    g.cloudInterp = Math.min(1, (g.cloudInterp ?? 1) + dt / guestTickS);
     const t = g.cloudInterp;
     const tx = prevX + (g.cloudX - prevX) * t;
     const tz = prevZ + (g.cloudZ - prevZ) * t;

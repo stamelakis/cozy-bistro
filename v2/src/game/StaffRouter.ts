@@ -268,6 +268,13 @@ interface StaffActor {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Phase M.28 — MEASURED server-update interval (s) + the last update's
+   * arrival time (performance.now ms). The render interpolates over this real
+   * interval instead of a fixed 0.5s, so when the server tick slows under load
+   * (it clamps to 1s) the body glides the whole way instead of finishing early
+   * and stalling — the stall-then-zip that read as "micro-teleporting". */
+  cloudTickS?: number;
+  cloudLastMs?: number;
   /** Phase M.17 — the server's TARGET floor for this actor (stashed from
    * the staff_actor row alongside cloudFloor). When it differs from the
    * currentFloor and the body is inside the stairwell footprint, the render
@@ -1871,6 +1878,19 @@ export class StaffRouter {
     // previous-pose anchor + reset the 0→1 interp clock so update() glides
     // from the old pose to this one over the ~500 ms tick instead of snapping
     // then stalling. First update (no prior pose) starts settled (interp 1).
+    // Phase M.28 — measure the REAL interval between server updates (this row
+    // updates every tick) so the render lerps over it instead of a fixed 0.5s.
+    // The server tick slows under load (clamps to 1s); a fixed 0.5s finished
+    // early and stalled → the "micro-teleport" zip-then-pause.
+    const nowMs = performance.now();
+    if (actor.cloudLastMs !== undefined) {
+      const gap = (nowMs - actor.cloudLastMs) / 1000;
+      if (gap > 0.05) { // ignore double-fires within a frame
+        actor.cloudTickS = actor.cloudTickS ? actor.cloudTickS * 0.6 + gap * 0.4 : gap;
+        actor.cloudTickS = Math.max(0.2, Math.min(1.1, actor.cloudTickS));
+      }
+    }
+    actor.cloudLastMs = nowMs;
     if (actor.cloudX === undefined
         || Math.hypot(row.x - actor.cloudX, row.z - (actor.cloudZ ?? row.z)) > 1e-4) {
       // Phase M.23 — anchor the new interp segment to where the body ACTUALLY is
@@ -2395,8 +2415,10 @@ export class StaffRouter {
     // over the 2 Hz tick interval (interp 0→1) — steady speed, no teleport+pause.
     const prevX = a.cloudPrevX ?? a.cloudX;
     const prevZ = a.cloudPrevZ ?? a.cloudZ;
-    const STAFF_TICK_S = 0.5; // server staff tick = 2 Hz
-    a.cloudInterp = Math.min(1, (a.cloudInterp ?? 1) + dt / STAFF_TICK_S);
+    // Phase M.28 — interp over the MEASURED update interval (reconcile measured
+    // it), falling back to the 0.5s nominal until the first measurement lands.
+    const staffTickS = a.cloudTickS ?? 0.5;
+    a.cloudInterp = Math.min(1, (a.cloudInterp ?? 1) + dt / staffTickS);
     const t = a.cloudInterp;
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
