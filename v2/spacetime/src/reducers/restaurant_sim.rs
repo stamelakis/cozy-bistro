@@ -7831,13 +7831,15 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
         if f.floor != g.floor { continue; }
         if !predicate(&f.def_id) { continue; }
         if taken.contains(&f.uid) { continue; }
-        // Phase M.24 — a TOILET is used SITTING ON it (target = the fixture
+        // Phase M.24/M.27 — a TOILET is used SITTING ON it (target = the fixture
         // cell; find_path's goal-always-traversable rule walks the guest onto
-        // it). A SINK is used STANDING one tile in front along its facing axis.
-        // (Was stand-ahead for both, so sink users sat "on" the basin.)
+        // it). A SINK is used STANDING beside it — at a REACHABLE tile on the
+        // path from the guest (serve_stand_tile), NOT a blind stand-ahead offset
+        // which could drop them in a wall/CORNER or a spot they can't reach and
+        // strand them (the "standing in the WC for no reason" the player saw).
         let (tgt_x, tgt_z) = match kind {
             WcKind::Toilet => (f.x, f.z),
-            WcKind::Sink => (f.x + f.rot_y.sin(), f.z + f.rot_y.cos()),
+            WcKind::Sink => serve_stand_tile(ctx, rid, g.x, g.z, f.x, f.z, f.floor),
         };
         let dx = tgt_x - g.x;
         let dz = tgt_z - g.z;
