@@ -289,7 +289,9 @@ export class Pathfinding {
         edges.add(edgeKeyFromWall(it.x, it.z, rotY));
         continue;
       }
-      if (!isBlockingCategory(def.category, def.placement)) continue;
+      // Phase M.25 — force-block solid floor decorations (the fountain) that
+      // their "decoration" category otherwise lets people walk through.
+      if (!isBlockingCategory(def.category, def.placement) && !SOLID_DECOR_IDS.has(it.defId)) continue;
       for (const cell of footprintCells({ x: it.x, z: it.z, rotY }, def)) {
         cells.add(`${cell.x},${cell.z}`);
       }
@@ -412,6 +414,12 @@ function reconstruct(came: Map<string, string>, startKey: string, goalKey: strin
   if (path.length > 0) path[path.length - 1] = finalTarget;
   return path;
 }
+
+/** Phase M.25 — solid floor DECORATIONS that block despite their (non-blocking)
+ * "decoration" category. The indoor fountain is a 2×2 physical object people
+ * were walking through. Matched by def id so the rest of the decoration category
+ * stays passable. Mirrors the server `pathfinding::is_solid_decor`. */
+const SOLID_DECOR_IDS = new Set<string>(["fountain"]);
 
 /** Decide whether a furniture category should block walking on its
  * cells. Mirrors the visual rule of thumb: solid furniture blocks;

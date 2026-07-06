@@ -255,6 +255,15 @@ fn is_blocking_category(category: &str) -> bool {
     )
 }
 
+/// Phase M.25 — solid floor DECORATIONS that block despite their (non-blocking)
+/// "decoration" category. The indoor fountain is a 2×2 physical object people
+/// were walking straight through. Matched by def id so the rest of the
+/// decoration category stays passable (rugs, small props, etc.). Mirrored in
+/// the client `Pathfinding.SOLID_DECOR_IDS`.
+fn is_solid_decor(def_id: &str) -> bool {
+    matches!(def_id, "fountain")
+}
+
 // === Edge keys (port of edgeKey / edgeKeyFromWall) =======================
 
 /// Key for the edge between two 4-neighbour cells. Tags horizontal vs
@@ -350,11 +359,16 @@ pub(crate) fn compute_blocked(
         // Otherwise: a solid floor item blocks its footprint iff its
         // category (from furniture_meta) is a blocking category. No meta
         // row → treat as non-blocking.
-        let category = match ctx.db.furniture_meta().def_id().find(f.def_id.clone()) {
-            Some(m) => m.category,
-            None => continue, // unseeded def → degrade-safe non-blocking
-        };
-        if !is_blocking_category(&category) {
+        // A solid floor item blocks its footprint iff its category (from
+        // furniture_meta) is a blocking category — OR it's a force-blocked solid
+        // decoration (Phase M.25, e.g. the fountain), checked by def id BEFORE
+        // the meta lookup so it blocks even when unseeded. No meta row + not
+        // force-blocked → treat as non-blocking (degrade-safe).
+        let blocks = is_solid_decor(&f.def_id)
+            || ctx.db.furniture_meta().def_id().find(f.def_id.clone())
+                .map(|m| is_blocking_category(&m.category))
+                .unwrap_or(false);
+        if !blocks {
             continue;
         }
         let (w, d) = def_size(&f.def_id);
