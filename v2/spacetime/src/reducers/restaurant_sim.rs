@@ -6712,16 +6712,20 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     let mut new_wc_target_uid: Option<String> = g.wc_target_uid.clone();
     let (wc_target_x, wc_target_z, wc_target_floor): (Option<f32>, Option<f32>, Option<u32>) =
         if g.state == "wcWalking" && g.wc_target_uid.as_deref().unwrap_or("").is_empty() {
-            match try_pick_wc_target(ctx, &g, WcKind::Toilet) {
+            // Phase M.24 — pick the fixture matching intent (toilet users → a
+            // toilet; wash-only → a sink). Was hardcoded Toilet, which sent a
+            // wash-only guest with a lost target to a toilet.
+            let want = if g.will_use_toilet && !g.used_toilet { WcKind::Toilet } else { WcKind::Sink };
+            match try_pick_wc_target(ctx, &g, want) {
                 Some((uid, tx, tz, tf)) => {
-                    log::info!("guest {} assigned toilet {} (server fallback)", g.id, uid);
+                    log::info!("guest {} assigned wc fixture {} (server fallback)", g.id, uid);
                     new_wc_target_uid = Some(uid);
                     (Some(tx), Some(tz), Some(tf))
                 }
                 None => (None, None, None),
             }
         } else if g.state == "wcWashing"
-            && g.wc_target_uid.as_deref().map(is_toilet_def).unwrap_or(false) {
+            && g.wc_target_uid.as_deref().map(|u| wc_uid_is_toilet(ctx, u)).unwrap_or(false) {
             // Transition from sitting on toilet to walking to sink.
             // wc_target_uid currently points at the toilet; swap it
             // for a sink uid.
@@ -6761,7 +6765,12 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // waiting — position step is a no-op anyway when target ≈ x.
     let anchored = matches!(
         g.state.as_str(),
-        "seated" | "ordering" | "eating" | "wcSitting" | "wcWashing"
+        // Phase M.24 — "wcWashing" REMOVED from the anchored list: a toilet
+        // user's target is swapped to a SINK on entering wcWashing, so the body
+        // must be free to WALK there. (A wash-only user is already at the sink,
+        // so the step is a no-op.) wcSitting stays anchored — they sit on the
+        // toilet in place.
+        "seated" | "ordering" | "eating" | "wcSitting"
     );
     // Phase 9.69 — route around furniture on the guest's own floor.
     // Phase M.17 — and WALK THE STAIRS across floors (next_step_multi): route
@@ -6961,17 +6970,24 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         // stair-climb grace so the state doesn't pop the guest onto
         // the toilet before they've visibly arrived. Same-floor keeps
         // the snappy arrival-only behaviour.
+        // Phase M.24 — on arrival: a TOILET user sits (wcSitting); a wash-only
+        // user (their target is a sink) skips straight to wcWashing so they
+        // STAND and wash — never sitting on the basin.
         "wcWalking" if arrived
-            && (g.floor == effective_target_floor || new_clock >= CROSS_FLOOR_WC_WALK_MS) =>
-            Some(("wcSitting".to_string(), 0)),
-        // wcSitting → wcWashing after WC_USE_MS — the toilet trip.
+            && (g.floor == effective_target_floor || new_clock >= CROSS_FLOOR_WC_WALK_MS) => {
+            let on_toilet = g.wc_target_uid.as_deref()
+                .map(|u| wc_uid_is_toilet(ctx, u)).unwrap_or(false);
+            Some(((if on_toilet { "wcSitting" } else { "wcWashing" }).to_string(), 0))
+        }
+        // wcSitting → wcWashing after WC_USE_MS — done on the toilet, go wash.
         "wcSitting" if new_clock >= WC_USE_MS => Some(("wcWashing".to_string(), 0)),
-        // wcWashing → seated after WC_WASH_MS — back to the seat.
-        // (Walking back is a separate state in the client; here we
-        // collapse it into a direct return since the client's local
-        // sim handles the walk model. Server-side this means
-        // wcWashing → seated and the client picks up rendering.)
-        "wcWashing" if new_clock >= WC_WASH_MS => Some(("seated".to_string(), 0)),
+        // wcWashing → seated after WC_WASH_MS — back to the seat. Phase M.24 —
+        // ALSO gated on `arrived`: a toilet user's target is swapped to a SINK
+        // on entering wcWashing, so they must actually reach + stand at the sink
+        // before the wash clock releases them (a wash-only user is already there,
+        // so `arrived` is immediately true). Walking back to the seat is the
+        // client's model; server-side this collapses to a direct return.
+        "wcWashing" if arrived && new_clock >= WC_WASH_MS => Some(("seated".to_string(), 0)),
         // No other server-driven transitions yet. ordering →
         // waitingForFood depends on waiter take-order which is
         // client-driven; eating → leaving needs order count (not
@@ -7729,6 +7745,17 @@ fn is_sink_def(def_id: &str) -> bool {
     matches!(def_id, "bathroom-sink" | "bathroom-sink-sq")
 }
 
+/// Phase M.24 — is a guest's `wc_target_uid` (a placed_furniture UID, e.g.
+/// "fp-…") a toilet? Resolves the UID to its def_id first. The old code called
+/// `is_toilet_def` DIRECTLY on the uid, which never matched "toilet"/"toilet-
+/// square", so the toilet→sink hand-off in wcWashing silently never fired —
+/// toilet users washed at the toilet instead of walking to a sink.
+fn wc_uid_is_toilet(ctx: &ReducerContext, uid: &str) -> bool {
+    ctx.db.placed_furniture().uid().find(uid.to_string())
+        .map(|f| is_toilet_def(&f.def_id))
+        .unwrap_or(false)
+}
+
 #[derive(Clone, Copy)]
 enum WcKind { Toilet, Sink }
 
@@ -7778,14 +7805,20 @@ fn try_pick_wc_target(ctx: &ReducerContext, g: &ActiveGuest, kind: WcKind)
         if f.floor != g.floor { continue; }
         if !predicate(&f.def_id) { continue; }
         if taken.contains(&f.uid) { continue; }
-        let stand_x = f.x + f.rot_y.sin();
-        let stand_z = f.z + f.rot_y.cos();
-        let dx = stand_x - g.x;
-        let dz = stand_z - g.z;
+        // Phase M.24 — a TOILET is used SITTING ON it (target = the fixture
+        // cell; find_path's goal-always-traversable rule walks the guest onto
+        // it). A SINK is used STANDING one tile in front along its facing axis.
+        // (Was stand-ahead for both, so sink users sat "on" the basin.)
+        let (tgt_x, tgt_z) = match kind {
+            WcKind::Toilet => (f.x, f.z),
+            WcKind::Sink => (f.x + f.rot_y.sin(), f.z + f.rot_y.cos()),
+        };
+        let dx = tgt_x - g.x;
+        let dz = tgt_z - g.z;
         let dist = dx * dx + dz * dz;
         if dist < best_dist {
             best_dist = dist;
-            best = Some((f.uid.clone(), stand_x, stand_z, f.floor));
+            best = Some((f.uid.clone(), tgt_x, tgt_z, f.floor));
         }
     }
     best

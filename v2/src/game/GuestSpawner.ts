@@ -607,7 +607,9 @@ function cloudStateToLocal(serverState: string): GuestState {
  * for picking the animation action on import and for setting
  * seatHeight (a tiny chair lift so the model lands on the cushion). */
 const SIT_STATES: Set<GuestState> = new Set([
-  "seated", "waitingForFood", "eating", "atToilet", "atSink", "waitingForSeat",
+  // Phase M.24 — "atSink" REMOVED: a guest washing their hands STANDS at the
+  // basin, it isn't a seat. (atToilet stays — they sit on the toilet.)
+  "seated", "waitingForFood", "eating", "atToilet", "waitingForSeat",
 ]);
 
 /** Pick the character animation action ("sit" / "walk" / "idle") for
