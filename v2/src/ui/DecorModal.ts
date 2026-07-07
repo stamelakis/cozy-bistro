@@ -1,5 +1,5 @@
 import type { Game } from "../game/Game";
-import { RESTAURANT_THEMES } from "../data/themes";
+import { RESTAURANT_THEMES, scaledThemeCost } from "../data/themes";
 import { WorldScene } from "../scene/WorldScene";
 
 /**
@@ -202,15 +202,16 @@ export class DecorModal {
         text.appendChild(appeal);
       }
       row.appendChild(text);
+      const cost = scaledThemeCost(theme);
       const price = document.createElement("span");
       price.textContent = locked
         ? `🔒 T${theme.tier}`
-        : active ? "—" : theme.cost === 0 ? "free" : `$${theme.cost}`;
+        : active ? "—" : cost === 0 ? "free" : `$${cost}`;
       Object.assign(price.style, { fontSize: "12px", opacity: "0.85", minWidth: "46px", textAlign: "right", flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
       if (locked) price.title = `Unlocks at luxury tier ${theme.tier}`;
       row.appendChild(price);
       if (!active && !locked) {
-        const can = theme.cost === 0 || this.game.economy.canAfford(theme.cost);
+        const can = cost === 0 || this.game.economy.canAfford(cost);
         if (!can) {
           row.style.opacity = "0.4";
           row.style.cursor = "not-allowed";

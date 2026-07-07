@@ -1008,14 +1008,19 @@ const TIER_PRICE_EXPONENT = 1.4;
  * of scaledCost, so refunds scale with it automatically. */
 const GLOBAL_COST_MULTIPLIER = 5;
 
-export function scaledCost(def: FurnitureDef): number {
-  const tier = inferQualityTier(def);
-  const base = def.cost * GLOBAL_COST_MULTIPLIER;
-  // T1 skips the tier curve but still rides the global multiplier + $10
-  // rounding (it's no longer at its bare catalog price).
+/** The shared build-economy price curve: base × global multiplier × tier^exp,
+ * snapped up to the nearest $10. T1 skips the tier curve (but still rides the
+ * multiplier + rounding). Single source of truth so anything tiered — furniture
+ * AND interior themes — prices identically. baseCost 0 stays free. */
+export function scaleCostByTier(baseCost: number, tier: number): number {
+  if (baseCost <= 0) return 0;
+  const base = baseCost * GLOBAL_COST_MULTIPLIER;
   if (tier <= 1) return Math.ceil(base / 10) * 10;
-  const raw = base * Math.pow(tier, TIER_PRICE_EXPONENT);
-  return Math.ceil(raw / 10) * 10;
+  return Math.ceil(base * Math.pow(tier, TIER_PRICE_EXPONENT) / 10) * 10;
+}
+
+export function scaledCost(def: FurnitureDef): number {
+  return scaleCostByTier(def.cost, inferQualityTier(def));
 }
 
 /** Sell-back value for a placed item, in dollars: ~50% of the scaled

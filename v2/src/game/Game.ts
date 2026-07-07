@@ -8,7 +8,7 @@ import { StaffSystem, STAFF_UPGRADE_MAX, type StaffRole } from "../systems/Staff
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
 import { AchievementSystem } from "./AchievementSystem";
-import { RESTAURANT_THEMES, themeAppeal, type RestaurantTheme } from "../data/themes";
+import { RESTAURANT_THEMES, themeAppeal, scaledThemeCost, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
 import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
 import { getFurnitureDef } from "../data/furnitureCatalog";
@@ -1186,7 +1186,9 @@ export class Game {
     if (!theme) return false;
     const currentForFloor = this.themeByFloor[floor] ?? (floor === 0 ? this.themeId : RESTAURANT_THEMES[0].id);
     if (theme.id === currentForFloor) return true; // no-op
-    if (theme.cost > 0 && !this.economy.spendMoney(theme.cost, "decor")) return false;
+    // Price rides the same per-tier curve as furniture (scaledThemeCost).
+    const cost = scaledThemeCost(theme);
+    if (cost > 0 && !this.economy.spendMoney(cost, "decor")) return false;
     this.themeByFloor[floor] = theme.id;
     if (floor === 0) this.themeId = theme.id; // keep legacy field in sync for save compat
     // Lifetime counters for the achievement system.
