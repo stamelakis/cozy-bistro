@@ -1259,35 +1259,64 @@ const OFFLINE_EARN_CAP_MICROS: i64 = 7 * 24 * 3_600 * 1_000_000;
 /// reconcile it (avoids tiny spurious "offline" events on a flaky ping).
 const OFFLINE_RECONCILE_MIN_MICROS: i64 = 10_000_000; // 10 s
 
-/// Most-recent completed-day NET profit (cents) from the day-history blob.
-/// Parses the LAST `"net":<dollars>` value, robust to the exact array shape.
-/// Returns 0 when the restaurant has no completed day yet — a safe default:
-/// no offline earnings until it has a real track record.
-fn last_day_net_cents(history_json: &str) -> i64 {
-    if let Some(pos) = history_json.rfind("\"net\":") {
-        let after = &history_json[pos + 6..];
+/// Most-recent completed-day value (cents) for a numeric dollar field in the
+/// day-history blob (e.g. "revenue", "net"). Parses the LAST occurrence, robust
+/// to the exact array shape. Returns 0 when absent — a safe default: no offline
+/// earnings until the restaurant has a real track record.
+fn last_day_field_cents(history_json: &str, field: &str) -> i64 {
+    let needle = format!("\"{field}\":");
+    if let Some(pos) = history_json.rfind(&needle) {
+        let after = &history_json[pos + needle.len()..];
         let end = after
             .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
             .unwrap_or(after.len());
-        if let Ok(net) = after[..end].parse::<f64>() {
-            return (net * 100.0).round() as i64;
+        if let Ok(v) = after[..end].parse::<f64>() {
+            return (v * 100.0).round() as i64;
         }
     }
     0
 }
 
 /// Apply the earnings a restaurant would have made while its owner was away, as
-/// ONE ledger event, instead of ticking 2 Hz for the whole gap. Rate = the
-/// restaurant's most-recent completed-day NET, prorated over the in-game days
-/// that elapsed during the real gap (a game day = DAY_LENGTH_MS), so it matches
-/// what the live tick would have earned — capped at 1 real week and floored so
+/// ONE ledger event, instead of ticking 2 Hz for the whole gap. Rate = the last
+/// completed day's REVENUE minus only recurring wages + rent (NOT its "net" —
+/// one-time furniture/upgrade/boost spend doesn't recur offline), prorated over
+/// the in-game days that elapsed during the real gap (a game day = DAY_LENGTH_MS),
+/// so it matches what the live tick would have earned — capped at 1 real week + floored so
 /// cloud money never goes below $0 (a net-negative restaurant just drains toward
 /// $0, same as online). Called on the first live tick after a freeze.
 fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
     let capped = gap_micros.min(OFFLINE_EARN_CAP_MICROS);
     if capped <= 0 { return; }
-    let daily_net = last_day_net_cents(r.cloud_day_history_json.as_deref().unwrap_or(""));
+    // Project the last completed day's REVENUE minus only the RECURRING costs
+    // that keep accruing while the owner is away — WAGES + RENT. Deliberately
+    // NOT the day's "net": that folds in one-time spend (furniture, upgrades,
+    // boosts) which does NOT happen while offline, so counting it would badly
+    // mis-state the away earnings (the numbers the owner questioned).
+    let daily_revenue = last_day_field_cents(r.cloud_day_history_json.as_deref().unwrap_or(""), "revenue");
+    if daily_revenue == 0 { return; } // no completed-day track record yet
+    // Rent per in-game day, by luxury tier (mirrors tick_day_clock's table).
+    const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
+    let luxury_tier = ctx.db.player_save().identity().find(r.owner)
+        .map(|s| s.luxury_tier as usize).unwrap_or(1).clamp(1, 5);
+    let rent_per_day = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
+    // Wages per in-game day = live payroll RATE (base × active headcount +
+    // Σlevel × per-level, per REAL minute — mirrors tick_offline_salary) × the
+    // real minutes in one in-game day (DAY_LENGTH_MS), so the away rate matches
+    // what the live tick would bill.
+    let mut headcount: i64 = 0;
+    let mut levels_sum: i64 = 0;
+    for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
+        if m.is_deactivated { continue; }
+        headcount += 1;
+        levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
+    }
+    let base_rate = if r.cloud_base_payroll_per_min_cents > 0 { r.cloud_base_payroll_per_min_cents } else { 600 };
+    let wage_per_min = base_rate.saturating_mul(headcount)
+        .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
+    let wages_per_day = wage_per_min.saturating_mul(DAY_LENGTH_MS) / 60_000;
+    let daily_net = daily_revenue - rent_per_day - wages_per_day;
     if daily_net == 0 { return; }
     let day_micros = DAY_LENGTH_MS.saturating_mul(1_000); // in-game day in micros
     if day_micros <= 0 { return; }
@@ -6924,15 +6953,19 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // above already early-returns for "waiting" guests, so this
     // branch only fires for in-restaurant states that aren't yet
     // waiting — position step is a no-op anyway when target ≈ x.
-    let anchored = matches!(
-        g.state.as_str(),
-        // Phase M.24 — "wcWashing" REMOVED from the anchored list: a toilet
-        // user's target is swapped to a SINK on entering wcWashing, so the body
-        // must be free to WALK there. (A wash-only user is already at the sink,
-        // so the step is a no-op.) wcSitting stays anchored — they sit on the
-        // toilet in place.
-        "seated" | "ordering" | "eating" | "wcSitting"
-    );
+    // Phase M.24 — "wcWashing" REMOVED from the anchored list so a toilet user
+    // can WALK to the sink. wcSitting stays anchored (they sit on the toilet).
+    // Phase M.33 — a seated/ordering/eating guest is normally pinned to its
+    // chair, but one that's DISPLACED — just flipped to "seated" back at the
+    // dining seat while still physically at the sink, or whose chair moved —
+    // must WALK to the seat, not freeze there (the "sitting in front of the
+    // sink" bug). So freeze only when already AT the seat; otherwise step toward
+    // it (target is the seat, set on the wcWashing→seated transition). The
+    // animator's sit-while-moving→walk rule renders the trip as a walk.
+    let at_seat = (g.x - g.seat_x).abs() < 0.15 && (g.z - g.seat_z).abs() < 0.15;
+    let anchored = g.state == "wcSitting"
+        || (matches!(g.state.as_str(), "seated" | "ordering" | "eating")
+            && (at_seat || g.seat_uid.is_empty()));
     // Phase 9.69 — route around furniture on the guest's own floor.
     // Phase M.17 — and WALK THE STAIRS across floors (next_step_multi): route
     // to the stairs, climb the flight, continue on the next floor, flipping
