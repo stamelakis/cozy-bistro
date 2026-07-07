@@ -17,9 +17,24 @@
 (function installEnvStorageNamespace(): void {
   try {
     const q = new URLSearchParams(window.location.search).get("env");
-    const onStaging =
-      q === "staging" ||
-      (q !== "prod" && window.localStorage.getItem("cb_env") === "staging");
+    // Env stickiness is SESSION-scoped (per tab), not permanent. The old version
+    // stuck the selector in localStorage, so once you opened ?env=staging the
+    // *bare prod URL* kept routing to staging forever — prod showed the staging
+    // restaurant, and testers landed in the empty staging DB ("can't log in").
+    // Scrub any stale localStorage flag and key off sessionStorage: it survives
+    // the query-string-dropping login/plot reloads within a tab, but a fresh
+    // visit to the prod URL is prod.
+    try { window.localStorage.removeItem("cb_env"); } catch { /* ignore */ }
+    let onStaging: boolean;
+    if (q === "staging") {
+      onStaging = true;
+      try { window.sessionStorage.setItem("cb_env", "staging"); } catch { /* ignore */ }
+    } else if (q === "prod") {
+      onStaging = false;
+      try { window.sessionStorage.removeItem("cb_env"); } catch { /* ignore */ }
+    } else {
+      onStaging = window.sessionStorage.getItem("cb_env") === "staging";
+    }
     if (!onStaging) return;
 
     const PREFIX = "stg::";
