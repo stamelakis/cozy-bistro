@@ -618,7 +618,11 @@ function cloudStateToLocal(serverState: string): GuestState {
 const SIT_STATES: Set<GuestState> = new Set([
   // Phase M.24 — "atSink" REMOVED: a guest washing their hands STANDS at the
   // basin, it isn't a seat. (atToilet stays — they sit on the toilet.)
-  "seated", "waitingForFood", "eating", "atToilet", "waitingForSeat",
+  // "waitingForSeat" REMOVED: overflow waiters have no real chair (the wait
+  // spot is a virtual "wait-XXXX" slot), so sitting there put them on a
+  // phantom seat — the "invisible seat" pile by the door. They STAND now
+  // (idle) via actionFromState below.
+  "seated", "waitingForFood", "eating", "atToilet",
 ]);
 
 /** Pick the character animation action ("sit" / "walk" / "idle") for
@@ -626,6 +630,9 @@ const SIT_STATES: Set<GuestState> = new Set([
  * selection — wrong action just looks weird, doesn't break gameplay. */
 function actionFromState(state: GuestState): "sit" | "walk" | "idle" {
   if (SIT_STATES.has(state)) return "sit";
+  // Overflow waiters STAND in the door queue — they're pinned in place with
+  // no chair, so "walk" would moonwalk and "sit" would float on nothing.
+  if (state === "waitingForSeat") return "idle";
   return "walk";
 }
 
