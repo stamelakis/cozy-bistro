@@ -1,3 +1,6 @@
+// MUST be first — isolates staging's localStorage/sessionStorage from prod
+// before anything reads the save or auth token. See envStorage.ts.
+import "./envStorage";
 import { Engine } from "./game/Engine";
 import { initMobileUI } from "./ui/MobileUI";
 
