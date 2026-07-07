@@ -327,8 +327,18 @@ export class CharacterAnimator {
       // stretch — a brief stall between 2 Hz server ticks keeps playing "walk"
       // (previously it flipped every stall, reset()-ing the walk cycle → the
       // "restart the animation / momentary glitch" the player saw).
+      // Two symmetric corrections, both gated on the stillness timer:
+      //   walk that ISN'T moving  → idle (stale "walk", already handled)
+      //   sit  that IS   moving   → walk
+      // The second fixes the "sitting at the sink": a guest returning from the
+      // handwash sink is flipped to a seated table-state server-side BEFORE it
+      // reaches the chair (the return walk is the client's job), so without this
+      // it slides home in a sitting pose. Any sit-pose body that's travelling
+      // renders as walking until it parks (≥ grace), then sits.
       const effAction: CharacterAction =
-        c.action === "walk" && (c._stillMs ?? 0) >= WALK_IDLE_GRACE_MS ? "idle" : c.action;
+        c.action === "walk" && (c._stillMs ?? 0) >= WALK_IDLE_GRACE_MS ? "idle"
+        : c.action === "sit" && (c._stillMs ?? WALK_IDLE_GRACE_MS) < WALK_IDLE_GRACE_MS ? "walk"
+        : c.action;
       c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
       c.root.rotation.set(0, c.facingY, 0);
 
