@@ -293,11 +293,35 @@ const STAGING_MODULE = "dunnin-staging";
 function resolveDefaultModule(): string {
   try {
     const q = new URLSearchParams(window.location.search).get("env");
-    if (q === "staging") { localStorage.setItem("cb_env", "staging"); return STAGING_MODULE; }
+    if (q === "staging") { localStorage.setItem("cb_env", "staging"); mountStagingBadge(); return STAGING_MODULE; }
     if (q === "prod")    { localStorage.removeItem("cb_env"); return DEFAULT_MODULE; }
-    if (localStorage.getItem("cb_env") === "staging") return STAGING_MODULE;
+    if (localStorage.getItem("cb_env") === "staging") { mountStagingBadge(); return STAGING_MODULE; }
   } catch { /* no window / storage blocked — fall through to prod */ }
   return DEFAULT_MODULE;
+}
+
+/** Pin a small red STAGING banner at the top so a tester (or the dev) can never
+ * mistake the staging environment for prod. Idempotent; no-op on prod. */
+function mountStagingBadge(): void {
+  try {
+    if (typeof document === "undefined") return;
+    const add = (): void => {
+      if (document.getElementById("cb-staging-badge")) return;
+      const b = document.createElement("div");
+      b.id = "cb-staging-badge";
+      b.textContent = "STAGING";
+      Object.assign(b.style, {
+        position: "fixed", top: "0", left: "50%", transform: "translateX(-50%)",
+        zIndex: "99999", padding: "3px 14px", borderRadius: "0 0 8px 8px",
+        background: "rgba(210,80,55,0.95)", color: "#fff",
+        font: "700 12px/1 system-ui, sans-serif", letterSpacing: "0.14em",
+        pointerEvents: "none", boxShadow: "0 2px 8px rgba(0,0,0,0.45)",
+      } as Partial<CSSStyleDeclaration>);
+      document.body.appendChild(b);
+    };
+    if (document.body) add();
+    else window.addEventListener("DOMContentLoaded", add, { once: true });
+  } catch { /* ignore */ }
 }
 
 export interface SpacetimeConfig {
