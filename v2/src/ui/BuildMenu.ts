@@ -824,6 +824,7 @@ export class BuildMenu {
     }
     // Show / hide the seat-slot markers — they're a placement aid only.
     this.seatMarkers?.setEnabled(this.moveMode || this.placingDef != null);
+    this.syncTouchControls();
   }
 
   /** Restore the carried original to its starting pose + visibility, and
@@ -866,6 +867,7 @@ export class BuildMenu {
         ? "SELL ✓ tap item"
         : "SELL (50%)";
     }
+    this.syncTouchControls();
   }
 
   private toggleStoreMode(): void {
@@ -883,6 +885,7 @@ export class BuildMenu {
         ? "STORE ✓ tap item"
         : "STORE";
     }
+    this.syncTouchControls();
   }
 
   /** Rebuild the storage-room list from the server inventory. Clicking an
@@ -1014,19 +1017,7 @@ export class BuildMenu {
       const ae = document.activeElement as HTMLElement | null;
       if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
       if (e.key === "Escape") {
-        // Cancel order matters: if mid-carry, restore original first so
-        // toggleMoveMode doesn't re-trigger restore against a stale state.
-        if (this.holdingUid && this.holdingFrom) {
-          this.restoreMoveOriginal();
-          this.holdingUid = null;
-          this.holdingFrom = null;
-          this.flashRoot("Move cancelled", "info");
-        } else {
-          this.cancelPlacing();
-        }
-        if (this.sellMode) this.toggleSellMode();
-        if (this.moveMode) this.toggleMoveMode();
-        if (this.storeMode) this.toggleStoreMode();
+        this.exitBuildModes();
       }
       if ((e.key === "r" || e.key === "R") && this.preview) {
         this.rotatePlacement();
@@ -1076,9 +1067,9 @@ export class BuildMenu {
     }
     // Surface seat-slot markers as a placement aid.
     this.seatMarkers?.setEnabled(true);
-    // Touch users get a floating rotate button (no R key). Wall-mounted
-    // items can't be rotated, so only show it for free-standing pieces.
-    this.showPlaceRotate(def.placement !== "wall" && def.placement !== "wall-shelf");
+    // Reveal the floating touch controls (⟳ rotate / ✓ place / ✕ done) for
+    // this placement — syncTouchControls picks the right buttons for the mode.
+    this.syncTouchControls();
   }
 
   /** Synchronously clone an already-placed model into a translucent ghost.
@@ -1164,29 +1155,72 @@ export class BuildMenu {
     this.placingDef = null;
     this.placingFromStorage = false;
     this.currentPlan = null;
-    this.showPlaceRotate(false);
+    this.syncTouchControls();
     // If nothing else needs the markers, hide them.
     if (!this.moveMode && this.holdingUid == null) {
       this.seatMarkers?.setEnabled(false);
     }
   }
 
-  /** A floating on-screen rotate button for touch — the R key has no
-   * equivalent on a phone. Lazily created; the stylesheet keeps it
-   * hidden on desktop and whenever not placing. */
-  private placeRotateBtn: HTMLButtonElement | null = null;
+  /** Floating on-screen touch controls — a phone has no R / Esc / precise
+   * click-to-place, so build & move interactions get ⟳ rotate, ✓ place, and
+   * ✕ done buttons. Lazily created; the stylesheet keeps them hidden on desktop
+   * and whenever the matching interaction isn't active. */
+  private touchBtns: Partial<Record<"rotate" | "confirm" | "cancel", HTMLButtonElement>> = {};
 
-  private showPlaceRotate(show: boolean): void {
-    if (show && !this.placeRotateBtn) {
-      const b = document.createElement("button");
-      b.className = "cb-place-rotate";
-      b.textContent = "⟳";
-      b.title = "Rotate";
-      b.addEventListener("click", () => this.rotatePlacement());
+  private showTouchBtn(kind: "rotate" | "confirm" | "cancel", show: boolean): void {
+    let b = this.touchBtns[kind];
+    if (show && !b) {
+      b = document.createElement("button");
+      b.className = `cb-touch-btn cb-touch-${kind}`;
+      b.textContent = kind === "rotate" ? "⟳" : kind === "confirm" ? "✓" : "✕";
+      b.title = kind === "rotate" ? "Rotate" : kind === "confirm" ? "Place" : "Done";
+      b.addEventListener("click", (e) => {
+        // Keep the tap on the button — don't let it fall through to the canvas
+        // (which would place / pick up whatever sits under the button).
+        e.preventDefault();
+        e.stopPropagation();
+        if (kind === "rotate") this.rotatePlacement();
+        else if (kind === "confirm") this.onClick({ button: 0 } as unknown as MouseEvent);
+        else this.exitBuildModes();
+      });
       document.body.appendChild(b);
-      this.placeRotateBtn = b;
+      this.touchBtns[kind] = b;
     }
-    this.placeRotateBtn?.classList.toggle("cb-show", show);
+    this.touchBtns[kind]?.classList.toggle("cb-show", show);
+  }
+
+  /** Reconcile the floating touch controls with the current interaction. */
+  private syncTouchControls(): void {
+    const placing = this.preview != null && this.placingDef != null;
+    const holding = this.holdingUid != null;
+    const rotatable = placing
+      ? (this.placingDef!.placement !== "wall" && this.placingDef!.placement !== "wall-shelf")
+      : holding;
+    this.showTouchBtn("rotate", rotatable);
+    // ✓ commits the ghost — only meaningful while placing NEW furniture.
+    this.showTouchBtn("confirm", placing);
+    // ✕ exits whatever build interaction is active (the mobile Esc).
+    this.showTouchBtn("cancel", placing || holding || this.moveMode || this.sellMode || this.storeMode);
+  }
+
+  /** Cancel whatever build / move / sell / store interaction is active — the
+   * shared target of the Esc key AND the on-screen ✕ button (a phone has no
+   * Esc). Mid-carry restores the original first so re-entering a mode doesn't
+   * fight a stale pose. */
+  private exitBuildModes(): void {
+    if (this.holdingUid && this.holdingFrom) {
+      this.restoreMoveOriginal();
+      this.holdingUid = null;
+      this.holdingFrom = null;
+      this.flashRoot("Move cancelled", "info");
+    } else {
+      this.cancelPlacing();
+    }
+    if (this.sellMode) this.toggleSellMode();
+    if (this.moveMode) this.toggleMoveMode();
+    if (this.storeMode) this.toggleStoreMode();
+    this.syncTouchControls();
   }
 
   /** Rotate the active placement ghost by 90°. Shared by the R key and
@@ -1384,8 +1418,16 @@ export class BuildMenu {
     // know which cell a click would hit.
     if (!this.placingDef && !this.sellMode && !this.moveMode && !this.storeMode) return;
     const rect = this.canvas.getBoundingClientRect();
+    // On touch the fingertip covers the target cell. While positioning a ghost
+    // (placing new furniture or carrying a moved item) lift the raycast a little
+    // above the contact point so the ghost + its target cell stay visible under
+    // your thumb. NOT applied when selecting an existing item (sell / store /
+    // move-pickup have no preview) — there you want the item right under the
+    // finger. Desktop keeps a 1:1 mapping.
+    const positioning = this.preview != null;
+    const touchLift = positioning && document.body.classList.contains("cb-mobile") ? 60 : 0;
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    this.pointerNdc.y = -(((e.clientY - touchLift - rect.top) / rect.height) * 2 - 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
     // Intersect with the focused storey's slab plane (floor 0 → y=0,
     // floor 1 → y=3, etc.). For a plane y=h the equation is
@@ -2200,6 +2242,8 @@ export class BuildMenu {
         }
         this.flashRoot(plan.quality === "snap-perfect" ? "Moved — perfect seat!" : "Moved", "success");
       }
+      // Pickup → show ⟳/✓/✕; drop → back to just ✕ (still in move mode).
+      this.syncTouchControls();
       return;
     }
     if (!this.placingDef || !this.preview || !this.hoverValid) return;

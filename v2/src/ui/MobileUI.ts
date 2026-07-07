@@ -418,24 +418,40 @@ body.cb-mobile .cb-modal-body > div:first-child > button:last-child {
   flex: 0 0 auto !important;
 }
 
-/* --- on-screen rotate button shown while placing furniture (no R key) --- */
-.cb-place-rotate { display: none; }
-body.cb-mobile .cb-place-rotate.cb-show {
+/* --- floating touch controls for placing / moving furniture (no keyboard):
+   ⟳ rotate (left), ✓ place (right-inner), ✕ done (right-outer). Shown only on
+   mobile, only while a build interaction is active. --- */
+.cb-touch-btn { display: none; }
+body.cb-mobile .cb-touch-btn.cb-show {
   display: flex;
   align-items: center;
   justify-content: center;
   position: fixed;
-  left: calc(14px + env(safe-area-inset-left, 0px));
   bottom: calc(74px + env(safe-area-inset-bottom, 0px));
-  width: 58px; height: 58px;
+  width: 60px; height: 60px;
   z-index: 1100;
-  background: rgba(255,210,120,0.95);
   color: #2a1c10;
-  border: 1px solid rgba(255,235,190,0.85);
   border-radius: 50%;
   font-size: 27px; font-weight: 700;
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
-body.cb-mobile .cb-place-rotate.cb-show:active { background: rgba(255,225,160,1); }
+body.cb-mobile .cb-touch-rotate.cb-show {
+  left: calc(14px + env(safe-area-inset-left, 0px));
+  background: rgba(255,210,120,0.96);
+  border: 1px solid rgba(255,235,190,0.85);
+}
+body.cb-mobile .cb-touch-confirm.cb-show {
+  right: calc(84px + env(safe-area-inset-right, 0px));
+  background: rgba(120,200,130,0.96);
+  border: 1px solid rgba(190,240,200,0.85);
+}
+body.cb-mobile .cb-touch-cancel.cb-show {
+  right: calc(14px + env(safe-area-inset-right, 0px));
+  background: rgba(226,120,110,0.96);
+  border: 1px solid rgba(245,190,185,0.85);
+}
+body.cb-mobile .cb-touch-btn.cb-show:active { filter: brightness(1.12); }
 `;
