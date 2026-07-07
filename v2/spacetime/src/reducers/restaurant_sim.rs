@@ -7400,22 +7400,35 @@ pub(crate) fn try_spawn_arrival_guest(
                     );
                     return false;
                 }
-                // Cap concurrent waiters so the doorway doesn't mob.
-                let waiting_now = ctx.db.active_guest()
+                // Gather current waiters' wait-spot X so we can (a) cap the
+                // queue and (b) place the newcomer on the LOWEST FREE slot.
+                let occupied_x: Vec<f32> = ctx.db.active_guest()
                     .restaurant_id().filter(restaurant_id)
                     .filter(|g| is_waiting_state(&g.state))
-                    .count();
-                if waiting_now >= 4 {
+                    .map(|g| g.seat_x)
+                    .collect();
+                // Cap concurrent waiters so the doorway doesn't mob.
+                if occupied_x.len() >= 4 {
                     return false;
                 }
                 wait_mode = true;
                 // 36 s at 1★ avg up to 100 s at 5★ — better
                 // restaurants are worth a longer wait.
                 waiting_timeout_ms = 20_000 + avg_x100 * 160;
-                // Fan wait spots alternately left/right of the door.
-                let side = if waiting_now % 2 == 0 { 1.0 } else { -1.0 };
-                let wx = door_x + side * (0.9 + 0.9 * (waiting_now / 2) as f32);
-                (String::new(), wx, door_z - 0.6, 0u32)
+                // Wait spots fan alternately left/right of the door: slot i →
+                // door_x ± (0.9 + 0.9*(i/2)).  Pick the LOWEST slot (0..3) no
+                // current waiter occupies — the old code indexed by the live
+                // waiter COUNT, which clusters near the cap as guests churn and
+                // stacked several bodies on one tile (the "invisible seat" pile).
+                let slot_x = |i: i32| -> f32 {
+                    let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+                    door_x + side * (0.9 + 0.9 * (i / 2) as f32)
+                };
+                let mut slot = 0;
+                while slot < 3 && occupied_x.iter().any(|&ox| (ox - slot_x(slot)).abs() < 0.25) {
+                    slot += 1;
+                }
+                (String::new(), slot_x(slot), door_z - 0.6, 0u32)
             }
         };
 
