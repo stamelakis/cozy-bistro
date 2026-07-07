@@ -281,6 +281,24 @@ function tokenStorageKeyFor(host: string): string {
 // name on the new host is "dunnin" (NOT cozy-bistro-andre).
 const DEFAULT_HOST = "wss://dunnin-spacetime.ownsun.de";
 const DEFAULT_MODULE = "dunnin";
+/** Staging database — SAME SpacetimeDB instance, a separate DB — so a patch can
+ * be tested against real infrastructure before it's promoted to prod. */
+const STAGING_MODULE = "dunnin-staging";
+
+/** Which database to connect to. Prod ("dunnin") by default; append
+ * `?env=staging` to the URL to point a client at the staging DB (no separate
+ * build needed). The choice is remembered in localStorage so the login/plot
+ * reloads — which drop the query string — don't bounce you back to prod.
+ * `?env=prod` clears it. */
+function resolveDefaultModule(): string {
+  try {
+    const q = new URLSearchParams(window.location.search).get("env");
+    if (q === "staging") { localStorage.setItem("cb_env", "staging"); return STAGING_MODULE; }
+    if (q === "prod")    { localStorage.removeItem("cb_env"); return DEFAULT_MODULE; }
+    if (localStorage.getItem("cb_env") === "staging") return STAGING_MODULE;
+  } catch { /* no window / storage blocked — fall through to prod */ }
+  return DEFAULT_MODULE;
+}
 
 export interface SpacetimeConfig {
   /** Module name as published on Maincloud. */
@@ -369,7 +387,7 @@ export class SpacetimeClient {
     this.game = game;
     this.saver = saver;
     this.cfg = {
-      moduleName: cfg.moduleName ?? DEFAULT_MODULE,
+      moduleName: cfg.moduleName ?? resolveDefaultModule(),
       host: cfg.host ?? DEFAULT_HOST,
     };
     // On-demand console diagnostics — type `cozyDiag()` in devtools to print
