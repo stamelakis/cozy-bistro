@@ -287,15 +287,19 @@ const STAGING_MODULE = "dunnin-staging";
 
 /** Which database to connect to. Prod ("dunnin") by default; append
  * `?env=staging` to the URL to point a client at the staging DB (no separate
- * build needed). The choice is remembered in localStorage so the login/plot
- * reloads — which drop the query string — don't bounce you back to prod.
- * `?env=prod` clears it. */
+ * build needed). The choice is remembered in sessionStorage — per TAB — so the
+ * login/plot reloads that drop the query string don't bounce you back to prod,
+ * yet a fresh visit to the bare prod URL is always prod. (The old localStorage
+ * version stuck staging on permanently, so prod showed the staging restaurant
+ * and testers landed in the empty staging DB → "can't log in".) `?env=prod`
+ * clears it; a stale localStorage flag is scrubbed. */
 function resolveDefaultModule(): string {
   try {
     const q = new URLSearchParams(window.location.search).get("env");
-    if (q === "staging") { localStorage.setItem("cb_env", "staging"); mountStagingBadge(); return STAGING_MODULE; }
-    if (q === "prod")    { localStorage.removeItem("cb_env"); return DEFAULT_MODULE; }
-    if (localStorage.getItem("cb_env") === "staging") { mountStagingBadge(); return STAGING_MODULE; }
+    try { localStorage.removeItem("cb_env"); } catch { /* retired permanent flag */ }
+    if (q === "staging") { sessionStorage.setItem("cb_env", "staging"); mountStagingBadge(); return STAGING_MODULE; }
+    if (q === "prod")    { sessionStorage.removeItem("cb_env"); return DEFAULT_MODULE; }
+    if (sessionStorage.getItem("cb_env") === "staging") { mountStagingBadge(); return STAGING_MODULE; }
   } catch { /* no window / storage blocked — fall through to prod */ }
   return DEFAULT_MODULE;
 }
