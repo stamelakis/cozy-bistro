@@ -418,7 +418,7 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   // systems only see actual burners.
   { id: "stove",          name: "Gas Stove",       category: "stove",
     modelPath: "assets/kenney/kitchenStove.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 240,
-    tier: 2, provides: "stove" },
+    tier: 1, provides: "stove" },
   { id: "stove-electric", name: "Electric Stove",  category: "stove",
     modelPath: "assets/kenney/kitchenStoveElectric.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 480,
     tier: 3, provides: "stove" },
