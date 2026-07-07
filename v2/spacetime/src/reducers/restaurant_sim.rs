@@ -379,6 +379,34 @@ pub fn restaurant_tick(
         .find(rid)
         .map(|s| s.last_tick_at);
 
+    // === Increment 1 — on-demand freeze + offline reconcile ===
+    // A restaurant runs its live simulation only while its OWNER is online. When
+    // the owner is offline this tick returns immediately WITHOUT touching
+    // tick_state (so last_tick_at stays pinned at the last live tick and the
+    // offline gap accumulates) and without any sim or writes — a frozen
+    // restaurant costs ~nothing, which is what lets the game scale past a dozen
+    // plots. When the owner returns, the first live tick reconciles the gap:
+    // reconcile_offline() applies the recent daily net × in-game-days-away
+    // (capped at 1 real week, floored at $0) as ONE "offline" ledger event, then
+    // normal live ticking resumes below.
+    {
+        const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000; // 30 s, matches elsewhere
+        let now_micros = now.to_micros_since_unix_epoch();
+        let owner_online = ctx.db.restaurant().id().find(rid)
+            .and_then(|r| ctx.db.player().identity().find(r.owner))
+            .map(|pl| now_micros - pl.last_seen_at.to_micros_since_unix_epoch() < OFFLINE_THRESHOLD_MICROS)
+            .unwrap_or(false);
+        if !owner_online {
+            return Ok(()); // frozen: no work, no writes, tick_state left pinned
+        }
+        if let Some(prev) = previous_tick_at {
+            let gap = now_micros - prev.to_micros_since_unix_epoch();
+            if gap > OFFLINE_RECONCILE_MIN_MICROS {
+                reconcile_offline(ctx, rid, gap);
+            }
+        }
+    }
+
     // Upsert tick-state — first tick after schedule creation INSERTs;
     // every tick after UPDATEs. Tick count helps dev tools / logs
     // confirm the schedule is genuinely firing.
@@ -1221,6 +1249,64 @@ pub fn bump_cloud_money(
         record_money_event(ctx, restaurant_id, "supplies", applied_delta, new_balance);
     }
     Ok(())
+}
+
+// === Increment 1 — offline reconcile helpers ===
+
+/// Real-time cap on how long a frozen restaurant keeps earning (1 real week).
+const OFFLINE_EARN_CAP_MICROS: i64 = 7 * 24 * 3_600 * 1_000_000;
+/// A gap smaller than this is a presence blip, not a real freeze — don't
+/// reconcile it (avoids tiny spurious "offline" events on a flaky ping).
+const OFFLINE_RECONCILE_MIN_MICROS: i64 = 10_000_000; // 10 s
+
+/// Most-recent completed-day NET profit (cents) from the day-history blob.
+/// Parses the LAST `"net":<dollars>` value, robust to the exact array shape.
+/// Returns 0 when the restaurant has no completed day yet — a safe default:
+/// no offline earnings until it has a real track record.
+fn last_day_net_cents(history_json: &str) -> i64 {
+    if let Some(pos) = history_json.rfind("\"net\":") {
+        let after = &history_json[pos + 6..];
+        let end = after
+            .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(net) = after[..end].parse::<f64>() {
+            return (net * 100.0).round() as i64;
+        }
+    }
+    0
+}
+
+/// Apply the earnings a restaurant would have made while its owner was away, as
+/// ONE ledger event, instead of ticking 2 Hz for the whole gap. Rate = the
+/// restaurant's most-recent completed-day NET, prorated over the in-game days
+/// that elapsed during the real gap (a game day = DAY_LENGTH_MS), so it matches
+/// what the live tick would have earned — capped at 1 real week and floored so
+/// cloud money never goes below $0 (a net-negative restaurant just drains toward
+/// $0, same as online). Called on the first live tick after a freeze.
+fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    let capped = gap_micros.min(OFFLINE_EARN_CAP_MICROS);
+    if capped <= 0 { return; }
+    let daily_net = last_day_net_cents(r.cloud_day_history_json.as_deref().unwrap_or(""));
+    if daily_net == 0 { return; }
+    let day_micros = DAY_LENGTH_MS.saturating_mul(1_000); // in-game day in micros
+    if day_micros <= 0 { return; }
+    let in_game_days = capped as f64 / day_micros as f64;
+    let offline_net = (daily_net as f64 * in_game_days).round() as i64;
+    if offline_net == 0 { return; }
+    let new_balance = r.cloud_money_cents.saturating_add(offline_net).max(0);
+    let applied = new_balance - r.cloud_money_cents;
+    if applied == 0 { return; }
+    // Fold into today's totals so the trends panel Net stays coherent.
+    let rev_add = if applied > 0 { applied } else { 0 };
+    let exp_add = if applied < 0 { -applied } else { 0 };
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: new_balance,
+        cloud_daily_revenue_cents: r.cloud_daily_revenue_cents.saturating_add(rev_add),
+        cloud_daily_expenses_cents: r.cloud_daily_expenses_cents.saturating_add(exp_add),
+        ..r
+    });
+    record_money_event(ctx, rid, "offline", applied, new_balance);
 }
 
 /// Phase H.46 — Live mirror of the foreground client's per-day
