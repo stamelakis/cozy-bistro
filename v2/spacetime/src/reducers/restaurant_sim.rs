@@ -7389,46 +7389,48 @@ pub(crate) fn try_spawn_arrival_guest(
             Some((taste_decor_pref, taste_window_pref, &taste_diet))) {
             Some(s) => s,
             None => {
-                let avg_x100 = avg_rating_x100(ctx, restaurant_id); // 100..500
-                let willing_pct = ((avg_x100 - 200) / 3).clamp(0, 100) as u64;
-                let roll_h = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
-                    .wrapping_mul(restaurant_id.wrapping_add(31));
-                if willing_pct == 0 || (roll_h >> 7) % 100 >= willing_pct {
-                    log::info!(
-                        "try_spawn_arrival_guest: no free seat in restaurant {} — guest unwilling to wait (avg rating x100 = {})",
-                        restaurant_id, avg_x100,
-                    );
+                let avg_x100 = avg_rating_x100(ctx, restaurant_id); // 100..500 (stars×100)
+                // Phase M.32 — an overflow LINE forms only at 4.0★ and up, and
+                // its MAX length scales with the rating (a better restaurant is
+                // worth queueing for):
+                //   below 4.0★ → 0  (arrival turned away, no waiter spawned)
+                //   4.0–4.2★   → 1
+                //   4.3–4.5★   → 2
+                //   4.6–4.8★   → 3
+                //   4.9–5.0★   → 4
+                let max_line: usize = if avg_x100 < 400 {
+                    0
+                } else {
+                    (((avg_x100 - 400) / 30) as usize + 1).min(4)
+                };
+                if max_line == 0 {
                     return false;
                 }
-                // Gather current waiters' wait-spot X so we can (a) cap the
-                // queue and (b) place the newcomer on the LOWEST FREE slot.
-                let occupied_x: Vec<f32> = ctx.db.active_guest()
+                // Existing waiters' line Z — cap the queue at max_line, and drop
+                // the newcomer on the lowest FREE slot so the line stays single-
+                // file with no gaps or stacking.
+                let occupied_z: Vec<f32> = ctx.db.active_guest()
                     .restaurant_id().filter(restaurant_id)
                     .filter(|g| is_waiting_state(&g.state))
-                    .map(|g| g.seat_x)
+                    .map(|g| g.seat_z)
                     .collect();
-                // Cap concurrent waiters so the doorway doesn't mob.
-                if occupied_x.len() >= 4 {
-                    return false;
+                if occupied_z.len() >= max_line {
+                    return false; // line already at its rating-capped length
                 }
                 wait_mode = true;
-                // 36 s at 1★ avg up to 100 s at 5★ — better
-                // restaurants are worth a longer wait.
-                waiting_timeout_ms = 20_000 + avg_x100 * 160;
-                // Wait spots fan alternately left/right of the door: slot i →
-                // door_x ± (0.9 + 0.9*(i/2)).  Pick the LOWEST slot (0..3) no
-                // current waiter occupies — the old code indexed by the live
-                // waiter COUNT, which clusters near the cap as guests churn and
-                // stacked several bodies on one tile (the "invisible seat" pile).
-                let slot_x = |i: i32| -> f32 {
-                    let side = if i % 2 == 0 { 1.0 } else { -1.0 };
-                    door_x + side * (0.9 + 0.9 * (i / 2) as f32)
+                waiting_timeout_ms = QUEUE_MAX_HOLD_MS;
+                // Single-file line straight OUT from the door (+Z): same X, one
+                // QUEUE_SPACING per slot. slot 0 = front, nearest the door.
+                let slot_z = |i: usize| -> f32 {
+                    door_z + QUEUE_FRONT_GAP + (i as f32) * QUEUE_SPACING
                 };
-                let mut slot = 0;
-                while slot < 3 && occupied_x.iter().any(|&ox| (ox - slot_x(slot)).abs() < 0.25) {
+                let mut slot = 0usize;
+                while slot + 1 < max_line
+                    && occupied_z.iter().any(|&oz| (oz - slot_z(slot)).abs() < QUEUE_SPACING * 0.5)
+                {
                     slot += 1;
                 }
-                (String::new(), slot_x(slot), door_z - 0.6, 0u32)
+                (String::new(), door_x, slot_z(slot), 0u32)
             }
         };
 
@@ -7460,7 +7462,9 @@ pub(crate) fn try_spawn_arrival_guest(
     // the seat). A WAIT-MODE (overflow queue) guest spawns at the door heading
     // straight to its wait spot (seat_x/seat_z), unchanged.
     let (spawn_z, init_target_x, init_target_z, init_target_floor) = if wait_mode {
-        (door_z, seat_x, seat_z, seat_floor)
+        // Phase M.32 — overflow guests spawn OUTSIDE (like a seated arrival) and
+        // walk to their outdoor line slot; they never enter until promoted.
+        (door_z + DOOR_SPAWN_GAP, seat_x, seat_z, 0u32)
     } else {
         (door_z + DOOR_SPAWN_GAP, door_x, door_z + DOOR_FRONT_GAP, 0u32)
     };
@@ -7730,6 +7734,15 @@ const WALKING_IN_MIN_MS: i64 = 500;
 const DOOR_FRONT_GAP: f32 = 0.5;
 const DOOR_SPAWN_GAP: f32 = 1.4;
 const DOOR_ENTRY_MS: i64 = 1_400;
+/// Phase M.32 — outdoor overflow QUEUE geometry. When the dining room is full a
+/// rating-gated line forms OUTSIDE the door (+Z), single-file: slot 0 is the
+/// front (nearest the door, seated first), each further slot one QUEUE_SPACING
+/// back. Guests stand (no chair, no visible timer) until a seat frees.
+const QUEUE_FRONT_GAP: f32 = 0.6;
+const QUEUE_SPACING: f32 = 0.6;
+/// Invisible safety ceiling. The queue shows no countdown, but a row wedged
+/// this long (e.g. promotion stuck) is evicted so it can't pin a slot forever.
+const QUEUE_MAX_HOLD_MS: i64 = 300_000;
 /// Grace period before the server's fallback seat assignment fires.
 /// Longer than WALKING_IN_MIN_MS because the client may pick a seat
 /// AFTER the mirror catches up — 1.5s gives the local sim ~15 ticks
@@ -8108,7 +8121,10 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
         // back over the server's "waiting" (see is_waiting_state / H.19), so
         // matching only the literal "waiting" left promoted-able guests
         // stranded outside forever even with the dining room empty.
-        .find(|g| is_waiting_state(&g.state))
+        // Phase M.32 — seat the FRONT of the line first (lowest Z = nearest the
+        // door) so the queue advances in order, not an arbitrary pick.
+        .filter(|g| is_waiting_state(&g.state))
+        .min_by(|a, b| a.seat_z.partial_cmp(&b.seat_z).unwrap_or(std::cmp::Ordering::Equal))
     else { return };
     let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id),
         Some((g.taste_decor_pref, g.taste_window_pref, &g.taste_diet)))
