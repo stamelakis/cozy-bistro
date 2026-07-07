@@ -7826,10 +7826,10 @@ const ASSIGN_SEAT_GRACE_MS: i64 = 1_500;
 /// (config/customer-config.ts). 4 seconds = the customer pretends to
 /// read the menu before flagging the waiter.
 const SEATED_DWELL_MS: i64 = 4_000;
-/// Time the guest dwells in "eating" before either advancing to the
-/// next course or leaving. Matches the client's TIME_TO_EAT constant.
-/// 8 seconds = generous enough for the plate animation to read.
-const EATING_DURATION_MS: i64 = 8_000;
+/// Time the guest dwells in "eating" before either advancing to the next
+/// course or leaving. Server-authoritative — the single source of truth for
+/// meal length; the client just renders the plate until this flips the row.
+const EATING_DURATION_MS: i64 = 30_000;
 /// Time the guest dwells on the toilet before washing hands.
 const WC_USE_MS: i64 = 6_000;
 /// Phase 9.22 — stair-climb grace before a cross-floor WC guest is
