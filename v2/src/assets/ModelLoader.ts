@@ -31,7 +31,7 @@ export class ModelLoader {
     const cached = this.cache.get(relPath);
     if (cached) {
       const source = await cached;
-      return this.cloneScene(source);
+      return this.rigDoorPanel(relPath, this.cloneScene(source));
     }
     const url = `${this.base}${relPath.replace(/^\//, "")}`;
     const promise = new Promise<THREE.Group>((resolve, reject) => {
@@ -65,5 +65,21 @@ export class ModelLoader {
     // furniture. Switch to SkeletonUtils.clone() when we add characters.
     const clone = source.clone(true);
     return clone;
+  }
+
+  /** Auto-rig the swinging leaf on Kenney doorway GLBs so they animate like
+   * the procedural front door. Their glTF carries a child node named "door"
+   * (the leaf), and — conveniently — that node's geometry origin already sits
+   * on the hinge edge (min.x ≈ 0), so simply exposing it as `userData.panel`
+   * lets the door-open system rotate it around the hinge with no pivot math.
+   * Gated to doorway paths so appliance sub-parts that happen to be named
+   * "door" (fridge / oven doors) are never rigged. Passages with no leaf
+   * (doorwayOpen / wallDoorway*) have no such node → no-op. */
+  private rigDoorPanel(relPath: string, model: THREE.Group): THREE.Group {
+    if (!relPath.toLowerCase().includes("doorway")) return model;
+    if ((model.userData as { panel?: unknown }).panel) return model;
+    const leaf = model.getObjectByName("door");
+    if (leaf) model.userData.panel = leaf;
+    return model;
   }
 }
