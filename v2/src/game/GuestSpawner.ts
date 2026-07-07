@@ -618,10 +618,10 @@ function cloudStateToLocal(serverState: string): GuestState {
 const SIT_STATES: Set<GuestState> = new Set([
   // Phase M.24 — "atSink" REMOVED: a guest washing their hands STANDS at the
   // basin, it isn't a seat. (atToilet stays — they sit on the toilet.)
-  // "waitingForSeat" REMOVED: overflow waiters have no real chair (the wait
-  // spot is a virtual "wait-XXXX" slot), so sitting there put them on a
-  // phantom seat — the "invisible seat" pile by the door. They STAND now
-  // (idle) via actionFromState below.
+  // "waitingForSeat" REMOVED: overflow waiters have no real chair — they queue
+  // OUTSIDE and STAND (actionFromState returns "walk"; the animator's stillness
+  // gate idles them once parked in line). Sitting there used to drop them on a
+  // phantom seat — the old "invisible seat" pile by the door.
   "seated", "waitingForFood", "eating", "atToilet",
 ]);
 
@@ -630,9 +630,11 @@ const SIT_STATES: Set<GuestState> = new Set([
  * selection — wrong action just looks weird, doesn't break gameplay. */
 function actionFromState(state: GuestState): "sit" | "walk" | "idle" {
   if (SIT_STATES.has(state)) return "sit";
-  // Overflow waiters STAND in the door queue — they're pinned in place with
-  // no chair, so "walk" would moonwalk and "sit" would float on nothing.
-  if (state === "waitingForSeat") return "idle";
+  // Everything else uses "walk". CharacterAnimator's stillness gate flips
+  // walk→idle once a body parks (CharacterAnimator ~L331), so overflow waiters
+  // stride out to their line slot then stand idle there — no sit-on-nothing,
+  // and no moonwalk while the server is still walking them out. (Returning
+  // "idle" here instead would freeze the walk-out into a slide.)
   return "walk";
 }
 
@@ -779,11 +781,8 @@ function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
   const prefix = g.archetype.shortLabel;
   switch (g.state) {
     case "walkingIn":      return "";
-    case "walkingToWait":  return `${prefix} ⏳`;
-    case "waitingForSeat": {
-      const secs = g.waiting ? Math.max(0, Math.ceil(g.waiting.timeLeft)) : 0;
-      return `${prefix} 🪑 ${secs}s`;
-    }
+    case "walkingToWait":  return ""; // walking to the outdoor line — no bubble
+    case "waitingForSeat": return ""; // standing in the outdoor line — no timer
     case "seated": {
       const menuIcon = drinkTable ? "📋🥤" : "📋";
       const tasteIcons = formatTasteIcons(g.taste);
