@@ -1498,13 +1498,27 @@ export class Engine {
       // every connect via the drain path, not via this seed loop.
       const LAST_CATALOG_SEED_KEY = "cozy-bistro.last-catalog-seed.v4"; // v4: + furniture_meta (server-side appeal/aggregates)
       const CATALOG_SEED_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-      const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY);
-      const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw, 10) : 0;
+      // Every setter below is admin-gated server-side, so a non-admin's seed
+      // is rejected and the catalog stays empty.  Record WHO seeded: an admin
+      // seed marks "<ts>" (the real, accepted one); a non-admin attempt marks
+      // "na:<ts>".  Without this split, a non-admin's rejected seed used to
+      // mark "done", so when the SAME account was later granted admin the
+      // reseed was skipped and the server catalog stayed empty forever — the
+      // staging "kitchen idle / recipe_meta = 0" bug.  (Old plain "<ts>"
+      // markers read as admin-seeded, which is correct for already-seeded prod.)
+      const acctIsAdmin = this.cloud.getCurrentAccount()?.isAdmin ?? false;
+      const lastSeedRaw = localStorage.getItem(LAST_CATALOG_SEED_KEY) ?? "";
+      const seededByAdmin = lastSeedRaw !== "" && !lastSeedRaw.startsWith("na:");
+      const lastSeed = lastSeedRaw ? parseInt(lastSeedRaw.replace(/^na:/, ""), 10) : 0;
       const seedAgeMs = Date.now() - lastSeed;
-      const needsCatalogReseed = !lastSeed || seedAgeMs > CATALOG_SEED_TTL_MS;
+      // Reseed when never seeded, stale, OR the prior mark was only a non-admin
+      // attempt and we're admin now (so the catalog can finally land).
+      const needsCatalogReseed =
+        !lastSeed || seedAgeMs > CATALOG_SEED_TTL_MS || (!seededByAdmin && acctIsAdmin);
       if (needsCatalogReseed) {
         console.log("[Engine] catalog reseed (lastSeed:",
-          lastSeed ? `${Math.round(seedAgeMs / 1000 / 60 / 60)}h ago` : "never", ")");
+          lastSeed ? `${Math.round(seedAgeMs / 1000 / 60 / 60)}h ago${seededByAdmin ? "" : ", non-admin"}` : "never",
+          acctIsAdmin ? ")" : "— NOT admin, server will reject )");
         // H.37 + H.40 + H.53 — seed recipe_ingredients + recipe_meta
         // (the per-recipe static catalog data).  Server's
         // auto_place_next_course + build_server_order read these.
@@ -1579,7 +1593,9 @@ export class Engine {
             );
           }
         });
-        localStorage.setItem(LAST_CATALOG_SEED_KEY, String(Date.now()));
+        // Tag the marker with admin-ness so a later admin login supersedes a
+        // non-admin attempt (see the needsCatalogReseed note above).
+        localStorage.setItem(LAST_CATALOG_SEED_KEY, (acctIsAdmin ? "" : "na:") + String(Date.now()));
       } else {
         console.log("[Engine] catalog reseed skipped (last seed",
           `${Math.round(seedAgeMs / 1000 / 60)}m ago, < ${CATALOG_SEED_TTL_MS / 1000 / 60 / 60}h TTL)`);
