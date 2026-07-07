@@ -667,13 +667,6 @@ function parseTiersCsv(csv: string): number[] {
 const WALK_SPEED = 1.8; // world units / second
 const ARRIVAL_THRESHOLD = 0.15;
 const TIME_TO_ORDER = 3.0;
-// 60s per course. Gives every meal a real "sit and chew" presence —
-// the dining room reads as occupied instead of churning. Patience
-// resets between courses so the longer eating beat costs the player
-// nothing in customer anger; it just slows seat turnover (and grows
-// average concurrent customer count proportionally for the same
-// spawn rate).
-const TIME_TO_EAT = 60.0;
 /** Dwell at a toilet (in seconds). Short enough that a busy restaurant
  * can cycle the same fixture among multiple guests, long enough that
  * the trip reads as deliberate when you watch a single guest do it. */
@@ -4087,44 +4080,14 @@ export class GuestSpawner {
         break;
       }
       case "eating": {
-        if (g.stateClock >= TIME_TO_EAT) {
-          // Phase H Phase 3b/3c — when server owns guest states, the
-          // cloud bridge handles BOTH branches of this advance:
-          //   eating → leaving (final course) → creditCourse +
-          //     finalizeVisit + walk-to-door cascade.
-          //   eating → seated (next course) → creditCourse +
-          //     removePlate + orderIndex sync + dish reservation +
-          //     patience reset. Server's auto_place_next_course then
-          //     enqueues the next ticket when state hits
-          //     waitingForFood again.
-          // Local sim sits in "eating" with stateClock past TIME_TO_EAT
-          // until the server tick (≤ 500ms) flips the cloud row and
-          // the bridge mirrors locally.
-          if (this.serverOwnsGuestStates()) break;
-
-          // Finished THIS course. Record payment + satisfaction, clear plate.
-          this.creditCourse(g);
-          this.removePlateForGuest(g.id);
-          g.orderIndex += 1;
-          if (g.orderIndex < g.order.length) {
-            // Move to next course — go back to seated for a moment
-            // (the guest considers what they ordered next, then waits).
-            // Next course — same dish stack the waiter already wrote
-            // down at the take-order step, no second waiter visit. Use
-            // the SERVE budget directly so a slow kitchen on course 2
-            // gets the full plate-arrival window.
-            g.patience = SERVE_PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
-            this.beginNextCourse(g);
-          } else {
-            // Full order complete — leave a single averaged rating + walk out via the door.
-            this.finalizeVisit(g);
-            g.character.action = "walk";
-            g.target = DOOR_POSITION.clone();
-            this.planPath(g);
-            g.state = "walkingToDoor";
-            g.stateClock = 0;
-          }
-        }
+        // Server-owned state. When the cloud is live the bridge advances
+        // eating → next course / → leaving after the server's
+        // EATING_DURATION_MS and fires the matching local effects
+        // (creditCourse, removePlate, finalize, walk-out); the client just
+        // holds the guest at the plate until that row flips. The old local
+        // advance keyed on a 60s TIME_TO_EAT that never matched the server
+        // dwell and only ran in the retired offline sim — removed so the
+        // server is the single source of truth for meal length.
         break;
       }
       case "walkingToDoor": {
