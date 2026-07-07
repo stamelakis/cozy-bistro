@@ -7476,47 +7476,55 @@ pub(crate) fn try_spawn_arrival_guest(
             Some(s) => s,
             None => {
                 let avg_x100 = avg_rating_x100(ctx, restaurant_id); // 100..500 (stars×100)
-                // Phase M.32 — an overflow LINE forms only at 4.0★ and up, and
-                // its MAX length scales with the rating (a better restaurant is
-                // worth queueing for):
+                // Phase M.32 — an overflow LINE forms only at 4.0★ and up; its
+                // MAX length scales with the rating, 1 at 4.0★ up to 30 at 5.0★
+                // (a wildly popular place draws a long queue). Waiters hold their
+                // place ~forever until a seat frees — no give-up.
                 //   below 4.0★ → 0  (arrival turned away, no waiter spawned)
-                //   4.0–4.2★   → 1
-                //   4.3–4.5★   → 2
-                //   4.6–4.8★   → 3
-                //   4.9–5.0★   → 4
+                //   4.0★ → 1, 4.1★ → 3, 4.2★ → 6, … +3 per 0.1★ … 5.0★ → 30
                 let max_line: usize = if avg_x100 < 400 {
                     0
                 } else {
-                    (((avg_x100 - 400) / 30) as usize + 1).min(4)
+                    ((avg_x100 - 400) * 3 / 10).max(1) as usize
                 };
                 if max_line == 0 {
                     return false;
                 }
-                // Existing waiters' line Z — cap the queue at max_line, and drop
-                // the newcomer on the lowest FREE slot so the line stays single-
-                // file with no gaps or stacking.
-                let occupied_z: Vec<f32> = ctx.db.active_guest()
+                // Existing waiters' cells — cap the queue at max_line, and drop
+                // the newcomer on the lowest FREE grid cell so it packs tight.
+                let occupied: Vec<(f32, f32)> = ctx.db.active_guest()
                     .restaurant_id().filter(restaurant_id)
                     .filter(|g| is_waiting_state(&g.state))
-                    .map(|g| g.seat_z)
+                    .map(|g| (g.seat_x, g.seat_z))
                     .collect();
-                if occupied_z.len() >= max_line {
+                if occupied.len() >= max_line {
                     return false; // line already at its rating-capped length
                 }
                 wait_mode = true;
-                waiting_timeout_ms = QUEUE_MAX_HOLD_MS;
-                // Single-file line straight OUT from the door (+Z): same X, one
-                // QUEUE_SPACING per slot. slot 0 = front, nearest the door.
-                let slot_z = |i: usize| -> f32 {
-                    door_z + QUEUE_FRONT_GAP + (i as f32) * QUEUE_SPACING
+                waiting_timeout_ms = QUEUE_HOLD_MS;
+                // OUTSIDE the door: a QUEUE_WIDTH-wide grid growing back in +Z,
+                // front row nearest the door (seated first). Cell i → row i/W,
+                // col i%W, centred on door_x.
+                let cell = |i: usize| -> (f32, f32) {
+                    let row = i / QUEUE_WIDTH;
+                    let col = i % QUEUE_WIDTH;
+                    let x = door_x
+                        + (col as f32 - (QUEUE_WIDTH as f32 - 1.0) * 0.5) * QUEUE_SPACING;
+                    let z = door_z + QUEUE_FRONT_GAP + (row as f32) * QUEUE_SPACING;
+                    (x, z)
                 };
                 let mut slot = 0usize;
-                while slot + 1 < max_line
-                    && occupied_z.iter().any(|&oz| (oz - slot_z(slot)).abs() < QUEUE_SPACING * 0.5)
-                {
+                while slot + 1 < max_line && {
+                    let (cx, cz) = cell(slot);
+                    occupied.iter().any(|&(ox, oz)| {
+                        (ox - cx).abs() < QUEUE_SPACING * 0.5
+                            && (oz - cz).abs() < QUEUE_SPACING * 0.5
+                    })
+                } {
                     slot += 1;
                 }
-                (String::new(), door_x, slot_z(slot), 0u32)
+                let (sx, sz) = cell(slot);
+                (String::new(), sx, sz, 0u32)
             }
         };
 
@@ -7821,14 +7829,17 @@ const DOOR_FRONT_GAP: f32 = 0.5;
 const DOOR_SPAWN_GAP: f32 = 1.4;
 const DOOR_ENTRY_MS: i64 = 1_400;
 /// Phase M.32 — outdoor overflow QUEUE geometry. When the dining room is full a
-/// rating-gated line forms OUTSIDE the door (+Z), single-file: slot 0 is the
-/// front (nearest the door, seated first), each further slot one QUEUE_SPACING
-/// back. Guests stand (no chair, no visible timer) until a seat frees.
+/// rating-gated line forms OUTSIDE the door, packed into a QUEUE_WIDTH-wide grid
+/// growing back in +Z (front row nearest the door, seated first). Guests stand
+/// (no chair, no timer) and wait ~forever until a seat frees. Up to 30 at 5★, so
+/// a strict single file would run off the lot — hence the grid fold.
 const QUEUE_FRONT_GAP: f32 = 0.6;
 const QUEUE_SPACING: f32 = 0.6;
-/// Invisible safety ceiling. The queue shows no countdown, but a row wedged
-/// this long (e.g. promotion stuck) is evicted so it can't pin a slot forever.
-const QUEUE_MAX_HOLD_MS: i64 = 300_000;
+const QUEUE_WIDTH: usize = 5;
+/// "Patiently forever" hold — a finite but enormous ceiling (~300 years) so the
+/// existing countdown/reposition tick runs unchanged; a seat always frees first,
+/// so in practice they never give up.
+const QUEUE_HOLD_MS: i64 = 10_000_000_000_000;
 /// Grace period before the server's fallback seat assignment fires.
 /// Longer than WALKING_IN_MIN_MS because the client may pick a seat
 /// AFTER the mirror catches up — 1.5s gives the local sim ~15 ticks
