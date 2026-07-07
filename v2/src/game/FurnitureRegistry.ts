@@ -828,8 +828,15 @@ export class FurnitureRegistry {
     });
   }
 
-  /** Aggregated stat bonuses across all placed furniture. Used by the
-   * Game to adjust guest spawn rate, satisfaction, and rating. */
+  /** Wired by Engine → Game.getActiveThemeAppeal(). Active interior themes
+   * contribute their tiered appeal to the aggregate, exactly like decoration
+   * furniture. Kept as a provider so the registry stays furniture-only and the
+   * theme state lives in Game. */
+  themeAppealProvider?: () => { attractionBonus: number; ratingBonus: number };
+
+  /** Aggregated stat bonuses across all placed furniture PLUS active interior
+   * themes. Used by the Game to adjust guest spawn rate, satisfaction, and
+   * rating (and mirrored to the server as the pre-seed fallback). */
   getAggregateStats(): { style: number; comfort: number; attractionBonus: number; ratingBonus: number } {
     let style = 0, comfort = 0, attractionBonus = 0, ratingBonus = 0;
     for (const it of this.items) {
@@ -839,6 +846,11 @@ export class FurnitureRegistry {
       comfort += def.comfort ?? 0;
       attractionBonus += def.attractionBonus ?? 0;
       ratingBonus += def.ratingBonus ?? 0;
+    }
+    const theme = this.themeAppealProvider?.();
+    if (theme) {
+      attractionBonus += theme.attractionBonus;
+      ratingBonus += theme.ratingBonus;
     }
     return { style, comfort, attractionBonus, ratingBonus };
   }

@@ -8,7 +8,7 @@ import { StaffSystem, STAFF_UPGRADE_MAX, type StaffRole } from "../systems/Staff
 import { WeatherSystem } from "./WeatherSystem";
 import { DayHistory } from "./DayHistory";
 import { AchievementSystem } from "./AchievementSystem";
-import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
+import { RESTAURANT_THEMES, themeAppeal, type RestaurantTheme } from "../data/themes";
 import { recipes } from "../data/recipes";
 import { getRecipeIngredientCost, getIngredientCost } from "../data/ingredients";
 import { getFurnitureDef } from "../data/furnitureCatalog";
@@ -1194,6 +1194,21 @@ export class Game {
     this.recordPlayerSet("themesTried", theme.id);
     this.onThemeChanged?.(floor, theme);
     return true;
+  }
+
+  /** Total appeal (attraction + rating) from the interior themes currently
+   * applied across floors. Non-default themes are tiered like furniture; this
+   * sum folds into the registry aggregate + the server's furniture aggregate so
+   * a fancier interior actually lifts spawn rate + rating. Default (T1) themes
+   * contribute 0. */
+  getActiveThemeAppeal(): { attractionBonus: number; ratingBonus: number } {
+    let attractionBonus = 0, ratingBonus = 0;
+    for (const id of Object.values(this.themeByFloor)) {
+      const a = themeAppeal(id);
+      attractionBonus += a.attractionBonus;
+      ratingBonus += a.ratingBonus;
+    }
+    return { attractionBonus, ratingBonus };
   }
 
   // === Door plaque (restaurant name + sign styling) ===

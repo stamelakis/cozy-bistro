@@ -921,6 +921,10 @@ export class Engine {
     this.game.onThemeChanged = (floor, theme) => {
       this.scene.setStoreyTheme(floor, theme);
       this.cloud.setRestaurantThemeOverrides(this.game.snapshotThemesByFloor());
+      // Theme appeal (attraction + rating) just changed → re-push the aggregate
+      // so the server recomputes cached_attraction/rating WITH the new theme.
+      // Otherwise the bonus wouldn't take effect until the next furniture edit.
+      this.registry.mirrorSeatSlotsNow();
     };
     // Replay every storey's saved theme on startup so the world
     // reflects per-floor decor choices the moment the scene mounts.
@@ -1040,6 +1044,9 @@ export class Engine {
     // place/move/sell on the local registry also fires the matching
     // placed_furniture reducer. No-op when flag off.
     this.registry.cloud = this.cloud;
+    // Active interior themes fold their tiered appeal into the aggregate the
+    // registry mirrors to the server (attraction + rating), same as decoration.
+    this.registry.themeAppealProvider = () => this.game.getActiveThemeAppeal();
     // Pathfinder reads the live registry each query — we don't have to
     // rebuild a grid when furniture is placed/moved/sold. PlacedFurnitureItem
     // has defId/x/z plus extras, so it satisfies the PathfinderItem shape

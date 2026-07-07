@@ -4556,7 +4556,40 @@ fn server_furniture_aggregates(ctx: &ReducerContext, rid: u64) -> Option<(i32, i
             rating = rating.saturating_add(m.rating_bonus_x100);
         }
     }
+    // Interior themes are tiered like furniture: a non-default theme on a floor
+    // adds its appeal (attraction + rating) to the aggregate. Parse the per-floor
+    // override CSV ("storey:theme_id|storey:theme_id") and sum each theme's
+    // bonus. Floors on the default theme are omitted from the CSV and contribute
+    // nothing (baseline). See theme_appeal_x100 / src/data/themes.ts.
+    if let Some(r) = ctx.db.restaurant().id().find(rid) {
+        if let Some(csv) = r.theme_overrides_csv.as_deref() {
+            for pair in csv.split('|') {
+                let theme_id = pair.split(':').nth(1).unwrap_or("");
+                let (att, rat) = theme_appeal_x100(theme_id);
+                attraction = attraction.saturating_add(att);
+                rating = rating.saturating_add(rat);
+            }
+        }
+    }
     Some((style, comfort, rating, attraction))
+}
+
+/// Appeal (attraction_x100, rating_bonus_x100) a floor gains from an active
+/// non-default interior theme. MUST stay in sync with themeAppeal() +
+/// RESTAURANT_THEMES in src/data/themes.ts (attraction ×100, ratingBonus ×100).
+/// Default / unknown = (0, 0).
+fn theme_appeal_x100(theme_id: &str) -> (i32, i32) {
+    match theme_id {
+        // Tier 2 — attraction 2, rating 0.02
+        "cozy-default" | "modern-monochrome" | "mediterranean" | "garden-fresh" | "coastal-breeze" => (200, 2),
+        // Tier 3 — attraction 3, rating 0.03
+        "rustic-tavern" | "diner-classic" | "industrial-loft" | "parisian-cafe" | "autumn-harvest" | "pastel-bakery" => (300, 3),
+        // Tier 4 — attraction 4, rating 0.04
+        "japanese-zen" | "fine-dining" => (400, 4),
+        // Tier 5 — attraction 5, rating 0.05
+        "emerald-lounge" | "midnight-jazz" => (500, 5),
+        _ => (0, 0), // plain-white default / unknown
+    }
 }
 
 /// Phase H.28 / 9.62 — refresh the cached furniture aggregates on the

@@ -143,17 +143,32 @@ export class DecorModal {
   private renderThemeList(): void {
     this.body.innerHTML = "";
     const current = this.game.getThemeForFloor(this.activeFloor);
-    for (const theme of RESTAURANT_THEMES) {
+    const luxuryTier = this.game.getLuxuryTier();
+    // Lowest tier first so the progression reads top → bottom, like the
+    // build menu's tier tabs.
+    const themes = [...RESTAURANT_THEMES].sort((a, b) => a.tier - b.tier || a.cost - b.cost);
+    for (const theme of themes) {
       const row = document.createElement("div");
       const active = theme.id === current.id;
+      const locked = theme.tier > luxuryTier;
       Object.assign(row.style, {
-        display: "flex", alignItems: "center", gap: "10px",
+        display: "flex", alignItems: "center", gap: "9px",
         padding: "8px 10px", marginBottom: "4px",
         background: active ? "rgba(120, 200, 120, 0.18)" : "rgba(255,245,220,0.06)",
         borderRadius: "6px",
-        cursor: active ? "default" : "pointer",
+        cursor: active || locked ? "default" : "pointer",
         border: active ? "1px solid rgba(120, 200, 120, 0.5)" : "1px solid transparent",
+        opacity: locked ? "0.5" : "1",
       } as Partial<CSSStyleDeclaration>);
+      // Tier badge — matches the build-menu T1–T5 language.
+      const tierBadge = document.createElement("span");
+      tierBadge.textContent = `T${theme.tier}`;
+      Object.assign(tierBadge.style, {
+        fontSize: "10px", fontWeight: "700", padding: "3px 5px",
+        borderRadius: "4px", background: "rgba(255,210,120,0.22)",
+        color: "#ffe6b0", minWidth: "20px", textAlign: "center", flex: "0 0 auto",
+      } as Partial<CSSStyleDeclaration>);
+      row.appendChild(tierBadge);
       const wallSw = document.createElement("span");
       Object.assign(wallSw.style, {
         display: "inline-block", width: "14px", height: "20px",
@@ -176,12 +191,25 @@ export class DecorModal {
       desc.textContent = theme.description;
       Object.assign(desc.style, { fontSize: "11px", opacity: "0.75" } as Partial<CSSStyleDeclaration>);
       text.appendChild(name); text.appendChild(desc);
+      // Appeal line — attraction (spawn rate) + rating, like decoration items.
+      const bits: string[] = [];
+      if (theme.attractionBonus > 0) bits.push(`✨ +${theme.attractionBonus} appeal`);
+      if (theme.ratingBonus > 0) bits.push(`★ +${theme.ratingBonus.toFixed(2)} rating`);
+      if (bits.length) {
+        const appeal = document.createElement("div");
+        appeal.textContent = bits.join("    ");
+        Object.assign(appeal.style, { fontSize: "10px", opacity: "0.9", color: "#ffe0a0", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+        text.appendChild(appeal);
+      }
       row.appendChild(text);
       const price = document.createElement("span");
-      price.textContent = active ? "—" : theme.cost === 0 ? "free" : `$${theme.cost}`;
-      Object.assign(price.style, { fontSize: "12px", opacity: "0.85", minWidth: "40px", textAlign: "right" } as Partial<CSSStyleDeclaration>);
+      price.textContent = locked
+        ? `🔒 T${theme.tier}`
+        : active ? "—" : theme.cost === 0 ? "free" : `$${theme.cost}`;
+      Object.assign(price.style, { fontSize: "12px", opacity: "0.85", minWidth: "46px", textAlign: "right", flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
+      if (locked) price.title = `Unlocks at luxury tier ${theme.tier}`;
       row.appendChild(price);
-      if (!active) {
+      if (!active && !locked) {
         const can = theme.cost === 0 || this.game.economy.canAfford(theme.cost);
         if (!can) {
           row.style.opacity = "0.4";
