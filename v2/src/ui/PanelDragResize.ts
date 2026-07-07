@@ -401,6 +401,27 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
       applyForState(nowExpanded);
     });
     observer.observe(sentinel, { attributes: true, attributeFilter: ["style"] });
+    // Persistent late-content guard for bottom-anchored ("up") panels. The
+    // one-shot rAF/timeout repin in applyForState still misses content that
+    // populates MORE than ~130 ms after expand — MenuPanel's recipe list
+    // renders on a later data tick, so the body grew and slid off the bottom of
+    // the screen ("first open is off-screen, second is fine" — the recurring
+    // bug). A ResizeObserver re-pins the top from the anchored BOTTOM on ANY
+    // size change while expanded, so the panel always grows UP and its body
+    // stays on-screen no matter when the content settles. Skipped mid-drag
+    // (`armed`) so it can't fight a title-bar reposition; writing `top` never
+    // changes the element's size, so this can't feed back into a loop.
+    if (expandDirection === "up" && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        if (!isExpanded || armed) return;
+        const h = root.offsetHeight;
+        let t = anchoredBottom - h;
+        if (t + h > window.innerHeight - VIEWPORT_PADDING) t = window.innerHeight - VIEWPORT_PADDING - h;
+        if (t < VIEWPORT_PADDING) t = VIEWPORT_PADDING;
+        root.style.top = `${t}px`;
+      });
+      ro.observe(root);
+    }
   }
   // Make the anchor updater available to the drag handler above so
   // explicit panel moves re-cache the anchored edge.
