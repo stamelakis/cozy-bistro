@@ -4342,6 +4342,14 @@ export class GuestSpawner {
       // genuinely stopped body (waiting/arrived) is settled to idle by the
       // animator's movement hysteresis (WALK_IDLE_GRACE_MS) instead.
       g.character.action = "walk";
+      // Overflow waiters stand in the outdoor line. Once parked (not moving),
+      // face the way the line was set on the server (seatFacingY → +X, toward
+      // the front / the door) instead of a stale last-walk heading — so the
+      // queue reads as a proper single-file line, not everyone side-on to the
+      // storefront. Only when stopped; while walking they keep their heading.
+      if (!moving && g.state === "waitingForSeat" && g.seatFacingY !== undefined) {
+        g.character.facingY = g.seatFacingY;
+      }
     }
   }
 

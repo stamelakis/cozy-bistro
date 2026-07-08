@@ -7692,8 +7692,16 @@ pub(crate) fn try_spawn_arrival_guest(
         // killed the entire barman flow server-side: bar-seat tickets
         // route through the barman pool keyed on this flag). Fallbacks
         // cover wait-mode spawns + legacy def-id assignments.
-        seat_facing_y: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
-            .map(|s| s.facing_y).unwrap_or(0.0),
+        // Wait-mode (overflow) guests have no chair, so the seat_slot lookup
+        // misses → the old unwrap_or(0.0) left them at facingY 0 = -Z = staring
+        // at the storefront. Face them +X (facingY -π/2), ALONG the single-file
+        // line toward the front (the door), so the queue reads as a proper line.
+        seat_facing_y: if wait_mode {
+            -std::f32::consts::FRAC_PI_2
+        } else {
+            ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
+                .map(|s| s.facing_y).unwrap_or(0.0)
+        },
         seat_floor,
         seat_at_bar: ctx.db.seat_slot().seat_uid().find(seat_uid.clone())
             .map(|s| s.at_bar).unwrap_or(false),
