@@ -598,17 +598,14 @@ export class SpacetimeClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   listBuildings(): { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; ownerIdentity: Identity; isMine: boolean; isUnowned: boolean }[] {
     if (!this.conn) return [];
-    const me = this.identity;
+    const homeId = this.getMyHomeBuildingId();
     const out: { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; ownerIdentity: Identity; isMine: boolean; isUnowned: boolean }[] = [];
     try {
       for (const b of this.conn.db.building.iter()) {
-        const mine = me ? identityEquals(b.ownerIdentity, me) : false;
-        // The zero Identity is the sentinel "unowned" marker (set
-        // by the seed reducer with Identity::__dummy()). Match it
-        // by checking the hex is all-zero — works regardless of
-        // whether the SDK exposes an Identity equality with the
-        // zero value or not.
-        const unowned = b.ownerIdentity.toHexString().split("").every((c) => c === "0");
+        // Phase M.34 — plots are SHARED identities: "mine" = my restaurant's
+        // home plot, and EVERY plot is always pickable so >12 players fit.
+        const mine = homeId != null && b.id === homeId;
+        const unowned = true;
         out.push({
           id: b.id,
           kind: b.kind,
@@ -631,6 +628,29 @@ export class SpacetimeClient {
     for (const b of this.listBuildings()) {
       if (b.isMine) return b;
     }
+    return null;
+  }
+
+  /** Phase M.34 — the plot id this player calls home: their restaurant's
+   * home_building_id, or (for legacy rows not yet backfilled) the plot they
+   * claimed 1:1. null if they have no restaurant / haven't picked yet. */
+  getMyHomeBuildingId(): bigint | null {
+    if (!this.conn) return null;
+    const me = this.identity;
+    if (!me) return null;
+    try {
+      for (const r of this.conn.db.restaurant.iter()) {
+        if (identityEquals(r.owner, me) && r.homeBuildingId && r.homeBuildingId !== 0n) {
+          return r.homeBuildingId;
+        }
+      }
+    } catch { /* not wired */ }
+    // Legacy fallback: the plot I claimed exclusively pre-Phase-3.
+    try {
+      for (const b of this.conn.db.building.iter()) {
+        if (identityEquals(b.ownerIdentity, me)) return b.id;
+      }
+    } catch { /* not wired */ }
     return null;
   }
 
