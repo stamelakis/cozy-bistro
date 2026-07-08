@@ -60,4 +60,5 @@ export default __t.row({
   lastLowBalanceGrantMicros: __t.i64().name("last_low_balance_grant_micros"),
   lastRecycleMicros: __t.i64().name("last_recycle_micros"),
   cumulativeAchievementCents: __t.i64().name("cumulative_achievement_cents"),
+  homeBuildingId: __t.u64().name("home_building_id"),
 });

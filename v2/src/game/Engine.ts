@@ -2811,39 +2811,44 @@ export class Engine {
    * Cheap — the WorldScene rebuild wipes + re-adds the small group.
    *
    * Re-polls for ~5 s after the first call so a slow cache fill
-   * still gets picked up. Each poll only does work if the building
-   * count changed since the previous pass. */
-  private cityBuildingCount = -1;
+   * still gets picked up. Each poll only rebuilds if the neighborhood
+   * signature changed since the previous pass. */
   /** Cached player-plot id so the 5 Hz HUD doesn't re-iterate the
    * building table every tick to find the player's own plot.
    * Refreshed in refreshCityBuildings when the building count
    * changes (claim landing / releasing). */
   private cachedMyPlotId: bigint | null = null;
+  /** Phase M.34 — signature of the last-rendered neighborhood, so a rotation
+   * that changes nothing doesn't rebuild the city group. */
+  private cityNeighborhoodSig = "";
+  private cityRotateTimer: number | null = null;
   private refreshCityBuildings(): void {
     const apply = (): void => {
-      const list = this.cloud.listBuildings();
-      if (list.length === this.cityBuildingCount) return;
-      this.cityBuildingCount = list.length;
-      // Enrich each building with the owner's display name so the
-      // visit overlay can show "Visit Alice's Restaurant" instead of
-      // raw identity hex. Lookup is via the auth_record cache.
-      const accounts = this.cloud.listAccounts();
-      const enriched = list.map((b) => {
-        const acct = accounts.find((a) => a.identity.toHexString() === b.ownerIdentity.toHexString());
-        return { ...b, ownerName: acct?.displayName ?? "" };
-      });
+      // Phase M.34 — render the PER-VIEWER neighborhood (you pinned at your
+      // home plot, level-matched neighbors rotating through the others), not
+      // the raw permanent building deeds. Ask the server to (re)build it, then
+      // draw the resulting slots.
+      this.cloud.refreshNeighborhood();
+      const nbr = this.cloud.listNeighborhood();
+      if (nbr.length === 0) return; // slots not ready yet
+      const sig = nbr.map((n) => `${n.buildingId}:${n.restaurantId}:${n.lifecycle}`).join("|");
+      if (sig === this.cityNeighborhoodSig) return;
+      this.cityNeighborhoodSig = sig;
+      const enriched = nbr.map((n) => ({
+        id: n.buildingId,
+        kind: n.kind,
+        plotX: n.plotX, plotZ: n.plotZ, plotW: n.plotW, plotH: n.plotH,
+        isMine: n.isYou,
+        ownerIdentity: n.ownerIdentity,
+        ownerName: n.ownerName,
+        lifecycle: n.lifecycle,
+        vacant: n.vacant,
+      }));
       this.scene.populateCityBuildings(enriched);
-      const mine = this.cloud.getMyBuilding();
-      this.cachedMyPlotId = mine?.id ?? null;
-      if (mine) {
-        // Shift the shared city so the player's claimed plot
-        // appears at the camera's local origin. From a shared-map
-        // perspective the player IS at (mine.plotX, mine.plotZ) —
-        // every other client renders the same absolute layout, just
-        // with a different worldRoot offset under their own
-        // restaurant.
-        this.scene.setOwnedPlotOffset(mine.plotX, mine.plotZ);
-      }
+      // Shift the shared city so the player's OWN plot sits at the local origin.
+      const mine = nbr.find((n) => n.isYou);
+      this.cachedMyPlotId = mine?.buildingId ?? null;
+      if (mine) this.scene.setOwnedPlotOffset(mine.plotX, mine.plotZ);
     };
     apply();
     // Poll for 5s to catch a late cache fill.
@@ -2855,6 +2860,10 @@ export class Engine {
       if (waited < 5000) window.setTimeout(tick, stepMs);
     };
     window.setTimeout(tick, stepMs);
+    // Rotate the neighbors every few minutes so the faces around you cycle.
+    if (this.cityRotateTimer === null) {
+      this.cityRotateTimer = window.setInterval(apply, 3 * 60 * 1000);
+    }
   }
 
   /** P5.8 — bottom-right toast: "👀 [Name] is visiting your restaurant".

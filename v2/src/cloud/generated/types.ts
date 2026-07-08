@@ -309,6 +309,18 @@ export const MoneyEvent = __t.object("MoneyEvent", {
 });
 export type MoneyEvent = __Infer<typeof MoneyEvent>;
 
+export const NeighborhoodSlot = __t.object("NeighborhoodSlot", {
+  id: __t.u64(),
+  viewer: __t.identity(),
+  buildingId: __t.u64(),
+  restaurantId: __t.u64(),
+  owner: __t.identity(),
+  lifecycle: __t.string(),
+  isYou: __t.bool(),
+  refreshedAt: __t.timestamp(),
+});
+export type NeighborhoodSlot = __Infer<typeof NeighborhoodSlot>;
+
 export const PantryStock = __t.object("PantryStock", {
   key: __t.string(),
   restaurantId: __t.u64(),
@@ -478,6 +490,7 @@ export const Restaurant = __t.object("Restaurant", {
   lastLowBalanceGrantMicros: __t.i64(),
   lastRecycleMicros: __t.i64(),
   cumulativeAchievementCents: __t.i64(),
+  homeBuildingId: __t.u64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
