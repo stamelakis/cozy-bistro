@@ -6963,9 +6963,14 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // it (target is the seat, set on the wcWashing→seated transition). The
     // animator's sit-while-moving→walk rule renders the trip as a walk.
     let at_seat = (g.x - g.seat_x).abs() < 0.15 && (g.z - g.seat_z).abs() < 0.15;
+    // Phase M.33 — "stand up" beat: hold a guest at its chair for the first
+    // STANDUP_MS of a bathroom trip so the sit→walk crossfade plays while it's
+    // stationary (stands up in place) instead of gliding away mid-stand.
+    const STANDUP_MS: i64 = 600;
     let anchored = g.state == "wcSitting"
         || (matches!(g.state.as_str(), "seated" | "ordering" | "eating")
-            && (at_seat || g.seat_uid.is_empty()));
+            && (at_seat || g.seat_uid.is_empty()))
+        || (g.state == "wcWalking" && at_seat && !g.seat_uid.is_empty() && new_clock < STANDUP_MS);
     // Phase 9.69 — route around furniture on the guest's own floor.
     // Phase M.17 — and WALK THE STAIRS across floors (next_step_multi): route
     // to the stairs, climb the flight, continue on the next floor, flipping
