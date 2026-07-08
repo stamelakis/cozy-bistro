@@ -78,37 +78,32 @@ pub fn seed_buildings_if_empty(ctx: &ReducerContext) {
 pub fn claim_building(ctx: &ReducerContext, building_id: u64) -> Result<(), String> {
     let me = ctx.sender;
 
-    // One plot per player — enforce here so a stray reducer call
-    // can't grant a second building.
-    for b in ctx.db.building().owner_identity().filter(me) {
-        return Err(format!("You already own building #{}", b.id));
-    }
-
+    // Phase M.34 — plots are SHARED identities now: picking one just sets it as
+    // your HOME plot (many players may share it), not an exclusive deed. So no
+    // one-plot-per-player / already-claimed rejections — that's what lets more
+    // than 12 players into the neighborhood.
     let target = ctx.db.building().id().find(building_id)
         .ok_or_else(|| "No such building".to_string())?;
-    if target.owner_identity != Identity::__dummy() {
-        return Err("That building is already claimed".into());
-    }
 
-    ctx.db.building().id().update(crate::tables::Building {
-        owner_identity: me,
-        claimed_at: Some(ctx.timestamp),
-        ..target
-    });
-    log::info!("Building #{} claimed by {}", building_id, me);
-
-    // Phase I (H.96) — Atomically materialise a Restaurant row for
-    // the new owner if they don't already have one. Pre-H.96 the
-    // client auto-created on subscription-ready, which raced the
-    // claim flow and could leave the user with a Building but no
-    // Restaurant (or vice versa) after a wipe / partial migration.
-    // Doing both in one reducer means the post-condition is always
-    // "owns building => has restaurant".
-    let has_restaurant = ctx.db.restaurant().iter().any(|r| r.owner == me);
-    if !has_restaurant {
+    // Ensure the player has a restaurant (H.96 post-condition), then stamp its
+    // home plot.
+    if !ctx.db.restaurant().iter().any(|r| r.owner == me) {
         crate::reducers::restaurants::create_default_restaurant_for(ctx, me);
-        log::info!("Auto-created Restaurant for new building owner {}", me);
     }
+    if let Some(r) = ctx.db.restaurant().iter().find(|r| r.owner == me) {
+        ctx.db.restaurant().id().update(Restaurant { home_building_id: target.id, ..r });
+    }
+    // Keep the legacy Building.owner_identity pointing at the FIRST claimer so
+    // the home_building_of fallback + any pre-Phase-3 reads still resolve; later
+    // pickers of the same plot don't overwrite it (it's no longer exclusive).
+    if target.owner_identity == Identity::__dummy() {
+        ctx.db.building().id().update(crate::tables::Building {
+            owner_identity: me,
+            claimed_at: Some(ctx.timestamp),
+            ..target
+        });
+    }
+    log::info!("Building #{} chosen as home by {}", building_id, me);
     Ok(())
 }
 
