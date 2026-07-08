@@ -634,6 +634,54 @@ export class SpacetimeClient {
     return null;
   }
 
+  /** Phase M.34 — (re)build the caller's per-viewer neighborhood server-side.
+   * Fire on entering the city + periodically so neighbors rotate. */
+  refreshNeighborhood(): void {
+    try { this.conn?.reducers.refreshNeighborhood({}); }
+    catch (e) { console.warn("[Cloud] refreshNeighborhood failed:", e); }
+  }
+
+  /** Phase M.34 — the caller's 12-plot neighborhood: their own restaurant at
+   * its home plot + level-matched rotating neighbors, joined with plot geometry
+   * and owner names. Empty until refreshNeighborhood() has run once. */
+  listNeighborhood(): {
+    buildingId: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number;
+    restaurantId: bigint; ownerIdentity: Identity; ownerName: string;
+    lifecycle: string; isYou: boolean; vacant: boolean;
+  }[] {
+    if (!this.conn) return [];
+    const me = this.identity;
+    if (!me) return [];
+    const geo = new Map<string, { kind: string; plotX: number; plotZ: number; plotW: number; plotH: number }>();
+    try {
+      for (const b of this.conn.db.building.iter()) {
+        geo.set(b.id.toString(), { kind: b.kind, plotX: b.plotX, plotZ: b.plotZ, plotW: b.plotW, plotH: b.plotH });
+      }
+    } catch { /* not wired */ }
+    const out: ReturnType<SpacetimeClient["listNeighborhood"]> = [];
+    try {
+      for (const s of this.conn.db.neighborhood_slot.iter()) {
+        if (!identityEquals(s.viewer, me)) continue;
+        const g = geo.get(s.buildingId.toString());
+        if (!g) continue;
+        const vacant = s.restaurantId === 0n;
+        out.push({
+          buildingId: s.buildingId,
+          kind: g.kind, plotX: g.plotX, plotZ: g.plotZ, plotW: g.plotW, plotH: g.plotH,
+          restaurantId: s.restaurantId,
+          ownerIdentity: s.owner,
+          ownerName: vacant ? "" : this.nameFor(s.owner.toHexString()),
+          lifecycle: s.lifecycle,
+          isYou: s.isYou,
+          vacant,
+        });
+      }
+    } catch { /* not wired */ }
+    // Stable slot order by plot id.
+    out.sort((a, b) => (a.buildingId < b.buildingId ? -1 : a.buildingId > b.buildingId ? 1 : 0));
+    return out;
+  }
+
   /** H.96 — Restaurant id this player owns, or null. Used by
    * Engine.afterAuth to detect "missing restaurant" states caused
    * by partial migrations / data wipes, and force the

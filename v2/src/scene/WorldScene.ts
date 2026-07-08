@@ -4204,7 +4204,7 @@ export class WorldScene {
    * call again on cache updates (e.g. another player claims a
    * plot) — fully rebuilds the group. */
   populateCityBuildings(
-    buildings: readonly { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; isMine: boolean; ownerIdentity?: { toHexString(): string }; ownerName?: string }[],
+    buildings: readonly { id: bigint; kind: string; plotX: number; plotZ: number; plotW: number; plotH: number; isMine: boolean; ownerIdentity?: { toHexString(): string }; ownerName?: string; lifecycle?: string; vacant?: boolean }[],
     skipMine: boolean = true,
   ): void {
     // Wipe + rebuild — buildings change rarely so the cost is fine.
@@ -4218,7 +4218,15 @@ export class WorldScene {
       // by addGardenArea(); this group adds fences for the OTHER 11
       // plots regardless of ownership).
       if (skipMine && b.isMine) continue;
+      // Phase M.34 — a VACANT plot in the viewer's neighborhood shows just the
+      // garden fence (an open lot), no shell + not visitable.
+      if (b.vacant) {
+        this.cityBuildings.add(this.makePlotGardenFence({ x: b.plotX, z: b.plotZ, w: b.plotW, h: b.plotH }));
+        continue;
+      }
       const shell = this.makeBuildingShell(b);
+      // Phase M.34 — a COLD restaurant (owner away > 1 week) reads as dimmed.
+      if (b.lifecycle === "cold") this.dimShell(shell);
       // Stamp the visit-mode metadata on the shell + every descendant
       // mesh so Engine's click raycast can identify which player owns
       // the plot the click landed on. Walking up the parent chain in
@@ -4236,6 +4244,25 @@ export class WorldScene {
         x: b.plotX, z: b.plotZ, w: b.plotW, h: b.plotH,
       }));
     }
+  }
+
+  /** Phase M.34 — darken a shell in place (cloning materials so shared caches
+   * aren't affected) to read a restaurant as "cold" — its owner is away. */
+  private dimShell(shell: THREE.Group): void {
+    shell.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (!mesh.material) return;
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((m) => this.dimMat(m))
+        : this.dimMat(mesh.material);
+    });
+  }
+
+  private dimMat(mat: THREE.Material): THREE.Material {
+    const c = mat.clone();
+    const col = (c as THREE.MeshStandardMaterial).color;
+    if (col) col.multiplyScalar(0.5);
+    return c;
   }
 
   /** Build one Parisian Haussmann-style placeholder shell — cream

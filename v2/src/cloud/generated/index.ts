@@ -89,6 +89,7 @@ import PlaceFurnitureReducer from "./place_furniture_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
+import RefreshNeighborhoodReducer from "./refresh_neighborhood_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import ReleaseDirtyPileReducer from "./release_dirty_pile_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
@@ -180,6 +181,7 @@ import LayoutPresetRow from "./layout_preset_table";
 import LeaderboardEntryRow from "./leaderboard_entry_table";
 import MoneyCutoverRow from "./money_cutover_table";
 import MoneyEventRow from "./money_event_table";
+import NeighborhoodSlotRow from "./neighborhood_slot_table";
 import PantryStockRow from "./pantry_stock_table";
 import PantryTargetRow from "./pantry_target_table";
 import PasswordResetRequestRow from "./password_reset_request_table";
@@ -557,6 +559,20 @@ const tablesSchema = __schema({
       { name: 'money_event_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, MoneyEventRow),
+  neighborhood_slot: __table({
+    name: 'neighborhood_slot',
+    indexes: [
+      { accessor: 'id', name: 'neighborhood_slot_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'viewer', name: 'neighborhood_slot_viewer_idx_btree', algorithm: 'btree', columns: [
+        'viewer',
+      ] },
+    ],
+    constraints: [
+      { name: 'neighborhood_slot_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, NeighborhoodSlotRow),
   pantry_stock: __table({
     name: 'pantry_stock',
     indexes: [
@@ -900,6 +916,7 @@ const reducersSchema = __reducers(
   __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
+  __reducerSchema("refresh_neighborhood", RefreshNeighborhoodReducer),
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
   __reducerSchema("release_dirty_pile", ReleaseDirtyPileReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
