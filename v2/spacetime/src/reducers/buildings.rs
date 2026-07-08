@@ -202,26 +202,41 @@ pub fn refresh_neighborhood(ctx: &ReducerContext) -> Result<(), String> {
     // Closest level first; equal levels shuffle by the rotation jitter.
     cands.sort_by_key(|c| (c.3, c.4));
 
+    // Two-pass assignment. Pass 1 honors each candidate's HOME plot (the "same
+    // identity" rule) — the closest-level candidate wins a contested home. Pass
+    // 2 fills the leftover plots with the remaining closest-level candidates.
+    // (A single greedy pass would drop a candidate into the first empty plot
+    // instead of its own home.)
+    let plot_ids: std::collections::HashSet<u64> =
+        buildings.iter().map(|b| b.id).filter(|&id| id != my_home).collect();
+    let mut assigned: std::collections::HashMap<u64, (u64, Identity)> = std::collections::HashMap::new();
+    let mut used: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    for &(rid, owner, home, _d, _r) in &cands {
+        if home != 0 && home != my_home && plot_ids.contains(&home)
+            && !assigned.contains_key(&home) && !used.contains(&rid) {
+            assigned.insert(home, (rid, owner));
+            used.insert(rid);
+        }
+    }
+    for b in &buildings {
+        if b.id == my_home || assigned.contains_key(&b.id) { continue; }
+        if let Some(&(rid, owner, _h, _d, _r)) = cands.iter().find(|c| !used.contains(&c.0)) {
+            used.insert(rid);
+            assigned.insert(b.id, (rid, owner));
+        }
+    }
+
     // Replace the viewer's previous view.
     let old: Vec<u64> = ctx.db.neighborhood_slot().viewer().filter(viewer).map(|s| s.id).collect();
     for id in old { ctx.db.neighborhood_slot().id().delete(id); }
 
-    let mut used: std::collections::HashSet<u64> = std::collections::HashSet::new();
     for b in &buildings {
         let (rid, owner, life, is_you) = if b.id == my_home && my_rest.is_some() {
             (my_rest.as_ref().unwrap().id, viewer, "active".to_string(), true)
+        } else if let Some(&(rid, owner)) = assigned.get(&b.id) {
+            (rid, owner, nbr_lifecycle(ctx, owner, now).to_string(), false)
         } else {
-            // Prefer a candidate whose OWN home is this plot; else the closest unused.
-            let pick = cands.iter().find(|c| c.2 == b.id && !used.contains(&c.0))
-                .or_else(|| cands.iter().find(|c| !used.contains(&c.0)))
-                .copied();
-            match pick {
-                Some((rid, owner, _h, _d, _r)) => {
-                    used.insert(rid);
-                    (rid, owner, nbr_lifecycle(ctx, owner, now).to_string(), false)
-                }
-                None => (0u64, Identity::__dummy(), "active".to_string(), false),
-            }
+            (0u64, Identity::__dummy(), "active".to_string(), false)
         };
         ctx.db.neighborhood_slot().insert(NeighborhoodSlot {
             id: 0, // auto_inc
