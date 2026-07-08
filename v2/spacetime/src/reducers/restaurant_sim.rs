@@ -1259,6 +1259,21 @@ const OFFLINE_EARN_CAP_MICROS: i64 = 7 * 24 * 3_600 * 1_000_000;
 /// reconcile it (avoids tiny spurious "offline" events on a flaky ping).
 const OFFLINE_RECONCILE_MIN_MICROS: i64 = 10_000_000; // 10 s
 
+/// Offline reconcile is a MODEST catch-up, not a wealth engine. The old
+/// version snowballed to $2.29M via two faults, both fixed below:
+///   1) scale — game days are only 12 min, so an uncapped real gap mapped
+///      to hundreds of in-game days (7-day cap = 840 days). We cap the paid
+///      window to a couple in-game days regardless of how long you're away.
+///   2) compounding — it folded each payout back into the day's `revenue`,
+///      then read that back as the next rate. We NEVER fold into revenue and
+///      the rate is an AVERAGE of recent CLEAN days.
+const OFFLINE_MAX_GAME_DAYS: f64 = 2.0;
+const OFFLINE_RATE_DAYS: usize = 3;
+/// Any completed day whose revenue exceeds this is treated as a corrupt
+/// legacy value (old offline-fold pollution) and skipped in the rate avg —
+/// legit days top out around $2-3k, so this only ever catches the runaway.
+const SANE_DAY_REVENUE_CEILING_CENTS: i64 = 5_000_000; // $50k
+
 /// Most-recent completed-day value (cents) for a numeric dollar field in the
 /// day-history blob (e.g. "revenue", "net"). Parses the LAST occurrence, robust
 /// to the exact array shape. Returns 0 when absent — a safe default: no offline
@@ -1275,6 +1290,38 @@ fn last_day_field_cents(history_json: &str, field: &str) -> i64 {
         }
     }
     0
+}
+
+/// Average CUSTOMER revenue (cents) over the last `n` completed days in the
+/// history blob — the stable rate the offline reconcile projects forward.
+/// Uses an AVERAGE (not the single last day) so one outlier can't set the
+/// rate, and SKIPS any day above SANE_DAY_REVENUE_CEILING_CENTS so a corrupt
+/// legacy spike (from the old offline-fold pollution) can never poison the
+/// estimate. Returns 0 when there are no clean completed days yet.
+fn avg_recent_revenue_cents(history_json: &str, n: usize) -> i64 {
+    if n == 0 { return 0; }
+    let needle = "\"revenue\":";
+    let mut vals: Vec<i64> = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = history_json[from..].find(needle) {
+        let pos = from + rel + needle.len();
+        let after = &history_json[pos..];
+        let end = after
+            .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(v) = after[..end].parse::<f64>() {
+            let cents = (v * 100.0).round() as i64;
+            if cents > 0 && cents <= SANE_DAY_REVENUE_CEILING_CENTS {
+                vals.push(cents);
+            }
+        }
+        from = pos + end.max(1);
+    }
+    if vals.is_empty() { return 0; }
+    let take = n.min(vals.len());
+    let recent = &vals[vals.len() - take..];
+    let sum: i64 = recent.iter().sum();
+    sum / take as i64
 }
 
 /// Apply the earnings a restaurant would have made while its owner was away, as
@@ -1294,7 +1341,18 @@ fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
     // NOT the day's "net": that folds in one-time spend (furniture, upgrades,
     // boosts) which does NOT happen while offline, so counting it would badly
     // mis-state the away earnings (the numbers the owner questioned).
-    let daily_revenue = last_day_field_cents(r.cloud_day_history_json.as_deref().unwrap_or(""), "revenue");
+    // Paid window: how many in-game days elapsed while away, CAPPED so a long
+    // real absence can't pay hundreds of days of profit (a game day is 12 min,
+    // so an uncapped gap ran to hundreds of days — the runaway's scale half).
+    let day_micros = DAY_LENGTH_MS.saturating_mul(1_000);
+    if day_micros <= 0 { return; }
+    let in_game_days = (capped as f64 / day_micros as f64).min(OFFLINE_MAX_GAME_DAYS);
+    if in_game_days <= 0.0 { return; }
+    // Rate = AVERAGE customer revenue over the last few CLEAN days — never the
+    // single last day, and never the just-written offline total (that self-fed
+    // and compounded). avg_recent_revenue_cents skips corrupt legacy spikes.
+    let daily_revenue = avg_recent_revenue_cents(
+        r.cloud_day_history_json.as_deref().unwrap_or(""), OFFLINE_RATE_DAYS);
     if daily_revenue == 0 { return; } // no completed-day track record yet
     // Rent per in-game day, by luxury tier (mirrors tick_day_clock's table).
     const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
@@ -1318,21 +1376,18 @@ fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
     let wages_per_day = wage_per_min.saturating_mul(DAY_LENGTH_MS) / 60_000;
     let daily_net = daily_revenue - rent_per_day - wages_per_day;
     if daily_net == 0 { return; }
-    let day_micros = DAY_LENGTH_MS.saturating_mul(1_000); // in-game day in micros
-    if day_micros <= 0 { return; }
-    let in_game_days = capped as f64 / day_micros as f64;
     let offline_net = (daily_net as f64 * in_game_days).round() as i64;
     if offline_net == 0 { return; }
     let new_balance = r.cloud_money_cents.saturating_add(offline_net).max(0);
     let applied = new_balance - r.cloud_money_cents;
     if applied == 0 { return; }
-    // Fold into today's totals so the trends panel Net stays coherent.
-    let rev_add = if applied > 0 { applied } else { 0 };
-    let exp_add = if applied < 0 { -applied } else { 0 };
+    // Update CASH only. Deliberately do NOT fold into cloud_daily_revenue_cents:
+    // that fed avg_recent_revenue_cents' successor and made the estimate
+    // compound on itself (the $2.29M runaway). The discrete "offline" ledger
+    // event below is the record of this reconciliation; the trends panel keeps
+    // showing real per-day customer sales, uninflated.
     ctx.db.restaurant().id().update(Restaurant {
         cloud_money_cents: new_balance,
-        cloud_daily_revenue_cents: r.cloud_daily_revenue_cents.saturating_add(rev_add),
-        cloud_daily_expenses_cents: r.cloud_daily_expenses_cents.saturating_add(exp_add),
         ..r
     });
     record_money_event(ctx, rid, "offline", applied, new_balance);
