@@ -549,6 +549,14 @@ pub struct Restaurant {
     /// it's bounded by a lifetime cap tracked here.
     #[default(0i64)]
     pub cumulative_achievement_cents: i64,
+    /// Phase M.34 (dynamic neighborhoods) — which of the 12 shared plot
+    /// "identities" (a `building` id) this restaurant calls home. Set when the
+    /// owner picks their plot; MANY restaurants may share one plot id. The
+    /// per-viewer neighborhood always shows YOU at your home plot and rotates
+    /// level-matched neighbors through the others. 0 = not yet assigned
+    /// (backfilled from the legacy 1:1 building claim).
+    #[default(0u64)]
+    pub home_building_id: u64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`
@@ -569,6 +577,26 @@ pub struct SaveSnapshot {
     pub rating_avg: f32,
     pub luxury_tier: u32,
     pub saved_at: Timestamp,
+}
+
+/// Phase M.34 — a per-VIEWER snapshot of the 12-plot neighborhood, rebuilt by
+/// `refresh_neighborhood`. One row per (viewer, plot). The viewer subscribes to
+/// their own rows and renders them: their own restaurant pinned at their home
+/// plot, plus level-matched neighbors rotated through the others. Archived
+/// (long-idle) restaurants never appear.
+#[table(name = neighborhood_slot, public)]
+pub struct NeighborhoodSlot {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub viewer: Identity,
+    pub building_id: u64,        // which of the 12 plots
+    pub restaurant_id: u64,      // restaurant shown here (0 = vacant plot)
+    pub owner: Identity,         // that restaurant's owner (for Visit; client resolves name)
+    pub lifecycle: String,       // "active" | "cold" (archived never shown)
+    pub is_you: bool,            // the viewer's own home plot
+    pub refreshed_at: Timestamp,
 }
 
 /// Per-player save snapshot, keyed directly by Identity (one save per

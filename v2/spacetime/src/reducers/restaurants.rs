@@ -28,6 +28,8 @@ pub fn create_default_restaurant_for(ctx: &ReducerContext, owner: Identity) {
 fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, public: bool) {
     let inserted = ctx.db.restaurant().insert(Restaurant {
         id: 0, // auto_inc
+        // Phase M.34 — assigned when the owner picks their plot (0 = not yet).
+        home_building_id: 0,
         owner,
         name,
         public,
