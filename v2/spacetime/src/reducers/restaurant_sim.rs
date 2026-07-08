@@ -7416,15 +7416,17 @@ pub(crate) fn try_spawn_arrival_guest(
                 }
                 wait_mode = true;
                 waiting_timeout_ms = QUEUE_HOLD_MS;
-                // OUTSIDE the door: a QUEUE_WIDTH-wide grid growing back in +Z,
-                // front row nearest the door (seated first). Cell i → row i/W,
-                // col i%W, centred on door_x.
+                // OUTSIDE the door: a SINGLE-FILE line hugging the storefront,
+                // marching -X along the front (screen-left, out across the open
+                // pavement) so a busy restaurant reads as an orderly queue
+                // instead of a mob jammed at the threshold. Z is fixed just in
+                // front of the wall; slot 0 is nearest the door (seated first)
+                // and already stands one space to the side, so the doorway stays
+                // clear for guests entering/leaving. A wildly popular (5★) place
+                // can draw ~30 — the tail simply trails on down the frontage.
                 let cell = |i: usize| -> (f32, f32) {
-                    let row = i / QUEUE_WIDTH;
-                    let col = i % QUEUE_WIDTH;
-                    let x = door_x
-                        + (col as f32 - (QUEUE_WIDTH as f32 - 1.0) * 0.5) * QUEUE_SPACING;
-                    let z = door_z + QUEUE_FRONT_GAP + (row as f32) * QUEUE_SPACING;
+                    let x = door_x - (i as f32 + 1.0) * QUEUE_SPACING;
+                    let z = door_z + QUEUE_FRONT_GAP;
                     (x, z)
                 };
                 let mut slot = 0usize;
@@ -7742,14 +7744,15 @@ const WALKING_IN_MIN_MS: i64 = 500;
 const DOOR_FRONT_GAP: f32 = 0.5;
 const DOOR_SPAWN_GAP: f32 = 1.4;
 const DOOR_ENTRY_MS: i64 = 1_400;
-/// Phase M.32 — outdoor overflow QUEUE geometry. When the dining room is full a
-/// rating-gated line forms OUTSIDE the door, packed into a QUEUE_WIDTH-wide grid
-/// growing back in +Z (front row nearest the door, seated first). Guests stand
-/// (no chair, no timer) and wait ~forever until a seat frees. Up to 30 at 5★, so
-/// a strict single file would run off the lot — hence the grid fold.
+/// Phase M.32 / M.33 — outdoor overflow QUEUE geometry. When the dining room is
+/// full a rating-gated SINGLE-FILE line forms OUTSIDE the door, hugging the
+/// storefront and marching -X across the pavement (slot 0 nearest the door,
+/// seated first). Guests stand (no chair, no timer) and wait ~forever until a
+/// seat frees. M.33: replaced the old QUEUE_WIDTH-wide grid that read as a mob
+/// pressed at the door — a real queue lines up along the frontage. A 5★ place
+/// can draw ~30 and the tail just trails on down the block, which is the point.
 const QUEUE_FRONT_GAP: f32 = 0.6;
 const QUEUE_SPACING: f32 = 0.6;
-const QUEUE_WIDTH: usize = 5;
 /// "Patiently forever" hold — a finite but enormous ceiling (~300 years) so the
 /// existing countdown/reposition tick runs unchanged; a seat always frees first,
 /// so in practice they never give up.
@@ -8132,10 +8135,14 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
         // back over the server's "waiting" (see is_waiting_state / H.19), so
         // matching only the literal "waiting" left promoted-able guests
         // stranded outside forever even with the dining room empty.
-        // Phase M.32 — seat the FRONT of the line first (lowest Z = nearest the
-        // door) so the queue advances in order, not an arbitrary pick.
+        // Phase M.33 — seat the FRONT of the single-file line first. The line
+        // now marches -X from the door, so the front waiter (nearest the door)
+        // has the LARGEST X — max_by(seat_x). Advances the queue in order
+        // instead of an arbitrary pick. (Was min_by(seat_z) when the line was a
+        // grid growing in +Z; every waiter now shares one Z, so that picked
+        // an arbitrary member and tore a gap in the middle of the line.)
         .filter(|g| is_waiting_state(&g.state))
-        .min_by(|a, b| a.seat_z.partial_cmp(&b.seat_z).unwrap_or(std::cmp::Ordering::Equal))
+        .max_by(|a, b| a.seat_x.partial_cmp(&b.seat_x).unwrap_or(std::cmp::Ordering::Equal))
     else { return };
     let Some((seat_uid, sx, sz, sf)) = try_assign_seat_for(ctx, rid, g.x, g.z, Some(g.id),
         Some((g.taste_decor_pref, g.taste_window_pref, &g.taste_diet)))
