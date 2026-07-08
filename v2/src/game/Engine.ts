@@ -234,7 +234,7 @@ export class Engine {
   private healthAccum = 0;
   /** Current player-facing graphics quality preset. Captured at
    * construct from localStorage, mutated by applyGraphicsQuality. */
-  private currentQuality: GraphicsQuality = "medium";
+  private currentQuality: GraphicsQuality = "high";
   /** Whether the sun is currently casting shadows. Tracked so the
    * per-frame zoom-based toggle in tick() doesn't repeatedly re-set
    * the same flag (which would otherwise force three.js to clear

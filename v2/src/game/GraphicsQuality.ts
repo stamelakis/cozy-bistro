@@ -59,13 +59,14 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
 
 const STORAGE_KEY = "cozy-bistro.graphics-quality";
 
-/** Read the saved quality, defaulting to Medium for a clean install. */
+/** Read the saved quality, defaulting to High for a clean install. A
+ * returning player's saved pick (any of low/medium/high) always wins. */
 export function getSavedGraphicsQuality(): GraphicsQuality {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw === "low" || raw === "medium" || raw === "high") return raw;
   } catch { /* private-mode storage — fall through */ }
-  return "medium";
+  return "high";
 }
 
 /** Persist the player's pick so the next session starts on the
