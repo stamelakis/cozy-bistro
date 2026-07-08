@@ -122,7 +122,7 @@ fn scale_patience(base_ms: i64, mult_x100: i32) -> i64 {
 /// Dwell time in the "leaving" state before the row is deleted.
 /// Lets the client play the walk-out animation before the model
 /// vanishes. Client's despawnGuest matches this cadence.
-const LEAVING_DWELL_MS: i64 = 4_000; // 4 s
+const LEAVING_DWELL_MS: i64 = 6_500; // 6.5 s — long enough to step outside the door
 
 /// H.18 — Safety-net dwell for the client's three "leaving variant"
 /// states (`walkingToDoor`, `exitingDoor`, `walkingOut`). The client
@@ -508,6 +508,9 @@ pub fn restaurant_tick(
     try_server_spawn_guest(ctx, rid, now);
     // Phase 9.6 — seat the longest-waiting guest when a chair frees.
     try_promote_waiting_guest(ctx, rid);
+    // Phase M.34 — then shuffle the rest of the line forward so the front slot
+    // never sits empty and no gap opens mid-line (FIFO, packed toward the door).
+    compact_queue(ctx, rid);
 
     // Energy audit (C) — early-out: if this restaurant has NOTHING
     // going on (no guests, no tickets, no actors, no dishwasher
@@ -7179,7 +7182,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     let just_started_leaving = g.state != "leaving" && final_state == "leaving";
     let (out_target_x, out_target_z, out_target_floor) =
         if just_started_leaving {
-            (g.door_x, g.door_z, g.door_floor)
+            // Phase M.34 — walk OUT of the restaurant: target a tile OUTSIDE the
+            // door (door_z + gap, on the pavement) so the guest steps through the
+            // doorway and off before despawning, instead of vanishing at the
+            // threshold. Same outside lane arrivals spawn on (DOOR_SPAWN_GAP).
+            (g.door_x, g.door_z + DOOR_SPAWN_GAP, g.door_floor)
         } else if g.state == "wcWashing" && final_state == "seated" {
             (g.seat_x, g.seat_z, g.seat_floor)
         } else if started_wc_trip {
@@ -7404,42 +7411,31 @@ pub(crate) fn try_spawn_arrival_guest(
                 if max_line == 0 {
                     return false;
                 }
-                // Existing waiters' cells — cap the queue at max_line, and drop
-                // the newcomer on the lowest FREE grid cell so it packs tight.
-                let occupied: Vec<(f32, f32)> = ctx.db.active_guest()
+                let line_len = ctx.db.active_guest()
                     .restaurant_id().filter(restaurant_id)
                     .filter(|g| is_waiting_state(&g.state))
-                    .map(|g| (g.seat_x, g.seat_z))
-                    .collect();
-                if occupied.len() >= max_line {
-                    return false; // line already at its rating-capped length
+                    .count();
+                if line_len >= max_line {
+                    return false; // line already at its rating-capped ceiling
+                }
+                // Phase M.34 — BALK. A high rating means the line CAN be long,
+                // not that it MUST be: an arrival is less willing to join an
+                // already-long line. Join chance falls linearly from 100% (empty)
+                // toward 0% (near the cap), so the queue settles at real demand
+                // and only a genuine rush approaches the max. Deterministic roll
+                // off ctx.timestamp — reducers must replay identically.
+                let join_chance = 100usize.saturating_sub(line_len * 100 / max_line.max(1));
+                let seed = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
+                    .wrapping_mul(restaurant_id.wrapping_add(1));
+                if (seed % 100) as usize >= join_chance {
+                    return false; // balked — walked off rather than join the line
                 }
                 wait_mode = true;
                 waiting_timeout_ms = QUEUE_HOLD_MS;
-                // OUTSIDE the door: a SINGLE-FILE line hugging the storefront,
-                // marching -X along the front (screen-left, out across the open
-                // pavement) so a busy restaurant reads as an orderly queue
-                // instead of a mob jammed at the threshold. Z is fixed just in
-                // front of the wall; slot 0 is nearest the door (seated first)
-                // and already stands one space to the side, so the doorway stays
-                // clear for guests entering/leaving. A wildly popular (5★) place
-                // can draw ~30 — the tail simply trails on down the frontage.
-                let cell = |i: usize| -> (f32, f32) {
-                    let x = door_x - (i as f32 + 1.0) * QUEUE_SPACING;
-                    let z = door_z + QUEUE_FRONT_GAP;
-                    (x, z)
-                };
-                let mut slot = 0usize;
-                while slot + 1 < max_line && {
-                    let (cx, cz) = cell(slot);
-                    occupied.iter().any(|&(ox, oz)| {
-                        (ox - cx).abs() < QUEUE_SPACING * 0.5
-                            && (oz - cz).abs() < QUEUE_SPACING * 0.5
-                    })
-                } {
-                    slot += 1;
-                }
-                let (sx, sz) = cell(slot);
+                // Join at the BACK of the single-file line (slot = current length).
+                // compact_queue keeps the line FIFO-ordered and packed toward the
+                // door, shuffling everyone forward when the front is seated.
+                let (sx, sz) = queue_cell(door_x, door_z, line_len);
                 (String::new(), sx, sz, 0u32)
             }
         };
@@ -7765,6 +7761,14 @@ const QUEUE_SPACING: f32 = 0.6;
 /// existing countdown/reposition tick runs unchanged; a seat always frees first,
 /// so in practice they never give up.
 const QUEUE_HOLD_MS: i64 = 10_000_000_000_000;
+
+/// Phase M.34 — position of the i-th slot in the outdoor single-file line
+/// (0 = front, nearest the door). Hugs the storefront (fixed Z) and marches
+/// -X across the pavement. Shared by the spawn path and compact_queue so the
+/// line stays consistent as it grows and shuffles forward.
+fn queue_cell(door_x: f32, door_z: f32, i: usize) -> (f32, f32) {
+    (door_x - (i as f32 + 1.0) * QUEUE_SPACING, door_z + QUEUE_FRONT_GAP)
+}
 /// Grace period before the server's fallback seat assignment fires.
 /// Longer than WALKING_IN_MIN_MS because the client may pick a seat
 /// AFTER the mirror catches up — 1.5s gives the local sim ~15 ticks
@@ -8180,6 +8184,40 @@ fn try_promote_waiting_guest(ctx: &ReducerContext, rid: u64) {
         waiting_timeout_ms: 0,
         ..g
     });
+}
+
+/// Phase M.34 — keep the outdoor overflow line tidy: sort waiting guests by
+/// arrival (id = FIFO) and pack them into slots 0..N (front nearest the door).
+/// When the front is promoted to a seat, everyone behind shuffles one place
+/// forward and any mid-line gap closes. Only rows whose slot actually changed
+/// are rewritten, so a settled line costs zero writes (keeps the commitlog
+/// quiet — see the clog disk incident).
+fn compact_queue(ctx: &ReducerContext, rid: u64) {
+    let mut waiters: Vec<ActiveGuest> = ctx.db.active_guest()
+        .restaurant_id().filter(rid)
+        .filter(|g| is_waiting_state(&g.state))
+        .collect();
+    if waiters.is_empty() { return; }
+    waiters.sort_by_key(|g| g.id); // earliest arrival = front of the line
+    // Everyone faces +X (down the line toward the door). Normalising it here
+    // also RETROFITS stragglers spawned before the facing fix, whose
+    // seat_facing_y is still 0 (= -Z = staring at the wall) — that was the
+    // "half the line faces forward, half faces the wall like zombies" case.
+    const FACE_FRONT: f32 = -std::f32::consts::FRAC_PI_2;
+    for (i, g) in waiters.into_iter().enumerate() {
+        let (cx, cz) = queue_cell(g.door_x, g.door_z, i);
+        if (g.seat_x - cx).abs() > 0.02 || (g.seat_z - cz).abs() > 0.02
+            || (g.seat_facing_y - FACE_FRONT).abs() > 0.01 {
+            ctx.db.active_guest().id().update(ActiveGuest {
+                seat_x: cx,
+                seat_z: cz,
+                target_x: cx,
+                target_z: cz,
+                seat_facing_y: FACE_FRONT,
+                ..g
+            });
+        }
+    }
 }
 
 fn try_assign_seat_for(
