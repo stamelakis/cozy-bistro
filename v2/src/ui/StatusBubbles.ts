@@ -195,7 +195,13 @@ export class StatusBubbles {
         whiteSpace: "nowrap",
         border: "1px solid rgba(255,245,220,0.25)",
         boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
-        zIndex: "50",
+        // Sit BELOW every HUD panel so a character's status label never
+        // bleeds over the UI (Jercy: "bubbles should be behind the UI").
+        // Panels live at z:100 (Sidebar/Menu/Chat) and z:5 (CameraControls/
+        // FloorSelector/PlayerRoster); z:3 keeps the bubble just above the
+        // 3D canvas but under all of them. This is the "bubble-layer fix"
+        // the panels' own z:100 comments already assume.
+        zIndex: "3",
       } as Partial<CSSStyleDeclaration>);
       this.host.appendChild(el);
       bubble = { el, inUse: false };
