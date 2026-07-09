@@ -1547,6 +1547,21 @@ export class GuestSpawner {
     return this.guests.length;
   }
 
+  /** Guests physically INSIDE the restaurant — excludes the outdoor
+   * queue (walkingToWait / waitingForSeat). The HUD's "IN" card uses
+   * this so it reads "customers inside" as its tooltip promises, instead
+   * of counting everyone standing in the line too. (getActiveGuestCount
+   * stays the true total for spawn/capacity logic that DOES want the
+   * line included.) */
+  getGuestsInsideCount(): number {
+    let n = 0;
+    for (const g of this.guests) {
+      if (g.state === "walkingToWait" || g.state === "waitingForSeat") continue;
+      n += 1;
+    }
+    return n;
+  }
+
   /** Phase C.3b — resolve a local guest id ("guest-7") to its
    * mirrored server-side auto-inc u64. Returns undefined when the
    * guest isn't mirrored (flag off, or pre-resolve window). The
