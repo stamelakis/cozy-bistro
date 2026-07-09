@@ -775,102 +775,95 @@ export class DishwareSystem {
     this.log(`reconcileToPurchaseLog → ${target.plate} plates, ${target.glass} glasses (starter + ${this.purchaseLog.length} purchases)`);
   }
 
-  /** Phase I (H.90) — User-invokable LEAK RECOVERY (restore-mode).
+  /** LEAK / TIER RECOVERY — per-tier, canonical-aware. Used by the
+   * manual "Restore missing dishes" button AND the gated auto-restore.
    *
-   * Replaces H.87's write-off behaviour ("just delete the missing
-   * plates") which the user (correctly) objected to: they paid for
-   * those dishes; they should get them back.
+   * The OLD version restored every missing piece as TIER 1, so a leaked
+   * T5 came back a T1 — repeated presses bled a high-tier collection down
+   * to T1 (the exact bug the user hit: 100 T5 slowly replaced by T1).
+   * This version reconciles EACH TIER to its canonical count — starter
+   * stock plus the tier recorded in `purchaseLog` for every buy — so a
+   * leaked T5 comes back a T5.
    *
-   * For each kind:
-   *   - If total < lifetime (LEAK): add the missing count back to
-   *     pool[clean] at tier 1 (force=true so cap doesn't drop them).
-   *     Lifetime stays unchanged; purchaseLog stays unchanged.
-   *   - If total > lifetime (OVER): trim the excess from highest-
-   *     tier clean → dirty → walk down (same algorithm as
-   *     reconcilePoolToLifetime). Lifetime stays unchanged.
-   *   - If total == lifetime: no-op.
+   * Per (kind, tier):
+   *   canonical[tier]   = starter (tier 1) + Σ purchaseLog buys/sells @tier
+   *   out[tier]         = dishes physically away = dishwasher batch @tier
+   *                       + in-flight (guest-held) @tier — BOTH carry their
+   *                       real tier, so a dish merely out on a table is
+   *                       never double-restored
+   *   desiredPool[tier] = max(0, canonical - out)   // what the pool should hold
+   * Then bring pool[tier] to desiredPool: add clean when short (a leak),
+   * trim clean→dirty when long (a wrongly-added / degraded tier).
    *
-   * Future bugs that leak again will be visible (no auto-recovery
-   * to mask them) — the user re-invokes via the button when they
-   * notice drift. Net effect: this is the OLD auto-restore path
-   * H.83 removed, but USER-INVOKED instead of silent, so it can
-   * never mask a duping path (LEAK appears only after an actual
-   * loss). */
-  reconcileToLifetime(inFlightPlates: number, inFlightGlasses: number): void {
-    this.reconcileOneKind("plate", inFlightPlates);
-    this.reconcileOneKind("glass", inFlightGlasses);
-  }
-
-  private reconcileOneKind(kind: DishKind, inFlightForKind: number): void {
-    const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
-    const inWash = this.getDishwasherInFlight(kind);
-    const owned = this.getOwned(kind) + inWash + inFlightForKind;
-    if (owned === target) {
-      this.log(`reconcileToLifetime(${kind}): already balanced (${owned}/${target})`);
-      return;
-    }
-    if (owned < target) {
-      // LEAK — restore the missing count to tier-1 clean.
-      const missing = target - owned;
-      this.addClean(kind, 1, missing, true);
-      this.log(`reconcileToLifetime(${kind}): restored ${missing} missing (was ${owned}/${target})`);
-      return;
-    }
-    // OVER — trim excess via applyPoolDelta (same algorithm as
-    // reconcilePoolToLifetime). Each delta mirrors itself, so we
-    // don't need the bulk mirrorAllPools after.
-    const map = kind === "plate" ? this.plates : this.glasses;
-    let excess = owned - target;
-    const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
-    for (const tier of tiersDesc) {
-      if (excess <= 0) break;
-      const e = map.get(tier);
-      if (!e) continue;
-      const trimClean = Math.min(excess, e.clean);
-      if (trimClean > 0) {
-        this.applyPoolDelta(kind, tier, -trimClean, 0, "reconcile-trim");
-        excess -= trimClean;
+   * Net effect is TOTAL-PRESERVING toward canonical — it never invents or
+   * destroys OWNED dishes, it just puts each back at the tier the purchase
+   * log says it belongs. `purchaseLog` + lifetime are never rewritten.
+   * Returns { restored, trimmed } for logging. */
+  reconcileToLifetime(
+    inFlight: ReadonlyArray<{ kind: string; tier: number; count: number }>,
+  ): { restored: number; trimmed: number } {
+    let restored = 0, trimmed = 0;
+    for (const kind of ["plate", "glass"] as const) {
+      const inFlightByTier = new Map<number, number>();
+      for (const e of inFlight) {
+        if (e.kind !== kind || e.tier < 1 || e.tier > 5) continue;
+        inFlightByTier.set(e.tier, (inFlightByTier.get(e.tier) ?? 0) + e.count);
       }
-      if (excess <= 0) break;
-      const e2 = map.get(tier);
-      if (!e2) continue;
-      const trimDirty = Math.min(excess, e2.dirty);
-      if (trimDirty > 0) {
-        this.applyPoolDelta(kind, tier, 0, -trimDirty, "reconcile-trim");
-        excess -= trimDirty;
+      const canonical = this.canonicalByTier(kind);
+      const wash = this.washByTier(kind);
+      const pool = this.poolFor(kind);
+      const tiers = new Set<number>([
+        ...canonical.keys(), ...pool.keys(), ...inFlightByTier.keys(), ...wash.keys(),
+      ]);
+      for (const tier of tiers) {
+        const out = (inFlightByTier.get(tier) ?? 0) + (wash.get(tier) ?? 0);
+        const desiredPool = Math.max(0, (canonical.get(tier) ?? 0) - out);
+        const e = pool.get(tier) ?? { clean: 0, dirty: 0 };
+        const cur = e.clean + e.dirty;
+        if (cur < desiredPool) {
+          this.addClean(kind, tier, desiredPool - cur, true); // restore at the RIGHT tier
+          restored += desiredPool - cur;
+        } else if (cur > desiredPool) {
+          let excess = cur - desiredPool;
+          const trimClean = Math.min(excess, e.clean);
+          if (trimClean > 0) { this.applyPoolDelta(kind, tier, -trimClean, 0, "reconcile-tier"); excess -= trimClean; }
+          if (excess > 0) {
+            const e2 = pool.get(tier);
+            const trimDirty = Math.min(excess, e2?.dirty ?? 0);
+            if (trimDirty > 0) this.applyPoolDelta(kind, tier, 0, -trimDirty, "reconcile-tier");
+          }
+          trimmed += cur - desiredPool;
+        }
       }
     }
-    this.log(`reconcileToLifetime(${kind}): trimmed ${owned - target} excess (was ${owned}/${target})`);
+    this.log(`reconcileToLifetime(per-tier) → restored ${restored}, trimmed ${trimmed}`);
+    return { restored, trimmed };
   }
 
-  /** SAFE AUTO-RESTORE — the top-up HALF of reconcileToLifetime, with
-   * the trim branch removed on purpose.
-   *
-   * For each kind: if owned (pool + dishwasher + caller's in-flight) is
-   * below canonical lifetime, add the missing pieces back to tier-1
-   * clean (force=true — they're already counted in lifetime). If owned
-   * is AT or OVER lifetime, do nothing — an over-count is never
-   * auto-trimmed (that stays behind the manual "Trim excess" button).
-   *
-   * This is what the DishwareLeakWatcher calls once a leak has proven
-   * persistent + stable (see the watcher's gates). Because it can only
-   * ADD — never delete — a mistimed call is self-correcting (surfaces as
-   * an OVER the player can trim), never destructive. Returns how many
-   * pieces were restored across both kinds. */
-  restoreLeaksOnly(inFlightPlates: number, inFlightGlasses: number): number {
-    return this.restoreOneKind("plate", inFlightPlates)
-      + this.restoreOneKind("glass", inFlightGlasses);
+  /** Canonical count PER TIER for a kind = starter stock (tier 1) plus
+   * the tier-tagged buys / sells in purchaseLog. The ground truth the
+   * reconcile restores toward. Non-positive tiers (fully sold) drop. */
+  private canonicalByTier(kind: DishKind): Map<number, number> {
+    const m = new Map<number, number>();
+    m.set(1, kind === "plate" ? STARTER_PLATE_COUNT : STARTER_GLASS_COUNT);
+    for (const p of this.purchaseLog) {
+      if (p.kind !== kind) continue;
+      m.set(p.tier, (m.get(p.tier) ?? 0) + p.count);
+    }
+    for (const [t, c] of Array.from(m)) if (c <= 0) m.delete(t);
+    return m;
   }
 
-  private restoreOneKind(kind: DishKind, inFlightForKind: number): number {
-    const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
-    const inWash = this.getDishwasherInFlight(kind);
-    const owned = this.getOwned(kind) + inWash + inFlightForKind;
-    if (owned >= target) return 0; // NEVER trims — over-count stays manual
-    const missing = target - owned;
-    this.addClean(kind, 1, missing, true); // force: already part of lifetime
-    this.log(`restoreLeaksOnly(${kind}): restored ${missing} (was ${owned}/${target})`);
-    return missing;
+  /** Pieces of a kind currently mid-wash, bucketed by their real tier
+   * (dishwasher batches carry per-piece tiers via H.93). Per-tier split
+   * of getDishwasherInFlight, for the reconcile's `out` term. */
+  private washByTier(kind: DishKind): Map<number, number> {
+    const m = new Map<number, number>();
+    for (const b of this.dishwasherBatches.values()) {
+      const tiers = kind === "plate" ? b.platesTiers : b.glassesTiers;
+      for (const t of tiers) m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    return m;
   }
 
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===

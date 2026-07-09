@@ -1467,16 +1467,9 @@ export class Engine {
         this.game.dishware,
         {
           getInFlightDishCount: () => this.spawner?.getInFlightDishCount() ?? 0,
-          // Per-kind in-flight from the same snapshot the manual Restore
-          // button reads, so the gated auto-restore is exactly as accurate.
-          getInFlightByKind: () => {
-            let plate = 0, glass = 0;
-            for (const e of this.game.getInFlightDishesForSave()) {
-              if (e.kind === "plate") plate += e.count;
-              else if (e.kind === "glass") glass += e.count;
-            }
-            return { plate, glass };
-          },
+          // Tiered in-flight snapshot the manual Restore button also reads,
+          // so the gated auto-reconcile restores each leaked tier correctly.
+          getInFlightList: () => this.game.getInFlightDishesForSave(),
         },
       );
       this.game.dishware.setLogger((msg) => this.dishwareLeakWatcher?.record(msg));

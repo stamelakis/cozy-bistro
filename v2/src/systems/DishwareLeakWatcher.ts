@@ -38,11 +38,12 @@ import type { DishwareSystem } from "./DishwareSystem";
  * reservation total without circular-importing GuestSpawner. */
 export interface InFlightSource {
   getInFlightDishCount(): number;
-  /** Per-kind in-flight (dishes held by eating guests / on a waiter's
-   * tray), from the same source the manual Restore button uses. The
-   * gated auto-restore needs it split by kind so it reconciles plates
-   * and glasses against their own lifetime totals. */
-  getInFlightByKind(): { plate: number; glass: number };
+  /** The in-flight dish list WITH per-piece tiers (dishes held by eating
+   * guests / on a waiter's tray) — the same snapshot the manual Restore
+   * button reads. The gated auto-restore hands it to reconcileToLifetime
+   * so each leaked TIER is restored to its own canonical count, not
+   * dumped at tier 1. */
+  getInFlightList(): ReadonlyArray<{ kind: string; tier: number; count: number }>;
 }
 
 const MAX_LOG_ENTRIES = 80;
@@ -122,15 +123,14 @@ export class DishwareLeakWatcher {
     if (this.posSecs < AUTO_RESTORE_STABLE_CHECKS || !stable || this.windowMin <= 0) {
       return false;
     }
-    const inflight = this.inFlightSource.getInFlightByKind();
-    const restored = this.dishware.restoreLeaksOnly(inflight.plate, inflight.glass);
+    const result = this.dishware.reconcileToLifetime(this.inFlightSource.getInFlightList());
     // eslint-disable-next-line no-console
     console.info(
-      `[Dishware] auto-restored ${restored} leaked piece(s) — deficit held ` +
-      `~${this.windowMin} for ${this.posSecs}s (in-flight plate ${inflight.plate}, glass ${inflight.glass}).`,
+      `[Dishware] auto-reconciled after a stable deficit (~${this.windowMin}) held ` +
+      `${this.posSecs}s — restored ${result.restored}, trimmed ${result.trimmed} (canonical per-tier).`,
     );
     this.posSecs = 0;
-    return restored > 0;
+    return result.restored > 0 || result.trimmed > 0;
   }
 
   /** Off / on toggle. Disabled watchers are inert — record() is a

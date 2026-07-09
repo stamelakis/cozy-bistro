@@ -390,7 +390,10 @@ export class StockStatusWidget {
       const btn = this.dishTooltip.querySelector("#dish-recalibrate-btn") as HTMLButtonElement | null;
       if (btn) {
         btn.onclick = (): void => {
-          dish.reconcileToLifetime(plateInUse, glassInUse);
+          // Fresh per-tier in-flight snapshot at click time (with tiers),
+          // so the reconcile restores each leaked tier to its canonical
+          // count instead of dumping everything at T1.
+          dish.reconcileToLifetime(this.game.getInFlightDishesForSave());
           this.update(); // re-render immediately so leak label vanishes
         };
       }
