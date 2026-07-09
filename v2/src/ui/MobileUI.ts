@@ -231,6 +231,17 @@ const CSS = `
 
 body.cb-mobile { -webkit-user-select: none; user-select: none; }
 
+/* ...but form fields MUST stay editable. An inherited user-select:none
+   blocks typing in text inputs on iOS Safari — which made the login form
+   impossible to fill on mobile (desktop was fine because cb-mobile is off
+   there). Re-enable selection/editing on every input + textarea. */
+body.cb-mobile input,
+body.cb-mobile textarea,
+body.cb-mobile [contenteditable="true"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
 /* --- the two always-on side panels + recipe panel become sheets --- */
 body.cb-mobile .cb-sidebar,
 body.cb-mobile .cb-buildmenu,
