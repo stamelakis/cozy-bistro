@@ -78,9 +78,33 @@ export function setSavedGraphicsQuality(q: GraphicsQuality): void {
   } catch { /* ignore */ }
 }
 
-/** Shorthand for the preset matching the currently-saved quality. */
+/** True on touch devices (phones / tablets). Uses pointer:coarse — an actual
+ * touch GPU — NOT viewport width, so a narrow desktop window (which still has a
+ * desktop GPU) keeps the full light budget. */
+function isTouchGpu(): boolean {
+  try { return window.matchMedia("(pointer: coarse)").matches; }
+  catch { return false; }
+}
+
+/** Shorthand for the preset matching the currently-saved quality.
+ *
+ * On touch devices the active-light pools are clamped to a mobile-safe
+ * ceiling. High allocates ~64 point lights; a phone GPU can't compile the
+ * lit-material shader with that many, so every lamp renders as an emissive
+ * bulb with NO cast light ("I only see the white ball"). Clamping to ~14
+ * point lights lets the shader compile so the nearest lamps actually light.
+ * DPR is also capped — a 2x device-pixel-ratio on a phone is brutal and buys
+ * nothing on a small dense screen. Desktop is unchanged (full budget). */
 export function getCurrentGraphicsPreset(): GraphicsPreset {
-  return GRAPHICS_PRESETS[getSavedGraphicsQuality()];
+  const preset = GRAPHICS_PRESETS[getSavedGraphicsQuality()];
+  if (!isTouchGpu()) return preset;
+  return {
+    ...preset,
+    pixelRatio: Math.min(preset.pixelRatio, 1.5),
+    placedLampPool: Math.min(preset.placedLampPool, 6),
+    streetLampPool: Math.min(preset.streetLampPool, 4),
+    stoveLightPool: Math.min(preset.stoveLightPool, 4),
+  };
 }
 
 // =====================================================================
