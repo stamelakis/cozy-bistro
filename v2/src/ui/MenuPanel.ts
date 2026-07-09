@@ -1,115 +1,118 @@
 import type { Game } from "../game/Game";
 import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier, maxActiveRecipesPerCategory } from "../systems/CookingSystem";
-import { getIngredientCost } from "../data/ingredients";
 import { APPLIANCE_LABELS } from "../data/types";
-import type { ApplianceId, LuxuryTier, RecipeDefinition } from "../data/types";
+import type { ApplianceId, RecipeDefinition } from "../data/types";
 import { attachTooltip } from "./tooltip";
-import { recipeIcon, ingredientIcon } from "./foodIcons";
+import { recipeIcon, ingredientIcon, recipeImage } from "./foodIcons";
 
-/** Section order for the right-side summary panel — owner asked for
- * Appetizers, Main, Side, Drinks, Dessert in that order. Internally
- * the data uses singular "appetizer"/"main"/"side"/"drink"/"dessert"
- * keys; this maps them to plural display headers. */
-const SUMMARY_SECTIONS: { key: RecipeDefinition["category"]; label: string }[] = [
+/** Display order + labels for the five courses. Swiping up / down the
+ * carousel moves between these; the internal category keys are singular
+ * ("appetizer"/"main"/…) so we map them to plural course headers here. */
+const COURSES: { key: RecipeDefinition["category"]; label: string }[] = [
   { key: "appetizer", label: "Appetizers" },
-  { key: "main",      label: "Main"       },
-  { key: "side",      label: "Side"       },
+  { key: "main",      label: "Mains"      },
+  { key: "side",      label: "Sides"      },
+  { key: "dessert",   label: "Desserts"   },
   { key: "drink",     label: "Drinks"     },
-  { key: "dessert",   label: "Dessert"    },
 ];
 
-/** Per-tier badge colours for the summary panel's dish chips.
- * Reads as a rarity ladder — green → blue → purple → orange → gold —
- * the same vocabulary players already know from loot games, so a
- * glance at the summary tells you both what's on the menu AND how
- * pricey the line-up skews. Index = tier − 1. */
-const TIER_BADGE_BG: readonly string[] = [
-  "#5fa650", // T1 — fresh green
-  "#4a8cd0", // T2 — solid blue
-  "#9462c8", // T3 — refined purple
-  "#d68b3a", // T4 — premium orange
-  "#d6b441", // T5 — luxury gold
-];
+interface Course {
+  key: RecipeDefinition["category"];
+  label: string;
+  dishes: RecipeDefinition[];
+}
 
 /**
- * Recipe menu picker (center-bottom). 5 tier tabs — each tab shows the
- * recipes of that tier, locked tabs are grayed and uncheckable. Each
- * row shows: checkbox, name (Lvl), effective $sell, satisfaction, and
- * ingredient list (with per-unit costs).
+ * Recipe menu — a focused carousel (replaces the old tier-tab list).
+ *
+ * One dish sits front-and-centre with its plate art; the neighbours
+ * peek at the edges. Swipe / arrow LEFT-RIGHT to move through the
+ * course (dishes run Tier 1 → Tier 5 as you go right); the big course
+ * buttons (or swipe UP-DOWN) move between courses. Everything about
+ * the focused dish — price, profit, guest-joy, ingredients, the
+ * appliance it needs, and its on-menu toggle — sits directly below.
  *
  * Collapsed by default — click the title to expand.
  */
 export class MenuPanel {
   private readonly game: Game;
-  /** Root panel element — exposed so the engine can make it
-   * draggable + resizable after construction. */
+  private readonly onUpgrade?: () => void;
   readonly root: HTMLElement;
-  /** Title bar — used as the drag handle by PanelDragResize. */
   readonly titleEl: HTMLElement;
-  /** Body wrapper — display:none when collapsed. Exposed so
-   * PanelDragResize can watch it as the collapse sentinel. */
   readonly body: HTMLElement;
-  private readonly tabsRow: HTMLElement;
-  private readonly content: HTMLElement;
-  /** Right-side summary panel — sits next to the recipe list when
-   * the menu is expanded, showing which recipes the player has on
-   * the active menu grouped by category with x/3 counts. Always
-   * rendered into the same body container so collapsing the menu
-   * also hides the summary. */
-  private readonly summaryPanel: HTMLElement;
-  /** Cached section bodies keyed by category — re-populated each
-   * render but the section container itself is built once. */
-  private readonly summarySections = new Map<RecipeDefinition["category"], { header: HTMLElement; list: HTMLElement }>();
-  /** Signature of the last-rendered summary so we skip rebuilds
-   * when nothing visible to that panel has changed. */
-  private lastSummarySig = "";
-  private collapsed = true;
-  private selectedTier: LuxuryTier = 1;
-  /** Persistent tab buttons — built once in the constructor and only
-   * restyled by update(), not destroyed and rebuilt. Earlier versions
-   * cleared `tabsRow.innerHTML` every 200 ms (the HUD update cadence),
-   * which raced with the player's clicks: tap a tab inside the same
-   * window and the button gets ripped out from under your pointer, so
-   * the click never resolves. With a stable button identity the click
-   * always lands. */
-  private tabBtns: HTMLButtonElement[] = [];
-  /** Signature of the last-rendered content state. Recomputed every
-   * update; we only walk the DOM when it actually changes. Same goal
-   * as the persistent tabs — avoid throwing away DOM that the player
-   * is in the middle of interacting with. */
-  private lastContentSig = "";
 
-  constructor(parent: HTMLElement, game: Game) {
+  /** Precomputed per-course dish lists, deduped by id and sorted
+   * Tier 1 → 5. `getRecipeLuxuryTier` is a pure function of the recipe
+   * definition, so this never changes at runtime and is built once. */
+  private readonly courses: Course[];
+
+  private collapsed = true;
+  private ci = 0; // course index (0..4)
+  private di = 0; // dish index within the course
+
+  // Persistent element refs — built once, mutated by render(). Keeping
+  // the interactive controls (arrows, course buttons, toggle, upgrade)
+  // stable means a click can never race with a re-render tearing the
+  // button out from under the pointer.
+  private catnameEl!: HTMLElement;
+  private catposEl!: HTMLElement;
+  private upLbl!: HTMLElement;
+  private dnLbl!: HTMLElement;
+  private tierBadge!: HTMLElement;
+  private focusWrap!: HTMLElement;
+  private focusImg!: HTMLImageElement;
+  private focusEmoji!: HTMLElement;
+  private peekL!: HTMLImageElement;
+  private peekR!: HTMLImageElement;
+  private arrowL!: HTMLElement;
+  private arrowR!: HTMLElement;
+  private lockov!: HTMLElement;
+  private rail!: HTMLElement;
+  private fname!: HTMLElement;
+  private dots!: HTMLElement;
+  private tog!: HTMLButtonElement;
+  private detailDyn!: HTMLElement;
+  private upBtn!: HTMLButtonElement;
+
+  /** Signature of the last render so the 5 Hz update() tick skips work
+   * when nothing visible changed. */
+  private lastSig = "";
+
+  constructor(parent: HTMLElement, game: Game, onUpgrade?: () => void) {
     this.game = game;
+    this.onUpgrade = onUpgrade;
+    this.courses = COURSES.map((c) => {
+      const seen = new Set<string>();
+      const dishes = recipes
+        .filter((r) => r.category === c.key)
+        // Dedupe: recipes.ts has a couple of duplicate ids (chocolate-cake,
+        // apple-pie). Keep the first so the carousel shows each dish once.
+        .filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
+        .sort((a, b) =>
+          (getRecipeLuxuryTier(a) - getRecipeLuxuryTier(b)) ||
+          (a.sellPrice - b.sellPrice) ||
+          a.name.localeCompare(b.name));
+      return { key: c.key, label: c.label, dishes };
+    });
+
+    this.injectStyle();
+
     this.root = document.createElement("div");
-    // 500 max (was 580 → 760 historically). The panel is centered
-    // horizontally, so on common laptop viewports (~1500 px wide)
-    // 580 still bled into the chat at left:280 by ~80 px even
-    // though the menu's own content fit fine. Dropping the max to
-    // 500 pushes the left edge ~40 px further right when centered;
-    // the recipe column shrinks from ~360 → ~280 (still readable
-    // for the longest recipe text), summary panel keeps its 180 px
-    // column, 10 px gap stays. Calc floor still lets the panel
-    // shrink further on narrow viewports.
     Object.assign(this.root.style, {
       position: "fixed",
       left: "50%",
       transform: "translateX(-50%)",
       bottom: "12px",
-      maxWidth: "500px",
-      width: "min(500px, calc(100vw - 480px))",
+      width: "min(468px, calc(100vw - 24px))",
+      maxWidth: "468px",
       padding: "8px 12px",
-      background: "rgba(20, 14, 10, 0.78)",
+      background: "rgba(20, 14, 10, 0.82)",
       color: "#fff5dc",
-      font: "12px/1.3 system-ui, sans-serif",
-      borderRadius: "8px",
+      font: "12px/1.35 system-ui, sans-serif",
+      borderRadius: "10px",
       pointerEvents: "auto",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-      // Phase I (UX) — explicit z-index so status bubbles (z=3 after
-      // the bubble-layer fix) can't bleed through the panel.  Matches
-      // ChatPanel (100) — both are side / centre HUD panels that need
-      // to sit above the bubble layer but below modals (1000+).
+      boxShadow: "0 4px 18px rgba(0,0,0,0.4)",
       zIndex: "100",
     } as Partial<CSSStyleDeclaration>);
     this.root.classList.add("cb-menupanel");
@@ -122,540 +125,347 @@ export class MenuPanel {
       this.collapsed = !this.collapsed;
       this.body.style.display = this.collapsed ? "none" : "block";
       title.textContent = this.collapsed ? "MENU ▾  (click to expand)" : "MENU ▴  (click to collapse)";
+      if (!this.collapsed) { this.lastSig = ""; this.render(); }
     };
     this.titleEl = title;
     this.root.appendChild(title);
     attachTooltip(title,
       "MENU — the dishes your restaurant serves.\n" +
-      "Each tier (T1 → T5) holds a set of recipes. Tick a recipe to put it on the menu — customers " +
-      "order it, the chef cooks it from pantry ingredients, and you earn its sell price.\n" +
-      "Higher tiers unlock as your overall luxury tier rises (matched to the priciest furniture you own). " +
-      "Each recipe can be upgraded for higher profit + satisfaction; some require specific appliances " +
-      "(stove, microwave, coffee, blender, toaster). Recipes appear locked when an appliance is missing."
+      "Swipe or use the ‹ › arrows to move through a course; dishes run Tier 1 → Tier 5 as you go right. " +
+      "Use the big ▲ ▼ course buttons (or swipe up / down) to switch course.\n" +
+      "Tap the pill under a dish to put it on the menu (max 3 per course) — customers order it, the chef " +
+      "cooks it from pantry ingredients, and you earn its sell price. Higher tiers unlock as your luxury " +
+      "tier rises; some dishes need a specific appliance (shown on the right) before they can be served."
     );
 
     this.body = document.createElement("div");
-    Object.assign(this.body.style, { display: "none", marginTop: "8px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(this.body.style, {
+      display: "none", marginTop: "8px", maxHeight: "82vh", overflowY: "auto",
+    } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.body);
 
-    this.tabsRow = document.createElement("div");
-    Object.assign(this.tabsRow.style, { display: "flex", gap: "4px", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
-    this.body.appendChild(this.tabsRow);
-
-    // Two-column flex inside the body: recipe list (flex:1) + summary
-    // panel (fixed 180px). Tabs row stays above both, full width.
-    const splitRow = document.createElement("div");
-    Object.assign(splitRow.style, {
-      display: "flex", gap: "10px", alignItems: "stretch",
-    } as Partial<CSSStyleDeclaration>);
-    this.body.appendChild(splitRow);
-
-    this.content = document.createElement("div");
-    Object.assign(this.content.style, {
-      flex: "1 1 auto",
-      minWidth: "0",
-      maxHeight: "30vh", overflowY: "auto", paddingRight: "4px",
-    } as Partial<CSSStyleDeclaration>);
-    splitRow.appendChild(this.content);
-
-    this.summaryPanel = document.createElement("div");
-    Object.assign(this.summaryPanel.style, {
-      flex: "0 0 180px",
-      maxHeight: "30vh", overflowY: "auto",
-      paddingLeft: "10px",
-      borderLeft: "1px solid rgba(255,245,220,0.15)",
-      display: "flex", flexDirection: "column", gap: "6px",
-      fontSize: "11px",
-    } as Partial<CSSStyleDeclaration>);
-    splitRow.appendChild(this.summaryPanel);
-    this.buildSummarySections();
-
-    // Build the tier-tab buttons ONCE — `update()` later only restyles
-    // them. See `tabBtns` doc for why we don't rebuild every 200 ms.
-    this.buildTabs();
+    this.buildCarousel();
+    this.render();
   }
 
-  /** Build the persistent header + list container for each category
-   * section in the summary panel. Built once; renderSummary() then
-   * mutates header text + list children each tick. */
-  private buildSummarySections(): void {
-    for (const sec of SUMMARY_SECTIONS) {
-      const wrap = document.createElement("div");
-      Object.assign(wrap.style, {
-        display: "flex", flexDirection: "column", gap: "2px",
-      } as Partial<CSSStyleDeclaration>);
-      const header = document.createElement("div");
-      Object.assign(header.style, {
-        fontSize: "10px", fontWeight: "700", letterSpacing: "0.04em",
-        textTransform: "uppercase", opacity: "0.85",
-      } as Partial<CSSStyleDeclaration>);
-      wrap.appendChild(header);
-      const list = document.createElement("div");
-      Object.assign(list.style, {
-        display: "flex", flexDirection: "column", gap: "1px",
-        paddingLeft: "8px",
-      } as Partial<CSSStyleDeclaration>);
-      wrap.appendChild(list);
-      this.summaryPanel.appendChild(wrap);
-      this.summarySections.set(sec.key, { header, list });
+  /** One-time scoped stylesheet for the carousel. Kept out of the TS as
+   * a <style> block (same approach as MobileUI) so the render code reads
+   * as structure, not 300 lines of inline Object.assign. */
+  private injectStyle(): void {
+    if (document.getElementById("cb-menu-style")) return;
+    const s = document.createElement("style");
+    s.id = "cb-menu-style";
+    s.textContent = `
+.cbm-wrap{max-width:452px;margin:0 auto}
+.cbm-cathead{text-align:center;margin:2px 0 0}
+.cbm-catname{font-size:16px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#ffd986}
+.cbm-catpos{font-size:10px;color:rgba(255,245,220,.5);letter-spacing:.03em}
+.cbm-course{display:flex;align-items:center;justify-content:center;gap:10px;margin:7px auto;font:inherit;font-size:14px;font-weight:600;color:#fff5dc;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);border-radius:11px;padding:8px 18px;cursor:pointer;min-width:184px}
+.cbm-course:hover{border-color:#ffd986;color:#ffd986}
+.cbm-course .cchev{font-size:19px;color:#ffd986;line-height:1}
+.cbm-stage{position:relative;height:196px;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:pan-y}
+.cbm-tier{position:absolute;top:2px;left:2px;z-index:5;font-size:10px;font-weight:700;letter-spacing:.07em;color:#1b1410;background:#ffd986;padding:2px 9px;border-radius:7px}
+.cbm-tier.lk{background:rgba(255,140,120,.92);color:#2a0f0a}
+.cbm-focus{position:relative;z-index:2;text-align:center}
+.cbm-focus img{width:172px;height:172px;object-fit:contain;filter:drop-shadow(0 8px 14px rgba(0,0,0,.5))}
+.cbm-focus.locked img{filter:grayscale(.8) brightness(.6)}
+.cbm-femoji{font-size:118px;line-height:172px;display:none}
+.cbm-peek{position:absolute;top:50%;transform:translateY(-50%) scale(.58);opacity:.3;z-index:1;pointer-events:none}
+.cbm-peek img{width:140px;height:140px;object-fit:contain}
+.cbm-peek.l{left:-46px}.cbm-peek.r{right:-46px}
+.cbm-arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:4;width:32px;height:32px;border-radius:50%;border:1px solid rgba(255,245,220,.16);background:rgba(18,12,8,.82);color:#fff5dc;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.cbm-arrow:hover{border-color:#ffd986;color:#ffd986}
+.cbm-arrow.l{left:0}.cbm-arrow.r{right:0}
+.cbm-lockov{position:absolute;inset:0;z-index:3;display:none;align-items:center;justify-content:center;pointer-events:none}
+.cbm-lockcircle{background:rgba(12,8,6,.74);border:1px solid rgba(255,215,150,.4);border-radius:12px;padding:8px 14px;text-align:center;font-size:22px}
+.cbm-lockcircle span{display:block;font-size:11px;letter-spacing:.05em;margin-top:1px;color:#fff5dc}
+.cbm-rail{position:absolute;right:-1px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px;z-index:5}
+.cbm-rdot{width:5px;height:5px;border-radius:50%;background:rgba(255,245,220,.2)}
+.cbm-rdot.on{background:#ffd986;height:14px;border-radius:3px}
+.cbm-fname{font-size:15px;font-weight:700;text-align:center;margin-top:1px}
+.cbm-dots{display:flex;gap:5px;justify-content:center;flex-wrap:wrap;margin:6px 0 2px}
+.cbm-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,245,220,.22)}
+.cbm-dot.on{background:#ffd986;transform:scale(1.3)}
+.cbm-dot.lk{background:rgba(255,140,120,.35)}
+.cbm-tiercap{text-align:center;font-size:10px;color:rgba(255,245,220,.5);margin-bottom:7px}
+.cbm-tog{display:block;margin:0 auto;font:inherit;font-size:12px;font-weight:600;padding:7px 16px;border-radius:18px;cursor:pointer;border:1px solid rgba(120,200,120,.45);background:rgba(120,200,120,.16);color:#a8e2a8}
+.cbm-tog.off{border-color:rgba(255,245,220,.14);background:rgba(255,245,220,.05);color:rgba(255,245,220,.6)}
+.cbm-tog.lock{border-color:rgba(255,180,120,.5);background:rgba(255,180,120,.12);color:#ffd986;cursor:default}
+.cbm-tog.need{border-color:rgba(230,120,110,.5);background:rgba(230,120,110,.14);color:#f0b6ac;cursor:default}
+.cbm-detail{margin-top:10px;border-top:1px solid rgba(255,245,220,.14);padding-top:10px}
+.cbm-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:11px}
+.cbm-stat{background:rgba(255,245,220,.04);border-radius:8px;padding:6px 8px;text-align:center}
+.cbm-stat .sl{display:block;font-size:10px;color:rgba(255,245,220,.5)}
+.cbm-stat .sv{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.cbm-stat .sv.good{color:#a8e2a8}
+.cbm-cols{display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:11px}
+.cbm-col.r{border-left:1px solid rgba(255,245,220,.14);padding-left:12px}
+.cbm-il{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,245,220,.5);margin-bottom:6px}
+.cbm-chips{display:flex;gap:5px;flex-wrap:wrap}
+.cbm-chip{font-size:11px;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);padding:2px 8px;border-radius:7px;text-transform:capitalize}
+.cbm-chip.appl{background:rgba(120,200,120,.16);color:#cbe6cb;border-color:rgba(120,200,120,.4);text-transform:none}
+.cbm-chip.miss{background:rgba(200,90,90,.2);color:#f0c8c8;border-color:rgba(200,90,90,.4);text-transform:none}
+.cbm-lvl{font-size:10px;color:rgba(255,245,220,.5);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}
+.cbm-up{width:100%;font:inherit;font-size:12px;padding:8px;border-radius:8px;background:transparent;border:1px solid #ffd986;color:#ffd986;cursor:pointer}
+.cbm-up:hover{background:rgba(255,217,134,.12)}
+`;
+    document.head.appendChild(s);
+  }
+
+  private el(tag: string, cls?: string): HTMLElement {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    return e;
+  }
+
+  private buildCarousel(): void {
+    const wrap = this.el("div", "cbm-wrap");
+
+    const cathead = this.el("div", "cbm-cathead");
+    this.catnameEl = this.el("div", "cbm-catname");
+    this.catposEl = this.el("div", "cbm-catpos");
+    cathead.append(this.catnameEl, this.catposEl);
+    wrap.appendChild(cathead);
+
+    // Previous-course button (▲)
+    const up = this.el("button", "cbm-course");
+    const upChev = this.el("span", "cchev"); upChev.textContent = "▲";
+    this.upLbl = this.el("span");
+    up.append(upChev, this.upLbl);
+    up.onclick = () => this.moveCourse(-1);
+    wrap.appendChild(up);
+
+    // Stage: tier badge + arrows + peeks + focus + lock overlay + rail
+    const stage = this.el("div", "cbm-stage");
+    this.tierBadge = this.el("div", "cbm-tier");
+    this.arrowL = this.el("button", "cbm-arrow l"); this.arrowL.textContent = "‹";
+    this.arrowR = this.el("button", "cbm-arrow r"); this.arrowR.textContent = "›";
+    this.arrowL.onclick = () => this.moveDish(-1);
+    this.arrowR.onclick = () => this.moveDish(1);
+    const peekLwrap = this.el("div", "cbm-peek l");
+    this.peekL = document.createElement("img"); peekLwrap.appendChild(this.peekL);
+    const peekRwrap = this.el("div", "cbm-peek r");
+    this.peekR = document.createElement("img"); peekRwrap.appendChild(this.peekR);
+    this.focusWrap = this.el("div", "cbm-focus");
+    this.focusImg = document.createElement("img");
+    this.focusEmoji = this.el("span", "cbm-femoji");
+    this.focusWrap.append(this.focusImg, this.focusEmoji);
+    this.lockov = this.el("div", "cbm-lockov");
+    this.rail = this.el("div", "cbm-rail");
+    stage.append(this.tierBadge, this.arrowL, peekLwrap, this.focusWrap, peekRwrap, this.arrowR, this.lockov, this.rail);
+    // Touch swipe: horizontal = dish, vertical = course.
+    let sx = 0, sy = 0;
+    stage.addEventListener("touchstart", (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+    stage.addEventListener("touchend", (e) => {
+      const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+      if (Math.abs(dx) > Math.abs(dy)) { if (dx > 28) this.moveDish(-1); else if (dx < -28) this.moveDish(1); }
+      else { if (dy > 28) this.moveCourse(-1); else if (dy < -28) this.moveCourse(1); }
+    }, { passive: true });
+    wrap.appendChild(stage);
+
+    this.fname = this.el("div", "cbm-fname");
+    wrap.appendChild(this.fname);
+    this.dots = this.el("div", "cbm-dots");
+    wrap.appendChild(this.dots);
+    const cap = this.el("div", "cbm-tiercap"); cap.textContent = "Tier rises as you scroll right →";
+    wrap.appendChild(cap);
+
+    this.tog = document.createElement("button"); this.tog.className = "cbm-tog";
+    this.tog.onclick = () => this.toggleFocused();
+    wrap.appendChild(this.tog);
+
+    const detail = this.el("div", "cbm-detail");
+    this.detailDyn = this.el("div");
+    this.upBtn = document.createElement("button"); this.upBtn.className = "cbm-up";
+    this.upBtn.textContent = "Upgrade this dish";
+    this.upBtn.onclick = () => this.onUpgrade?.();
+    detail.append(this.detailDyn, this.upBtn);
+    wrap.appendChild(detail);
+
+    // Next-course button (▼)
+    const dn = this.el("button", "cbm-course");
+    this.dnLbl = this.el("span");
+    const dnChev = this.el("span", "cchev"); dnChev.textContent = "▼";
+    dn.append(this.dnLbl, dnChev);
+    dn.onclick = () => this.moveCourse(1);
+    wrap.appendChild(dn);
+
+    this.body.appendChild(wrap);
+  }
+
+  private moveDish(delta: number): void {
+    const n = this.courses[this.ci].dishes.length;
+    if (n <= 1) return;
+    this.di = (this.di + delta + n) % n;
+    this.render();
+  }
+
+  private moveCourse(delta: number): void {
+    this.ci = (this.ci + delta + this.courses.length) % this.courses.length;
+    this.di = 0;
+    this.render();
+  }
+
+  /** Put the focused dish on / off the menu. Removing always works
+   * (even a dish whose appliance was later sold). Adding is gated on
+   * unlocked tier + all appliances present + the per-course cap of 3. */
+  private toggleFocused(): void {
+    const recipe = this.courses[this.ci].dishes[this.di];
+    if (!recipe) return;
+    const onMenu = new Set(this.game.cooking.getMenuRecipeIds());
+    if (onMenu.has(recipe.id)) {
+      this.game.cooking.removeFromMenu(recipe.id);
+      this.lastSig = ""; this.render();
+      return;
     }
-  }
-
-  /** Briefly flash the matching summary section header red to
-   * surface the "category is full" feedback. The header's color
-   * gets restored on the next renderSummary tick. */
-  private flashCapWarning(category: RecipeDefinition["category"]): void {
-    const refs = this.summarySections.get(category);
-    if (!refs) return;
-    refs.header.style.color = "#ff9a9a";
-    refs.header.style.transition = "color 0.5s ease";
-    window.setTimeout(() => {
-      // Force the next renderSummary to recompute the header color.
-      this.lastSummarySig = "";
-      this.renderSummary();
-    }, 600);
-  }
-
-  /** Mutate the existing summary sections to reflect the current
-   * menu. Uses a signature check so the DOM is only touched when
-   * something visibly changed — same defensive pattern as
-   * renderContent. The signature folds in the provided-appliance set
-   * so selling / placing an appliance (e.g. removing the toaster)
-   * re-renders the makeable counts + missing-appliance warnings even
-   * though the active-menu id list itself is unchanged. */
-  private renderSummary(): void {
-    const onMenu = this.game.cooking.getMenuRecipeIds();
+    if (getRecipeLuxuryTier(recipe) > this.game.getLuxuryTier()) return; // tier-locked
     const provided = this.game.getProvidedAppliances?.();
-    const provKey = provided ? Array.from(provided).sort().join(",") : "∅";
-    const sig = `${onMenu.slice().sort().join(",")}|${provKey}`;
-    if (sig === this.lastSummarySig) return;
-    this.lastSummarySig = sig;
-    const onMenuSet = new Set(onMenu);
-    for (const sec of SUMMARY_SECTIONS) {
-      const refs = this.summarySections.get(sec.key);
-      if (!refs) continue;
-      const items = recipes.filter((r) => r.category === sec.key && onMenuSet.has(r.id));
-      // Per-recipe missing appliances. A recipe you can't cook (missing
-      // stove / toaster / …) is still ON the menu but will never reach a
-      // customer, so it must NOT count toward the category tally — the
-      // count reflects how many active dishes here can actually be served.
-      // Delete the toaster and "Appetizers (1/3)" drops to "(0/3)": a
-      // visible flag that something's broken even though the recipe still
-      // shows in the list below (struck out + "Toaster missing" in red).
-      const missingByRecipe = new Map<string, ApplianceId[]>();
-      for (const r of items) missingByRecipe.set(r.id, this.missingAppliancesFor(r, provided));
-      const makeable = items.filter((r) => (missingByRecipe.get(r.id)?.length ?? 0) === 0).length;
-      const anyBroken = items.some((r) => (missingByRecipe.get(r.id)?.length ?? 0) > 0);
-      const max = maxActiveRecipesPerCategory;
-      // Red header the moment any active dish here can't be cooked;
-      // otherwise the prior amber-full / dim-empty / normal scheme, keyed
-      // off the MAKEABLE count so it agrees with the number displayed.
-      const headerColor = anyBroken ? "#ff7a7a"
-        : makeable >= max ? "#ffd986"
-        : makeable === 0 ? "rgba(255,245,220,0.55)"
-        : "#fff5dc";
-      refs.header.style.color = headerColor;
-      refs.header.textContent = `${sec.label} (${makeable}/${max}):`;
-      // Rebuild list contents — small enough that diffing isn't worth it.
-      refs.list.innerHTML = "";
-      if (items.length === 0) {
-        const empty = document.createElement("div");
-        empty.textContent = "—";
-        Object.assign(empty.style, {
-          opacity: "0.4", fontStyle: "italic",
-        } as Partial<CSSStyleDeclaration>);
-        refs.list.appendChild(empty);
-      } else {
-        for (const r of items) {
-          refs.list.appendChild(this.renderSummaryLine(r, missingByRecipe.get(r.id) ?? []));
-        }
-      }
-    }
+    const missing = provided
+      ? this.game.cooking.getRecipeAppliances(recipe).filter((a) => !provided.has(a))
+      : [];
+    if (missing.length > 0) return; // appliance missing
+    const added = this.game.cooking.addToMenu(recipe.id);
+    if (!added) { this.flashCap(); return; } // per-course cap hit
+    this.lastSig = ""; this.render();
   }
 
-  /** The appliance ids a recipe needs but the restaurant doesn't
-   * currently provide. Empty when everything's placed — or when the
-   * provided set isn't known yet (early boot treats recipes as
-   * makeable, matching CookingSystem.canMakeRecipe). */
-  private missingAppliancesFor(
-    recipe: RecipeDefinition, provided: ReadonlySet<string> | undefined,
-  ): ApplianceId[] {
-    if (!provided) return [];
-    const missing: ApplianceId[] = [];
-    for (const a of this.game.cooking.getRecipeAppliances(recipe)) {
-      if (!provided.has(a)) missing.push(a);
-    }
-    return missing;
-  }
-
-  /** One active-recipe line in the summary panel: coloured tier chip +
-   * dish name, plus — when the recipe can't be cooked — a struck-through
-   * dimmed name and a red "<Appliance> missing" sub-line, so a glance at
-   * the active menu shows which dishes are broken (appliance sold or
-   * never built) instead of silently never being served. */
-  private renderSummaryLine(r: RecipeDefinition, missing: ApplianceId[]): HTMLElement {
-    const broken = missing.length > 0;
-    const cell = document.createElement("div");
-    Object.assign(cell.style, {
-      display: "flex", flexDirection: "column", gap: "0",
-      opacity: broken ? "0.85" : "1",
-    } as Partial<CSSStyleDeclaration>);
-    const line = document.createElement("div");
-    // Flex row: coloured tier chip + dish name. The chip doubles as the
-    // list marker and tells the player how pricey each picked dish is.
-    Object.assign(line.style, {
-      display: "flex", alignItems: "center", gap: "5px",
-      whiteSpace: "nowrap", overflow: "hidden",
-    } as Partial<CSSStyleDeclaration>);
-    const tier = getRecipeLuxuryTier(r);
-    const badge = document.createElement("span");
-    badge.textContent = `T${tier}`;
-    const bg = TIER_BADGE_BG[Math.max(0, Math.min(TIER_BADGE_BG.length - 1, tier - 1))];
-    Object.assign(badge.style, {
-      display: "inline-block", background: bg, color: "#fff",
-      fontSize: "9px", fontWeight: "700", letterSpacing: "0.04em",
-      padding: "1px 5px", borderRadius: "3px", flex: "0 0 auto",
-      boxShadow: "inset 0 -1px 0 rgba(0,0,0,0.25)",
-    } as Partial<CSSStyleDeclaration>);
-    line.appendChild(badge);
-    const name = document.createElement("span");
-    name.textContent = r.name;
-    Object.assign(name.style, {
-      flex: "1 1 auto", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis",
-      textDecoration: broken ? "line-through" : "none",
-      color: broken ? "rgba(255,245,220,0.6)" : "inherit",
-    } as Partial<CSSStyleDeclaration>);
-    line.appendChild(name);
-    cell.appendChild(line);
-    if (broken) {
-      const warn = document.createElement("div");
-      warn.textContent = `${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")} missing`;
-      Object.assign(warn.style, {
-        color: "#ff6b6b", fontWeight: "700", fontSize: "10px",
-        paddingLeft: "3px", whiteSpace: "nowrap",
-        overflow: "hidden", textOverflow: "ellipsis",
-      } as Partial<CSSStyleDeclaration>);
-      cell.appendChild(warn);
-    }
-    return cell;
-  }
-
-  /** Build the 5 tier-tab buttons one time. Each button's click handler
-   * is a closure over a fixed tier value; subsequent restyles in
-   * `refreshTabs` never touch the click handler or the button identity,
-   * so a tap can't race with a re-render. */
-  private buildTabs(): void {
-    const baseProfits = ([1, 2, 3, 4, 5] as const).map((t) => this.game.getTierBaseProfit(t));
-    for (let t = 1; t <= 5; t += 1) {
-      const tier = t as LuxuryTier;
-      const btn = document.createElement("button");
-      Object.assign(btn.style, {
-        flex: "1",
-        padding: "5px 4px",
-        borderRadius: "4px",
-        font: "inherit",
-        fontSize: "11px",
-      } as Partial<CSSStyleDeclaration>);
-      btn.title = `Base profit per dish at L1: $${baseProfits[t - 1]}`;
-      btn.onclick = () => {
-        if (btn.disabled) return;
-        if (this.selectedTier === tier) return;
-        this.selectedTier = tier;
-        this.refreshTabs();
-        // Force a content rebuild on tier change — the signature would
-        // catch it next tick anyway, but we don't want a 200 ms flash
-        // of stale rows.
-        this.lastContentSig = "";
-        this.renderContent();
-      };
-      this.tabBtns.push(btn);
-      this.tabsRow.appendChild(btn);
-    }
+  /** Briefly turn the toggle into a "course full" warning, then let the
+   * next render restore it. */
+  private flashCap(): void {
+    this.tog.className = "cbm-tog need";
+    this.tog.textContent = `Only ${maxActiveRecipesPerCategory} dishes per course`;
+    window.setTimeout(() => { this.lastSig = ""; this.render(); }, 1200);
   }
 
   update(): void {
-    if (this.collapsed) return; // skip work when hidden
-    this.refreshTabs();
-    this.renderContent();
-    this.renderSummary();
+    if (this.collapsed) return;
+    if (this.computeSig() === this.lastSig) return;
+    this.render();
   }
 
-  /** Mutate the existing tab buttons' styles + labels to match the
-   * current player tier + active selection. No DOM destruction; the
-   * tab the player is clicking right now is never ripped out from
-   * under their pointer. */
-  private refreshTabs(): void {
+  private computeSig(): string {
+    const recipe = this.courses[this.ci]?.dishes[this.di];
+    if (!recipe) return `${this.ci}|${this.di}`;
     const playerTier = this.game.getLuxuryTier();
-    const baseProfits = ([1, 2, 3, 4, 5] as const).map((t) => this.game.getTierBaseProfit(t));
-    for (let i = 0; i < this.tabBtns.length; i += 1) {
-      const tier = (i + 1) as LuxuryTier;
-      const locked = tier > playerTier;
-      const active = tier === this.selectedTier;
-      const btn = this.tabBtns[i];
-      btn.textContent = `Tier ${tier}${locked ? " 🔒" : ""}  ·  $${baseProfits[i]}/dish`;
-      btn.style.background = active
-        ? "rgba(120, 200, 120, 0.30)"
-        : locked
-          ? "rgba(255,245,220,0.04)"
-          : "rgba(255,245,220,0.10)";
-      btn.style.color = locked ? "rgba(255,245,220,0.4)" : "#fff5dc";
-      btn.style.border = active
-        ? "1px solid rgba(120, 200, 120, 0.7)"
-        : "1px solid rgba(255,245,220,0.18)";
-      btn.style.cursor = locked ? "not-allowed" : "pointer";
-      btn.style.fontWeight = active ? "700" : "500";
-      btn.disabled = locked;
-      btn.title = locked ? `Unlock with Tier ${tier} expansion` : `Base profit per dish at L1: $${baseProfits[i]}`;
-    }
-  }
-
-  private renderContent(): void {
-    // Cheap signature of the everything that drives the rendered HTML.
-    // When nothing has changed (the common case — the player isn't
-    // touching menus 5×/s) we skip the rebuild entirely, which avoids
-    // throwing away the row checkboxes the player might be about to
-    // click. Without this, every 200 ms tick destroys + recreates the
-    // whole recipe list, costing both real CPU and any in-flight click.
-    const sig = this.computeContentSig();
-    if (sig === this.lastContentSig) return;
-    this.lastContentSig = sig;
-    this.content.innerHTML = "";
-    const inTier = recipes.filter((r) => getRecipeLuxuryTier(r) === this.selectedTier);
-    if (inTier.length === 0) {
-      this.content.textContent = "No recipes in this tier.";
-      return;
-    }
-    const onMenu = new Set(this.game.cooking.getMenuRecipeIds());
-    const playerTier = this.game.getLuxuryTier();
-    const tierUnlocked = this.selectedTier <= playerTier;
-    // Snapshot the currently-provided appliances ONCE per render so
-    // every row checks against the same set (and we don't walk the
-    // registry n times).
-    const provided = this.game.getProvidedAppliances?.();
-    // Sort within tier by category (appetizer, main, dessert, drink, side) then name.
-    const order = { appetizer: 0, main: 1, dessert: 2, drink: 3, side: 4 } as const;
-    inTier.sort((a, b) => (order[a.category] - order[b.category]) || a.name.localeCompare(b.name));
-    for (const recipe of inTier) {
-      this.content.appendChild(this.renderRecipe(recipe, onMenu.has(recipe.id), tierUnlocked, provided));
-    }
-  }
-
-  private renderRecipe(
-    recipe: RecipeDefinition, on: boolean, unlocked: boolean,
-    provided: ReadonlySet<string> | undefined,
-  ): HTMLElement {
-    // Recipes whose required appliances aren't all placed in the
-    // restaurant can't be put on the menu. The row still renders so
-    // the player knows the recipe exists and what they need to build
-    // to unlock it.
-    const appliances = this.game.cooking.getRecipeAppliances(recipe);
-    const missing: ApplianceId[] = [];
-    if (provided) {
-      for (const a of appliances) if (!provided.has(a)) missing.push(a);
-    }
-    const makeable = missing.length === 0;
-    const usable = unlocked && makeable;
-
-    const row = document.createElement("div");
-    Object.assign(row.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      padding: "4px 6px",
-      borderBottom: "1px solid rgba(255,245,220,0.06)",
-      opacity: usable ? "1" : "0.45",
-    } as Partial<CSSStyleDeclaration>);
-
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = on;
-    // You can ALWAYS untick a recipe that's already on the menu — even one
-    // you currently can't cook (missing appliance) — so the menu never gets
-    // stuck advertising a dish the kitchen can't make. Only TICKING a new
-    // recipe on is gated behind `usable` (unlocked tier + all appliances).
-    cb.disabled = !on && !usable;
-    // Tooltip explains WHY it's gated / that you can still remove it.
-    if (on && !makeable) {
-      cb.title = `Missing ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")} — untick to take it off the menu`;
-    } else if (!unlocked) {
-      cb.title = `Locked — unlock with Tier ${this.selectedTier} expansion`;
-    } else if (!makeable) {
-      cb.title = `Needs: ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
-    }
-    cb.onchange = () => {
-      if (cb.checked) {
-        const added = this.game.cooking.addToMenu(recipe.id);
-        if (!added) {
-          // addToMenu refuses when the per-category cap of 3 is
-          // already met OR the recipe is somehow already on. Roll
-          // the checkbox state back so the UI stays truthful, and
-          // ping the title with a brief tooltip so the player knows
-          // why nothing happened.
-          cb.checked = false;
-          const onCount = this.game.cooking.getActiveRecipeCountForCategory(recipe.category);
-          if (onCount >= maxActiveRecipesPerCategory) {
-            this.flashCapWarning(recipe.category);
-          }
-        }
-      } else {
-        this.game.cooking.removeFromMenu(recipe.id);
-      }
-      // Force the summary panel to redraw immediately so the new
-      // count + bullet shows without waiting for the 200 ms tick.
-      this.lastSummarySig = "";
-      this.renderSummary();
-    };
-    row.appendChild(cb);
-
-    const left = document.createElement("div");
-    // flex: 1 1 auto — description column grows to fill the row so the
-    // price chip sits flush against the row's right edge (which is also
-    // the summary-panel border). An earlier attempt used flex: 0 1 auto
-    // to "tighten" a gap between description and price, but the real
-    // gap-fix is shrinking the panel box itself (see maxWidth: 500 +
-    // storage-key bump to v3). Without `flex: 1` the price drifts left
-    // and leaves empty space on the right inside the panel.
-    Object.assign(left.style, { flex: "1 1 auto", minWidth: "0" } as Partial<CSSStyleDeclaration>);
-    const nameRow = document.createElement("div");
-    Object.assign(nameRow.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
-    // Plate icon — gives the player an immediate visual cue for what
-    // the dish looks like before they read the name. Same map is used
-    // in UpgradeModal so identical recipes look identical across the
-    // two panels.
-    const icon = document.createElement("span");
-    icon.textContent = recipeIcon(recipe.id);
-    Object.assign(icon.style, {
-      fontSize: "16px", lineHeight: "1", flex: "0 0 auto",
-    } as Partial<CSSStyleDeclaration>);
-    nameRow.appendChild(icon);
-    const cat = document.createElement("span");
-    cat.textContent = this.shortForCategory(recipe.category);
-    Object.assign(cat.style, {
-      fontSize: "9px", padding: "1px 4px", borderRadius: "3px",
-      background: this.colorForCategory(recipe.category), color: "#1b1410",
-      fontWeight: "700", minWidth: "18px", textAlign: "center",
-    } as Partial<CSSStyleDeclaration>);
-    cat.title = recipe.category[0].toUpperCase() + recipe.category.slice(1);
-    nameRow.appendChild(cat);
-    const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
-    // Level badge — same styling as the category chip so the L number is
-    // unmissable instead of buried as plain trailing text on the name.
-    const lvlBadge = document.createElement("span");
-    lvlBadge.textContent = `L${level}`;
-    Object.assign(lvlBadge.style, {
-      fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
-      background: level >= 10 ? "#f5c14a" : level > 1 ? "#7a9a6a" : "#4a4137",
-      color: level > 1 ? "#fff" : "#cbb",
-      fontWeight: "700", minWidth: "18px", textAlign: "center",
-    } as Partial<CSSStyleDeclaration>);
-    nameRow.appendChild(lvlBadge);
-    const name = document.createElement("span");
-    name.textContent = recipe.name;
-    Object.assign(name.style, { fontWeight: "600", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } as Partial<CSSStyleDeclaration>);
-    nameRow.appendChild(name);
-    // ACTIVE pill — bright green chip so the player can see at a glance
-    // which recipes are on the active menu without scanning the row's
-    // leftmost checkbox.
-    if (on) {
-      const activeBadge = document.createElement("span");
-      activeBadge.textContent = "ACTIVE";
-      Object.assign(activeBadge.style, {
-        fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
-        background: "rgba(120, 200, 120, 0.85)", color: "#1b1410",
-        fontWeight: "700", marginLeft: "2px",
-      } as Partial<CSSStyleDeclaration>);
-      nameRow.appendChild(activeBadge);
-    }
-    left.appendChild(nameRow);
-    // Appliance requirements — one chip per appliance the recipe needs.
-    // Provided ones render green, missing ones render dim red so the
-    // player can see at a glance "this recipe needs a toaster I don't
-    // own". Skip the row entirely when the recipe only needs whichever
-    // station has historically been universal so it doesn't add noise
-    // for the basic counter / stove recipes.
-    if (appliances.length > 0) {
-      const applLine = document.createElement("div");
-      Object.assign(applLine.style, {
-        display: "flex", gap: "3px", marginTop: "2px", flexWrap: "wrap",
-      } as Partial<CSSStyleDeclaration>);
-      for (const a of appliances) {
-        const have = provided ? provided.has(a) : true;
-        const chip = document.createElement("span");
-        chip.textContent = APPLIANCE_LABELS[a];
-        Object.assign(chip.style, {
-          fontSize: "9px", padding: "1px 5px", borderRadius: "3px",
-          background: have ? "rgba(120, 200, 120, 0.30)" : "rgba(200, 90, 90, 0.25)",
-          color: have ? "#cbe6cb" : "#f0c8c8",
-          fontWeight: "600",
-        } as Partial<CSSStyleDeclaration>);
-        applLine.appendChild(chip);
-      }
-      left.appendChild(applLine);
-    }
-    // Ingredient line — list every ingredient with its per-unit cost.
-    // Each entry leads with its emoji so the line is visually scannable
-    // (a row full of 🍅 🍝 🧀 reads as Italian at a glance).
-    const ingLine = document.createElement("div");
-    ingLine.textContent = recipe.ingredients
-      .map((id) => `${ingredientIcon(id)} ${this.prettyIng(id)}($${getIngredientCost(id)})`)
-      .join(" + ");
-    Object.assign(ingLine.style, { fontSize: "10px", opacity: "0.7", marginTop: "1px" } as Partial<CSSStyleDeclaration>);
-    left.appendChild(ingLine);
-    row.appendChild(left);
-
-    const stats = document.createElement("div");
-    Object.assign(stats.style, { textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
-    const price = this.game.getEffectiveSellPrice(recipe);
-    const profit = this.game.getEffectiveProfit(recipe);
-    const sat = this.game.getEffectiveSatisfaction(recipe).toFixed(0);
-    const priceLine = document.createElement("div");
-    priceLine.innerHTML = `$${price} <span style="opacity:0.55">(+$${profit})</span>`;
-    Object.assign(priceLine.style, { fontWeight: "600", fontSize: "12px", color: "#a8e2a8" } as Partial<CSSStyleDeclaration>);
-    stats.appendChild(priceLine);
-    const satLine = document.createElement("div");
-    satLine.textContent = `${sat}😋`;
-    Object.assign(satLine.style, { fontSize: "10px", opacity: "0.75" } as Partial<CSSStyleDeclaration>);
-    stats.appendChild(satLine);
-    row.appendChild(stats);
-
-    return row;
-  }
-
-  /** Hash everything that affects the rendered recipe rows into a
-   * short string. The render-content path compares this against the
-   * last-rendered signature and bails when they match, so the 5 Hz
-   * update tick stays free when nothing visible has changed. */
-  private computeContentSig(): string {
-    const playerTier = this.game.getLuxuryTier();
-    const inTier = recipes.filter((r) => getRecipeLuxuryTier(r) === this.selectedTier);
-    const onMenu = this.game.cooking.getMenuRecipeIds();
     const provided = this.game.getProvidedAppliances?.();
     const provKey = provided ? Array.from(provided).sort().join(",") : "";
-    const onMenuKey = Array.from(onMenu).sort().join(",");
-    // Per-recipe: upgrade level + effective price (covers global cook
-    // multipliers / staff bonuses changing the displayed $price).
-    const recipeKey = inTier.map((r) =>
-      `${r.id}:${this.game.cooking.getRecipeUpgradeLevel(r)}:${this.game.getEffectiveSellPrice(r)}:${this.game.getEffectiveSatisfaction(r).toFixed(0)}`
-    ).join("|");
-    return `${this.selectedTier}|${playerTier}|${onMenuKey}|${provKey}|${recipeKey}`;
+    const onMenu = this.game.cooking.getMenuRecipeIds().slice().sort().join(",");
+    const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
+    const price = this.game.getEffectiveSellPrice(recipe);
+    const sat = Math.round(this.game.getEffectiveSatisfaction(recipe));
+    return `${this.ci}|${this.di}|${playerTier}|${provKey}|${onMenu}|${recipe.id}|${level}|${price}|${sat}`;
   }
 
-  private prettyIng(id: string): string {
+  private setImg(img: HTMLImageElement, id: string, onFail?: () => void): void {
+    img.style.visibility = "";
+    img.onerror = () => { if (onFail) onFail(); else img.style.visibility = "hidden"; };
+    img.src = recipeImage(id);
+  }
+
+  private render(): void {
+    const course = this.courses[this.ci];
+    const dishes = course.dishes;
+    const n = dishes.length;
+    if (this.di >= n) this.di = 0;
+    const recipe = dishes[this.di];
+
+    const tier = getRecipeLuxuryTier(recipe);
+    const playerTier = this.game.getLuxuryTier();
+    const provided = this.game.getProvidedAppliances?.();
+    const appliances = this.game.cooking.getRecipeAppliances(recipe);
+    const missing = provided ? appliances.filter((a) => !provided.has(a)) : [];
+    const lockedByTier = tier > playerTier;
+    const makeable = missing.length === 0;
+    const on = new Set(this.game.cooking.getMenuRecipeIds()).has(recipe.id);
+
+    // Course header
+    this.catnameEl.textContent = course.label;
+    const active = this.game.cooking.getActiveRecipeCountForCategory(course.key);
+    this.catposEl.textContent =
+      `Course ${this.ci + 1} of ${this.courses.length}  ·  ${active}/${maxActiveRecipesPerCategory} on menu`;
+    this.upLbl.textContent = "  " + this.courses[(this.ci - 1 + this.courses.length) % this.courses.length].label;
+    this.dnLbl.textContent = this.courses[(this.ci + 1) % this.courses.length].label + "  ";
+
+    // Focus plate (emoji fallback if the PNG is missing)
+    this.focusImg.style.display = "";
+    this.focusEmoji.style.display = "none";
+    this.setImg(this.focusImg, recipe.id, () => {
+      this.focusImg.style.display = "none";
+      this.focusEmoji.style.display = "inline-block";
+      this.focusEmoji.textContent = recipeIcon(recipe.id);
+    });
+    this.focusWrap.classList.toggle("locked", lockedByTier);
+
+    // Peeks
+    if (n > 1) {
+      this.arrowL.style.display = ""; this.arrowR.style.display = "";
+      this.peekL.parentElement!.style.display = ""; this.peekR.parentElement!.style.display = "";
+      this.setImg(this.peekL, dishes[(this.di - 1 + n) % n].id);
+      this.setImg(this.peekR, dishes[(this.di + 1) % n].id);
+    } else {
+      this.arrowL.style.display = "none"; this.arrowR.style.display = "none";
+      this.peekL.parentElement!.style.display = "none"; this.peekR.parentElement!.style.display = "none";
+    }
+
+    // Tier badge + lock overlay
+    this.tierBadge.textContent = `TIER ${tier}`;
+    this.tierBadge.className = "cbm-tier" + (lockedByTier ? " lk" : "");
+    this.lockov.style.display = lockedByTier ? "flex" : "none";
+    this.lockov.innerHTML = lockedByTier
+      ? `<div class="cbm-lockcircle">🔒<span>Tier ${tier}</span></div>` : "";
+
+    // Dish dots (locked ones tinted) + course rail
+    this.dots.innerHTML = dishes.map((d, k) =>
+      `<span class="cbm-dot${k === this.di ? " on" : ""}${getRecipeLuxuryTier(d) > playerTier ? " lk" : ""}"></span>`).join("");
+    this.rail.innerHTML = this.courses.map((_, k) =>
+      `<span class="cbm-rdot${k === this.ci ? " on" : ""}"></span>`).join("");
+
+    this.fname.textContent = recipe.name;
+
+    // Toggle pill
+    if (lockedByTier) {
+      this.tog.className = "cbm-tog lock";
+      this.tog.textContent = `🔒 Reach Tier ${tier} to unlock`;
+    } else if (!makeable) {
+      this.tog.className = "cbm-tog need";
+      this.tog.textContent = `Needs ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
+    } else if (on) {
+      this.tog.className = "cbm-tog";
+      this.tog.textContent = "✓ On the menu";
+    } else {
+      this.tog.className = "cbm-tog off";
+      this.tog.textContent = "+ Add to menu";
+    }
+
+    // Detail: stats + ingredients / appliance columns + level
+    const price = this.game.getEffectiveSellPrice(recipe);
+    const profit = this.game.getEffectiveProfit(recipe);
+    const sat = Math.round(this.game.getEffectiveSatisfaction(recipe));
+    const level = this.game.cooking.getRecipeUpgradeLevel(recipe);
+    const ingChips = recipe.ingredients
+      .map((id) => `<span class="cbm-chip">${ingredientIcon(id)} ${this.pretty(id)}</span>`)
+      .join("");
+    const applList: string[] = appliances.length ? appliances.slice() : [recipe.stationNeeded];
+    const applChips = applList.map((a) => {
+      const label = APPLIANCE_LABELS[a as ApplianceId] ?? this.pretty(a);
+      const isMissing = provided ? missing.includes(a as ApplianceId) : false;
+      return `<span class="cbm-chip ${isMissing ? "miss" : "appl"}">${label}</span>`;
+    }).join("");
+    this.detailDyn.innerHTML =
+      `<div class="cbm-stats">` +
+      `<div class="cbm-stat"><span class="sl">Price</span><span class="sv">$${price}</span></div>` +
+      `<div class="cbm-stat"><span class="sl">Profit</span><span class="sv good">+$${profit}</span></div>` +
+      `<div class="cbm-stat"><span class="sl">Guest joy</span><span class="sv">${sat}</span></div></div>` +
+      `<div class="cbm-cols">` +
+      `<div class="cbm-col"><div class="cbm-il">Ingredients</div><div class="cbm-chips">${ingChips}</div></div>` +
+      `<div class="cbm-col r"><div class="cbm-il">Appliance</div><div class="cbm-chips">${applChips}</div></div>` +
+      `</div>` +
+      `<div class="cbm-lvl">Level ${level}</div>`;
+
+    this.lastSig = this.computeSig();
+  }
+
+  private pretty(id: string): string {
     return id.replace(/[-_]/g, " ");
-  }
-
-  private colorForCategory(c: string): string {
-    return c === "appetizer" ? "#f6d36a"
-      : c === "main"      ? "#f0a070"
-      : c === "dessert"   ? "#f0a0d0"
-      : c === "drink"     ? "#a0d8f0"
-      : "#cccccc"; // side
-  }
-  private shortForCategory(c: string): string {
-    return c === "appetizer" ? "Ap"
-      : c === "main"      ? "Ma"
-      : c === "dessert"   ? "De"
-      : c === "drink"     ? "Dr"
-      : "Si";
   }
 }
