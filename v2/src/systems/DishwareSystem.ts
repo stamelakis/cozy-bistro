@@ -843,6 +843,36 @@ export class DishwareSystem {
     this.log(`reconcileToLifetime(${kind}): trimmed ${owned - target} excess (was ${owned}/${target})`);
   }
 
+  /** SAFE AUTO-RESTORE — the top-up HALF of reconcileToLifetime, with
+   * the trim branch removed on purpose.
+   *
+   * For each kind: if owned (pool + dishwasher + caller's in-flight) is
+   * below canonical lifetime, add the missing pieces back to tier-1
+   * clean (force=true — they're already counted in lifetime). If owned
+   * is AT or OVER lifetime, do nothing — an over-count is never
+   * auto-trimmed (that stays behind the manual "Trim excess" button).
+   *
+   * This is what the DishwareLeakWatcher calls once a leak has proven
+   * persistent + stable (see the watcher's gates). Because it can only
+   * ADD — never delete — a mistimed call is self-correcting (surfaces as
+   * an OVER the player can trim), never destructive. Returns how many
+   * pieces were restored across both kinds. */
+  restoreLeaksOnly(inFlightPlates: number, inFlightGlasses: number): number {
+    return this.restoreOneKind("plate", inFlightPlates)
+      + this.restoreOneKind("glass", inFlightGlasses);
+  }
+
+  private restoreOneKind(kind: DishKind, inFlightForKind: number): number {
+    const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
+    const inWash = this.getDishwasherInFlight(kind);
+    const owned = this.getOwned(kind) + inWash + inFlightForKind;
+    if (owned >= target) return 0; // NEVER trims — over-count stays manual
+    const missing = target - owned;
+    this.addClean(kind, 1, missing, true); // force: already part of lifetime
+    this.log(`restoreLeaksOnly(${kind}): restored ${missing} (was ${owned}/${target})`);
+    return missing;
+  }
+
   // === Wash loop (v1 — timer-driven, replaced by waiter trips later) ===
 
   /** Wash interval in seconds. Each placed sink shaves 0.6s, each
