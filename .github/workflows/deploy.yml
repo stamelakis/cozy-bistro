@@ -1,21 +1,26 @@
 name: Deploy to GitHub Pages
 
-# Trigger on push to main and allow manual runs from the Actions tab.
+# Prod and staging are separate bundles on the SAME Pages site:
+#   main    -> https://stamelakis.github.io/cozy-bistro/            (2D)
+#           -> https://stamelakis.github.io/cozy-bistro/cozy-bistro-3d/   (3D prod)
+#   staging -> https://stamelakis.github.io/cozy-bistro/staging/cozy-bistro-3d/ (3D staging)
+#
+# GitHub Pages allows only one published artifact per repo, so a single
+# workflow builds BOTH branches (checked out by ref into subdirs) and packs
+# them into one artifact. A push to either branch rebuilds both from their
+# own tips, so neither clobbers the other. The staging build is
+# continue-on-error + guarded, so a broken staging build never blocks the
+# prod deploy.
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   workflow_dispatch:
 
-# Minimum perms needed for the deploy-pages action.
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# Only one Pages deploy at a time. cancel-in-progress: true so a new
-# push supersedes an old stuck deploy instead of queueing behind it —
-# avoids the "pending forever" failure mode we hit when the github-pages
-# environment got into a wedged state.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -24,23 +29,54 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout prod (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: prod
+      - name: Checkout staging
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          path: staging
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: npm
-      # Build the 2D version (root) into dist/
-      - run: npm ci
-      - run: npm run build
-      # Build the 3D version (v2/) and copy it into dist/cozy-bistro-3d/
-      # so the same Pages artifact serves both:
-      #   /cozy-bistro/             -> 2D
-      #   /cozy-bistro/cozy-bistro-3d/ -> 3D
-      - run: npm ci --prefix v2
-      - run: npm run --prefix v2 build
-      - run: |
+
+      # ---- PROD (from main): 2D at root, 3D at /cozy-bistro-3d/ ----
+      - name: Build prod 2D (root)
+        working-directory: prod
+        run: npm ci && npm run build
+      - name: Build prod 3D (v2)
+        working-directory: prod
+        run: npm ci --prefix v2 && npm run --prefix v2 build
+
+      # ---- STAGING (from staging): 3D only, at /staging/cozy-bistro-3d/ ----
+      # Its own base + staging-DB default baked in. Non-fatal: a broken
+      # staging build must never take prod down with it.
+      - name: Build staging 3D (v2)
+        id: staging_build
+        continue-on-error: true
+        working-directory: staging
+        env:
+          CB_BASE: /cozy-bistro/staging/cozy-bistro-3d/
+          CB_BUILD_ENV: staging
+        run: npm ci --prefix v2 && npm run --prefix v2 build
+
+      # ---- Assemble one Pages artifact ----
+      - name: Assemble site
+        run: |
           mkdir -p dist/cozy-bistro-3d
-          cp -r v2/dist/* dist/cozy-bistro-3d/
+          cp -r prod/dist/* dist/
+          cp -r prod/v2/dist/* dist/cozy-bistro-3d/
+          if [ -d staging/v2/dist ]; then
+            mkdir -p dist/staging/cozy-bistro-3d
+            cp -r staging/v2/dist/* dist/staging/cozy-bistro-3d/
+            echo "staging bundle packed"
+          else
+            echo "::warning::staging build produced no dist — deploying prod only"
+          fi
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
