@@ -300,6 +300,10 @@ function resolveDefaultModule(): string {
     if (q === "staging") { sessionStorage.setItem("cb_env", "staging"); mountStagingBadge(); return STAGING_MODULE; }
     if (q === "prod")    { sessionStorage.removeItem("cb_env"); return DEFAULT_MODULE; }
     if (sessionStorage.getItem("cb_env") === "staging") { mountStagingBadge(); return STAGING_MODULE; }
+    // Dedicated staging BUILD (separate /staging/ bundle) defaults to the
+    // staging DB with no query param, so its URL "just works" as staging.
+    // `?env=prod` above still forces prod as an escape hatch.
+    if (__CB_ENV__ === "staging") { mountStagingBadge(); return STAGING_MODULE; }
   } catch { /* no window / storage blocked — fall through to prod */ }
   return DEFAULT_MODULE;
 }

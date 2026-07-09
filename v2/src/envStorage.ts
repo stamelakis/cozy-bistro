@@ -33,7 +33,12 @@
       onStaging = false;
       try { window.sessionStorage.removeItem("cb_env"); } catch { /* ignore */ }
     } else {
-      onStaging = window.sessionStorage.getItem("cb_env") === "staging";
+      // A dedicated staging BUILD (__CB_ENV__ baked to "staging") isolates
+      // storage by default so the separate /staging/ bundle never shares the
+      // prod save/token even with no ?env query. Prod builds keep the old
+      // per-tab sessionStorage behaviour.
+      onStaging =
+        __CB_ENV__ === "staging" || window.sessionStorage.getItem("cb_env") === "staging";
     }
     if (!onStaging) return;
 
