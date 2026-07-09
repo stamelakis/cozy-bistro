@@ -764,7 +764,10 @@ export class Engine {
     // Modals still live on the page-level container so they overlay the world.
     // (SfxPlayer + kickAudio listeners constructed earlier — see above.)
     this.pantryModal = new PantryModal(container, this.game);
-    this.menuPanel = new MenuPanel(container, this.game);
+    // Upgrade button in the menu carousel opens the upgrade modal. The
+    // thunk is lazy (upgradeModal is constructed just below), so the
+    // forward reference resolves by the time a player clicks it.
+    this.menuPanel = new MenuPanel(container, this.game, () => this.upgradeModal.show());
     makeDraggableResizable({
       // v3 — old saved widths from when the panel's maxWidth was 760
       // overrode the new 500-max via PanelDragResize.applyLayout, which

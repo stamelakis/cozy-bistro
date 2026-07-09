@@ -379,6 +379,34 @@ pub fn restaurant_tick(
         .find(rid)
         .map(|s| s.last_tick_at);
 
+    // === Increment 1 — on-demand freeze + offline reconcile ===
+    // A restaurant runs its live simulation only while its OWNER is online. When
+    // the owner is offline this tick returns immediately WITHOUT touching
+    // tick_state (so last_tick_at stays pinned at the last live tick and the
+    // offline gap accumulates) and without any sim or writes — a frozen
+    // restaurant costs ~nothing, which is what lets the game scale past a dozen
+    // plots. When the owner returns, the first live tick reconciles the gap:
+    // reconcile_offline() applies the recent daily net × in-game-days-away
+    // (capped at 1 real week, floored at $0) as ONE "offline" ledger event, then
+    // normal live ticking resumes below.
+    {
+        const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000; // 30 s, matches elsewhere
+        let now_micros = now.to_micros_since_unix_epoch();
+        let owner_online = ctx.db.restaurant().id().find(rid)
+            .and_then(|r| ctx.db.player().identity().find(r.owner))
+            .map(|pl| now_micros - pl.last_seen_at.to_micros_since_unix_epoch() < OFFLINE_THRESHOLD_MICROS)
+            .unwrap_or(false);
+        if !owner_online {
+            return Ok(()); // frozen: no work, no writes, tick_state left pinned
+        }
+        if let Some(prev) = previous_tick_at {
+            let gap = now_micros - prev.to_micros_since_unix_epoch();
+            if gap > OFFLINE_RECONCILE_MIN_MICROS {
+                reconcile_offline(ctx, rid, gap);
+            }
+        }
+    }
+
     // Upsert tick-state — first tick after schedule creation INSERTs;
     // every tick after UPDATEs. Tick count helps dev tools / logs
     // confirm the schedule is genuinely firing.
@@ -1224,6 +1252,148 @@ pub fn bump_cloud_money(
         record_money_event(ctx, restaurant_id, "supplies", applied_delta, new_balance);
     }
     Ok(())
+}
+
+// === Increment 1 — offline reconcile helpers ===
+
+/// Real-time cap on how long a frozen restaurant keeps earning (1 real week).
+const OFFLINE_EARN_CAP_MICROS: i64 = 7 * 24 * 3_600 * 1_000_000;
+/// A gap smaller than this is a presence blip, not a real freeze — don't
+/// reconcile it (avoids tiny spurious "offline" events on a flaky ping).
+const OFFLINE_RECONCILE_MIN_MICROS: i64 = 10_000_000; // 10 s
+
+/// Offline reconcile is a MODEST catch-up, not a wealth engine. The old
+/// version snowballed to $2.29M via two faults, both fixed below:
+///   1) scale — game days are only 12 min, so an uncapped real gap mapped
+///      to hundreds of in-game days (7-day cap = 840 days). We cap the paid
+///      window to a couple in-game days regardless of how long you're away.
+///   2) compounding — it folded each payout back into the day's `revenue`,
+///      then read that back as the next rate. We NEVER fold into revenue and
+///      the rate is an AVERAGE of recent CLEAN days.
+const OFFLINE_MAX_GAME_DAYS: f64 = 2.0;
+const OFFLINE_RATE_DAYS: usize = 3;
+/// Any completed day whose revenue exceeds this is treated as a corrupt
+/// legacy value (old offline-fold pollution) and skipped in the rate avg —
+/// legit days top out around $2-3k, so this only ever catches the runaway.
+const SANE_DAY_REVENUE_CEILING_CENTS: i64 = 5_000_000; // $50k
+
+/// Most-recent completed-day value (cents) for a numeric dollar field in the
+/// day-history blob (e.g. "revenue", "net"). Parses the LAST occurrence, robust
+/// to the exact array shape. Returns 0 when absent — a safe default: no offline
+/// earnings until the restaurant has a real track record.
+fn last_day_field_cents(history_json: &str, field: &str) -> i64 {
+    let needle = format!("\"{field}\":");
+    if let Some(pos) = history_json.rfind(&needle) {
+        let after = &history_json[pos + needle.len()..];
+        let end = after
+            .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(v) = after[..end].parse::<f64>() {
+            return (v * 100.0).round() as i64;
+        }
+    }
+    0
+}
+
+/// Average CUSTOMER revenue (cents) over the last `n` completed days in the
+/// history blob — the stable rate the offline reconcile projects forward.
+/// Uses an AVERAGE (not the single last day) so one outlier can't set the
+/// rate, and SKIPS any day above SANE_DAY_REVENUE_CEILING_CENTS so a corrupt
+/// legacy spike (from the old offline-fold pollution) can never poison the
+/// estimate. Returns 0 when there are no clean completed days yet.
+fn avg_recent_revenue_cents(history_json: &str, n: usize) -> i64 {
+    if n == 0 { return 0; }
+    let needle = "\"revenue\":";
+    let mut vals: Vec<i64> = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = history_json[from..].find(needle) {
+        let pos = from + rel + needle.len();
+        let after = &history_json[pos..];
+        let end = after
+            .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(v) = after[..end].parse::<f64>() {
+            let cents = (v * 100.0).round() as i64;
+            if cents > 0 && cents <= SANE_DAY_REVENUE_CEILING_CENTS {
+                vals.push(cents);
+            }
+        }
+        from = pos + end.max(1);
+    }
+    if vals.is_empty() { return 0; }
+    let take = n.min(vals.len());
+    let recent = &vals[vals.len() - take..];
+    let sum: i64 = recent.iter().sum();
+    sum / take as i64
+}
+
+/// Apply the earnings a restaurant would have made while its owner was away, as
+/// ONE ledger event, instead of ticking 2 Hz for the whole gap. Rate = the last
+/// completed day's REVENUE minus only recurring wages + rent (NOT its "net" —
+/// one-time furniture/upgrade/boost spend doesn't recur offline), prorated over
+/// the in-game days that elapsed during the real gap (a game day = DAY_LENGTH_MS),
+/// so it matches what the live tick would have earned — capped at 1 real week + floored so
+/// cloud money never goes below $0 (a net-negative restaurant just drains toward
+/// $0, same as online). Called on the first live tick after a freeze.
+fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return; };
+    let capped = gap_micros.min(OFFLINE_EARN_CAP_MICROS);
+    if capped <= 0 { return; }
+    // Project the last completed day's REVENUE minus only the RECURRING costs
+    // that keep accruing while the owner is away — WAGES + RENT. Deliberately
+    // NOT the day's "net": that folds in one-time spend (furniture, upgrades,
+    // boosts) which does NOT happen while offline, so counting it would badly
+    // mis-state the away earnings (the numbers the owner questioned).
+    // Paid window: how many in-game days elapsed while away, CAPPED so a long
+    // real absence can't pay hundreds of days of profit (a game day is 12 min,
+    // so an uncapped gap ran to hundreds of days — the runaway's scale half).
+    let day_micros = DAY_LENGTH_MS.saturating_mul(1_000);
+    if day_micros <= 0 { return; }
+    let in_game_days = (capped as f64 / day_micros as f64).min(OFFLINE_MAX_GAME_DAYS);
+    if in_game_days <= 0.0 { return; }
+    // Rate = AVERAGE customer revenue over the last few CLEAN days — never the
+    // single last day, and never the just-written offline total (that self-fed
+    // and compounded). avg_recent_revenue_cents skips corrupt legacy spikes.
+    let daily_revenue = avg_recent_revenue_cents(
+        r.cloud_day_history_json.as_deref().unwrap_or(""), OFFLINE_RATE_DAYS);
+    if daily_revenue == 0 { return; } // no completed-day track record yet
+    // Rent per in-game day, by luxury tier (mirrors tick_day_clock's table).
+    const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
+    let luxury_tier = ctx.db.player_save().identity().find(r.owner)
+        .map(|s| s.luxury_tier as usize).unwrap_or(1).clamp(1, 5);
+    let rent_per_day = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
+    // Wages per in-game day = live payroll RATE (base × active headcount +
+    // Σlevel × per-level, per REAL minute — mirrors tick_offline_salary) × the
+    // real minutes in one in-game day (DAY_LENGTH_MS), so the away rate matches
+    // what the live tick would bill.
+    let mut headcount: i64 = 0;
+    let mut levels_sum: i64 = 0;
+    for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
+        if m.is_deactivated { continue; }
+        headcount += 1;
+        levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
+    }
+    let base_rate = if r.cloud_base_payroll_per_min_cents > 0 { r.cloud_base_payroll_per_min_cents } else { 600 };
+    let wage_per_min = base_rate.saturating_mul(headcount)
+        .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
+    let wages_per_day = wage_per_min.saturating_mul(DAY_LENGTH_MS) / 60_000;
+    let daily_net = daily_revenue - rent_per_day - wages_per_day;
+    if daily_net == 0 { return; }
+    let offline_net = (daily_net as f64 * in_game_days).round() as i64;
+    if offline_net == 0 { return; }
+    let new_balance = r.cloud_money_cents.saturating_add(offline_net).max(0);
+    let applied = new_balance - r.cloud_money_cents;
+    if applied == 0 { return; }
+    // Update CASH only. Deliberately do NOT fold into cloud_daily_revenue_cents:
+    // that fed avg_recent_revenue_cents' successor and made the estimate
+    // compound on itself (the $2.29M runaway). The discrete "offline" ledger
+    // event below is the record of this reconciliation; the trends panel keeps
+    // showing real per-day customer sales, uninflated.
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: new_balance,
+        ..r
+    });
+    record_money_event(ctx, rid, "offline", applied, new_balance);
 }
 
 /// Phase H.46 — Live mirror of the foreground client's per-day
@@ -6841,15 +7011,24 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
     // above already early-returns for "waiting" guests, so this
     // branch only fires for in-restaurant states that aren't yet
     // waiting — position step is a no-op anyway when target ≈ x.
-    let anchored = matches!(
-        g.state.as_str(),
-        // Phase M.24 — "wcWashing" REMOVED from the anchored list: a toilet
-        // user's target is swapped to a SINK on entering wcWashing, so the body
-        // must be free to WALK there. (A wash-only user is already at the sink,
-        // so the step is a no-op.) wcSitting stays anchored — they sit on the
-        // toilet in place.
-        "seated" | "ordering" | "eating" | "wcSitting"
-    );
+    // Phase M.24 — "wcWashing" REMOVED from the anchored list so a toilet user
+    // can WALK to the sink. wcSitting stays anchored (they sit on the toilet).
+    // Phase M.33 — a seated/ordering/eating guest is normally pinned to its
+    // chair, but one that's DISPLACED — just flipped to "seated" back at the
+    // dining seat while still physically at the sink, or whose chair moved —
+    // must WALK to the seat, not freeze there (the "sitting in front of the
+    // sink" bug). So freeze only when already AT the seat; otherwise step toward
+    // it (target is the seat, set on the wcWashing→seated transition). The
+    // animator's sit-while-moving→walk rule renders the trip as a walk.
+    let at_seat = (g.x - g.seat_x).abs() < 0.15 && (g.z - g.seat_z).abs() < 0.15;
+    // Phase M.33 — "stand up" beat: hold a guest at its chair for the first
+    // STANDUP_MS of a bathroom trip so the sit→walk crossfade plays while it's
+    // stationary (stands up in place) instead of gliding away mid-stand.
+    const STANDUP_MS: i64 = 600;
+    let anchored = g.state == "wcSitting"
+        || (matches!(g.state.as_str(), "seated" | "ordering" | "eating")
+            && (at_seat || g.seat_uid.is_empty()))
+        || (g.state == "wcWalking" && at_seat && !g.seat_uid.is_empty() && new_clock < STANDUP_MS);
     // Phase 9.69 — route around furniture on the guest's own floor.
     // Phase M.17 — and WALK THE STAIRS across floors (next_step_multi): route
     // to the stairs, climb the flight, continue on the next floor, flipping

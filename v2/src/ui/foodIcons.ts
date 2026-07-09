@@ -69,6 +69,9 @@ const RECIPE_ICONS: Record<string, string> = {
   "salmon-noodles": "🍜",
   "duck-polenta": "🍛",
   "filet-mignon": "🥩",
+  "grilled-cheese": "🧀",
+  "mac-and-cheese": "🍝",
+  "veggie-stir-fry": "🥘",
   // Desserts
   pancakes: "🥞",
   "berry-tart": "🥧",
@@ -80,6 +83,8 @@ const RECIPE_ICONS: Record<string, string> = {
   "pear-galette": "🥧",
   "pistachio-cream": "🍮",
   "golden-souffle": "🥮",
+  "fruit-cup": "🍓",
+  "chocolate-pudding": "🍮",
   // Drinks
   lemonade: "🍋",
   "iced-tea": "🧊",
@@ -110,4 +115,17 @@ export function ingredientIcon(id: string): string {
 
 export function recipeIcon(id: string): string {
   return RECIPE_ICONS[id] ?? "🍽️";
+}
+
+/**
+ * URL of a dish's authored plate art, e.g. `dishes/filet-mignon.png`.
+ * These are transparent PNGs shipped as Vite static assets under
+ * BASE_URL (prod base is `/cozy-bistro/cozy-bistro-3d/`), one per
+ * recipe id. Not every id is guaranteed to have art, so callers that
+ * render it in an <img> should wire an `onerror` that falls back to
+ * `recipeIcon(id)` (the emoji) — the menu carousel does exactly this.
+ */
+export function recipeImage(id: string): string {
+  const base = import.meta.env.BASE_URL ?? "/";
+  return `${base}dishes/${id}.png`;
 }
