@@ -193,10 +193,12 @@ const COFFEE_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   { dx:  0, dz: -1, facingY:  Math.PI,     platePos: { dx:  0,    dz: -0.22 } },
   // South seat.
   { dx:  0, dz:  1, facingY:  0,           platePos: { dx:  0,    dz:  0.22 } },
-  // East seat (right of the table, looking west).
-  { dx:  1, dz:  0, facingY:  Math.PI / 2, platePos: { dx:  0.22, dz:  0    } },
-  // West seat.
-  { dx: -1, dz:  0, facingY: -Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
+  // East seat (right of the table, looking WEST at it → -X → -π/2).
+  // Was +π/2 (facing +X, away from the table) — guests sat looking out
+  // at the wall on the E/W seats of every coffee table.
+  { dx:  1, dz:  0, facingY: -Math.PI / 2, platePos: { dx:  0.22, dz:  0    } },
+  // West seat (left of the table, looking EAST at it → +X → +π/2).
+  { dx: -1, dz:  0, facingY:  Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
 ];
 
 /** Seat layout for a 2-tile-wide bar counter: two stools on the +Z
