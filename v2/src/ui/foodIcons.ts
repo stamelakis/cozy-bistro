@@ -69,6 +69,9 @@ const RECIPE_ICONS: Record<string, string> = {
   "salmon-noodles": "🍜",
   "duck-polenta": "🍛",
   "filet-mignon": "🥩",
+  "grilled-cheese": "🧀",
+  "mac-and-cheese": "🍝",
+  "veggie-stir-fry": "🥘",
   // Desserts
   pancakes: "🥞",
   "berry-tart": "🥧",

@@ -201,8 +201,8 @@ export class MenuPanel {
 .cbm-cols{display:grid;grid-template-columns:1.5fr 1fr;gap:12px;margin-bottom:11px}
 .cbm-col.r{border-left:1px solid rgba(255,245,220,.14);padding-left:12px}
 .cbm-il{font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:rgba(255,245,220,.5);margin-bottom:6px}
-.cbm-chips{display:flex;gap:5px;flex-wrap:wrap}
-.cbm-chip{font-size:11px;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);padding:2px 8px;border-radius:7px;text-transform:capitalize}
+.cbm-chips{display:flex;gap:5px;flex-wrap:wrap;align-content:flex-start;min-height:48px}
+.cbm-chip{font-size:11px;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);padding:2px 8px;border-radius:7px;text-transform:capitalize;white-space:nowrap}
 .cbm-chip.appl{background:rgba(120,200,120,.16);color:#cbe6cb;border-color:rgba(120,200,120,.4);text-transform:none}
 .cbm-chip.miss{background:rgba(200,90,90,.2);color:#f0c8c8;border-color:rgba(200,90,90,.4);text-transform:none}
 .cbm-lvl{font-size:10px;color:rgba(255,245,220,.5);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}
