@@ -83,6 +83,8 @@ const RECIPE_ICONS: Record<string, string> = {
   "pear-galette": "🥧",
   "pistachio-cream": "🍮",
   "golden-souffle": "🥮",
+  "fruit-cup": "🍓",
+  "chocolate-pudding": "🍮",
   // Drinks
   lemonade: "🍋",
   "iced-tea": "🧊",
