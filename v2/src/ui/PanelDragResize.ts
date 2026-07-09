@@ -105,6 +105,11 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   const homeRightPx = root.style.right.endsWith("px") ? parseFloat(root.style.right) : null;
   const homeCentered = root.style.left === "50%"
     || (root.style.transform || "").includes("translateX(-50%)");
+  // Left-anchored panels (e.g. Chat at left:280) must also re-home on
+  // resize; without this they fall through to "keep current left" and
+  // stay wherever a narrower viewport clamped them.
+  const homeLeftPx = (!homeCentered && root.style.left.endsWith("px"))
+    ? parseFloat(root.style.left) : null;
   let userMoved = false;
 
   // === RESTORE saved layout (or convert current anchor to top/left) ===
@@ -438,6 +443,15 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     window.addEventListener("resize", () => {
       const dvh = window.innerHeight - lastVH;
       lastVH = window.innerHeight;
+      // While the mobile layer owns the layout (cb-mobile is on), the panels
+      // are repositioned as slide-in sheets via !important CSS. Repositioning
+      // them here would capture those sheet coordinates as inline left/top and
+      // strand them when the viewport widens back to desktop and cb-mobile is
+      // removed — exactly the "narrow to preview mobile, widen back, panels
+      // moved" bug. Let MobileUI own it; the frozen inline desktop position
+      // takes over again on exit. (lastVH is still updated above so the next
+      // desktop resize computes a correct height delta.)
+      if (document.body.classList.contains("cb-mobile")) return;
       const r = root.getBoundingClientRect();
       const w = root.offsetWidth;
       const h = root.offsetHeight;
@@ -456,6 +470,8 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
         homeLeft = window.innerWidth - w - homeRightPx;
       } else if (!userMoved && homeCentered) {
         homeLeft = (window.innerWidth - w) / 2;
+      } else if (!userMoved && homeLeftPx !== null) {
+        homeLeft = homeLeftPx;
       } else {
         homeLeft = r.left;
       }
