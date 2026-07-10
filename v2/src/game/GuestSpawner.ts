@@ -1351,14 +1351,15 @@ export class GuestSpawner {
    *     dwell timer then deletes the cloud row)
    */
   private applyAngryLeave(g: ActiveGuest): void {
-    this.game.customers.recordLost(1);
-    // Phase 7.8 — Server's accumulate appends the 1★ angry rating to
-    // cloud_rating_history_csv at despawn time; the cloud_rating
-    // subscription handler flows it back into local ratingHistory.
-    // Skipping the local recordRating here avoids double-recording.
-    // We KEEP recordLost (it's just a daily counter that doesn't
-    // round-trip through cloud_money_cents).
+    // Phase 7.8 / M.5 — Server's accumulate appends the 1★ angry rating to
+    // cloud_rating_history_csv AND bumps cloud_daily_lost at despawn time;
+    // the cloud_rating + restaurant.onUpdate subscription handlers flow
+    // both back into local state (ratingHistory + setDailyLost). Under the
+    // cutover we skip BOTH local bumps so the HUD reads the canonical
+    // server values instead of drifting from them; only the legacy
+    // non-cutover sim tallies locally.
     if (!this.serverOwnsGuestStates()) {
+      this.game.customers.recordLost(1);
       this.game.reputation.recordRating(1);
     }
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a", g.currentFloor);
@@ -4608,7 +4609,14 @@ export class GuestSpawner {
    * feedback signal, so we want them very visible.
    */
   private finalizeVisit(g: ActiveGuest): void {
-    this.game.customers.recordServed(1);
+    // Phase M.5 — served is a server-owned daily counter (server bumps
+    // cloud_daily_served on despawn; restaurant.onUpdate adopts it via
+    // setDailyServed). Skip the local bump under the cutover so the HUD
+    // reads the canonical server value instead of drifting from it; the
+    // rest of finalizeVisit still runs for local rating/dish/feedback.
+    if (!this.serverOwnsGuestStates()) {
+      this.game.customers.recordServed(1);
+    }
     // Plate / glass quality lifts the per-course satisfaction average:
     // each tier of dishware actually served adds its catalog
     // satisfactionPerPiece on top of the recipe's own value. T1 adds
