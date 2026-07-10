@@ -1266,11 +1266,13 @@ const OFFLINE_RECONCILE_MIN_MICROS: i64 = 10_000_000; // 10 s
 /// version snowballed to $2.29M via two faults, both fixed below:
 ///   1) scale — game days are only 12 min, so an uncapped real gap mapped
 ///      to hundreds of in-game days (7-day cap = 840 days). We cap the paid
-///      window to a couple in-game days regardless of how long you're away.
+///      window to SEVERAL in-game days regardless of how long you're away.
 ///   2) compounding — it folded each payout back into the day's `revenue`,
 ///      then read that back as the next rate. We NEVER fold into revenue and
 ///      the rate is an AVERAGE of recent CLEAN days.
-const OFFLINE_MAX_GAME_DAYS: f64 = 2.0;
+/// This window ALSO drives how many days the counter advances on return, so
+/// "days since" matches the offline earnings the owner is paid. Tunable.
+const OFFLINE_MAX_GAME_DAYS: f64 = 5.0;
 const OFFLINE_RATE_DAYS: usize = 3;
 /// Any completed day whose revenue exceeds this is treated as a corrupt
 /// legacy value (old offline-fold pollution) and skipped in the rate avg —
@@ -1378,22 +1380,29 @@ fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
         .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
     let wages_per_day = wage_per_min.saturating_mul(DAY_LENGTH_MS) / 60_000;
     let daily_net = daily_revenue - rent_per_day - wages_per_day;
-    if daily_net == 0 { return; }
+    // Days to advance the COUNTER by (rounded) — the owner asked to be told how
+    // many days passed while away, matching the capped window the earnings use.
+    // Applied via pending_days_advanced, which the client consumes RENT-FREE on
+    // reconnect (see tick_day_clock's note) and with no per-day earnings of its
+    // own for un-simulated days, so it's counter-only: no double-charge, no
+    // double-pay. The cash below is the whole offline economic effect.
+    let days_to_add = in_game_days.round().max(0.0) as u32;
     let offline_net = (daily_net as f64 * in_game_days).round() as i64;
-    if offline_net == 0 { return; }
     let new_balance = r.cloud_money_cents.saturating_add(offline_net).max(0);
     let applied = new_balance - r.cloud_money_cents;
-    if applied == 0 { return; }
-    // Update CASH only. Deliberately do NOT fold into cloud_daily_revenue_cents:
-    // that fed avg_recent_revenue_cents' successor and made the estimate
-    // compound on itself (the $2.29M runaway). The discrete "offline" ledger
-    // event below is the record of this reconciliation; the trends panel keeps
-    // showing real per-day customer sales, uninflated.
+    if days_to_add == 0 && applied == 0 { return; } // nothing to reconcile
+    // Update CASH + advance the away-days counter. Deliberately do NOT fold into
+    // cloud_daily_revenue_cents: that fed avg_recent_revenue_cents' successor and
+    // compounded (the $2.29M runaway). The discrete "offline" ledger event is
+    // the record; the trends panel keeps showing real per-day sales, uninflated.
     ctx.db.restaurant().id().update(Restaurant {
         cloud_money_cents: new_balance,
+        pending_days_advanced: r.pending_days_advanced.saturating_add(days_to_add),
         ..r
     });
-    record_money_event(ctx, rid, "offline", applied, new_balance);
+    if applied != 0 {
+        record_money_event(ctx, rid, "offline", applied, new_balance);
+    }
 }
 
 /// Phase H.46 — Live mirror of the foreground client's per-day
