@@ -909,9 +909,19 @@ export class FurnitureRegistry {
           slotIndex: i,
           x: sx,
           z: sz,
-          facingY: this.normalizeAngle(slot.facingY + it.rotY),
+          // The seat POSITION is rotated by rotateSlotOffset with the matrix
+          // (dx,dz) -> (c*dx + s*dz, -s*dx + c*dz) — a CLOCKWISE rotation by
+          // it.rotY. The customer's facing has to rotate the SAME way to keep
+          // pointing at the table, so it's slot.facingY MINUS it.rotY. With
+          // PLUS, position and facing rotate opposite ways: they cancel at
+          // 0deg/180deg (why most seats looked fine) but land 180deg off at
+          // 90deg/270deg — customers on rotated tables (booth benches, lounge
+          // coffee tables) sat facing AWAY from their food. Verified on live
+          // data: a pi/2-rotated linen table seated a guest facing +X into the
+          // east wall; -rotY turns them back toward the table.
+          facingY: this.normalizeAngle(slot.facingY - it.rotY),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid, it.floor),
+          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(slot.facingY - it.rotY), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
           atBar: def.category === "bar",
