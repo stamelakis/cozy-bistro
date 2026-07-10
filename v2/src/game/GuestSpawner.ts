@@ -2584,10 +2584,20 @@ export class GuestSpawner {
    * cleanup window. The previous tier-gated SEATS array has been replaced
    * by the actual placed-chair situation. */
   private countAvailableSeats(): number {
+    // Occupancy comes from the SERVER-synced guest list — each guest's seatId is
+    // set from its active_guest.seat_uid (renderGuestFromServer) — NOT the local
+    // occupiedSeats set. That set only ever captured CLIENT-side seat
+    // assignments and silently missed every SERVER-assigned seat, so the SEATS
+    // card over-reported free seats: "9/16 free" while the server actually had
+    // all 16 taken and 28 guests queued outside (correctly unable to sit). The
+    // seat-id format matches (both "tableUid#slotIndex"), so a guest holding a
+    // functional seat marks that exact seat occupied.
+    const held = new Set<SeatId>();
+    for (const g of this.guests) if (g.seatId) held.add(g.seatId);
     let n = 0;
     for (const s of this.listFunctionalSeats()) {
       const id = makeSeatId(s);
-      if (!this.occupiedSeats.has(id) && !this.dirtyUntil.has(id)) n += 1;
+      if (!held.has(id) && !this.dirtyUntil.has(id)) n += 1;
     }
     return n;
   }
