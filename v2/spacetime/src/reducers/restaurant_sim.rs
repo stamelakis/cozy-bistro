@@ -4487,6 +4487,23 @@ fn tick_offline_salary(ctx: &ReducerContext, rid: u64) {
     // leave last_salary_tick_micros untouched until a chunk fires, so no
     // wage-time is lost. (Also subsumes the old `elapsed <= 0` guard.)
     if elapsed < 10_000_000 { return; }
+    // Freeze guard (Increment 1) — while the owner is offline the restaurant
+    // tick returns early, so last_salary_tick_micros is NOT advanced. An
+    // `elapsed` far beyond the ~10 s live cadence therefore means we just
+    // resumed after an OFFLINE GAP. Billing that whole gap here was the
+    // phantom multi-day wage spike in Daily Trends (e.g. +$12k on one day) —
+    // and it double-charged, because those offline wages are already folded
+    // into reconcile_offline's net. So on resume, advance the clock to now
+    // and skip the charge; the live cadence resumes from here.
+    const MAX_LIVE_SALARY_ELAPSED_MICROS: i64 = 120_000_000; // 2 min (cadence ~10 s)
+    if elapsed > MAX_LIVE_SALARY_ELAPSED_MICROS {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_salary_tick_micros: now_micros,
+            pending_salary_remainder_x: 0,
+            ..r
+        });
+        return;
+    }
     // accrual_x = pending_remainder_x + total_per_min × elapsed
     // (units of cents × micros / minute)
     let micros_cents = total_per_min_cents.saturating_mul(elapsed);
