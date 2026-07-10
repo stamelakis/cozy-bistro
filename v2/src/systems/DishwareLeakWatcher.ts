@@ -38,9 +38,32 @@ import type { DishwareSystem } from "./DishwareSystem";
  * reservation total without circular-importing GuestSpawner. */
 export interface InFlightSource {
   getInFlightDishCount(): number;
+  /** The in-flight dish list WITH per-piece tiers (dishes held by eating
+   * guests / on a waiter's tray) — the same snapshot the manual Restore
+   * button reads. The gated auto-restore hands it to reconcileToLifetime
+   * so each leaked TIER is restored to its own canonical count, not
+   * dumped at tier 1. */
+  getInFlightList(): ReadonlyArray<{ kind: string; tier: number; count: number }>;
 }
 
 const MAX_LOG_ENTRIES = 80;
+
+// === Gated auto-restore tuning ===
+// The historical duping bug came from auto-restoring at the WRONG time —
+// during hydrate, before the in-flight bucket was reconstructed, so it
+// "restored" dishes that were merely out on tables and then double-counted
+// when they came back. These gates make the auto path only ever act on a
+// genuine, settled loss:
+//   • never within BOOT_SETTLE of construction (boot sync / in-flight
+//     reconstruction finishes first);
+//   • only after the deficit has stayed positive AND within a ±TOLERANCE
+//     band for STABLE_CHECKS consecutive one-second checks (a transient —
+//     a dish mid-transition — clears in a check or two and never qualifies).
+// Combined with restoreLeaksOnly's top-up-only guarantee, a misfire can at
+// worst add a recoverable piece, never delete a real one.
+const AUTO_RESTORE_BOOT_SETTLE_MS = 30_000;
+const AUTO_RESTORE_STABLE_CHECKS = 15;
+const AUTO_RESTORE_TOLERANCE = 2;
 
 export class DishwareLeakWatcher {
   private readonly dishware: DishwareSystem;
@@ -55,10 +78,59 @@ export class DishwareLeakWatcher {
    * absolute performance.now() noise. */
   private readonly startMs = performance.now();
   private enabled = true;
+  /** Auto-restore kill-switch (default on). If a future bug ever makes
+   * the gated restore misbehave, one call to enableAutoRestore(false)
+   * reverts to log-only / manual-button behaviour without a rebuild. */
+  private autoRestore = true;
+  /** Consecutive one-second checks the deficit has stayed positive, plus
+   * the min / max seen in that window — the stability gate. Reset the
+   * moment the deficit clears or wobbles beyond tolerance. */
+  private posSecs = 0;
+  private windowMin = 0;
+  private windowMax = 0;
 
   constructor(dishware: DishwareSystem, inFlightSource: InFlightSource) {
     this.dishware = dishware;
     this.inFlightSource = inFlightSource;
+  }
+
+  /** Toggle the gated auto-restore (default on). Off = log-only, the
+   * player restores via the manual button as before. */
+  enableAutoRestore(on: boolean): void {
+    this.autoRestore = on;
+    if (!on) this.posSecs = 0;
+  }
+
+  /** Gated, top-up-only auto-recovery. Returns true if it restored this
+   * tick (caller then skips the leak log + re-baselines). Only fires
+   * once a positive deficit has held stable past boot-settle — see the
+   * AUTO_RESTORE_* gate docs. */
+  private maybeAutoRestore(deficit: number): boolean {
+    const settled = performance.now() - this.startMs > AUTO_RESTORE_BOOT_SETTLE_MS;
+    if (!this.autoRestore || deficit <= 0 || !settled) {
+      this.posSecs = 0;
+      return false;
+    }
+    if (this.posSecs === 0) {
+      this.windowMin = deficit;
+      this.windowMax = deficit;
+    } else {
+      this.windowMin = Math.min(this.windowMin, deficit);
+      this.windowMax = Math.max(this.windowMax, deficit);
+    }
+    this.posSecs += 1;
+    const stable = this.windowMax - this.windowMin <= AUTO_RESTORE_TOLERANCE;
+    if (this.posSecs < AUTO_RESTORE_STABLE_CHECKS || !stable || this.windowMin <= 0) {
+      return false;
+    }
+    const result = this.dishware.reconcileToLifetime(this.inFlightSource.getInFlightList());
+    // eslint-disable-next-line no-console
+    console.info(
+      `[Dishware] auto-reconciled after a stable deficit (~${this.windowMin}) held ` +
+      `${this.posSecs}s — restored ${result.restored}, trimmed ${result.trimmed} (canonical per-tier).`,
+    );
+    this.posSecs = 0;
+    return result.restored > 0 || result.trimmed > 0;
   }
 
   /** Off / on toggle. Disabled watchers are inert — record() is a
@@ -99,6 +171,13 @@ export class DishwareLeakWatcher {
     const inFlight = this.inFlightSource.getInFlightDishCount();
     const actual = owned + inFlight;
     const deficit = expected - actual;
+    // Gated, top-up-only auto-recovery. If it restored this tick, skip
+    // the leak log below and re-baseline so a fresh future leak still
+    // reports (and can be auto-restored again).
+    if (this.maybeAutoRestore(deficit)) {
+      this.lastReportedDeficit = 0;
+      return 0;
+    }
     if (deficit > this.lastReportedDeficit) {
       // Console output is intentionally one big block so the dev's
       // eye lands on the WARN header and follows the indented action

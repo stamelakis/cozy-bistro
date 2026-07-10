@@ -634,7 +634,7 @@ export class Engine {
     this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
     this.hud = new Hud(this.sidebar.body, this.game, {
-      getCount: () => this.spawner?.getActiveGuestCount() ?? 0,
+      getCount: () => this.spawner?.getGuestsInsideCount() ?? 0,
       isOpen: () => this.game.restaurantOpen,
       setOpen: (open: boolean) => {
         if (this.game.restaurantOpen === open) return;
@@ -1465,7 +1465,12 @@ export class Engine {
       // dips below the lifetime-added baseline.
       this.dishwareLeakWatcher = new DishwareLeakWatcher(
         this.game.dishware,
-        { getInFlightDishCount: () => this.spawner?.getInFlightDishCount() ?? 0 },
+        {
+          getInFlightDishCount: () => this.spawner?.getInFlightDishCount() ?? 0,
+          // Tiered in-flight snapshot the manual Restore button also reads,
+          // so the gated auto-reconcile restores each leaked tier correctly.
+          getInFlightList: () => this.game.getInFlightDishesForSave(),
+        },
       );
       this.game.dishware.setLogger((msg) => this.dishwareLeakWatcher?.record(msg));
       this.spawner.setDishwareLogger((msg) => this.dishwareLeakWatcher?.record(msg));

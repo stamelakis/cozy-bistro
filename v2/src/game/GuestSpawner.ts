@@ -1351,14 +1351,15 @@ export class GuestSpawner {
    *     dwell timer then deletes the cloud row)
    */
   private applyAngryLeave(g: ActiveGuest): void {
-    this.game.customers.recordLost(1);
-    // Phase 7.8 — Server's accumulate appends the 1★ angry rating to
-    // cloud_rating_history_csv at despawn time; the cloud_rating
-    // subscription handler flows it back into local ratingHistory.
-    // Skipping the local recordRating here avoids double-recording.
-    // We KEEP recordLost (it's just a daily counter that doesn't
-    // round-trip through cloud_money_cents).
+    // Phase 7.8 / M.5 — Server's accumulate appends the 1★ angry rating to
+    // cloud_rating_history_csv AND bumps cloud_daily_lost at despawn time;
+    // the cloud_rating + restaurant.onUpdate subscription handlers flow
+    // both back into local state (ratingHistory + setDailyLost). Under the
+    // cutover we skip BOTH local bumps so the HUD reads the canonical
+    // server values instead of drifting from them; only the legacy
+    // non-cutover sim tallies locally.
     if (!this.serverOwnsGuestStates()) {
+      this.game.customers.recordLost(1);
       this.game.reputation.recordRating(1);
     }
     this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, "-1★ (gave up)", "#ff9a9a", g.currentFloor);
@@ -1545,6 +1546,21 @@ export class GuestSpawner {
 
   getActiveGuestCount(): number {
     return this.guests.length;
+  }
+
+  /** Guests physically INSIDE the restaurant — excludes the outdoor
+   * queue (walkingToWait / waitingForSeat). The HUD's "IN" card uses
+   * this so it reads "customers inside" as its tooltip promises, instead
+   * of counting everyone standing in the line too. (getActiveGuestCount
+   * stays the true total for spawn/capacity logic that DOES want the
+   * line included.) */
+  getGuestsInsideCount(): number {
+    let n = 0;
+    for (const g of this.guests) {
+      if (g.state === "walkingToWait" || g.state === "waitingForSeat") continue;
+      n += 1;
+    }
+    return n;
   }
 
   /** Phase C.3b — resolve a local guest id ("guest-7") to its
@@ -2569,10 +2585,20 @@ export class GuestSpawner {
    * cleanup window. The previous tier-gated SEATS array has been replaced
    * by the actual placed-chair situation. */
   private countAvailableSeats(): number {
+    // Occupancy comes from the SERVER-synced guest list — each guest's seatId is
+    // set from its active_guest.seat_uid (renderGuestFromServer) — NOT the local
+    // occupiedSeats set. That set only ever captured CLIENT-side seat
+    // assignments and silently missed every SERVER-assigned seat, so the SEATS
+    // card over-reported free seats: "9/16 free" while the server actually had
+    // all 16 taken and 28 guests queued outside (correctly unable to sit). The
+    // seat-id format matches (both "tableUid#slotIndex"), so a guest holding a
+    // functional seat marks that exact seat occupied.
+    const held = new Set<SeatId>();
+    for (const g of this.guests) if (g.seatId) held.add(g.seatId);
     let n = 0;
     for (const s of this.listFunctionalSeats()) {
       const id = makeSeatId(s);
-      if (!this.occupiedSeats.has(id) && !this.dirtyUntil.has(id)) n += 1;
+      if (!held.has(id) && !this.dirtyUntil.has(id)) n += 1;
     }
     return n;
   }
@@ -4583,7 +4609,14 @@ export class GuestSpawner {
    * feedback signal, so we want them very visible.
    */
   private finalizeVisit(g: ActiveGuest): void {
-    this.game.customers.recordServed(1);
+    // Phase M.5 — served is a server-owned daily counter (server bumps
+    // cloud_daily_served on despawn; restaurant.onUpdate adopts it via
+    // setDailyServed). Skip the local bump under the cutover so the HUD
+    // reads the canonical server value instead of drifting from it; the
+    // rest of finalizeVisit still runs for local rating/dish/feedback.
+    if (!this.serverOwnsGuestStates()) {
+      this.game.customers.recordServed(1);
+    }
     // Plate / glass quality lifts the per-course satisfaction average:
     // each tier of dishware actually served adds its catalog
     // satisfactionPerPiece on top of the recipe's own value. T1 adds
