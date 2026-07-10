@@ -700,6 +700,28 @@ pub fn restaurant_tick(
 /// On reconnect the client's applyPendingDayAdvancement skips the
 /// rent debit (chargeRent=false) since the server already paid it,
 /// avoiding the cash-jolt-down on reload.
+/// Highest dayNumber already recorded in the day-history blob (0 if none).
+/// Used to keep new day-history stamps MONOTONIC: cross-device play can
+/// regress base_day_number (a device whose local day is behind syncs a lower
+/// player_save.day_number), which produced the out-of-order + repeated day
+/// numbers in Daily Trends (#3). Clamping each stamp above this max keeps the
+/// history strictly increasing regardless of which device rolled the day.
+fn max_day_in_history(history_json: &str) -> u32 {
+    let needle = "\"dayNumber\":";
+    let mut max_day = 0u32;
+    let mut from = 0usize;
+    while let Some(rel) = history_json[from..].find(needle) {
+        let pos = from + rel + needle.len();
+        let after = &history_json[pos..];
+        let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+        if let Ok(v) = after[..end].parse::<u32>() {
+            if v > max_day { max_day = v; }
+        }
+        from = pos + end.max(1);
+    }
+    max_day
+}
+
 fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
     /// Daily rent in cents per luxury tier. Mirrors RENT_BY_TIER in
     /// src/game/Game.ts (×100 to keep integer math here).
@@ -723,6 +745,9 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         .unwrap_or(false);
     let save = ctx.db.player_save().identity().find(r.owner);
     let base_day_number = save.as_ref().map(|s| s.day_number).unwrap_or(1);
+    // Highest day already stamped in the history — new stamps are clamped above
+    // this so a cross-device day regression can't reorder/repeat Daily Trends (#3).
+    let history_floor_day = max_day_in_history(r.cloud_day_history_json.as_deref().unwrap_or(""));
     // Rent pauses while the restaurant is CLOSED (player toggle, mirrored to
     // player_save.restaurant_open + eagerly pushed on change).
     let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
@@ -750,7 +775,11 @@ fn tick_day_clock(ctx: &ReducerContext, rid: u64, dt_ms: i64) {
         // The day that JUST ENDED is base_day_number + (pending - 1).
         // base_day_number is the day the client last persisted; each
         // pending bump represents another day completed since then.
-        let ended_day = base_day_number.saturating_add(pending).saturating_sub(1);
+        // Monotonic clamp (#3): never stamp a day <= the highest already in the
+        // history. days_rolled is 1,2,… within this drain, so a multi-day roll
+        // stays strictly increasing from the floor even if base regressed.
+        let ended_day = base_day_number.saturating_add(pending).saturating_sub(1)
+            .max(history_floor_day.saturating_add(days_rolled));
         // Charge rent IFF offline AND day > GRACE.
         if !owner_online && ended_day > RENT_GRACE_DAYS && restaurant_open {
             rent_to_charge_cents = rent_to_charge_cents.saturating_add(rent_per_day_cents);
