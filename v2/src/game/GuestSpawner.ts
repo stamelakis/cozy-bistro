@@ -4357,9 +4357,12 @@ export class GuestSpawner {
     } else if (SIT_STATES.has(g.state) && !moving) {
       if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       g.character.action = "sit";
-      // Keep them facing the way the seat was set (seatFacingY) rather than a
-      // stale last-walk heading, matching how importCloudGuest seats them.
-      if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;
+      // ⚠ TEMPORARY DIAGNOSTIC — force EVERY seated guest to a FIXED facingY = 0
+      // (per the walk-facing formula, 0 should render as facing -Z / the back
+      // wall away from the entrance). Whatever direction they actually face tells
+      // us exactly how the seated pose maps facing→visual, with zero ambiguity.
+      // Revert this to `if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;` after.
+      g.character.facingY = 0;
     } else {
       if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       // Phase M.23 — stay "walk" while travelling. Don't drop to "idle" just

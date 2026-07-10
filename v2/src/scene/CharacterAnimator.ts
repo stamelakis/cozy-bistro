@@ -341,15 +341,6 @@ export class CharacterAnimator {
         : c.action;
       c.root.position.set(c.groundPos.x, baseY, c.groundPos.y);
       c.root.rotation.set(0, c.facingY, 0);
-      // SEATED YAW CORRECTION (rigged): the "Sitting_Idle" Mixamo clip is
-      // authored a quarter-turn off the walk clip, so a seated guest whose
-      // facingY correctly points at their table still RENDERS 90° sideways.
-      // Verified via server data: seat_facing_y points AT the table, yet seated
-      // bodies read sideways while WALKERS (identical facingY→rotation path)
-      // read correctly — so it's the sit clip's orientation, not the facing.
-      // Rotate the seated body back a quarter turn. TUNABLE: if seated guests
-      // end up facing the OTHER sideways, negate this.
-      if (effAction === "sit") c.root.rotation.y += Math.PI / 2;
 
       // Phase 9.29 — floor-focus body gate. A character is visible only
       // when it's on the focused storey (same maths as the status-bubble
