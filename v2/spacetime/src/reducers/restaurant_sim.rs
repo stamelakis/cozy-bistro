@@ -1329,6 +1329,44 @@ fn avg_recent_revenue_cents(history_json: &str, n: usize) -> i64 {
     sum / take as i64
 }
 
+/// Average NET (cents) over the last `n` completed days — revenue MINUS all
+/// recurring costs (wages + rent + ingredient restock). Reads the day-history
+/// "net" field so INGREDIENT cost (a real recurring cost of serving) is
+/// counted; the old offline estimate used revenue - wages - rent and OMITTED
+/// ingredients, crediting an away-day ~4x a played day and ballooning cash on
+/// every reconnect. Skips days whose net is outside a sane band so a one-time
+/// furniture/upgrade purchase (big negative) or a legacy runaway (big positive)
+/// can't poison the rate. Returns 0 when there are no clean days.
+fn avg_recent_net_cents(history_json: &str, n: usize) -> i64 {
+    if n == 0 { return 0; }
+    // -$5k floor drops furniture-buy / phantom-spike days; the revenue ceiling
+    // ($50k) drops legacy offline-fold runaways. A normal day nets a few hundred
+    // dollars and sits comfortably inside the band.
+    const SANE_NET_FLOOR_CENTS: i64 = -500_000;
+    let needle = "\"net\":";
+    let mut vals: Vec<i64> = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = history_json[from..].find(needle) {
+        let pos = from + rel + needle.len();
+        let after = &history_json[pos..];
+        let end = after
+            .find(|c: char| c != '-' && c != '.' && !c.is_ascii_digit())
+            .unwrap_or(after.len());
+        if let Ok(v) = after[..end].parse::<f64>() {
+            let cents = (v * 100.0).round() as i64;
+            if cents >= SANE_NET_FLOOR_CENTS && cents <= SANE_DAY_REVENUE_CEILING_CENTS {
+                vals.push(cents);
+            }
+        }
+        from = pos + end.max(1);
+    }
+    if vals.is_empty() { return 0; }
+    let take = n.min(vals.len());
+    let recent = &vals[vals.len() - take..];
+    let sum: i64 = recent.iter().sum();
+    sum / take as i64
+}
+
 /// Apply the earnings a restaurant would have made while its owner was away, as
 /// ONE ledger event, instead of ticking 2 Hz for the whole gap. Rate = the last
 /// completed day's REVENUE minus only recurring wages + rent (NOT its "net" —
@@ -1353,33 +1391,17 @@ fn reconcile_offline(ctx: &ReducerContext, rid: u64, gap_micros: i64) {
     if day_micros <= 0 { return; }
     let in_game_days = (capped as f64 / day_micros as f64).min(OFFLINE_MAX_GAME_DAYS);
     if in_game_days <= 0.0 { return; }
-    // Rate = AVERAGE customer revenue over the last few CLEAN days — never the
-    // single last day, and never the just-written offline total (that self-fed
-    // and compounded). avg_recent_revenue_cents skips corrupt legacy spikes.
-    let daily_revenue = avg_recent_revenue_cents(
-        r.cloud_day_history_json.as_deref().unwrap_or(""), OFFLINE_RATE_DAYS);
+    // Rate = AVERAGE NET over the last few CLEAN days: revenue minus ALL
+    // recurring costs (wages + rent + ingredient restock). Reading the day
+    // history's "net" field is what makes INGREDIENT cost count — the old
+    // avg_revenue - wages - rent estimate omitted it and over-credited offline
+    // by ~4x (the "$44k, how?" balloon). daily_revenue is still read purely as
+    // the "has a real track record" gate (0 = brand-new restaurant, no history
+    // → no offline earnings yet).
+    let history = r.cloud_day_history_json.as_deref().unwrap_or("");
+    let daily_revenue = avg_recent_revenue_cents(history, OFFLINE_RATE_DAYS);
     if daily_revenue == 0 { return; } // no completed-day track record yet
-    // Rent per in-game day, by luxury tier (mirrors tick_day_clock's table).
-    const RENT_BY_TIER_CENTS: [i64; 6] = [0, 4_000, 8_000, 16_000, 32_000, 64_000];
-    let luxury_tier = ctx.db.player_save().identity().find(r.owner)
-        .map(|s| s.luxury_tier as usize).unwrap_or(1).clamp(1, 5);
-    let rent_per_day = RENT_BY_TIER_CENTS.get(luxury_tier).copied().unwrap_or(0);
-    // Wages per in-game day = live payroll RATE (base × active headcount +
-    // Σlevel × per-level, per REAL minute — mirrors tick_offline_salary) × the
-    // real minutes in one in-game day (DAY_LENGTH_MS), so the away rate matches
-    // what the live tick would bill.
-    let mut headcount: i64 = 0;
-    let mut levels_sum: i64 = 0;
-    for m in ctx.db.hired_staff_member().restaurant_id().filter(rid) {
-        if m.is_deactivated { continue; }
-        headcount += 1;
-        levels_sum = levels_sum.saturating_add(m.upgrade_level as i64);
-    }
-    let base_rate = if r.cloud_base_payroll_per_min_cents > 0 { r.cloud_base_payroll_per_min_cents } else { 600 };
-    let wage_per_min = base_rate.saturating_mul(headcount)
-        .saturating_add(levels_sum.saturating_mul(SALARY_PER_LEVEL_CENTS_PER_MIN));
-    let wages_per_day = wage_per_min.saturating_mul(DAY_LENGTH_MS) / 60_000;
-    let daily_net = daily_revenue - rent_per_day - wages_per_day;
+    let daily_net = avg_recent_net_cents(history, OFFLINE_RATE_DAYS);
     // Days to advance the COUNTER by (rounded) — the owner asked to be told how
     // many days passed while away, matching the capped window the earnings use.
     // Applied via pending_days_advanced, which the client consumes RENT-FREE on
