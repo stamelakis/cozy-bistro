@@ -909,19 +909,19 @@ export class FurnitureRegistry {
           slotIndex: i,
           x: sx,
           z: sz,
-          // The seat POSITION is rotated by rotateSlotOffset with the matrix
-          // (dx,dz) -> (c*dx + s*dz, -s*dx + c*dz) — a CLOCKWISE rotation by
-          // it.rotY. The customer's facing has to rotate the SAME way to keep
-          // pointing at the table, so it's slot.facingY MINUS it.rotY. With
-          // PLUS, position and facing rotate opposite ways: they cancel at
-          // 0deg/180deg (why most seats looked fine) but land 180deg off at
-          // 90deg/270deg — customers on rotated tables (booth benches, lounge
-          // coffee tables) sat facing AWAY from their food. Verified on live
-          // data: a pi/2-rotated linen table seated a guest facing +X into the
-          // east wall; -rotY turns them back toward the table.
-          facingY: this.normalizeAngle(slot.facingY - it.rotY),
+          // Rotate the seat facing WITH the table (slot.facingY + it.rotY),
+          // matching how rotateSlotOffset rotates the seat POSITION. RENDER
+          // CONVENTION (ground truth = the walk-facing atan2(-dx,-dz) in
+          // renderGuestFromServer, which faces the walk direction correctly):
+          //   facingY 0 = faces -Z (north),  +PI/2 = faces -X (WEST),
+          //             PI = faces +Z (south), -PI/2 = faces +X (EAST).
+          // The SeatSlot doc comment historically claimed PI/2 = +X — that is
+          // BACKWARDS on the X axis and is what made the E/W base values point
+          // away from the table. Facing correctness lives in the base slot
+          // VALUES (in the convention above), not in the +/- rotY here.
+          facingY: this.normalizeAngle(slot.facingY + it.rotY),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(slot.facingY - it.rotY), excludeUid, it.floor),
+          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
           atBar: def.category === "bar",

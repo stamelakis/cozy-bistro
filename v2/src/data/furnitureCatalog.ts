@@ -22,8 +22,12 @@
 
 /**
  * One sitting position around a table. Offsets are relative to the table's
- * center; facingY is the chair's required rotation (Three.js Y, where
- * 0 = -Z, π/2 = +X, π = +Z, -π/2 = -X). platePos is where the served plate
+ * center; facingY is the customer's facing. RENDER CONVENTION — ground truth
+ * is the walk-facing atan2(-dx,-dz) in renderGuestFromServer, which faces the
+ * walk direction correctly: 0 = -Z (north), π/2 = -X (WEST), π = +Z (south),
+ * -π/2 = +X (EAST). This was previously mis-documented as π/2 = +X (backwards
+ * on the X axis), which caused E/W seats to be authored facing AWAY from the
+ * table. platePos is where the served plate
  * sits on the tabletop for this seat.
  *
  * A chair placed at (table.x + dx, table.z + dz) with rotation facingY
@@ -193,12 +197,14 @@ const COFFEE_TABLE_SEAT_SLOTS: readonly SeatSlot[] = [
   { dx:  0, dz: -1, facingY:  Math.PI,     platePos: { dx:  0,    dz: -0.22 } },
   // South seat.
   { dx:  0, dz:  1, facingY:  0,           platePos: { dx:  0,    dz:  0.22 } },
-  // East seat (right of the table, looking WEST at it → -X → -π/2).
-  // Was +π/2 (facing +X, away from the table) — guests sat looking out
-  // at the wall on the E/W seats of every coffee table.
-  { dx:  1, dz:  0, facingY: -Math.PI / 2, platePos: { dx:  0.22, dz:  0    } },
-  // West seat (left of the table, looking EAST at it → +X → +π/2).
-  { dx: -1, dz:  0, facingY:  Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
+  // East seat (right of the table). Must look WEST (-X) at the table. In the
+  // render convention (ground truth = walk-facing atan2(-dx,-dz)) facing -X is
+  // +π/2. The old note said "-X → -π/2" using a BACKWARDS convention and set
+  // -π/2, which actually faces +X (east) — guests on E/W seats looked at the
+  // wall. +π/2 turns them back toward the table.
+  { dx:  1, dz:  0, facingY:  Math.PI / 2, platePos: { dx:  0.22, dz:  0    } },
+  // West seat (left of the table). Must look EAST (+X) at the table → -π/2.
+  { dx: -1, dz:  0, facingY: -Math.PI / 2, platePos: { dx: -0.22, dz:  0    } },
 ];
 
 /** Seat layout for a 2-tile-wide bar counter: two stools on the +Z
