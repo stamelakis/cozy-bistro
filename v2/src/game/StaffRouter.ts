@@ -1675,15 +1675,20 @@ export class StaffRouter {
   // Local idle handlers used to make those decisions too; they're now
   // gated off via serverOwnsTicketDispatch().
   //
-  // The local sim STILL drives:
-  //   - Take-order trips (waiter walks to a seated guest)
-  //   - Wash trips (waiter walks to dirty plate → station)
-  //   - Movement smoothing (lerp toward target every frame)
-  //   - Bar-seated tickets in their entirety (barman cook + serve dwell)
-  //     — server-side bar handling is a later-phase gap.
+  // HISTORICAL (pre-staffMove): the local sim used to also drive
+  // take-order trips, wash trips, movement smoothing, and bar-seated
+  // tickets in their entirety (barman cook + serve dwell). NONE of that
+  // is live anymore. As of the staffMove cutover (DEFAULT-ON 2026-06-27)
+  // the entire local staff sim below is dead in production — the staff
+  // update loop early-returns after renderActorFromServer, so tickChef/
+  // tickBarman/tickWaiter never run. In particular, bar-seated tickets
+  // are now FULLY server-authoritative: tick_ticket_state cooks the drink,
+  // splits it straight to "delivering" (no waiter), holds the barman
+  // dwell, then flips "delivered" + releases the barman (Phase H Phase 4e,
+  // restaurant_sim.rs). The server owns dispatch, movement, AND bar service.
   //
-  // Rollback path: ?serverSim=off disables the feature flag, which
-  // both stops cloud mirror calls AND re-enables local deciders below.
+  // Rollback path: ?serverSim=off (per-session) or DEFAULTS.staffMove=false
+  // (rebuild) re-enables the local deciders + sim below.
 
   /** True when the server is the sole decider of ticket dispatch (chef-
    * claim, waiter-pickup) for THIS restaurant. Local handlers consult
