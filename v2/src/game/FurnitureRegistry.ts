@@ -904,15 +904,25 @@ export class FurnitureRegistry {
           const ddz = sz - 5.45;
           if (ddx * ddx + ddz * ddz < 0.9 * 0.9) continue;
         }
-        // Customer faces the table CENTRE. Render convention (calibrated live
-        // via a fixed-facing diagnostic: facingY 0 → world +X, +PI/2 → world +Z,
-        // i.e. facingY θ → visual (cos θ, sin θ)) ⇒ to face world dir (dx,dz) use
-        // atan2(dz,dx). `world` is the seat's rotated offset FROM the table
-        // centre, so toward-centre is (-world.dx,-world.dz). (Plate-facing was
-        // tried and read far worse — the plate spot is clamped to the table edge
-        // for food placement, not aim — so we stay on centre.) slot.facingY is
-        // unused for facing now.
-        const faceAng = Math.atan2(-world.dz, -world.dx);
+        // Customer faces the SAME way the CHAIR faces: PERPENDICULAR to the table
+        // edge, so they sit STRAIGHT in the chair rather than twisted. Aiming at
+        // the geometric centre instead tilts an offset seat ~18° off the chair,
+        // and on a rotated table that misalignment reads as "facing the wall".
+        // Take the seat's DOMINANT offset axis, point toward the table along it
+        // (= the chair's out-direction in the table's local frame), rotate by the
+        // table's rotation (rotateSlotOffset's matrix (c,s;-s,c)), then convert to
+        // the render convention (calibrated live: facingY θ → visual (cos θ,sin θ),
+        // so to face world (dx,dz) use atan2(dz,dx)). Degenerate/centre slot →
+        // fall back to the table centre. slot.facingY is unused for facing now.
+        const adx = Math.abs(slot.dx), adz = Math.abs(slot.dz);
+        let lpx = 0, lpz = 0;
+        if (adz >= adx && adz > 1e-4) lpz = slot.dz > 0 ? -1 : 1;
+        else if (adx > 1e-4) lpx = slot.dx > 0 ? -1 : 1;
+        const cr = Math.cos(it.rotY), sr = Math.sin(it.rotY);
+        const wpx = cr * lpx + sr * lpz, wpz = -sr * lpx + cr * lpz;
+        const faceAng = (wpx * wpx + wpz * wpz) > 1e-6
+          ? Math.atan2(wpz, wpx)
+          : Math.atan2(-world.dz, -world.dx);
         out.push({
           tableUid: it.uid,
           slotIndex: i,
