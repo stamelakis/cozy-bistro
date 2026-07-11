@@ -912,7 +912,7 @@ export class FurnitureRegistry {
         // (= the chair's out-direction in the table's local frame), rotate by the
         // table's rotation (rotateSlotOffset's matrix (c,s;-s,c)), then convert to
         // the render convention (calibrated live: facingY θ → visual (cos θ,sin θ),
-        // so to face world (dx,dz) use atan2(dz,dx)). Degenerate/centre slot →
+        // see the atan2(-wpx,-wpz) note at the computation below). Centre slot →
         // fall back to the table centre. slot.facingY is unused for facing now.
         const adx = Math.abs(slot.dx), adz = Math.abs(slot.dz);
         let lpx = 0, lpz = 0;
@@ -920,9 +920,14 @@ export class FurnitureRegistry {
         else if (adx > 1e-4) lpx = slot.dx > 0 ? -1 : 1;
         const cr = Math.cos(it.rotY), sr = Math.sin(it.rotY);
         const wpx = cr * lpx + sr * lpz, wpz = -sr * lpx + cr * lpz;
+        // Face with the SAME convention the rest of the movement code uses:
+        // renderGuestFromServer sets facingY = atan2(-dirX, -dirZ) to face world
+        // (dirX,dirZ) — proven correct by every walking guest (GuestSpawner
+        // ~4340/4247). To face the chair's out-direction (wpx,wpz): atan2(-wpx,
+        // -wpz). Degenerate slot → aim at the table centre (dir = -world).
         const faceAng = (wpx * wpx + wpz * wpz) > 1e-6
-          ? Math.atan2(wpz, wpx)
-          : Math.atan2(-world.dz, -world.dx);
+          ? Math.atan2(-wpx, -wpz)
+          : Math.atan2(world.dx, world.dz);
         out.push({
           tableUid: it.uid,
           slotIndex: i,
