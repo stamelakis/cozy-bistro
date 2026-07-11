@@ -122,6 +122,17 @@ const WALK_STILL_SQ = 0.000025; // (5 mm/frame)² — same threshold as before
 const WALK_IDLE_GRACE_MS = 280;
 const SPEED_SMOOTH_S = 0.12;
 
+/** Rigged seated-clip yaw correction (degrees). The Mixamo customer GLBs carry
+ * a per-clip root orientation: FORWARD_OFFSET (RiggedCharacter, = π) was tuned on
+ * the WALK clip, but the Sitting_Idle / Stand_To_Sit clips are authored with a
+ * different baked yaw, so a seated body renders turned ~90° to the side even
+ * though its facingY is geometrically correct (server per-seat facing verified
+ * against table geometry). We compensate the wrapper by this fixed yaw only while
+ * a seated clip is the one playing. The value is a property of the GLB clips, not
+ * the game — `globalThis.__SIT_YAW_DEG` overrides it live (in-engine, no redeploy)
+ * so the exact offset/sign can be dialled in, then baked here. */
+const SIT_CLIP_YAW_DEG = -90;
+
 export class CharacterAnimator {
   private readonly characters: AnimatedCharacter[] = [];
   private elapsed = 0;
@@ -424,6 +435,16 @@ export class CharacterAnimator {
         // guests get the equivalent via the "sit" case in tickCharacter, which
         // the skeletal path skips.
         if (c.action === "sit" && c.seatHeight) c.root.position.y += c.seatHeight;
+        // Correct the Mixamo seated-clip's baked yaw so a seated guest faces the
+        // way facingY commands (the walk clip is already right via FORWARD_OFFSET;
+        // the sit clips aren't). Only while a seated clip actually plays
+        // (effAction "sit" — a moving body falls through to walk above). Live knob
+        // globalThis.__SIT_YAW_DEG overrides the constant for in-engine tuning.
+        if (effAction === "sit") {
+          const ov = (globalThis as unknown as { __SIT_YAW_DEG?: number }).__SIT_YAW_DEG;
+          const deg = typeof ov === "number" ? ov : SIT_CLIP_YAW_DEG;
+          c.root.rotation.y += deg * (Math.PI / 180);
+        }
         c.skeletal.update(dt, effAction, c._speed);
         continue;
       }
