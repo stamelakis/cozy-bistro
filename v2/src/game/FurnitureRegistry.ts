@@ -904,20 +904,15 @@ export class FurnitureRegistry {
           const ddz = sz - 5.45;
           if (ddx * ddx + ddz * ddz < 0.9 * 0.9) continue;
         }
-        // Face the guest's own PLATE — the spot their food lands, on the table
-        // edge right in front of them — rather than the table's geometric CENTRE
-        // (which tilts an offset/end seat toward the far centre and, on a rotated
-        // square table, reads as facing the wall). Render convention (calibrated
-        // live with a fixed-facing diagnostic: facingY 0 → world +X, +PI/2 →
-        // world +Z, i.e. facingY θ → visual (cos θ, sin θ)) ⇒ to face world dir
-        // (dx,dz) use atan2(dz,dx). Seat→plate vector = world.platePos − world
-        // (the seat offset); fall back to the centre if a def puts the plate on
-        // the seat. slot.facingY is unused for facing now.
-        const platedx = world.platePos.dx - world.dx;
-        const platedz = world.platePos.dz - world.dz;
-        const faceAng = (platedx * platedx + platedz * platedz) > 1e-4
-          ? Math.atan2(platedz, platedx)
-          : Math.atan2(-world.dz, -world.dx);
+        // Customer faces the table CENTRE. Render convention (calibrated live
+        // via a fixed-facing diagnostic: facingY 0 → world +X, +PI/2 → world +Z,
+        // i.e. facingY θ → visual (cos θ, sin θ)) ⇒ to face world dir (dx,dz) use
+        // atan2(dz,dx). `world` is the seat's rotated offset FROM the table
+        // centre, so toward-centre is (-world.dx,-world.dz). (Plate-facing was
+        // tried and read far worse — the plate spot is clamped to the table edge
+        // for food placement, not aim — so we stay on centre.) slot.facingY is
+        // unused for facing now.
+        const faceAng = Math.atan2(-world.dz, -world.dx);
         out.push({
           tableUid: it.uid,
           slotIndex: i,
