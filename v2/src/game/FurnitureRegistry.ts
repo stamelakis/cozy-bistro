@@ -909,19 +909,19 @@ export class FurnitureRegistry {
           slotIndex: i,
           x: sx,
           z: sz,
-          // Rotate the seat facing WITH the table (slot.facingY + it.rotY),
-          // matching how rotateSlotOffset rotates the seat POSITION. RENDER
-          // CONVENTION (ground truth = the walk-facing atan2(-dx,-dz) in
-          // renderGuestFromServer, which faces the walk direction correctly):
-          //   facingY 0 = faces -Z (north),  +PI/2 = faces -X (WEST),
-          //             PI = faces +Z (south), -PI/2 = faces +X (EAST).
-          // The SeatSlot doc comment historically claimed PI/2 = +X — that is
-          // BACKWARDS on the X axis and is what made the E/W base values point
-          // away from the table. Facing correctness lives in the base slot
-          // VALUES (in the convention above), not in the +/- rotY here.
-          facingY: this.normalizeAngle(slot.facingY + it.rotY),
+          // Customer faces straight at the table CENTRE, computed directly in
+          // the render's SEATED convention (calibrated live via a fixed-facing
+          // diagnostic: facingY 0 renders as world +X, facingY +PI/2 as world
+          // +Z — a pure rotation facingY θ → visual (cos θ, sin θ)). world.dx/dz
+          // is the seat's offset FROM the table centre, so the toward-centre
+          // direction is (-world.dx, -world.dz) and the facing that renders it
+          // is atan2(-world.dz, -world.dx). This REPLACES the old
+          // slot.facingY ± it.rotY scheme (and the mis-documented PI/2 = +X
+          // convention behind it) that left seated guests 90° sideways.
+          // slot.facingY is now unused for facing.
+          facingY: this.normalizeAngle(Math.atan2(-world.dz, -world.dx)),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(slot.facingY + it.rotY), excludeUid, it.floor),
+          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(Math.atan2(-world.dz, -world.dx)), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
           atBar: def.category === "bar",

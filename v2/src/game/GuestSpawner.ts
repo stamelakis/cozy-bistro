@@ -4357,11 +4357,10 @@ export class GuestSpawner {
     } else if (SIT_STATES.has(g.state) && !moving) {
       if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       g.character.action = "sit";
-      // ⚠ TEMPORARY DIAGNOSTIC #2 — facingY = π/2 now (reading #1 with 0 gave
-      // "right wall"). The second fixed direction pins the rotation SENSE so the
-      // real fix is computed, not guessed.
-      // Revert this to `if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;` after.
-      g.character.facingY = Math.PI / 2;
+      // Face the way the seat was set (seatFacingY = the server's per-seat facing,
+      // now computed to point straight at the table centre in the seated render
+      // convention — see FurnitureRegistry.getResolvedSeatSlots).
+      if (g.seatFacingY !== undefined) g.character.facingY = g.seatFacingY;
     } else {
       if (g._toiletFacingSet) g._toiletFacingSet = false; // reset for next visit
       // Phase M.23 — stay "walk" while travelling. Don't drop to "idle" just
