@@ -904,24 +904,28 @@ export class FurnitureRegistry {
           const ddz = sz - 5.45;
           if (ddx * ddx + ddz * ddz < 0.9 * 0.9) continue;
         }
+        // Face the guest's own PLATE — the spot their food lands, on the table
+        // edge right in front of them — rather than the table's geometric CENTRE
+        // (which tilts an offset/end seat toward the far centre and, on a rotated
+        // square table, reads as facing the wall). Render convention (calibrated
+        // live with a fixed-facing diagnostic: facingY 0 → world +X, +PI/2 →
+        // world +Z, i.e. facingY θ → visual (cos θ, sin θ)) ⇒ to face world dir
+        // (dx,dz) use atan2(dz,dx). Seat→plate vector = world.platePos − world
+        // (the seat offset); fall back to the centre if a def puts the plate on
+        // the seat. slot.facingY is unused for facing now.
+        const platedx = world.platePos.dx - world.dx;
+        const platedz = world.platePos.dz - world.dz;
+        const faceAng = (platedx * platedx + platedz * platedz) > 1e-4
+          ? Math.atan2(platedz, platedx)
+          : Math.atan2(-world.dz, -world.dx);
         out.push({
           tableUid: it.uid,
           slotIndex: i,
           x: sx,
           z: sz,
-          // Customer faces straight at the table CENTRE, computed directly in
-          // the render's SEATED convention (calibrated live via a fixed-facing
-          // diagnostic: facingY 0 renders as world +X, facingY +PI/2 as world
-          // +Z — a pure rotation facingY θ → visual (cos θ, sin θ)). world.dx/dz
-          // is the seat's offset FROM the table centre, so the toward-centre
-          // direction is (-world.dx, -world.dz) and the facing that renders it
-          // is atan2(-world.dz, -world.dx). This REPLACES the old
-          // slot.facingY ± it.rotY scheme (and the mis-documented PI/2 = +X
-          // convention behind it) that left seated guests 90° sideways.
-          // slot.facingY is now unused for facing.
-          facingY: this.normalizeAngle(Math.atan2(-world.dz, -world.dx)),
+          facingY: this.normalizeAngle(faceAng),
           platePos: { x: it.x + world.platePos.dx, z: it.z + world.platePos.dz },
-          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(Math.atan2(-world.dz, -world.dx)), excludeUid, it.floor),
+          chairUid: this.findChairAtSlot(sx, sz, this.normalizeAngle(faceAng), excludeUid, it.floor),
           floor: it.floor,
           surface: def.surface ?? "food",
           atBar: def.category === "bar",
