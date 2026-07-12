@@ -1049,6 +1049,24 @@ export class DishwareSystem {
     return DISHWASHER_CAPACITY[kind];
   }
 
+  /** Admin / dev-tool: the INVERSE of adminWashAll — soil every CLEAN
+   * piece to dirty (pieces stay owned, just no longer clean). Drives clean
+   * stock straight to 0 so you can test the "out of clean dishes" service
+   * banner AND the server's wash-deadlock override (a waiter breaks off to
+   * wash) without waiting for a real rush. Goes through the SOLE mutator so
+   * the delta mirrors to the server pool too. */
+  adminSoilAll(): void {
+    for (const kind of ["plate", "glass"] as const) {
+      const map = this.poolFor(kind);
+      const tiers = Array.from(map.keys());
+      for (const tier of tiers) {
+        const e = map.get(tier);
+        if (!e || e.clean === 0) continue;
+        this.applyPoolDelta(kind, tier, -e.clean, +e.clean, "adminSoilAll");
+      }
+    }
+  }
+
   /** Admin / dev-tool: move every dirty piece (in pools + dishwasher
    * batches) back into the clean pool. Useful for testing the
    * post-rush "everything is clean again" state without waiting for

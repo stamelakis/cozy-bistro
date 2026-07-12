@@ -736,6 +736,9 @@ export class AdminModal {
     row.appendChild(this.actionButton("Wash everything", "good", () => {
       this.game.dishware.adminWashAll();
     }));
+    row.appendChild(this.actionButton("Soil clean (test out-of-stock)", "danger", () => {
+      this.game.dishware.adminSoilAll();
+    }));
     row.appendChild(this.actionButton("Toggle auto-shop", "neutral", () => {
       this.game.autoShopEnabled = !this.game.autoShopEnabled;
     }));
