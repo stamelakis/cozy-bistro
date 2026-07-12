@@ -160,6 +160,10 @@ export interface ActiveGuestRow {
   seatX: number;
   seatZ: number;
   seatFloor: number;
+  /** Server-authoritative seated facing (radians), read from the guest's
+   * seat_slot. The render uses this directly under the cutover so the client
+   * seat recompute can't override it with a divergent angle. */
+  seatFacingY: number;
   plateX: number;
   plateZ: number;
   /** Phase H Phase 6.1 — remaining patience pool in ms. Bridge reads
@@ -2248,7 +2252,7 @@ export class SpacetimeClient {
       targetX: number; targetZ: number; targetFloor: number;
       onStair: boolean;
       seatUid: string;
-      seatX: number; seatZ: number; seatFloor: number;
+      seatX: number; seatZ: number; seatFloor: number; seatFacingY: number;
       plateX: number; plateZ: number;
       orderIndex: number;
       orderRecipes: string;
@@ -2261,6 +2265,7 @@ export class SpacetimeClient {
       onStair: r.onStair,
       seatUid: r.seatUid,
       seatX: r.seatX, seatZ: r.seatZ, seatFloor: r.seatFloor,
+      seatFacingY: r.seatFacingY,
       plateX: r.plateX, plateZ: r.plateZ,
       orderIndex: r.orderIndex,
       orderRecipes: r.orderRecipes,
@@ -5118,6 +5123,7 @@ export class SpacetimeClient {
             onStair: g.onStair,
             seatUid: g.seatUid,
             seatX: g.seatX, seatZ: g.seatZ, seatFloor: g.seatFloor,
+            seatFacingY: g.seatFacingY,
             plateX: g.plateX, plateZ: g.plateZ,
             orderIndex: g.orderIndex,
             orderRecipes: g.orderRecipes,
