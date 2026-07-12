@@ -1740,6 +1740,13 @@ export class GuestSpawner {
     // update; tickPatienceDisplay smooths the gaps between pushes.
     if (this.serverOwnsGuestStates()) {
       g.patience = Number(row.patienceMs) / 1000;
+      // Seated facing is SERVER truth. The server streams each guest's
+      // seat_facing_y (read from its seat_slot); refresh it every update so the
+      // client-side seat recompute (refreshSeatedGuestPoses) can't override it
+      // with a divergent angle. That dual-source fight was rendering seated
+      // guests turned to the side / backwards even though the server value was
+      // geometrically correct — and it flip-flopped as the override re-fired.
+      g.seatFacingY = row.seatFacingY;
     }
 
     // Phase H Phase 4d — populate local g.order from cloud's
@@ -2662,7 +2669,11 @@ export class GuestSpawner {
         continue;
       }
       g.seatPos.set(slot.x, slot.z);
-      g.seatFacingY = slot.facingY;
+      // Facing is server-authoritative (refreshed from row.seatFacingY in
+      // reconcileCloudGuest). Only the LOCAL sim derives it from the client seat
+      // slot; overriding it here under the cutover fought the server's correct
+      // value and left seated guests twisted (some 90°, some 180°, some right).
+      if (!this.serverOwnsGuestStates()) g.seatFacingY = slot.facingY;
       g.platePos.set(slot.platePos.x, slot.platePos.z);
       // If the guest is currently on a bathroom side-trip (anywhere
       // between leaving the seat and returning to it), keep the
