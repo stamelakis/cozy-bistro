@@ -24,6 +24,7 @@ import { CameraControls } from "../ui/CameraControls";
 import { setMobileInGame } from "../ui/MobileUI";
 import { VisitMode } from "../ui/VisitMode";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
+import { ServiceAlertBanner } from "../ui/ServiceAlertBanner";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
@@ -119,6 +120,7 @@ export class Engine {
    * instant the player buys an expansion. */
   buildMenu!: BuildMenu;
   readonly stockWidget: StockStatusWidget;
+  readonly serviceAlert: ServiceAlertBanner;
   readonly decorModal: DecorModal;
   readonly dayEndModal: DayEndModal;
   readonly ledgerModal: LedgerModal;
@@ -728,6 +730,10 @@ export class Engine {
         return { avail: stats.seatsAvail, total: stats.seatsTotal };
       },
     });
+    // Prominent top-screen banner shown when a shortage is actually BLOCKING
+    // service (0 clean plates/glasses, or an ingredient out with nothing on the
+    // way). Overlay on document.body; its fix button opens the Pantry.
+    this.serviceAlert = new ServiceAlertBanner(this.game, () => this.pantryModal.show());
     this.sidebar.addSeparator();
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
     this.sidebar.addSeparator();
@@ -4106,6 +4112,7 @@ export class Engine {
     this.hudAccumulator += rawDt;
     if (this.hudAccumulator >= 0.2) {
       this.hud.update();
+      this.serviceAlert.update();
       this.staffPanel.update();
       this.menuPanel.update();
       this.expandWidget.update();

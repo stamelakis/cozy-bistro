@@ -5306,17 +5306,39 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
         .any(|p| p.dirty > 0);
     if !any_dirty { return; }
 
+    // Anti-deadlock (2026-07) — normally SERVICE OUTRANKS WASHING (below), but
+    // if a dish kind's CLEAN stock is critically low AND it has dirty pieces
+    // waiting, washing must NOT keep yielding: with no clean dishes, service
+    // can't proceed anyway, so a busy sink-only restaurant would HARD-STALL
+    // (can't serve → the "ordering"/"ready" that blocks washing never clears →
+    // never washes → permanent lock). Let a waiter reclaim them even mid-
+    // service. Self-limiting: once clean climbs back over the threshold,
+    // service-first resumes. Sums across tiers (dishware_pool is per-tier).
+    const CRITICAL_CLEAN_STOCK: u32 = 2;
+    let (mut plate_clean, mut plate_dirty, mut glass_clean, mut glass_dirty) = (0u32, 0u32, 0u32, 0u32);
+    for p in ctx.db.dishware_pool().restaurant_id().filter(rid) {
+        match p.kind.as_str() {
+            "plate" => { plate_clean += p.clean; plate_dirty += p.dirty; }
+            "glass" => { glass_clean += p.clean; glass_dirty += p.dirty; }
+            _ => {}
+        }
+    }
+    let clean_critical =
+        (plate_clean <= CRITICAL_CLEAN_STOCK && plate_dirty > 0)
+        || (glass_clean <= CRITICAL_CLEAN_STOCK && glass_dirty > 0);
+
     // Phase 9.8 — SERVICE OUTRANKS WASHING. Under a big dirty
     // backlog this dispatcher used to claim every idle waiter, trip
     // after trip, starving take-order + delivery ("waiters aren't
     // taking orders"). Washing now yields whenever a guest is
     // waiting to order or a cooked ticket is waiting for a runner,
-    // and at most ONE wash trip runs per restaurant at a time.
+    // and at most ONE wash trip runs per restaurant at a time —
+    // UNLESS clean stock is critical (anti-deadlock above).
     let service_demand = ctx.db.active_guest().restaurant_id().filter(rid)
         .any(|g| g.state == "ordering")
         || ctx.db.active_ticket().restaurant_id().filter(rid)
             .any(|t| t.state == "ready");
-    if service_demand { return; }
+    if service_demand && !clean_critical { return; }
     let wash_in_flight = ctx.db.staff_actor().restaurant_id().filter(rid)
         .any(|a| a.role == "waiter" && !a.wash_target_uid.is_empty());
     if wash_in_flight { return; }
