@@ -5711,7 +5711,12 @@ fn tick_seat_clean(ctx: &ReducerContext, a: StaffActor, dt_ms: i64) {
 /// southern-wall door — every plot reads the same. Matches the
 /// active_guest.door_x/z default.
 const ERRAND_DOOR_INTERIOR_X: f32 = 0.0;
-const ERRAND_DOOR_INTERIOR_Z: f32 = 5.45;
+// One tile INSIDE the wall (door leaf is at ~5.5), not right at the threshold.
+// The helper steps straight toward its target, so anchoring at the wall itself
+// meant it was still on its diagonal from the supply counter as it crossed the
+// frame — clipping the jamb on the way out. A tile of run-up lets it line up and
+// pass through the opening square. Symmetric with the exterior 1-tile standoff.
+const ERRAND_DOOR_INTERIOR_Z: f32 = 4.45;
 const ERRAND_DOOR_EXTERIOR_X: f32 = 0.0;
 const ERRAND_DOOR_EXTERIOR_Z: f32 = 6.45;
 /// Pavement edge where the helper disappears offscreen. Mirrors the
