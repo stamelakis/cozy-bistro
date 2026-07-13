@@ -35,6 +35,7 @@ import {
 
 // Import all reducer arg schemas
 import AddDirtyPileReducer from "./add_dirty_pile_reducer";
+import AddFavoriteReducer from "./add_favorite_reducer";
 import AdminAdjustMoneyReducer from "./admin_adjust_money_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
@@ -93,6 +94,7 @@ import RefreshNeighborhoodReducer from "./refresh_neighborhood_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
 import ReleaseDirtyPileReducer from "./release_dirty_pile_reducer";
 import RemoveCoOwnerReducer from "./remove_co_owner_reducer";
+import RemoveFavoriteReducer from "./remove_favorite_reducer";
 import ReplaceSeatSlotsReducer from "./replace_seat_slots_reducer";
 import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
@@ -170,6 +172,7 @@ import CustomerArchetypeRow from "./customer_archetype_table";
 import DirtyPileRow from "./dirty_pile_table";
 import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
+import FavoriteRow from "./favorite_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
@@ -408,6 +411,23 @@ const tablesSchema = __schema({
       { name: 'dishwasher_batch_furniture_uid_key', constraint: 'unique', columns: ['furnitureUid'] },
     ],
   }, DishwasherBatchRow),
+  favorite: __table({
+    name: 'favorite',
+    indexes: [
+      { accessor: 'id', name: 'favorite_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'player', name: 'favorite_player_idx_btree', algorithm: 'btree', columns: [
+        'player',
+      ] },
+      { accessor: 'restaurant_id', name: 'favorite_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'favorite_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, FavoriteRow),
   friend_request: __table({
     name: 'friend_request',
     indexes: [
@@ -862,6 +882,7 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("add_dirty_pile", AddDirtyPileReducer),
+  __reducerSchema("add_favorite", AddFavoriteReducer),
   __reducerSchema("admin_adjust_money", AdminAdjustMoneyReducer),
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
@@ -920,6 +941,7 @@ const reducersSchema = __reducers(
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
   __reducerSchema("release_dirty_pile", ReleaseDirtyPileReducer),
   __reducerSchema("remove_co_owner", RemoveCoOwnerReducer),
+  __reducerSchema("remove_favorite", RemoveFavoriteReducer),
   __reducerSchema("replace_seat_slots", ReplaceSeatSlotsReducer),
   __reducerSchema("request_password_reset", RequestPasswordResetReducer),
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),

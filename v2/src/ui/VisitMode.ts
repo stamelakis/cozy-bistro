@@ -1823,6 +1823,40 @@ export class VisitMode {
     liveness.textContent = "loading…";
     wrap.appendChild(liveness);
     this.livenessEl = liveness;
+    // ⭐ Favorite — bookmark this restaurant for the Social hub's quick-visit
+    // list, and add to its favorite count (light social proof). Shown only
+    // once the restaurant row has primed (so we can resolve its id).
+    const favRid = this.cloud?.findRestaurantIdByOwnerHex(plot.ownerHex) ?? null;
+    if (favRid != null && this.cloud) {
+      const cloud = this.cloud;
+      const favBtn = document.createElement("button");
+      Object.assign(favBtn.style, {
+        border: "1px solid rgba(255, 217, 134, 0.5)",
+        color: "#ffd986",
+        borderRadius: "6px",
+        padding: "4px 12px",
+        cursor: "pointer",
+        font: "inherit",
+        fontWeight: "600",
+      } as Partial<CSSStyleDeclaration>);
+      const paint = (): void => {
+        const on = cloud.isFavorite(favRid);
+        const count = cloud.getFavoriteCount(favRid);
+        favBtn.textContent = `${on ? "★ Favorited" : "☆ Favorite"}${count > 0 ? ` · ${count}` : ""}`;
+        favBtn.style.background = on ? "rgba(255,217,134,0.30)" : "rgba(255,217,134,0.13)";
+      };
+      favBtn.onclick = (): void => {
+        const wasOn = cloud.isFavorite(favRid);
+        if (wasOn) cloud.removeFavorite(favRid); else cloud.addFavorite(favRid);
+        // Optimistic label flip; reconcile from the subscription cache shortly.
+        const count = Math.max(0, cloud.getFavoriteCount(favRid) + (wasOn ? -1 : 1));
+        favBtn.textContent = `${wasOn ? "☆ Favorite" : "★ Favorited"}${count > 0 ? ` · ${count}` : ""}`;
+        favBtn.style.background = wasOn ? "rgba(255,217,134,0.13)" : "rgba(255,217,134,0.30)";
+        window.setTimeout(paint, 350);
+      };
+      paint();
+      wrap.appendChild(favBtn);
+    }
     const exit = document.createElement("button");
     exit.textContent = "Exit Visit";
     Object.assign(exit.style, {

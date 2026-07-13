@@ -729,6 +729,22 @@ pub struct Friendship {
     pub since: Timestamp,
 }
 
+/// A player's favorited (bookmarked) restaurant. One row per
+/// (player, restaurant); the player's client toggles it and lists its own
+/// rows for a quick-visit menu. Public so a restaurant can show its
+/// favorite COUNT as light social proof.
+#[table(name = favorite, public)]
+pub struct Favorite {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub player: Identity,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub created_at: Timestamp,
+}
+
 /// P5.8 — a single visit event. The visitor's client inserts a row
 /// via record_visit when entering VisitMode; the host's client picks
 /// the row up via subscription and renders a toast. Rows are

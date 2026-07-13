@@ -213,6 +213,14 @@ export const DishwasherBatch = __t.object("DishwasherBatch", {
 });
 export type DishwasherBatch = __Infer<typeof DishwasherBatch>;
 
+export const Favorite = __t.object("Favorite", {
+  id: __t.u64(),
+  player: __t.identity(),
+  restaurantId: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type Favorite = __Infer<typeof Favorite>;
+
 export const FriendRequest = __t.object("FriendRequest", {
   id: __t.u64(),
   fromPlayer: __t.identity(),

@@ -7,6 +7,7 @@ import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
 import AddDirtyPileReducer from "../add_dirty_pile_reducer";
+import AddFavoriteReducer from "../add_favorite_reducer";
 import AdminAdjustMoneyReducer from "../admin_adjust_money_reducer";
 import AdminBanPlayerReducer from "../admin_ban_player_reducer";
 import AdminDeleteRestaurantReducer from "../admin_delete_restaurant_reducer";
@@ -65,6 +66,7 @@ import RefreshNeighborhoodReducer from "../refresh_neighborhood_reducer";
 import RegisterStaffActorReducer from "../register_staff_actor_reducer";
 import ReleaseDirtyPileReducer from "../release_dirty_pile_reducer";
 import RemoveCoOwnerReducer from "../remove_co_owner_reducer";
+import RemoveFavoriteReducer from "../remove_favorite_reducer";
 import ReplaceSeatSlotsReducer from "../replace_seat_slots_reducer";
 import RequestPasswordResetReducer from "../request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "../reset_salary_tick_clock_reducer";
@@ -126,6 +128,7 @@ import UpdateStaffActorReducer from "../update_staff_actor_reducer";
 import WipeMyRestaurantReducer from "../wipe_my_restaurant_reducer";
 
 export type AddDirtyPileParams = __Infer<typeof AddDirtyPileReducer>;
+export type AddFavoriteParams = __Infer<typeof AddFavoriteReducer>;
 export type AdminAdjustMoneyParams = __Infer<typeof AdminAdjustMoneyReducer>;
 export type AdminBanPlayerParams = __Infer<typeof AdminBanPlayerReducer>;
 export type AdminDeleteRestaurantParams = __Infer<typeof AdminDeleteRestaurantReducer>;
@@ -184,6 +187,7 @@ export type RefreshNeighborhoodParams = __Infer<typeof RefreshNeighborhoodReduce
 export type RegisterStaffActorParams = __Infer<typeof RegisterStaffActorReducer>;
 export type ReleaseDirtyPileParams = __Infer<typeof ReleaseDirtyPileReducer>;
 export type RemoveCoOwnerParams = __Infer<typeof RemoveCoOwnerReducer>;
+export type RemoveFavoriteParams = __Infer<typeof RemoveFavoriteReducer>;
 export type ReplaceSeatSlotsParams = __Infer<typeof ReplaceSeatSlotsReducer>;
 export type RequestPasswordResetParams = __Infer<typeof RequestPasswordResetReducer>;
 export type ResetSalaryTickClockParams = __Infer<typeof ResetSalaryTickClockReducer>;

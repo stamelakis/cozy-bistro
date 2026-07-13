@@ -5104,6 +5104,48 @@ export class SpacetimeClient {
     this.conn.reducers.unfriend({ other });
   }
 
+  // === Favorites (bookmarked restaurants) ===
+
+  addFavorite(restaurantId: bigint): void {
+    this.conn?.reducers.addFavorite({ restaurantId });
+  }
+
+  removeFavorite(restaurantId: bigint): void {
+    this.conn?.reducers.removeFavorite({ restaurantId });
+  }
+
+  /** True if the current player has favorited this restaurant. */
+  isFavorite(restaurantId: bigint): boolean {
+    if (!this.conn || !this.identity) return false;
+    const meHex = this.identity.toHexString();
+    for (const f of this.conn.db.favorite.iter()) {
+      if (f.restaurantId === restaurantId && f.player.toHexString() === meHex) return true;
+    }
+    return false;
+  }
+
+  /** Restaurant ids the current player has favorited (newest first). */
+  getMyFavoriteRestaurantIds(): bigint[] {
+    if (!this.conn || !this.identity) return [];
+    const meHex = this.identity.toHexString();
+    // Sort by the auto-inc row id (newer favorites → higher id) so the list
+    // reads newest-first without depending on the Timestamp accessor.
+    const mine = [] as { rid: bigint; key: bigint }[];
+    for (const f of this.conn.db.favorite.iter()) {
+      if (f.player.toHexString() === meHex) mine.push({ rid: f.restaurantId, key: f.id });
+    }
+    mine.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+    return mine.map((m) => m.rid);
+  }
+
+  /** How many players have favorited a restaurant — light social proof. */
+  getFavoriteCount(restaurantId: bigint): number {
+    if (!this.conn) return 0;
+    let n = 0;
+    for (const f of this.conn.db.favorite.iter()) if (f.restaurantId === restaurantId) n += 1;
+    return n;
+  }
+
   /** All active_guest rows in the local subscription cache, regardless
    * of which restaurant they belong to. Tagged with restaurantId so
    * the caller can filter. Same role as listAllStaffActors but for

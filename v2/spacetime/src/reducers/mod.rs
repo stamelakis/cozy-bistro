@@ -10,6 +10,7 @@ mod restaurants;
 mod achievements;
 mod leaderboard;
 mod friends;
+mod favorites;
 mod pedestrians;
 mod chat;
 mod weather;
