@@ -75,6 +75,10 @@ export class MenuPanel {
   private detailDyn!: HTMLElement;
   private upBtn!: HTMLButtonElement;
 
+  /** Lazily-built "Your menu" customer-view overlay (backdrop + content host). */
+  private customerMenuBack?: HTMLElement;
+  private customerMenuHost?: HTMLElement;
+
   /** Signature of the last render so the 5 Hz update() tick skips work
    * when nothing visible changed. */
   private lastSig = "";
@@ -118,9 +122,11 @@ export class MenuPanel {
     this.root.classList.add("cb-menupanel");
     parent.appendChild(this.root);
 
+    const header = document.createElement("div");
+    header.className = "cbm-header";
     const title = document.createElement("div");
     title.textContent = "MENU ▾  (click to expand)";
-    Object.assign(title.style, { fontWeight: "600", fontSize: "13px", cursor: "pointer" } as Partial<CSSStyleDeclaration>);
+    Object.assign(title.style, { fontWeight: "600", fontSize: "13px", cursor: "pointer", flex: "1" } as Partial<CSSStyleDeclaration>);
     title.onclick = () => {
       this.collapsed = !this.collapsed;
       this.body.style.display = this.collapsed ? "none" : "block";
@@ -128,7 +134,16 @@ export class MenuPanel {
       if (!this.collapsed) { this.lastSig = ""; this.render(); }
     };
     this.titleEl = title;
-    this.root.appendChild(title);
+    header.appendChild(title);
+    // "Your menu" — preview the on-menu dishes the way a seated customer reads
+    // them. Stops propagation so it doesn't toggle the panel collapse.
+    const yourMenuBtn = document.createElement("button");
+    yourMenuBtn.className = "cbm-yourmenu";
+    yourMenuBtn.textContent = "📖 Your menu";
+    yourMenuBtn.onclick = (e) => { e.stopPropagation(); this.showCustomerMenu(); };
+    attachTooltip(yourMenuBtn, "See your menu the way a seated customer reads it before ordering.");
+    header.appendChild(yourMenuBtn);
+    this.root.appendChild(header);
     attachTooltip(title,
       "MENU — the dishes your restaurant serves.\n" +
       "Swipe or use the ‹ › arrows to move through a course; dishes run Tier 1 → Tier 5 as you go right. " +
@@ -160,7 +175,7 @@ export class MenuPanel {
 .cbm-cathead{text-align:center;margin:2px 0 0}
 .cbm-catname{font-size:16px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#ffd986}
 .cbm-catpos{font-size:10px;color:rgba(255,245,220,.5);letter-spacing:.03em}
-.cbm-course{display:flex;align-items:center;justify-content:center;gap:10px;margin:7px auto;font:inherit;font-size:14px;font-weight:600;color:#fff5dc;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);border-radius:11px;padding:8px 18px;cursor:pointer;min-width:184px}
+.cbm-course{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;min-width:0;font:inherit;font-size:14px;font-weight:600;color:#fff5dc;background:rgba(255,245,220,.05);border:1px solid rgba(255,245,220,.14);border-radius:11px;padding:8px 12px;cursor:pointer}
 .cbm-course:hover{border-color:#ffd986;color:#ffd986}
 .cbm-course .cchev{font-size:19px;color:#ffd986;line-height:1}
 .cbm-stage{position:relative;height:196px;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:pan-y}
@@ -208,6 +223,24 @@ export class MenuPanel {
 .cbm-lvl{font-size:10px;color:rgba(255,245,220,.5);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em}
 .cbm-up{width:100%;font:inherit;font-size:12px;padding:8px;border-radius:8px;background:transparent;border:1px solid #ffd986;color:#ffd986;cursor:pointer}
 .cbm-up:hover{background:rgba(255,217,134,.12)}
+.cbm-coursebar{display:flex;gap:8px;margin:6px auto 2px;max-width:452px}
+.cbm-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cbm-yourmenu{font:inherit;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px;border:1px solid rgba(255,217,134,.5);background:rgba(255,217,134,.12);color:#ffd986;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.cbm-yourmenu:hover{background:rgba(255,217,134,.22)}
+.cbm-cmback{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:1300;display:none;align-items:center;justify-content:center;padding:20px}
+.cbm-cmcard{position:relative;width:min(560px,calc(100vw - 40px));max-height:88vh;overflow-y:auto;background:#f5ecd6;color:#3a2c1a;border-radius:5px;padding:32px 40px 38px;box-shadow:0 14px 46px rgba(0,0,0,.6);border:1px solid #d8c39a}
+.cbm-cmclose{position:absolute;top:10px;right:13px;background:transparent;border:none;color:#9a7d4f;font-size:20px;cursor:pointer;line-height:1;font-family:system-ui,sans-serif}
+.cbm-cmhead{text-align:center;border-bottom:2px solid #a8895c;padding-bottom:14px;margin-bottom:4px}
+.cbm-cmname{font-family:Georgia,'Times New Roman',serif;font-size:29px;font-weight:700;letter-spacing:.03em;color:#4a3216}
+.cbm-cmsub{font-family:Georgia,serif;font-style:italic;font-size:11px;color:#8a6f45;margin-top:5px;letter-spacing:.24em;text-transform:uppercase}
+.cbm-cmcourse{margin:18px 0 4px}
+.cbm-cmcoursetitle{font-family:Georgia,serif;font-size:14px;font-weight:700;letter-spacing:.24em;text-transform:uppercase;color:#7a5a2c;text-align:center}
+.cbm-cmrow{display:flex;align-items:baseline;gap:6px;margin:13px 2px 0}
+.cbm-cmdish{font-family:Georgia,serif;font-size:16px;font-weight:600;color:#3a2c1a}
+.cbm-cmlead{flex:1;border-bottom:1px dotted #b09a6e;transform:translateY(-4px)}
+.cbm-cmprice{font-family:Georgia,serif;font-size:16px;font-weight:700;color:#5a4326;white-space:nowrap}
+.cbm-cmdesc{font-family:Georgia,serif;font-style:italic;font-size:11.5px;color:#8a6f45;margin:2px 2px 0;max-width:80%}
+.cbm-cmempty{text-align:center;font-family:Georgia,serif;font-style:italic;font-size:14px;color:#8a6f45;padding:34px 12px;line-height:1.6}
 `;
     document.head.appendChild(s);
   }
@@ -227,13 +260,21 @@ export class MenuPanel {
     cathead.append(this.catnameEl, this.catposEl);
     wrap.appendChild(cathead);
 
-    // Previous-course button (▲)
+    // Course navigation — previous (▲) + next (▼) sit SIDE BY SIDE at the top.
+    const courseBar = this.el("div", "cbm-coursebar");
     const up = this.el("button", "cbm-course");
     const upChev = this.el("span", "cchev"); upChev.textContent = "▲";
     this.upLbl = this.el("span");
     up.append(upChev, this.upLbl);
     up.onclick = () => this.moveCourse(-1);
-    wrap.appendChild(up);
+    courseBar.appendChild(up);
+    const dn = this.el("button", "cbm-course");
+    this.dnLbl = this.el("span");
+    const dnChev = this.el("span", "cchev"); dnChev.textContent = "▼";
+    dn.append(this.dnLbl, dnChev);
+    dn.onclick = () => this.moveCourse(1);
+    courseBar.appendChild(dn);
+    wrap.appendChild(courseBar);
 
     // Stage: tier badge + arrows + peeks + focus + lock overlay + rail
     const stage = this.el("div", "cbm-stage");
@@ -281,14 +322,6 @@ export class MenuPanel {
     this.upBtn.onclick = () => this.onUpgrade?.();
     detail.append(this.detailDyn, this.upBtn);
     wrap.appendChild(detail);
-
-    // Next-course button (▼)
-    const dn = this.el("button", "cbm-course");
-    this.dnLbl = this.el("span");
-    const dnChev = this.el("span", "cchev"); dnChev.textContent = "▼";
-    dn.append(this.dnLbl, dnChev);
-    dn.onclick = () => this.moveCourse(1);
-    wrap.appendChild(dn);
 
     this.body.appendChild(wrap);
   }
@@ -383,8 +416,8 @@ export class MenuPanel {
     const active = this.game.cooking.getActiveRecipeCountForCategory(course.key);
     this.catposEl.textContent =
       `Course ${this.ci + 1} of ${this.courses.length}  ·  ${active}/${maxActiveRecipesPerCategory} on menu`;
-    this.upLbl.textContent = "  " + this.courses[(this.ci - 1 + this.courses.length) % this.courses.length].label;
-    this.dnLbl.textContent = this.courses[(this.ci + 1) % this.courses.length].label + "  ";
+    this.upLbl.textContent = this.courses[(this.ci - 1 + this.courses.length) % this.courses.length].label;
+    this.dnLbl.textContent = this.courses[(this.ci + 1) % this.courses.length].label;
 
     // Focus plate (emoji fallback if the PNG is missing)
     this.focusImg.style.display = "";
@@ -468,4 +501,78 @@ export class MenuPanel {
   private pretty(id: string): string {
     return id.replace(/[-_]/g, " ");
   }
+
+  /** Open the customer-facing menu preview — the dishes currently ON the menu,
+   * laid out like a printed restaurant menu: grouped by course, dish name with
+   * a dotted leader to the price, and the ingredients as an italic descriptor.
+   * Built lazily; repopulated each open so it reflects live menu edits. */
+  private showCustomerMenu(): void {
+    if (!this.customerMenuBack) {
+      const back = this.el("div", "cbm-cmback");
+      back.onclick = (e) => { if (e.target === back) back.style.display = "none"; };
+      const card = this.el("div", "cbm-cmcard");
+      const close = document.createElement("button");
+      close.className = "cbm-cmclose";
+      close.textContent = "✕";
+      close.onclick = () => { back.style.display = "none"; };
+      const host = this.el("div");
+      card.append(close, host);
+      back.appendChild(card);
+      document.body.appendChild(back);
+      this.customerMenuBack = back;
+      this.customerMenuHost = host;
+    }
+    this.renderCustomerMenu(this.customerMenuHost!);
+    this.customerMenuBack.style.display = "flex";
+  }
+
+  private renderCustomerMenu(host: HTMLElement): void {
+    const onMenu = new Set(this.game.cooking.getMenuRecipeIds());
+    const parts: string[] = [];
+    parts.push(
+      `<div class="cbm-cmhead">` +
+      `<div class="cbm-cmname">${escapeHtml(this.game.getRestaurantName())}</div>` +
+      `<div class="cbm-cmsub">Menu</div></div>`,
+    );
+    let any = false;
+    for (const course of this.courses) {
+      const dishes = course.dishes
+        .filter((d) => onMenu.has(d.id))
+        .sort((a, b) =>
+          (getRecipeLuxuryTier(a) - getRecipeLuxuryTier(b)) || (a.sellPrice - b.sellPrice));
+      if (dishes.length === 0) continue;
+      any = true;
+      parts.push(`<div class="cbm-cmcourse"><div class="cbm-cmcoursetitle">${escapeHtml(course.label)}</div>`);
+      for (const d of dishes) {
+        const price = this.game.getEffectiveSellPrice(d);
+        const desc = d.ingredients.map((id) => this.pretty(id)).join(", ");
+        parts.push(
+          `<div class="cbm-cmrow">` +
+          `<span class="cbm-cmdish">${escapeHtml(d.name)}</span>` +
+          `<span class="cbm-cmlead"></span>` +
+          `<span class="cbm-cmprice">$${price}</span></div>` +
+          (desc ? `<div class="cbm-cmdesc">${escapeHtml(capitalize(desc))}</div>` : ""),
+        );
+      }
+      parts.push(`</div>`);
+    }
+    if (!any) {
+      parts.push(
+        `<div class="cbm-cmempty">Your menu is empty.<br>` +
+        `Add dishes below and they'll appear here — exactly as your customers will see them.</div>`,
+      );
+    }
+    host.innerHTML = parts.join("");
+  }
+}
+
+/** Escape user/recipe text before it goes into the menu innerHTML (the
+ * restaurant name is player-set, so it must be escaped). */
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;");
+}
+
+function capitalize(s: string): string {
+  return s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
