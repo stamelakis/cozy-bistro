@@ -148,10 +148,17 @@ export class ErrandRouter {
   private readonly pathfind?: Pathfinding;
 
   constructor(helperChar: AnimatedCharacter, helperMemberId: string, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
-    this.doorInteriorPos = doorPos.clone();
-    // Exterior anchor sits 1 tile out from the interior point along the
-    // door's normal (+Z, toward the front of the building). Front door
-    // lives on the +Z exterior wall so +Z is "outside".
+    // Interior anchor sits 1 tile INSIDE the door (−Z) rather than right at
+    // the threshold. The helper lines up here first, then walks a straight run
+    // along the door normal through the opening — mirroring doorExteriorPos on
+    // the outside. Anchoring at the threshold itself let them arrive still
+    // angled from the diagonal counter approach, so on the way OUT they crossed
+    // the frame sideways and clipped the wooden jamb (inbound already crossed
+    // straight, coming from the exterior anchor — hence outbound-only).
+    this.doorInteriorPos = new THREE.Vector2(doorPos.x, doorPos.y - 1);
+    // Exterior anchor sits 1 tile out from the door along the door's normal
+    // (+Z, toward the front of the building). Front door lives on the +Z
+    // exterior wall so +Z is "outside".
     this.doorExteriorPos = new THREE.Vector2(doorPos.x, doorPos.y + 1);
     this.counterPos = counterPos.clone();
     this.pathfind = pathfind;
