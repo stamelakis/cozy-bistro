@@ -19,8 +19,9 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 type Tab = "leaderboards" | "friends" | "favorites" | "guestbook";
 
 const CATEGORIES = [
-  { id: "daily_revenue", label: "Daily Revenue", scoreLabel: "$" },
-  { id: "daily_served",  label: "Daily Served",  scoreLabel: "guests" },
+  { id: "daily_revenue",   label: "Daily Revenue", scoreLabel: "$" },
+  { id: "daily_served",    label: "Daily Served",  scoreLabel: "guests" },
+  { id: "best_rating_day", label: "Best Rating",   scoreLabel: "★" },
 ];
 
 export class CloudModal {
@@ -29,6 +30,7 @@ export class CloudModal {
   private readonly cloud: SpacetimeClient;
   private tab: Tab = "leaderboards";
   private leaderboardCategory = "daily_revenue";
+  private leaderboardFriendsOnly = false;
   private unsubscribe?: () => void;
   /** Wired by Engine — enter visit mode for an owner's plot. Returns true if
    * they're a current neighbor (favorites are pinned, so it's reliable for
@@ -245,11 +247,31 @@ export class CloudModal {
     }
     this.body.appendChild(catRow);
 
+    // Everyone vs Friends filter.
+    const filterRow = document.createElement("div");
+    Object.assign(filterRow.style, { display: "flex", gap: "6px", justifyContent: "center", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    for (const opt of [{ v: false, label: "🌍 Everyone" }, { v: true, label: "👥 Friends" }]) {
+      const b = document.createElement("button");
+      b.textContent = opt.label;
+      const active = this.leaderboardFriendsOnly === opt.v;
+      Object.assign(b.style, {
+        padding: "4px 12px", borderRadius: "12px",
+        background: active ? "rgba(120,180,200,0.30)" : "rgba(255,245,220,0.06)",
+        color: "#fff5dc", border: "1px solid rgba(255,245,220,0.18)",
+        cursor: "pointer", font: "inherit", fontSize: "11px", fontWeight: active ? "700" : "400",
+      } as Partial<CSSStyleDeclaration>);
+      b.onclick = () => { this.leaderboardFriendsOnly = opt.v; this.refresh(); };
+      filterRow.appendChild(b);
+    }
+    this.body.appendChild(filterRow);
+
     const cat = CATEGORIES.find((c) => c.id === this.leaderboardCategory)!;
-    const rows = this.cloud.getLeaderboard(cat.id, 25);
+    const rows = this.cloud.getLeaderboard(cat.id, 25, this.leaderboardFriendsOnly);
     if (rows.length === 0) {
       const empty = document.createElement("div");
-      empty.textContent = "No scores submitted yet. Finish a day to be the first!";
+      empty.textContent = this.leaderboardFriendsOnly
+        ? "No friends on this board yet."
+        : "No scores submitted yet. Finish a day to be the first!";
       Object.assign(empty.style, { textAlign: "center", padding: "16px", opacity: "0.65" } as Partial<CSSStyleDeclaration>);
       this.body.appendChild(empty);
       return;
@@ -277,7 +299,9 @@ export class CloudModal {
         fontWeight: r.isMe ? "700" : "400",
       } as Partial<CSSStyleDeclaration>);
       const trophy = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `${r.rank}`;
-      const fmt = cat.id === "daily_revenue" ? `$${r.score}` : String(r.score);
+      const fmt = cat.id === "daily_revenue" ? `$${r.score}`
+        : cat.id === "best_rating_day" ? `${(r.score / 100).toFixed(1)}★`
+        : String(r.score);
       row.innerHTML =
         `<span>${trophy}</span>` +
         `<span>${escapeHtml(r.playerName)}${r.isMe ? " (you)" : ""}</span>` +

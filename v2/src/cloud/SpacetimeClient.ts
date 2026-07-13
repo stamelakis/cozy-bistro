@@ -4877,6 +4877,11 @@ export class SpacetimeClient {
         score: BigInt(Math.max(0, s.served)),
         dayNumber: s.dayNumber,
       });
+      this.conn.reducers.submitLeaderboard({
+        restaurantId: rid, category: "best_rating_day",
+        score: BigInt(Math.max(0, Math.round(s.rating * 100))),
+        dayNumber: s.dayNumber,
+      });
       // H.64 — consolidate the day's state into the visit-mode blob.
       // Visit mode reads player_save; no other path needs the
       // save_snapshot upsert.
@@ -5069,23 +5074,36 @@ export class SpacetimeClient {
   }
 
   /** Top N rows of a leaderboard category, sorted desc by score. */
-  getLeaderboard(category: string, limit = 25): LeaderboardRow[] {
+  getLeaderboard(category: string, limit = 25, friendsOnly = false): LeaderboardRow[] {
     if (!this.conn) return [];
-    const rows = Array.from(this.conn.db.leaderboard_entry.iter())
-      .filter((r) => r.category === category)
-      .sort((a, b) => Number(b.score - a.score));
     const me = this.identity?.toHexString() ?? "";
-    return rows.slice(0, limit).map((r, i) => {
+    let allow: Set<string> | null = null;
+    if (friendsOnly) {
+      allow = new Set<string>([me]);
+      for (const f of this.getFriendsView().friends) allow.add(f.hex);
+    }
+    // The table is append-only (one row per submission), so keep each player's
+    // BEST score instead of listing every day — otherwise one player's good
+    // days dominate the top-N.
+    const best = new Map<string, { score: bigint; dayNumber: number }>();
+    for (const r of this.conn.db.leaderboard_entry.iter()) {
+      if (r.category !== category) continue;
       const hex = r.player.toHexString();
-      return {
+      if (allow && !allow.has(hex)) continue;
+      const prev = best.get(hex);
+      if (!prev || r.score > prev.score) best.set(hex, { score: r.score, dayNumber: r.dayNumber });
+    }
+    return Array.from(best.entries())
+      .sort((a, b) => Number(b[1].score - a[1].score))
+      .slice(0, limit)
+      .map(([hex, v], i) => ({
         rank: i + 1,
         playerHex: hex,
         playerName: this.nameFor(hex),
-        score: Number(r.score),
-        dayNumber: r.dayNumber,
+        score: Number(v.score),
+        dayNumber: v.dayNumber,
         isMe: hex === me,
-      };
-    });
+      }));
   }
 
   /** Friend list + pending requests in/out for the current player. */
