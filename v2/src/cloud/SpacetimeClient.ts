@@ -785,6 +785,20 @@ export class SpacetimeClient {
 
   private readonly visitListeners = new Set<(visitorHex: string) => void>();
 
+  /** Host ping — someone reacted to THIS player's restaurant. */
+  onReactedToMe(cb: (reactorHex: string, emoji: string) => void): () => void {
+    this.reactionListeners.add(cb);
+    return () => { this.reactionListeners.delete(cb); };
+  }
+  private readonly reactionListeners = new Set<(reactorHex: string, emoji: string) => void>();
+
+  /** Host ping — someone signed THIS player's guestbook. */
+  onGuestbookSigned(cb: (authorName: string) => void): () => void {
+    this.guestbookListeners.add(cb);
+    return () => { this.guestbookListeners.delete(cb); };
+  }
+  private readonly guestbookListeners = new Set<(authorName: string) => void>();
+
   /** Publish this player's save snapshot to the server. Called by
    * SaveSystem on every autosave so visitors can subscribe to the
    * latest restaurant state. Fire-and-forget — failures (offline,
@@ -4800,6 +4814,21 @@ export class SpacetimeClient {
         if (row.host.toHexString() !== me.toHexString()) return;
         for (const cb of this.visitListeners) {
           try { cb(row.visitor.toHexString()); } catch { /* ignore */ }
+        }
+      });
+      // Phase 2b — reaction / guestbook host pings. Filter to my restaurant.
+      ctx.db.visit_reaction.onInsert((_evCtx, row) => {
+        const me = this.identity;
+        if (!me || row.targetOwner.toHexString() !== me.toHexString()) return;
+        for (const cb of this.reactionListeners) {
+          try { cb(row.reactor.toHexString(), row.emoji); } catch { /* ignore */ }
+        }
+      });
+      ctx.db.guestbook_entry.onInsert((_evCtx, row) => {
+        const me = this.identity;
+        if (!me || row.targetOwner.toHexString() !== me.toHexString()) return;
+        for (const cb of this.guestbookListeners) {
+          try { cb(row.authorName); } catch { /* ignore */ }
         }
       });
     } catch (e) {

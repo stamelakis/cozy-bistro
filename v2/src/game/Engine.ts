@@ -875,6 +875,14 @@ export class Engine {
       // Lifetime "someone visited me" counter.
       this.game.bumpPlayerCounter("visitsIn");
     });
+    // Phase 2b — someone reacted to / signed the guestbook of MY restaurant.
+    this.cloud.onReactedToMe((reactorHex: string, emoji: string) => {
+      const who = this.cloud.listAccounts().find((a) => a.identity.toHexString() === reactorHex);
+      this.showSocialToast(`${emoji} <b>${escapeHtmlForToast(who?.displayName ?? "Someone")}</b> reacted to your restaurant`);
+    });
+    this.cloud.onGuestbookSigned((authorName: string) => {
+      this.showSocialToast(`📖 <b>${escapeHtmlForToast(authorName || "Someone")}</b> signed your guestbook`);
+    });
     // Home button while visiting should exit visit mode first so the
     // player goes back to their own restaurant cleanly.
     const originalGoHome = this.camera.goHome.bind(this.camera);
@@ -2891,6 +2899,13 @@ export class Engine {
    * Container is the same #app the rest of the UI lives in so the
    * toast doesn't survive a page navigation. */
   private showVisitToast(visitorName: string): void {
+    this.showSocialToast(`👀 <b>${escapeHtmlForToast(visitorName)}</b> is visiting your restaurant`);
+  }
+
+  /** Generic bottom-right social toast (visit / reaction / guestbook). Fades
+   * after 5 s; stacks via DOM flow. `innerHtml` is caller-built — callers must
+   * escape any user text with escapeHtmlForToast. */
+  private showSocialToast(innerHtml: string): void {
     const toast = document.createElement("div");
     Object.assign(toast.style, {
       position: "fixed",
@@ -2909,11 +2924,9 @@ export class Engine {
       opacity: "0",
       transition: "opacity 200ms ease-out",
     } as Partial<CSSStyleDeclaration>);
-    toast.innerHTML = `👀 <b>${escapeHtmlForToast(visitorName)}</b> is visiting your restaurant`;
+    toast.innerHTML = innerHtml;
     this.container.appendChild(toast);
-    // Fade-in next frame so the transition fires.
     requestAnimationFrame(() => { toast.style.opacity = "1"; });
-    // Fade-out + remove after 5 s.
     setTimeout(() => {
       toast.style.opacity = "0";
       setTimeout(() => toast.remove(), 250);
