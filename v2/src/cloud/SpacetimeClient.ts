@@ -5831,7 +5831,7 @@ export class SpacetimeClient {
    * derived from the player table's last_seen_at (same 90 s window
    * as countOnlinePlayers). Sorted online-first, then alphabetical
    * within each section — drives the PlayerRosterPanel. */
-  getPlayerRoster(): Array<{ username: string; displayName: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> {
+  getPlayerRoster(): Array<{ username: string; displayName: string; hex: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> {
     if (!this.conn) return [];
     const ONLINE_WINDOW_MS = 90_000;
     const cutoffMs = Date.now() - ONLINE_WINDOW_MS;
@@ -5846,7 +5846,7 @@ export class SpacetimeClient {
       }
     } catch { /* ignore */ }
     const meHex = this.identity?.toHexString().toLowerCase() ?? "";
-    const rows: Array<{ username: string; displayName: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> = [];
+    const rows: Array<{ username: string; displayName: string; hex: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> = [];
     try {
       for (const a of this.conn.db.auth_record.iter()) {
         if (!a.username) continue;
@@ -5854,6 +5854,7 @@ export class SpacetimeClient {
         rows.push({
           username: a.username,
           displayName: a.displayName || a.username,
+          hex,
           isOnline: onlineHex.has(hex),
           isMe: hex === meHex,
           isAdmin: a.isAdmin,

@@ -25,6 +25,7 @@ import { setMobileInGame } from "../ui/MobileUI";
 import { VisitMode } from "../ui/VisitMode";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { ServiceAlertBanner } from "../ui/ServiceAlertBanner";
+import { showPlayerMenu } from "../ui/playerMenu";
 import { DecorModal } from "../ui/DecorModal";
 import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
@@ -2376,6 +2377,7 @@ export class Engine {
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
       this.chatPanel.onMessageSent = () => this.game.bumpPlayerCounter("chatsSent");
+      this.chatPanel.onPlayerClick = (e, hex, name, isMe) => this.openPlayerMenu(e, hex, name, isMe);
       makeDraggableResizable({
         storageKey: "cozy-bistro.panel.chat.v4", // v3→v4 (2026-06-27): drop stale collapsed-height layouts
         root: this.chatPanel.root,
@@ -2404,6 +2406,7 @@ export class Engine {
     try {
       if (!this.rosterPanel) {
         this.rosterPanel = new PlayerRosterPanel(container, this.cloud);
+        this.rosterPanel.onPlayerClick = (e, hex, name, isMe) => this.openPlayerMenu(e, hex, name, isMe);
       }
     } catch (e) {
       console.warn("[Engine] failed to mount roster panel:", e);
@@ -2900,6 +2903,18 @@ export class Engine {
    * toast doesn't survive a page navigation. */
   private showVisitToast(visitorName: string): void {
     this.showSocialToast(`👀 <b>${escapeHtmlForToast(visitorName)}</b> is visiting your restaurant`);
+  }
+
+  /** Open the shared player-action menu (from a roster row or a chat author).
+   * Wired to both panels' onPlayerClick. */
+  private openPlayerMenu(e: MouseEvent, hex: string, name: string, isMe: boolean): void {
+    showPlayerMenu(e.clientX, e.clientY, hex, name, isMe, {
+      onProfile: (h) => this.cloudModal.openProfile(h),
+      onMessage: (h, n) => this.chatPanel?.openPrivateByHex(h, n),
+      onVisit: (h) => this.visitMode.visitByOwnerHex(h),
+      onAddFriend: (h) => this.cloud.sendFriendRequestByHex(h),
+      isFriend: (h) => this.cloud.getFriendsView().friends.some((f) => f.hex.toLowerCase() === h.toLowerCase()),
+    });
   }
 
   /** Generic bottom-right social toast (visit / reaction / guestbook). Fades

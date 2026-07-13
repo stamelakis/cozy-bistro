@@ -63,6 +63,9 @@ export class ChatPanel {
   /** Detach the chat-message listener on dispose. */
   private chatUnsub: (() => void) | null = null;
 
+  /** Wired by Engine — opens the shared player action menu for a chat author. */
+  onPlayerClick?: (e: MouseEvent, hex: string, name: string, isMe: boolean) => void;
+
   constructor(parent: HTMLElement, cloud: SpacetimeClient) {
     this.cloud = cloud;
 
@@ -446,7 +449,7 @@ export class ChatPanel {
       this.logArea.appendChild(empty);
       return;
     }
-    for (const m of msgs) this.logArea.appendChild(renderMessageRow(m));
+    for (const m of msgs) this.logArea.appendChild(renderMessageRow(m, (e, hex, name) => this.onPlayerClick?.(e, hex, name, false)));
     // Scroll to bottom so the newest message is visible.
     this.logArea.scrollTop = this.logArea.scrollHeight;
   }
@@ -530,6 +533,18 @@ export class ChatPanel {
     this.setActive(channel);
   }
 
+  /** Open (or focus) a PM conversation with a player by identity hex — used by
+   * the shared player menu in the roster / chat. */
+  openPrivateByHex(otherHexRaw: string, name: string): void {
+    const otherHex = otherHexRaw.toLowerCase();
+    const meHex = (this.cloud.getMyHex() || "").toLowerCase();
+    if (!meHex || otherHex === meHex) return;
+    const channel = SpacetimeClient.pmChannelFor(meHex, otherHex);
+    this.addTab({ channel, label: `@${name}`, closable: true, otherHex });
+    this.setActive(channel);
+    this.setMinimized(false);
+  }
+
   // (discoverExistingPms removed — owner wants ephemeral chat with
   //  no historical replay. PM tabs auto-spawn from onIncoming when
   //  the first in-session message arrives on a new channel.)
@@ -585,7 +600,10 @@ interface SessionMessage {
 //                       HELPERS
 // ============================================================
 
-function renderMessageRow(m: { senderName: string; senderHex: string; text: string; sentAtMs: number; isMine: boolean }): HTMLElement {
+function renderMessageRow(
+  m: { senderName: string; senderHex: string; text: string; sentAtMs: number; isMine: boolean },
+  onAuthor?: (e: MouseEvent, hex: string, name: string) => void,
+): HTMLElement {
   // Chat-bubble layout: own messages right-aligned with a green
   // tint, other people's messages left-aligned with an amber tint.
   // Replaces the old "flat list of name/time/text triples" which
@@ -635,6 +653,13 @@ function renderMessageRow(m: { senderName: string; senderHex: string; text: stri
     fontWeight: "700",
     color: m.isMine ? "#a8e2a8" : "#ffd986",
   } as Partial<CSSStyleDeclaration>);
+  if (!m.isMine && m.senderHex && onAuthor) {
+    name.style.cursor = "pointer";
+    name.style.textDecoration = "underline dotted rgba(255,217,134,0.4)";
+    const open = (e: MouseEvent): void => { e.preventDefault(); onAuthor(e, m.senderHex, m.senderName); };
+    name.addEventListener("click", open);
+    name.addEventListener("contextmenu", open);
+  }
   head.appendChild(name);
   const time = document.createElement("span");
   time.textContent = formatShortTime(m.sentAtMs);

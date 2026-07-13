@@ -24,6 +24,9 @@ export class PlayerRosterPanel {
   /** Hash of the last render — skip rebuilding when nothing visible
    * changed (cheaper than diffing per-row, and the roster is small). */
   private lastSig = "";
+  /** Wired by Engine — opens the shared player action menu (PM / friend /
+   * profile / visit) for a clicked name. */
+  onPlayerClick?: (e: MouseEvent, hex: string, name: string, isMe: boolean) => void;
 
   constructor(parent: HTMLElement, cloud: SpacetimeClient) {
     this.cloud = cloud;
@@ -102,7 +105,7 @@ export class PlayerRosterPanel {
     for (const r of roster) this.list.appendChild(this.renderRow(r));
   }
 
-  private renderRow(r: { displayName: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }): HTMLElement {
+  private renderRow(r: { displayName: string; hex: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }): HTMLElement {
     const row = document.createElement("div");
     Object.assign(row.style, {
       display: "flex", alignItems: "center", gap: "6px",
@@ -126,7 +129,15 @@ export class PlayerRosterPanel {
       whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       color: r.isOnline ? "#fff5dc" : "rgba(255, 245, 220, 0.55)",
       fontWeight: r.isMe ? "700" : "500",
+      cursor: "pointer",
     } as Partial<CSSStyleDeclaration>);
+    // Left OR right click opens the player action menu.
+    const open = (e: MouseEvent): void => {
+      e.preventDefault();
+      this.onPlayerClick?.(e, r.hex, r.displayName, r.isMe);
+    };
+    name.addEventListener("click", open);
+    name.addEventListener("contextmenu", open);
     row.appendChild(name);
     return row;
   }

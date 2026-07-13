@@ -145,6 +145,10 @@ export class CloudModal {
   show(): void { this.refresh(); this.root.style.display = "flex"; }
   hide(): void { this.root.style.display = "none"; }
 
+  /** Open the hub straight to a player's profile card (used by the shared
+   * player menu in the roster / chat). */
+  openProfile(hex: string): void { this.profileHex = hex; this.show(); }
+
   dispose(): void { this.unsubscribe?.(); }
 
   // === Render ===
