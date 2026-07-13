@@ -728,7 +728,15 @@ export class Game {
     // (~$76.6k) is a real late-game money sink vs a T1 (~$15.3k). Recipes
     // without a tier default to 1× (unchanged). Client-computed (optimistic
     // purchase — the server just records the money delta, no re-validation).
-    const tier = recipe.luxuryTier ?? 1;
+    // Use the canonical tier resolver, NOT the raw recipe.luxuryTier field:
+    // almost every original recipe leaves luxuryTier undefined and has its tier
+    // DERIVED from sellPrice/satisfaction (see getRecipeLuxuryTier). Reading the
+    // raw field here made all of those fall back to 1× — so the tier scaling
+    // only ever applied to the few recipes with an explicit field, and every
+    // other dish kept showing the old flat $30 cost. This matches how the
+    // upgrade modal groups recipes into tier tabs and how upgrade DURATION is
+    // computed (both already use getRecipeLuxuryTier).
+    const tier = getRecipeLuxuryTier(recipe);
     return 30 * tier * Math.pow(2, level - 1);
   }
 
