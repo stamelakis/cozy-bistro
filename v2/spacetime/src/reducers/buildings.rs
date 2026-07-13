@@ -11,7 +11,7 @@
 //! space each player gets.
 
 use spacetimedb::{reducer, ReducerContext, Table, Identity};
-use crate::tables::{building, favorite, restaurant, player, player_save, neighborhood_slot, Building, NeighborhoodSlot, Restaurant};
+use crate::tables::{building, favorite, friendship, restaurant, player, player_save, neighborhood_slot, Building, NeighborhoodSlot, Restaurant};
 
 /// Seed N unowned buildings on the city map. Called once from the
 /// `init` lifecycle reducer when the module is first published —
@@ -194,14 +194,21 @@ pub fn refresh_neighborhood(ctx: &ReducerContext) -> Result<(), String> {
         let rot = r.id.wrapping_mul(2654435761).wrapping_add(bucket as u64) % 100_003;
         cands.push((r.id, r.owner, home, dist, rot));
     }
-    // Pin the viewer's FAVORITES: they sort ahead of everyone else so they
-    // always claim a neighborhood plot (up to the ~11 available) — a favorited
-    // restaurant becomes a permanent, always-visitable neighbour. Within the
-    // favorites (and within the rest) it's still closest-level first, then the
-    // rotation jitter.
+    // Pin the viewer's FAVORITES first, then their FRIENDS, then everyone else —
+    // so a favorited or friended restaurant always claims a neighborhood plot
+    // (up to the ~11 available) and becomes a permanent, one-click-visitable
+    // neighbour. Within each rank it's still closest-level first, then jitter.
     let favs: std::collections::HashSet<u64> = ctx.db.favorite().player().filter(viewer)
         .map(|f| f.restaurant_id).collect();
-    cands.sort_by_key(|c| (if favs.contains(&c.0) { 0u8 } else { 1u8 }, c.3, c.4));
+    let mut friend_owners: std::collections::HashSet<Identity> = std::collections::HashSet::new();
+    for f in ctx.db.friendship().player_a().filter(viewer) { friend_owners.insert(f.player_b); }
+    for f in ctx.db.friendship().player_b().filter(viewer) { friend_owners.insert(f.player_a); }
+    cands.sort_by_key(|c| {
+        let rank = if favs.contains(&c.0) { 0u8 }
+            else if friend_owners.contains(&c.1) { 1u8 }
+            else { 2u8 };
+        (rank, c.3, c.4)
+    });
 
     // Two-pass assignment. Pass 1 honors each candidate's HOME plot (the "same
     // identity" rule) — the closest-level candidate wins a contested home. Pass

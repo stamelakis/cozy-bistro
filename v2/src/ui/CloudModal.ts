@@ -441,6 +441,8 @@ export class CloudModal {
     } else {
       for (const f of view.friends) {
         const row = personRow(`${f.name}`);
+        const visit = this.makeVisitBtn(f.hex);
+        if (visit) row.appendChild(visit);
         const unfriendBtn = document.createElement("button");
         unfriendBtn.textContent = "Unfriend";
         Object.assign(unfriendBtn.style, btnStyle("rgba(200,120,120,0.18)") as Partial<CSSStyleDeclaration>);

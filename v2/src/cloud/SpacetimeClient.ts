@@ -5107,11 +5107,17 @@ export class SpacetimeClient {
   // === Favorites (bookmarked restaurants) ===
 
   addFavorite(restaurantId: bigint): void {
-    this.conn?.reducers.addFavorite({ restaurantId });
+    if (!this.conn) return;
+    this.conn.reducers.addFavorite({ restaurantId });
+    // Instantly re-pin so the favorite becomes a visitable neighbour NOW (not on
+    // the next ~5-min rotation). Queued after add_favorite, so it sees the row.
+    this.refreshNeighborhood();
   }
 
   removeFavorite(restaurantId: bigint): void {
-    this.conn?.reducers.removeFavorite({ restaurantId });
+    if (!this.conn) return;
+    this.conn.reducers.removeFavorite({ restaurantId });
+    this.refreshNeighborhood();
   }
 
   /** True if the current player has favorited this restaurant. */
