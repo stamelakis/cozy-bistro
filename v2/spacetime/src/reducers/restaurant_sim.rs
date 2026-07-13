@@ -5729,14 +5729,13 @@ const ERRAND_COUNTER_DWELL_MS: i64 = 800;
 /// Mirrors `Game.stockTarget` minus a hysteresis margin so we don't
 /// re-dispatch every tick while the helper is mid-trip.
 const ERRAND_RESTOCK_THRESHOLD: u32 = 3;
-/// Units to fetch per ingredient on a single trip. Mirrors the local
-/// "deficit-fill" logic but simplified — we just buy a fixed N per
-/// shortage line. Server picks at most CARRY_CAP ingredients per
-/// trip.
-const ERRAND_UNITS_PER_INGREDIENT: u32 = 5;
-/// Max distinct ingredients a single trip carries. Trip cost scales
-/// linearly with this cap.
-const ERRAND_CARRY_CAP: usize = 5;
+/// TOTAL units one errand trip carries back = ERRAND_CARRY_BASE plus
+/// ERRAND_CARRY_PER_LEVEL per errand-helper training level (10 → 20 at L5).
+/// Mirrors the client's AUTOSHOP_MAX_PER_TRIP + getHelperCarryCapacity so the
+/// online (server) supply chain matches the offline (client) one. This is a
+/// TOTAL cap across all ingredients on the trip, NOT a per-ingredient amount.
+const ERRAND_CARRY_BASE: u32 = 10;
+const ERRAND_CARRY_PER_LEVEL: u32 = 2;
 /// How often the dispatcher will consider a new trip. Without this
 /// cooldown the dispatcher would fire every tick while pantry stays
 /// below threshold, queueing trips faster than the helper can
@@ -5749,10 +5748,11 @@ const ERRAND_DISPATCH_COOLDOWN_MICROS: i64 = 60_000_000;
 ///
 /// Algorithm:
 ///   1. Bail if no errand helper exists OR all are mid-trip.
-///   2. Scan pantry_stock for ingredients below ERRAND_RESTOCK_THRESHOLD,
+///   2. Scan pantry_stock for ingredients below the player's target,
 ///      skipping any already on the way (= present in another
 ///      helper's errand_trip_list_csv).
-///   3. Pick up to ERRAND_CARRY_CAP entries.
+///   3. Sort by biggest deficit and greedy-fill the trip up to the
+///      helper's training-scaled TOTAL carry cap (10 → 20 at L5).
 ///   4. Compute total cost via ingredient_cost lookup.
 ///   5. Saturating-subtract from cloud_money_cents (allow negative
 ///      balance — matches local forceSpendMoney semantics for
@@ -5813,7 +5813,20 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     let target = ctx.db.pantry_target().restaurant_id().find(rid)
         .map(|t| t.target.max(1))
         .unwrap_or(ERRAND_RESTOCK_THRESHOLD);
-    let mut needs: Vec<(String, u32)> = Vec::new();
+    // Migration parity (2026-07) — match the client's dispatchAutoShopTrip so
+    // the online supply chain behaves like the offline one: a single TOTAL
+    // per-trip carry cap (not a per-ingredient / per-entry cap), scaled by the
+    // dispatched helper's training (10 base, +2/level → 20 at L5), filled
+    // BIGGEST-DEFICIT-FIRST so the scarcest ingredients restock first. The old
+    // rule (≤5 ingredients, ≤10 units each, unsorted, training ignored) was an
+    // un-migrated divergence that left the carry upgrade dead + starved the
+    // most-depleted items.
+    let helper_level = ctx.db.hired_staff_member().member_id().find(helper.member_id.clone())
+        .map(|m| m.upgrade_level)
+        .unwrap_or(0);
+    let carry_cap: u32 = ERRAND_CARRY_BASE + ERRAND_CARRY_PER_LEVEL * helper_level;
+    // Every below-target ingredient with its deficit, biggest first.
+    let mut deficits: Vec<(String, u32)> = Vec::new();
     for cost in ctx.db.ingredient_cost().iter() {
         let ing = cost.ingredient_id.clone();
         if on_the_way.contains(&ing) { continue; }
@@ -5822,11 +5835,19 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
             .map(|p| p.quantity)
             .unwrap_or(0);
         if qty >= target { continue; }
-        // Buy up to the deficit, capped per trip so one scarce
-        // ingredient doesn't hog the whole carry capacity.
-        let units = (target - qty).min(ERRAND_UNITS_PER_INGREDIENT.max(10));
-        needs.push((ing, units));
-        if needs.len() >= ERRAND_CARRY_CAP { break; }
+        deficits.push((ing, target - qty));
+    }
+    deficits.sort_by(|a, b| b.1.cmp(&a.1));
+    // Greedy-fill the trip up to the TOTAL carry cap, biggest deficits first.
+    let mut needs: Vec<(String, u32)> = Vec::new();
+    let mut carried: u32 = 0;
+    for (ing, deficit) in deficits {
+        if carried >= carry_cap { break; }
+        let take = deficit.min(carry_cap - carried);
+        if take > 0 {
+            needs.push((ing, take));
+            carried += take;
+        }
     }
     if needs.is_empty() { return; }
 
