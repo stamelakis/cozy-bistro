@@ -353,7 +353,7 @@ export class WorldScene {
    * is animated independently based on whether any character is
    * standing close to it. The panel ref is captured lazily from the
    * model's userData (same convention as the front door). */
-  private internalDoorState = new Map<string, { panel: THREE.Object3D; openAmount: number }>();
+  private internalDoorState = new Map<string, { openAmount: number }>();
 
   /** Reconcile the placed-interior-doorway list and animate each
    * panel toward the requested open / closed state. Engine calls
@@ -364,23 +364,27 @@ export class WorldScene {
     const live = new Set<string>();
     for (const d of doors) {
       live.add(d.uid);
+      // Re-resolve the hinge panel from the CURRENT model every frame. A door
+      // model can be re-created underneath a stable uid — e.g. a neighborhood
+      // re-render (favorite/unfavorite → refreshNeighborhood) rebuilds the plot
+      // and swaps in a fresh door object. If we cached the panel on first sight
+      // (the old behaviour), we'd keep rotating the now-detached old panel while
+      // the live door sat frozen shut — exactly the "doors stopped opening" bug.
+      // The hinge is normally on the model's own userData, but the registry may
+      // wrap the door in a positioning/rotation container, so fall back to a
+      // descendant scan (that's why the front door needs it).
+      let panel = (d.model.userData as { panel?: THREE.Object3D }).panel;
+      if (!panel) {
+        d.model.traverse((o) => {
+          if (panel) return;
+          const p = (o.userData as { panel?: THREE.Object3D } | undefined)?.panel;
+          if (p) panel = p;
+        });
+      }
+      if (!panel) continue;
       let entry = this.internalDoorState.get(d.uid);
       if (!entry) {
-        // The hinge is normally on the model's own userData, but the registry
-        // may wrap the door in a positioning/rotation container (that's why
-        // the front-door capture searches descendants) — so fall back to a
-        // descendant scan. Without this the front door ("door") would silently
-        // never animate when it came in wrapped.
-        let panel = (d.model.userData as { panel?: THREE.Object3D }).panel;
-        if (!panel) {
-          d.model.traverse((o) => {
-            if (panel) return;
-            const p = (o.userData as { panel?: THREE.Object3D } | undefined)?.panel;
-            if (p) panel = p;
-          });
-        }
-        if (!panel) continue;
-        entry = { panel, openAmount: 0 };
+        entry = { openAmount: 0 };
         this.internalDoorState.set(d.uid, entry);
       }
       const target = d.open ? 1 : 0;
@@ -388,7 +392,7 @@ export class WorldScene {
       // — feels snappy enough that the guest doesn't visibly clip it.
       const speed = 6;
       entry.openAmount += (target - entry.openAmount) * Math.min(1, dt * speed);
-      entry.panel.rotation.y = -entry.openAmount * Math.PI / 2;
+      panel.rotation.y = -entry.openAmount * Math.PI / 2;
     }
     for (const uid of [...this.internalDoorState.keys()]) {
       if (!live.has(uid)) this.internalDoorState.delete(uid);
