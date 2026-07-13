@@ -16,7 +16,15 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 // Friends + Leaderboards remain the social meat. A username search
 // is added inside the friends tab so players can find each other
 // without needing a friend code.
-type Tab = "leaderboards" | "friends" | "favorites" | "guestbook";
+type Tab = "leaderboards" | "friends" | "favorites" | "guestbook" | "weekly";
+
+/** The 3 concurrent weekly competitions, derived from the daily leaderboard
+ * submissions windowed by real-time week. Prestige only (no cash). */
+const WEEKLY_COMPS: { id: string; label: string; agg: "sum" | "avg"; fmt: (v: number) => string }[] = [
+  { id: "daily_served",    label: "Served",  agg: "sum", fmt: (v) => `${Math.round(v)}` },
+  { id: "best_rating_day", label: "Rating",  agg: "avg", fmt: (v) => `${(v / 100).toFixed(1)}★` },
+  { id: "daily_revenue",   label: "Revenue", agg: "sum", fmt: (v) => `$${Math.round(v)}` },
+];
 
 const CATEGORIES = [
   { id: "daily_revenue",   label: "Daily Revenue", scoreLabel: "$" },
@@ -32,6 +40,7 @@ export class CloudModal {
   private leaderboardCategory = "daily_revenue";
   private leaderboardFriendsOnly = false;
   private profileHex: string | null = null;
+  private weeklyCategory = "daily_served";
   private unsubscribe?: () => void;
   /** Wired by Engine — enter visit mode for an owner's plot. Returns true if
    * they're a current neighbor (favorites are pinned, so it's reliable for
@@ -95,7 +104,8 @@ export class CloudModal {
       display: "flex", gap: "6px", marginBottom: "10px",
     } as Partial<CSSStyleDeclaration>);
     const tabList: { id: Tab; label: string }[] = [
-      { id: "leaderboards", label: "🏆 Leaderboards" },
+      { id: "leaderboards", label: "🏆 Leaders" },
+      { id: "weekly",       label: "🏁 Weekly" },
       { id: "favorites",    label: "⭐ Favorites" },
       { id: "guestbook",    label: "📖 Guestbook" },
       { id: "friends",      label: "👥 Friends" },
@@ -158,6 +168,7 @@ export class CloudModal {
     }
     if (this.profileHex) { this.renderProfile(this.profileHex); return; }
     if (this.tab === "leaderboards") this.renderLeaderboards();
+    else if (this.tab === "weekly") this.renderWeekly();
     else if (this.tab === "favorites") this.renderFavorites();
     else if (this.tab === "guestbook") this.renderGuestbook();
     else this.renderFriends();
@@ -182,6 +193,13 @@ export class CloudModal {
     head.innerHTML = `<div style="font-size:18px;font-weight:700">${this.esc(p.restaurantName)}</div>`
       + `<div style="opacity:0.7;margin-top:2px">${this.esc(p.displayName)}${p.isMe ? " (you)" : ""}</div>`;
     this.body.appendChild(head);
+
+    if (p.champion > 0) {
+      const champ = document.createElement("div");
+      champ.textContent = `🏆 ${p.champion}-time weekly champion`;
+      Object.assign(champ.style, { textAlign: "center", color: "#ffd986", fontWeight: "700", marginBottom: "12px" } as Partial<CSSStyleDeclaration>);
+      this.body.appendChild(champ);
+    }
 
     const npc = p.npcRating > 0 ? `${p.npcRating.toFixed(1)}★` : "—";
     const comm = p.community.count > 0 ? `${p.community.avg.toFixed(1)}★ (${p.community.count})` : "—";
@@ -388,6 +406,70 @@ export class CloudModal {
         const h = el.getAttribute("data-hex");
         if (h) this.showProfile(h);
       });
+    });
+  }
+
+  private renderWeekly(): void {
+    const catRow = document.createElement("div");
+    Object.assign(catRow.style, { display: "flex", gap: "6px", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    for (const c of WEEKLY_COMPS) {
+      const btn = document.createElement("button");
+      btn.textContent = c.label;
+      const active = c.id === this.weeklyCategory;
+      Object.assign(btn.style, {
+        flex: "1", padding: "6px 8px", borderRadius: "4px",
+        background: active ? "rgba(120,180,200,0.30)" : "rgba(255,245,220,0.06)",
+        color: "#fff5dc", border: "1px solid rgba(255,245,220,0.18)",
+        cursor: "pointer", font: "inherit", fontSize: "11px", fontWeight: active ? "700" : "400",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => { this.weeklyCategory = c.id; this.refresh(); };
+      catRow.appendChild(btn);
+    }
+    this.body.appendChild(catRow);
+
+    const comp = WEEKLY_COMPS.find((c) => c.id === this.weeklyCategory)!;
+    const cur = this.cloud.getWeeklyCompetition(comp.id, comp.agg, 0, 15);
+    const msLeft = Math.max(0, cur.endMs - Date.now());
+    const dleft = Math.floor(msLeft / 86400000);
+    const hleft = Math.floor((msLeft % 86400000) / 3600000);
+    const info = document.createElement("div");
+    Object.assign(info.style, { textAlign: "center", fontSize: "12px", opacity: "0.8", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    info.textContent = `This week's contest · resets in ${dleft}d ${hleft}h`;
+    this.body.appendChild(info);
+
+    const last = this.cloud.getWeeklyCompetition(comp.id, comp.agg, 1, 1);
+    if (last.standings.length > 0) {
+      const champ = last.standings[0];
+      const c = document.createElement("div");
+      Object.assign(c.style, { textAlign: "center", marginBottom: "10px", padding: "6px 8px", background: "rgba(255,217,134,0.12)", borderRadius: "8px", border: "1px solid rgba(255,217,134,0.35)" } as Partial<CSSStyleDeclaration>);
+      c.innerHTML = `🏆 Last week: <b>${escapeHtml(champ.playerName)}</b> <span style="opacity:0.7">(${escapeHtml(comp.fmt(champ.value))})</span>`;
+      this.body.appendChild(c);
+    }
+
+    if (cur.standings.length === 0) {
+      const m = document.createElement("div");
+      m.textContent = "No entries yet this week — finish a day to compete!";
+      Object.assign(m.style, { textAlign: "center", padding: "16px", opacity: "0.65" } as Partial<CSSStyleDeclaration>);
+      this.body.appendChild(m);
+      return;
+    }
+    for (const r of cur.standings) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "grid", gridTemplateColumns: "32px 1fr 90px", gap: "8px", padding: "5px 8px",
+        background: r.isMe ? "rgba(120,200,120,0.15)" : undefined,
+        borderBottom: "1px solid rgba(255,245,220,0.06)", fontVariantNumeric: "tabular-nums",
+        fontWeight: r.isMe ? "700" : "400",
+      } as Partial<CSSStyleDeclaration>);
+      const trophy = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `${r.rank}`;
+      row.innerHTML =
+        `<span>${trophy}</span>` +
+        `<span><span class="cb-profile-link" data-hex="${r.playerHex}" style="cursor:pointer;text-decoration:underline dotted rgba(255,245,220,0.4)">${escapeHtml(r.playerName)}</span>${r.isMe ? " (you)" : ""}</span>` +
+        `<span style="text-align:right">${escapeHtml(comp.fmt(r.value))}</span>`;
+      this.body.appendChild(row);
+    }
+    this.body.querySelectorAll(".cb-profile-link").forEach((el) => {
+      (el as HTMLElement).addEventListener("click", () => { const h = el.getAttribute("data-hex"); if (h) this.showProfile(h); });
     });
   }
 

@@ -5350,6 +5350,7 @@ export class SpacetimeClient {
     npcRating: number; community: { avg: number; count: number };
     tier: number; day: number; favorites: number;
     reactions: Record<string, number>; isMe: boolean; isFriend: boolean;
+    champion: number;
   } {
     const target = ownerHex.toLowerCase();
     const acct = this.listAccounts().find((a) => a.identity.toHexString().toLowerCase() === target);
@@ -5370,7 +5371,78 @@ export class SpacetimeClient {
       reactions: this.getReactionCounts(ownerHex),
       isMe: target === meHex,
       isFriend,
+      champion: this.getChampionCount(ownerHex),
     };
+  }
+
+  // === Weekly competitions (derived from the daily leaderboard submissions,
+  // windowed by real-time week — no separate table). Prestige only. ===
+
+  /** Standings for a 7-day competition window. `aggregate` = how to combine a
+   * player's daily submissions ("sum" for served/revenue, "avg" for rating).
+   * weekOffset 0 = current week, 1 = last week, etc. */
+  getWeeklyCompetition(category: string, aggregate: "sum" | "avg", weekOffset = 0, limit = 10): {
+    standings: { rank: number; playerHex: string; playerName: string; value: number; isMe: boolean }[];
+    startMs: number; endMs: number;
+  } {
+    const WEEK_MS = 7 * 24 * 3600 * 1000;
+    const bucket = Math.floor(Date.now() / WEEK_MS) - weekOffset;
+    const startMs = bucket * WEEK_MS;
+    const endMs = startMs + WEEK_MS;
+    if (!this.conn) return { standings: [], startMs, endMs };
+    const meHex = this.identity?.toHexString() ?? "";
+    const agg = new Map<string, { sum: number; count: number }>();
+    for (const r of this.conn.db.leaderboard_entry.iter()) {
+      if (r.category !== category) continue;
+      const ms = Number(r.submittedAt.microsSinceUnixEpoch) / 1000;
+      if (ms < startMs || ms >= endMs) continue;
+      const hex = r.player.toHexString();
+      const e = agg.get(hex) ?? { sum: 0, count: 0 };
+      e.sum += Number(r.score); e.count += 1;
+      agg.set(hex, e);
+    }
+    const standings = Array.from(agg.entries())
+      .map(([hex, e]) => ({ hex, value: aggregate === "avg" ? (e.count > 0 ? e.sum / e.count : 0) : e.sum }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, limit)
+      .map((x, i) => ({ rank: i + 1, playerHex: x.hex, playerName: this.nameFor(x.hex), value: x.value, isMe: x.hex === meHex }));
+    return { standings, startMs, endMs };
+  }
+
+  /** How many COMPLETED weekly competitions (any of the 3 metrics) a player has
+   * won — powers the "🏆 N-time champion" profile badge. */
+  getChampionCount(ownerHex: string): number {
+    if (!this.conn) return 0;
+    const WEEK_MS = 7 * 24 * 3600 * 1000;
+    const curBucket = Math.floor(Date.now() / WEEK_MS);
+    const target = ownerHex.toLowerCase();
+    const cats: Record<string, "sum" | "avg"> = { daily_served: "sum", daily_revenue: "sum", best_rating_day: "avg" };
+    const buckets = new Map<string, Map<string, { sum: number; count: number }>>();
+    for (const r of this.conn.db.leaderboard_entry.iter()) {
+      const how = cats[r.category];
+      if (!how) continue;
+      const ms = Number(r.submittedAt.microsSinceUnixEpoch) / 1000;
+      const bucket = Math.floor(ms / WEEK_MS);
+      if (bucket >= curBucket) continue; // only finished weeks count
+      const key = `${bucket}|${r.category}`;
+      let m = buckets.get(key);
+      if (!m) { m = new Map(); buckets.set(key, m); }
+      const hex = r.player.toHexString();
+      const e = m.get(hex) ?? { sum: 0, count: 0 };
+      e.sum += Number(r.score); e.count += 1;
+      m.set(hex, e);
+    }
+    let wins = 0;
+    for (const [key, m] of buckets) {
+      const how = cats[key.split("|")[1]];
+      let topHex = "", topVal = -1;
+      for (const [hex, e] of m) {
+        const v = how === "avg" ? (e.count > 0 ? e.sum / e.count : 0) : e.sum;
+        if (v > topVal) { topVal = v; topHex = hex; }
+      }
+      if (topHex.toLowerCase() === target) wins += 1;
+    }
+    return wins;
   }
 
   /** All active_guest rows in the local subscription cache, regardless
