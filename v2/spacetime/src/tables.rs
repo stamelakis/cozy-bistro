@@ -780,6 +780,22 @@ pub struct GuestbookEntry {
     pub created_at: Timestamp,
 }
 
+/// A visitor's 1..5 star review of a restaurant. One per (reviewer,
+/// target_owner), updatable; stars is aggregated into a "community rating"
+/// shown beside the owner's own NPC-customer rating. Public.
+#[table(name = restaurant_review, public)]
+pub struct RestaurantReview {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub target_owner: Identity,
+    #[index(btree)]
+    pub reviewer: Identity,
+    pub stars: u32,
+    pub created_at: Timestamp,
+}
+
 /// P5.8 — a single visit event. The visitor's client inserts a row
 /// via record_visit when entering VisitMode; the host's client picks
 /// the row up via subscription and renders a toast. Rows are

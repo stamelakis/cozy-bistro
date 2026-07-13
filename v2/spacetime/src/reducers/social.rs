@@ -2,7 +2,7 @@
 //! Left by visitors, read (and moderated) by the owner.
 
 use spacetimedb::{reducer, ReducerContext, Identity, Table};
-use crate::tables::{visit_reaction, guestbook_entry, VisitReaction, GuestbookEntry};
+use crate::tables::{visit_reaction, guestbook_entry, restaurant_review, VisitReaction, GuestbookEntry, RestaurantReview};
 
 /// Allowed reaction emoji. All single code points (no variation selectors) so
 /// the client and server literals compare exactly. Keep in sync with the client
@@ -92,5 +92,40 @@ pub fn delete_guestbook_entry(ctx: &ReducerContext, entry_id: u64) -> Result<(),
         return Err("Only the owner or author can delete this note".into());
     }
     ctx.db.guestbook_entry().id().delete(entry_id);
+    Ok(())
+}
+
+/// Leave / update a 1..5 star review of a restaurant (0 removes it). One review
+/// per reviewer per restaurant. Rejects self-reviews and out-of-range stars.
+#[reducer]
+pub fn review_restaurant(ctx: &ReducerContext, target_owner: Identity, stars: u32) -> Result<(), String> {
+    if target_owner == ctx.sender {
+        return Err("Can't review your own restaurant".into());
+    }
+    if stars > 5 {
+        return Err("Stars must be 0..5".into());
+    }
+    let existing = ctx.db.restaurant_review().reviewer().filter(ctx.sender)
+        .find(|r| r.target_owner == target_owner);
+    if stars == 0 {
+        if let Some(r) = existing { ctx.db.restaurant_review().id().delete(r.id); }
+        return Ok(());
+    }
+    match existing {
+        Some(r) => {
+            ctx.db.restaurant_review().id().update(RestaurantReview {
+                stars, created_at: ctx.timestamp, ..r
+            });
+        }
+        None => {
+            ctx.db.restaurant_review().insert(RestaurantReview {
+                id: 0, // auto_inc
+                target_owner,
+                reviewer: ctx.sender,
+                stars,
+                created_at: ctx.timestamp,
+            });
+        }
+    }
     Ok(())
 }

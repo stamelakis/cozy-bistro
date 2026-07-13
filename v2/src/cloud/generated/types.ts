@@ -512,6 +512,15 @@ export const Restaurant = __t.object("Restaurant", {
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
+export const RestaurantReview = __t.object("RestaurantReview", {
+  id: __t.u64(),
+  targetOwner: __t.identity(),
+  reviewer: __t.identity(),
+  stars: __t.u32(),
+  createdAt: __t.timestamp(),
+});
+export type RestaurantReview = __Infer<typeof RestaurantReview>;
+
 export const RestaurantTickSchedule = __t.object("RestaurantTickSchedule", {
   id: __t.u64(),
   scheduledAt: __t.scheduleAt(),

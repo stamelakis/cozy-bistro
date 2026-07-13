@@ -74,6 +74,7 @@ import RequestPasswordResetReducer from "../request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "../reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "../reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "../respond_friend_request_reducer";
+import ReviewRestaurantReducer from "../review_restaurant_reducer";
 import SaveAccountReducer from "../save_account_reducer";
 import SaveLayoutPresetReducer from "../save_layout_preset_reducer";
 import SaveRestaurantSnapshotReducer from "../save_restaurant_snapshot_reducer";
@@ -198,6 +199,7 @@ export type RequestPasswordResetParams = __Infer<typeof RequestPasswordResetRedu
 export type ResetSalaryTickClockParams = __Infer<typeof ResetSalaryTickClockReducer>;
 export type ResetSimSchedulesParams = __Infer<typeof ResetSimSchedulesReducer>;
 export type RespondFriendRequestParams = __Infer<typeof RespondFriendRequestReducer>;
+export type ReviewRestaurantParams = __Infer<typeof ReviewRestaurantReducer>;
 export type SaveAccountParams = __Infer<typeof SaveAccountReducer>;
 export type SaveLayoutPresetParams = __Infer<typeof SaveLayoutPresetReducer>;
 export type SaveRestaurantSnapshotParams = __Infer<typeof SaveRestaurantSnapshotReducer>;

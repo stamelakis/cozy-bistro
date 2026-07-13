@@ -5285,6 +5285,44 @@ export class SpacetimeClient {
     return this.getReactionCounts(this.identity.toHexString());
   }
 
+  // === Cross-player reviews (community rating) ===
+
+  /** Leave/update a 1..5 star review of a restaurant (0 removes it). */
+  reviewRestaurant(ownerHex: string, stars: number): void {
+    if (!this.conn) return;
+    const targetOwner = parseHexToIdentity(ownerHex);
+    if (!targetOwner) return;
+    this.conn.reducers.reviewRestaurant({ targetOwner, stars });
+  }
+
+  /** Aggregate community rating (average stars + count) for a restaurant. */
+  getCommunityRating(ownerHex: string): { avg: number; count: number } {
+    if (!this.conn) return { avg: 0, count: 0 };
+    const target = ownerHex.toLowerCase();
+    let sum = 0, count = 0;
+    for (const r of this.conn.db.restaurant_review.iter()) {
+      if (r.targetOwner.toHexString() === target) { sum += r.stars; count += 1; }
+    }
+    return { avg: count > 0 ? sum / count : 0, count };
+  }
+
+  /** The current player's own star review of a restaurant (0 = none). */
+  myReview(ownerHex: string): number {
+    if (!this.conn || !this.identity) return 0;
+    const meHex = this.identity.toHexString();
+    const target = ownerHex.toLowerCase();
+    for (const r of this.conn.db.restaurant_review.iter()) {
+      if (r.reviewer.toHexString() === meHex && r.targetOwner.toHexString() === target) return r.stars;
+    }
+    return 0;
+  }
+
+  /** The community rating on the current player's OWN restaurant. */
+  getMyCommunityRating(): { avg: number; count: number } {
+    if (!this.identity) return { avg: 0, count: 0 };
+    return this.getCommunityRating(this.identity.toHexString());
+  }
+
   /** All active_guest rows in the local subscription cache, regardless
    * of which restaurant they belong to. Tagged with restaurantId so
    * the caller can filter. Same role as listAllStaffActors but for

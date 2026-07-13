@@ -102,6 +102,7 @@ import RequestPasswordResetReducer from "./request_password_reset_reducer";
 import ResetSalaryTickClockReducer from "./reset_salary_tick_clock_reducer";
 import ResetSimSchedulesReducer from "./reset_sim_schedules_reducer";
 import RespondFriendRequestReducer from "./respond_friend_request_reducer";
+import ReviewRestaurantReducer from "./review_restaurant_reducer";
 import SaveAccountReducer from "./save_account_reducer";
 import SaveLayoutPresetReducer from "./save_layout_preset_reducer";
 import SaveRestaurantSnapshotReducer from "./save_restaurant_snapshot_reducer";
@@ -202,6 +203,7 @@ import RecipeLevelRow from "./recipe_level_table";
 import RecipeMetaRow from "./recipe_meta_table";
 import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
 import RestaurantRow from "./restaurant_table";
+import RestaurantReviewRow from "./restaurant_review_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
 import SaveSnapshotRow from "./save_snapshot_table";
 import SeatAppealRow from "./seat_appeal_table";
@@ -779,6 +781,23 @@ const tablesSchema = __schema({
       { name: 'restaurant_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, RestaurantRow),
+  restaurant_review: __table({
+    name: 'restaurant_review',
+    indexes: [
+      { accessor: 'id', name: 'restaurant_review_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'reviewer', name: 'restaurant_review_reviewer_idx_btree', algorithm: 'btree', columns: [
+        'reviewer',
+      ] },
+      { accessor: 'target_owner', name: 'restaurant_review_target_owner_idx_btree', algorithm: 'btree', columns: [
+        'targetOwner',
+      ] },
+    ],
+    constraints: [
+      { name: 'restaurant_review_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, RestaurantReviewRow),
   restaurant_tick_state: __table({
     name: 'restaurant_tick_state',
     indexes: [
@@ -988,6 +1007,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reset_salary_tick_clock", ResetSalaryTickClockReducer),
   __reducerSchema("reset_sim_schedules", ResetSimSchedulesReducer),
   __reducerSchema("respond_friend_request", RespondFriendRequestReducer),
+  __reducerSchema("review_restaurant", ReviewRestaurantReducer),
   __reducerSchema("save_account", SaveAccountReducer),
   __reducerSchema("save_layout_preset", SaveLayoutPresetReducer),
   __reducerSchema("save_restaurant_snapshot", SaveRestaurantSnapshotReducer),

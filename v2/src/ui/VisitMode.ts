@@ -1903,7 +1903,8 @@ export class VisitMode {
     bar.id = "cb-visit-reactions";
     Object.assign(bar.style, {
       position: "fixed", bottom: "18px", left: "50%", transform: "translateX(-50%)",
-      display: "flex", alignItems: "center", gap: "8px",
+      display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+      flexWrap: "wrap", maxWidth: "min(680px, calc(100vw - 24px))",
       background: "rgba(20,14,10,0.92)", border: "1px solid rgba(255,220,150,0.5)",
       borderRadius: "12px", padding: "7px 12px",
       font: "14px/1 system-ui, sans-serif", color: "#fff5dc",
@@ -1954,6 +1955,35 @@ export class VisitMode {
       window.setTimeout(() => this.paintReactionBar(bar, owner), 300);
     };
     bar.appendChild(gb);
+    // Community rating — a 1..5 star review that aggregates across visitors,
+    // shown next to the average. Click your current star again to clear it.
+    const divider2 = document.createElement("span");
+    Object.assign(divider2.style, { borderLeft: "1px solid rgba(255,220,150,0.3)", height: "20px" } as Partial<CSSStyleDeclaration>);
+    bar.appendChild(divider2);
+    const rating = cloud.getCommunityRating(owner);
+    const myStars = cloud.myReview(owner);
+    const rateWrap = document.createElement("div");
+    Object.assign(rateWrap.style, { display: "flex", alignItems: "center", gap: "5px" } as Partial<CSSStyleDeclaration>);
+    const rlabel = document.createElement("span");
+    rlabel.textContent = rating.count > 0 ? `${rating.avg.toFixed(1)}★ (${rating.count})` : "Rate:";
+    Object.assign(rlabel.style, { fontSize: "12px", opacity: "0.85", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    rateWrap.appendChild(rlabel);
+    for (let k = 1; k <= 5; k += 1) {
+      const s = document.createElement("button");
+      s.textContent = k <= myStars ? "★" : "☆";
+      Object.assign(s.style, {
+        background: "transparent", border: "none",
+        color: k <= myStars ? "#ffd986" : "rgba(255,245,220,0.4)",
+        cursor: "pointer", font: "inherit", fontSize: "17px", padding: "0", lineHeight: "1",
+      } as Partial<CSSStyleDeclaration>);
+      s.title = `Rate ${k} star${k === 1 ? "" : "s"}`;
+      s.onclick = () => {
+        cloud.reviewRestaurant(owner, myStars === k ? 0 : k);
+        window.setTimeout(() => this.paintReactionBar(bar, owner), 300);
+      };
+      rateWrap.appendChild(s);
+    }
+    bar.appendChild(rateWrap);
   }
 
   private hideOverlay(): void {

@@ -288,6 +288,14 @@ export class CloudModal {
   }
 
   private renderGuestbook(): void {
+    // Community rating (other players' star reviews) of your restaurant.
+    const cr = this.cloud.getMyCommunityRating();
+    const crEl = document.createElement("div");
+    Object.assign(crEl.style, { textAlign: "center", marginBottom: "8px", fontSize: "15px", fontWeight: "700" } as Partial<CSSStyleDeclaration>);
+    crEl.innerHTML = cr.count > 0
+      ? `Community rating: <span style="color:#ffd986">${cr.avg.toFixed(1)}★</span> <span style="opacity:0.6;font-weight:400;font-size:12px">(${cr.count} review${cr.count === 1 ? "" : "s"})</span>`
+      : "<span style=\"opacity:0.6;font-weight:400\">No community reviews yet</span>";
+    this.body.appendChild(crEl);
     // Reactions received on your restaurant.
     const reactions = this.cloud.getMyReactionsReceived();
     const total = Object.values(reactions).reduce((a, b) => a + b, 0);
