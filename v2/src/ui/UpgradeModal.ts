@@ -43,8 +43,49 @@ export class UpgradeModal {
   private countdownUpdaters: Array<() => boolean> = [];
   private countdownInterval: number | null = null;
 
+  /** Prototype (mobile UX) — inject a one-time stylesheet that, on narrow
+   * viewports (≤640px), restyles this modal as a proper bottom sheet:
+   * bottom-anchored + full-width with a rounded top and a drag handle,
+   * legible type, and ≥44px tap targets. CSS-only + class hooks; desktop
+   * is untouched. If it feels right, the same pattern generalizes to the
+   * other panels. */
+  private static ensureMobileStyles(): void {
+    if (document.getElementById("cb-upg-mobile-css")) return;
+    const style = document.createElement("style");
+    style.id = "cb-upg-mobile-css";
+    style.textContent = `
+@media (max-width: 640px) {
+  .cb-upg-root { align-items: flex-end !important; }
+  .cb-upg-sheet {
+    width: 100vw !important; max-width: 100vw !important;
+    max-height: 90vh !important;
+    border-radius: 20px 20px 0 0 !important;
+    border-bottom: none !important;
+    padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)) !important;
+    font-size: 14px !important;
+    animation: cbUpgSheetIn .22s ease-out;
+  }
+  .cb-upg-sheet::before {
+    content: ""; display: block; flex: 0 0 auto;
+    width: 44px; height: 5px; border-radius: 3px;
+    background: rgba(255,245,220,0.35); margin: 2px auto 12px;
+  }
+  @keyframes cbUpgSheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .cb-upg-close { width: 42px !important; height: 42px !important; font-size: 18px !important; }
+  .cb-upg-sectiontabs button { min-height: 44px !important; font-size: 14px !important; flex: 1 1 0 !important; }
+  .cb-upg-tiertabs { overflow-x: auto !important; flex-wrap: nowrap !important; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .cb-upg-tiertabs::-webkit-scrollbar { display: none; }
+  .cb-upg-tiertabs button { min-height: 40px !important; font-size: 13px !important; white-space: nowrap !important; flex: 0 0 auto !important; }
+  .cb-upg-scroll b { font-size: 15px !important; }
+  .cb-upg-mats { font-size: 12.5px !important; line-height: 1.5 !important; }
+  .cb-upg-scroll button { min-height: 48px !important; min-width: 92px !important; font-size: 14px !important; padding: 8px 12px !important; }
+}`;
+    document.head.appendChild(style);
+  }
+
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
+    UpgradeModal.ensureMobileStyles();
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed", top: "0", left: "0",
@@ -55,6 +96,7 @@ export class UpgradeModal {
       zIndex: "1000",
       pointerEvents: "auto",
     } as Partial<CSSStyleDeclaration>);
+    this.root.classList.add("cb-upg-root");
     this.root.addEventListener("click", (e) => { if (e.target === this.root) this.hide(); });
     parent.appendChild(this.root);
 
@@ -71,6 +113,7 @@ export class UpgradeModal {
       border: "2px solid #d8b98f",
       boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
     } as Partial<CSSStyleDeclaration>);
+    body.classList.add("cb-upg-sheet");
     this.root.appendChild(body);
 
     const header = document.createElement("div");
@@ -90,6 +133,7 @@ export class UpgradeModal {
       width: "26px", height: "26px", cursor: "pointer",
       font: "inherit", fontSize: "13px",
     } as Partial<CSSStyleDeclaration>);
+    closeBtn.classList.add("cb-upg-close");
     closeBtn.onclick = () => this.hide();
     header.appendChild(closeBtn);
     body.appendChild(header);
@@ -103,15 +147,18 @@ export class UpgradeModal {
       borderBottom: "1px solid rgba(255,245,220,0.18)",
       paddingBottom: "4px",
     } as Partial<CSSStyleDeclaration>);
+    this.sectionTabs.classList.add("cb-upg-sectiontabs");
     body.appendChild(this.sectionTabs);
 
     // Inner tabs (tier strip for Recipes; hidden in Staff).
     this.tabs = document.createElement("div");
     Object.assign(this.tabs.style, { display: "flex", gap: "4px", marginBottom: "10px" } as Partial<CSSStyleDeclaration>);
+    this.tabs.classList.add("cb-upg-tiertabs");
     body.appendChild(this.tabs);
 
     this.body = document.createElement("div");
     Object.assign(this.body.style, { flex: "1", overflowY: "auto" } as Partial<CSSStyleDeclaration>);
+    this.body.classList.add("cb-upg-scroll");
     body.appendChild(this.body);
   }
 
@@ -276,6 +323,7 @@ export class UpgradeModal {
         const matLine = document.createElement("div");
         matLine.innerHTML = `<span style="opacity:0.6">Materials:</span> ${matText}`;
         Object.assign(matLine.style, { fontSize: "11px", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+        matLine.classList.add("cb-upg-mats");
         label.appendChild(matLine);
       }
       row.appendChild(label);
