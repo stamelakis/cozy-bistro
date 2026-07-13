@@ -5341,6 +5341,38 @@ export class SpacetimeClient {
     return this.getCommunityRating(this.identity.toHexString());
   }
 
+  // === Player profiles ===
+
+  /** Assemble a public profile for a player (by their identity/owner hex):
+   * name, restaurant, ratings, progression, and social tallies. */
+  getPlayerProfile(ownerHex: string): {
+    ownerHex: string; displayName: string; restaurantName: string;
+    npcRating: number; community: { avg: number; count: number };
+    tier: number; day: number; favorites: number;
+    reactions: Record<string, number>; isMe: boolean; isFriend: boolean;
+  } {
+    const target = ownerHex.toLowerCase();
+    const acct = this.listAccounts().find((a) => a.identity.toHexString().toLowerCase() === target);
+    const id = parseHexToIdentity(ownerHex);
+    const save = id ? this.getPlayerSave(id) : null;
+    const rid = this.findRestaurantIdByOwnerHex(ownerHex);
+    const meHex = (this.identity?.toHexString() ?? "").toLowerCase();
+    const isFriend = this.getFriendsView().friends.some((f) => f.hex.toLowerCase() === target);
+    return {
+      ownerHex,
+      displayName: acct?.displayName || this.nameFor(ownerHex) || "Player",
+      restaurantName: this.getRestaurantNameByOwnerHex(ownerHex) ?? "Cozy Bistro",
+      npcRating: this.getRestaurantRatingByOwnerHex(ownerHex),
+      community: this.getCommunityRating(ownerHex),
+      tier: save?.luxuryTier ?? 0,
+      day: save?.dayNumber ?? 0,
+      favorites: rid != null ? this.getFavoriteCount(rid) : 0,
+      reactions: this.getReactionCounts(ownerHex),
+      isMe: target === meHex,
+      isFriend,
+    };
+  }
+
   /** All active_guest rows in the local subscription cache, regardless
    * of which restaurant they belong to. Tagged with restaurantId so
    * the caller can filter. Same role as listAllStaffActors but for

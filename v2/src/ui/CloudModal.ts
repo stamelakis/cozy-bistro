@@ -31,6 +31,7 @@ export class CloudModal {
   private tab: Tab = "leaderboards";
   private leaderboardCategory = "daily_revenue";
   private leaderboardFriendsOnly = false;
+  private profileHex: string | null = null;
   private unsubscribe?: () => void;
   /** Wired by Engine — enter visit mode for an owner's plot. Returns true if
    * they're a current neighbor (favorites are pinned, so it's reliable for
@@ -112,7 +113,7 @@ export class CloudModal {
         cursor: "pointer", font: "inherit", fontSize: "12px",
       } as Partial<CSSStyleDeclaration>);
       btn.dataset.tab = t.id;
-      btn.onclick = () => { this.tab = t.id; this.refresh(); };
+      btn.onclick = () => { this.tab = t.id; this.profileHex = null; this.refresh(); };
       tabs.appendChild(btn);
     }
     card.appendChild(tabs);
@@ -155,10 +156,82 @@ export class CloudModal {
       this.body.appendChild(p);
       return;
     }
+    if (this.profileHex) { this.renderProfile(this.profileHex); return; }
     if (this.tab === "leaderboards") this.renderLeaderboards();
     else if (this.tab === "favorites") this.renderFavorites();
     else if (this.tab === "guestbook") this.renderGuestbook();
     else this.renderFriends();
+  }
+
+  private showProfile(hex: string): void { this.profileHex = hex; this.refresh(); }
+
+  private renderProfile(hex: string): void {
+    const p = this.cloud.getPlayerProfile(hex);
+    const back = document.createElement("button");
+    back.textContent = "‹ Back";
+    Object.assign(back.style, {
+      background: "rgba(255,245,220,0.06)", color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.18)", borderRadius: "6px",
+      padding: "4px 10px", cursor: "pointer", font: "inherit", fontSize: "12px", marginBottom: "10px",
+    } as Partial<CSSStyleDeclaration>);
+    back.onclick = () => { this.profileHex = null; this.refresh(); };
+    this.body.appendChild(back);
+
+    const head = document.createElement("div");
+    Object.assign(head.style, { textAlign: "center", margin: "4px 0 14px" } as Partial<CSSStyleDeclaration>);
+    head.innerHTML = `<div style="font-size:18px;font-weight:700">${this.esc(p.restaurantName)}</div>`
+      + `<div style="opacity:0.7;margin-top:2px">${this.esc(p.displayName)}${p.isMe ? " (you)" : ""}</div>`;
+    this.body.appendChild(head);
+
+    const npc = p.npcRating > 0 ? `${p.npcRating.toFixed(1)}★` : "—";
+    const comm = p.community.count > 0 ? `${p.community.avg.toFixed(1)}★ (${p.community.count})` : "—";
+    const totalReactions = Object.values(p.reactions).reduce((a, b) => a + b, 0);
+    const stats: [string, string][] = [
+      ["Tier", p.tier > 0 ? `${p.tier}` : "—"],
+      ["Day", p.day > 0 ? `${p.day}` : "—"],
+      ["Rating", npc],
+      ["Community", comm],
+      ["Favorited by", `${p.favorites}`],
+      ["Reactions", `${totalReactions}`],
+    ];
+    const grid = document.createElement("div");
+    Object.assign(grid.style, { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "7px", marginBottom: "14px" } as Partial<CSSStyleDeclaration>);
+    grid.innerHTML = stats.map(([k, v]) =>
+      `<div style="background:rgba(255,245,220,0.05);border-radius:8px;padding:8px 6px;text-align:center">`
+      + `<div style="font-size:10px;opacity:0.5">${this.esc(k)}</div>`
+      + `<div style="font-size:15px;font-weight:700">${this.esc(v)}</div></div>`).join("");
+    this.body.appendChild(grid);
+
+    if (totalReactions > 0) {
+      const rb = document.createElement("div");
+      rb.textContent = ["👍", "💖", "🔥", "😋"].map((e) => `${e} ${p.reactions[e] ?? 0}`).join("    ");
+      Object.assign(rb.style, { textAlign: "center", marginBottom: "14px", fontSize: "14px" } as Partial<CSSStyleDeclaration>);
+      this.body.appendChild(rb);
+    }
+
+    if (!p.isMe) {
+      const actions = document.createElement("div");
+      Object.assign(actions.style, { display: "flex", gap: "8px", justifyContent: "center" } as Partial<CSSStyleDeclaration>);
+      const visit = this.makeVisitBtn(hex);
+      if (visit) actions.appendChild(visit);
+      if (p.isFriend) {
+        const badge = document.createElement("span");
+        badge.textContent = "✓ Friends";
+        Object.assign(badge.style, { padding: "5px 10px", color: "#a8e2a8", fontWeight: "600" } as Partial<CSSStyleDeclaration>);
+        actions.appendChild(badge);
+      } else {
+        const addF = document.createElement("button");
+        addF.textContent = "＋ Add friend";
+        Object.assign(addF.style, {
+          background: "rgba(120,200,120,0.18)", color: "#cbe6cb",
+          border: "1px solid rgba(120,200,120,0.45)", borderRadius: "6px",
+          padding: "5px 12px", cursor: "pointer", font: "inherit", fontWeight: "600",
+        } as Partial<CSSStyleDeclaration>);
+        addF.onclick = () => { this.cloud.sendFriendRequestByHex(hex); addF.textContent = "Request sent"; addF.disabled = true; addF.style.opacity = "0.6"; };
+        actions.appendChild(addF);
+      }
+      this.body.appendChild(actions);
+    }
   }
 
   private esc(s: string): string {
@@ -304,11 +377,18 @@ export class CloudModal {
         : String(r.score);
       row.innerHTML =
         `<span>${trophy}</span>` +
-        `<span>${escapeHtml(r.playerName)}${r.isMe ? " (you)" : ""}</span>` +
+        `<span><span class="cb-profile-link" data-hex="${r.playerHex}" style="cursor:pointer;text-decoration:underline dotted rgba(255,245,220,0.4)">${escapeHtml(r.playerName)}</span>${r.isMe ? " (you)" : ""}</span>` +
         `<span style="text-align:right">${fmt}</span>` +
         `<span style="text-align:right;opacity:0.7">${r.dayNumber}</span>`;
       this.body.appendChild(row);
     }
+    // Clickable player names → profile view.
+    this.body.querySelectorAll(".cb-profile-link").forEach((el) => {
+      (el as HTMLElement).addEventListener("click", () => {
+        const h = el.getAttribute("data-hex");
+        if (h) this.showProfile(h);
+      });
+    });
   }
 
   private renderGuestbook(): void {
