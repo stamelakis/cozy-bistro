@@ -423,8 +423,12 @@ export class CookingSystem {
       return false;
     }
     stock.quantity += quantity;
-    // H.36 — mirror the increment. Symmetrical to consumeIngredients.
-    if (!this.suppressPantryMirror && this.cloud && quantity > 0) {
+    // H.36 — mirror the increment. Symmetrical to consumeIngredients,
+    // including the cutover gate: when the server owns tickets it also
+    // owns errand restocks (try_dispatch_errand_trip delivers to
+    // pantry_stock), so mirroring here too would double-count. The
+    // client's pantry is adopted from the server instead.
+    if (!this.suppressPantryMirror && this.cloud && quantity > 0 && !isServerSim("tickets")) {
       this.cloud.bumpPantryStock(ingredientId, quantity);
     }
     return true;
