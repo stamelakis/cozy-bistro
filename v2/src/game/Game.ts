@@ -720,7 +720,14 @@ export class Game {
    * L1 → $30, L2 → $60, L3 → $120, L4 → $240, L5 → $480, ... */
   getRecipeUpgradeCost(recipe: RecipeDefinition): number {
     const level = this.cooking.getRecipeUpgradeLevel(recipe);
-    return 30 * Math.pow(2, level - 1);
+    // Higher-tier dishes cost proportionally more to develop. The base $30 and
+    // per-level doubling are unchanged; the whole thing is multiplied by the
+    // recipe's luxury tier (T1 1× … T5 5×), so fully maxing a T5 signature dish
+    // (~$76.6k) is a real late-game money sink vs a T1 (~$15.3k). Recipes
+    // without a tier default to 1× (unchanged). Client-computed (optimistic
+    // purchase — the server just records the money delta, no re-validation).
+    const tier = recipe.luxuryTier ?? 1;
+    return 30 * tier * Math.pow(2, level - 1);
   }
 
   /** Material cost to upgrade — L units of each ingredient, where L is
