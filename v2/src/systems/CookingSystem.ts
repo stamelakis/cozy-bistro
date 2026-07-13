@@ -626,30 +626,18 @@ export class CookingSystem {
   restorePantryFromCloud(): void {
     if (!this.cloud) return;
     const rows = this.cloud.listPantryStock();
-    if (rows.length === 0) {
-      console.log("[H.48d] restorePantryFromCloud: no cloud pantry_stock rows");
-      return;
-    }
-    let updated = 0;
+    if (rows.length === 0) return;
     for (const row of rows) {
       const stock = this.pantry.find((s) => s.id === row.ingredientId);
       if (stock) {
-        if (stock.quantity !== row.quantity) {
-          stock.quantity = row.quantity;
-          updated += 1;
-        }
+        stock.quantity = row.quantity;
       } else {
         // Cloud has an ingredient the local pantry didn't initialize
-        // (e.g. an H.41 restock added stock for a new ingredient).
-        // Append it — name defaults to capitalized id since the cloud
-        // doesn't carry display strings; the local catalog usually
-        // overrides anyway.
+        // (e.g. a restock added stock for a new ingredient) — append it.
         const name = row.ingredientId.charAt(0).toUpperCase() + row.ingredientId.slice(1);
         this.pantry.push({ id: row.ingredientId, name, quantity: row.quantity });
-        updated += 1;
       }
     }
-    console.log(`[H.48d] restorePantryFromCloud: ${updated} pantry entries reconciled (cloud had ${rows.length} rows)`);
   }
 
   /** Kept for backwards compat with any external callers — equivalent to filtering by getUnlockedRecipeIds(). */

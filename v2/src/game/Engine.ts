@@ -1246,6 +1246,7 @@ export class Engine {
     this.game.getBarmanBacklog = (id: string) => this.cloud?.getServerBarmanBacklog(id) ?? this.router?.getBarmanBacklog?.(id) ?? 0;
     this.game.getWaiterBacklog = (id: string) => this.cloud?.getServerWaiterBacklog(id) ?? this.router?.getWaiterBacklog?.(id) ?? 0;
     this.game.getErrandBacklog = (id: string) => this.errand?.getHelperWorkload?.(id) ?? 0;
+    this.game.getErrandTripSummary = (id: string) => this.cloud.getErrandTripSummary(id);
     // Build menu — for placing furniture at runtime.
     const buildMenu = new BuildMenu(container, this.game, this.scene.loader, this.scene.threeScene, this.camera.threeCamera, this.renderer.domElement, this.registry);
     this.buildMenu = buildMenu;
@@ -4144,6 +4145,12 @@ export class Engine {
     // still refresh while paused (admin pause sets dt=0, which froze them).
     this.hudAccumulator += rawDt;
     if (this.hudAccumulator >= 0.2) {
+      // Pantry is server-authoritative under the cutover — adopt the server's
+      // pantry_stock every tick so the display reflects live restocks +
+      // consumption instead of drifting from the boot-time snapshot (the cause
+      // of "helpers never restocked my vegetables" when the server actually had
+      // them). Cheap: ~40 rows, idempotent when already in sync.
+      if (this.cloud?.isReady()) this.game.cooking.restorePantryFromCloud();
       this.hud.update();
       this.serviceAlert.update();
       this.staffPanel.update();

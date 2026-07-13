@@ -324,6 +324,8 @@ export class Game {
   getBarmanBacklog?: (barmanMemberId: string) => number;
   getWaiterBacklog?: (waiterMemberId: string) => number;
   getErrandBacklog?: (helperMemberId: string) => number;
+  /** Human-readable current shopping list for an errand helper (server truth). */
+  getErrandTripSummary?: (helperMemberId: string) => string;
   /** Optional callback fired once per auto-shop tick that actually bought
    * something. Engine wires this to the ErrandRouter so the helper makes
    * a visible door trip. Receiver should be cheap (queue, don't block). */

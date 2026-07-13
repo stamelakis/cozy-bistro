@@ -179,9 +179,10 @@ export class StaffPanel {
       }
       case "errand": {
         const n = this.game.getErrandBacklog?.(memberId) ?? 0;
+        const trip = this.game.getErrandTripSummary?.(memberId) ?? "";
         return { emoji: "📦", count: n, tooltip:
           n > 0
-            ? "On a shopping trip."
+            ? (trip ? `Bringing back: ${trip}.` : "On a shopping trip.")
             : "Idle by the supply counter." };
       }
       default:

@@ -5831,6 +5831,26 @@ export class SpacetimeClient {
    * derived from the player table's last_seen_at (same 90 s window
    * as countOnlinePlayers). Sorted online-first, then alphabetical
    * within each section — drives the PlayerRosterPanel. */
+  /** Human-readable summary of an errand helper's current shopping list, from
+   * the server-streamed staff_actor.errand_trip_list_csv (e.g. "5 vegetables,
+   * 4 herbs"). Empty string when the helper isn't carrying a list. */
+  getErrandTripSummary(memberId: string): string {
+    if (!this.conn) return "";
+    try {
+      for (const a of this.conn.db.staff_actor.iter()) {
+        if (a.memberId !== memberId) continue;
+        const csv = a.errandTripListCsv;
+        if (!csv) return "";
+        return csv.split(",").map((s) => s.trim()).filter(Boolean).map((entry) => {
+          const [id, q] = entry.split(":");
+          const qty = parseInt(q ?? "0", 10) || 0;
+          return `${qty} ${(id ?? "").replace(/[-_]/g, " ")}`;
+        }).join(", ");
+      }
+    } catch { /* table not wired */ }
+    return "";
+  }
+
   getPlayerRoster(): Array<{ username: string; displayName: string; hex: string; isOnline: boolean; isMe: boolean; isAdmin: boolean }> {
     if (!this.conn) return [];
     const ONLINE_WINDOW_MS = 90_000;
