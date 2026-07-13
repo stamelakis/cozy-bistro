@@ -1891,9 +1891,73 @@ export class VisitMode {
     wrap.appendChild(exit);
     this.container.appendChild(wrap);
     this.overlay = wrap;
+    this.showReactionBar(plot);
+  }
+
+  /** Bottom-centre "leave your mark" bar: emoji reactions (tallied) + a
+   * guestbook note. Rebuilt per visit; id-tagged so it's cleaned up simply. */
+  private showReactionBar(plot: VisitablePlot): void {
+    document.getElementById("cb-visit-reactions")?.remove();
+    if (!this.cloud || !plot.ownerHex) return;
+    const bar = document.createElement("div");
+    bar.id = "cb-visit-reactions";
+    Object.assign(bar.style, {
+      position: "fixed", bottom: "18px", left: "50%", transform: "translateX(-50%)",
+      display: "flex", alignItems: "center", gap: "8px",
+      background: "rgba(20,14,10,0.92)", border: "1px solid rgba(255,220,150,0.5)",
+      borderRadius: "12px", padding: "7px 12px",
+      font: "14px/1 system-ui, sans-serif", color: "#fff5dc",
+      boxShadow: "0 4px 18px rgba(0,0,0,0.45)", zIndex: "15", pointerEvents: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    this.paintReactionBar(bar, plot.ownerHex);
+    this.container.appendChild(bar);
+  }
+
+  private paintReactionBar(bar: HTMLElement, owner: string): void {
+    if (!this.cloud) return;
+    const cloud = this.cloud;
+    bar.replaceChildren();
+    const counts = cloud.getReactionCounts(owner);
+    const mine = cloud.myReaction(owner);
+    for (const emoji of ["👍", "💖", "🔥", "😋"]) {
+      const n = counts[emoji] ?? 0;
+      const on = mine === emoji;
+      const btn = document.createElement("button");
+      btn.textContent = n > 0 ? `${emoji} ${n}` : emoji;
+      Object.assign(btn.style, {
+        background: on ? "rgba(255,217,134,0.30)" : "rgba(255,245,220,0.06)",
+        border: on ? "1px solid #ffd986" : "1px solid rgba(255,245,220,0.2)",
+        color: "#fff5dc", borderRadius: "9px", padding: "5px 10px",
+        cursor: "pointer", font: "inherit", fontWeight: "600",
+      } as Partial<CSSStyleDeclaration>);
+      btn.onclick = () => {
+        cloud.reactToRestaurant(owner, emoji);
+        window.setTimeout(() => this.paintReactionBar(bar, owner), 300);
+      };
+      bar.appendChild(btn);
+    }
+    const divider = document.createElement("span");
+    Object.assign(divider.style, { borderLeft: "1px solid rgba(255,220,150,0.3)", height: "20px" } as Partial<CSSStyleDeclaration>);
+    bar.appendChild(divider);
+    const existing = cloud.myGuestbookNote(owner);
+    const gb = document.createElement("button");
+    gb.textContent = existing ? "✍ Edit note" : "✍ Sign guestbook";
+    Object.assign(gb.style, {
+      background: "rgba(120,200,120,0.18)", border: "1px solid rgba(120,200,120,0.45)",
+      color: "#cbe6cb", borderRadius: "9px", padding: "5px 10px",
+      cursor: "pointer", font: "inherit", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    gb.onclick = () => {
+      const note = window.prompt("Leave a note on this restaurant's guestbook (blank to remove):", existing);
+      if (note === null) return; // cancelled
+      cloud.signGuestbook(owner, note.trim());
+      window.setTimeout(() => this.paintReactionBar(bar, owner), 300);
+    };
+    bar.appendChild(gb);
   }
 
   private hideOverlay(): void {
+    document.getElementById("cb-visit-reactions")?.remove();
     if (this.overlay) {
       this.overlay.remove();
       this.overlay = null;

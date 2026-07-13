@@ -16,7 +16,7 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 // Friends + Leaderboards remain the social meat. A username search
 // is added inside the friends tab so players can find each other
 // without needing a friend code.
-type Tab = "leaderboards" | "friends" | "favorites";
+type Tab = "leaderboards" | "friends" | "favorites" | "guestbook";
 
 const CATEGORIES = [
   { id: "daily_revenue", label: "Daily Revenue", scoreLabel: "$" },
@@ -94,6 +94,7 @@ export class CloudModal {
     const tabList: { id: Tab; label: string }[] = [
       { id: "leaderboards", label: "🏆 Leaderboards" },
       { id: "favorites",    label: "⭐ Favorites" },
+      { id: "guestbook",    label: "📖 Guestbook" },
       { id: "friends",      label: "👥 Friends" },
     ];
     for (const t of tabList) {
@@ -154,6 +155,7 @@ export class CloudModal {
     }
     if (this.tab === "leaderboards") this.renderLeaderboards();
     else if (this.tab === "favorites") this.renderFavorites();
+    else if (this.tab === "guestbook") this.renderGuestbook();
     else this.renderFriends();
   }
 
@@ -281,6 +283,60 @@ export class CloudModal {
         `<span>${escapeHtml(r.playerName)}${r.isMe ? " (you)" : ""}</span>` +
         `<span style="text-align:right">${fmt}</span>` +
         `<span style="text-align:right;opacity:0.7">${r.dayNumber}</span>`;
+      this.body.appendChild(row);
+    }
+  }
+
+  private renderGuestbook(): void {
+    // Reactions received on your restaurant.
+    const reactions = this.cloud.getMyReactionsReceived();
+    const total = Object.values(reactions).reduce((a, b) => a + b, 0);
+    const summary = document.createElement("div");
+    Object.assign(summary.style, { textAlign: "center", marginBottom: "12px", fontSize: "14px" } as Partial<CSSStyleDeclaration>);
+    if (total > 0) {
+      summary.textContent = "Reactions received:   "
+        + ["👍", "💖", "🔥", "😋"].map((e) => `${e} ${reactions[e] ?? 0}`).join("    ");
+    } else {
+      summary.innerHTML = "<span style=\"opacity:0.6\">No reactions yet — visitors can react to your restaurant.</span>";
+    }
+    this.body.appendChild(summary);
+
+    // Guestbook notes left for you.
+    const notes = this.cloud.getMyGuestbook();
+    const hdr = document.createElement("div");
+    hdr.textContent = `Guestbook (${notes.length})`;
+    Object.assign(hdr.style, { fontWeight: "700", margin: "6px 0 8px", borderTop: "1px solid rgba(255,245,220,0.14)", paddingTop: "10px" } as Partial<CSSStyleDeclaration>);
+    this.body.appendChild(hdr);
+    if (notes.length === 0) {
+      const m = document.createElement("div");
+      m.innerHTML = "<span style=\"opacity:0.7\">No notes yet. When someone visits your restaurant they can sign your guestbook.</span>";
+      Object.assign(m.style, { textAlign: "center", padding: "16px 12px", lineHeight: "1.6" } as Partial<CSSStyleDeclaration>);
+      this.body.appendChild(m);
+      return;
+    }
+    for (const nt of notes) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex", gap: "10px", alignItems: "flex-start",
+        padding: "8px 10px", marginBottom: "6px",
+        background: "rgba(255,245,220,0.05)",
+        border: "1px solid rgba(255,245,220,0.14)", borderRadius: "8px",
+      } as Partial<CSSStyleDeclaration>);
+      const info = document.createElement("div");
+      Object.assign(info.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
+      info.innerHTML = `<div style="font-weight:700">${this.esc(nt.authorName || "A visitor")}</div>`
+        + `<div style="opacity:0.85;margin-top:2px;word-wrap:break-word">${this.esc(nt.message)}</div>`;
+      row.appendChild(info);
+      const del = document.createElement("button");
+      del.textContent = "✕";
+      del.title = "Remove this note";
+      Object.assign(del.style, {
+        background: "rgba(200,120,120,0.18)", color: "#fff5dc",
+        border: "1px solid rgba(255,180,180,0.4)", borderRadius: "6px",
+        padding: "3px 8px", cursor: "pointer", font: "inherit", flexShrink: "0",
+      } as Partial<CSSStyleDeclaration>);
+      del.onclick = () => { this.cloud.deleteGuestbookEntry(nt.id); this.refresh(); };
+      row.appendChild(del);
       this.body.appendChild(row);
     }
   }

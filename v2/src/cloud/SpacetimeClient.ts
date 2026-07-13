@@ -5173,6 +5173,89 @@ export class SpacetimeClient {
     return out;
   }
 
+  // === Two-way visits: reactions + guestbook ===
+
+  /** The allowed reaction emoji — MUST match the server's ALLOWED_REACTIONS
+   * (all single code points, no variation selectors, so they compare exactly). */
+  static readonly REACTIONS = ["👍", "💖", "🔥", "😋"] as const;
+
+  /** Toggle/replace the caller's reaction on a restaurant (by owner hex). */
+  reactToRestaurant(ownerHex: string, emoji: string): void {
+    if (!this.conn) return;
+    const targetOwner = parseHexToIdentity(ownerHex);
+    if (!targetOwner) return;
+    this.conn.reducers.reactToRestaurant({ targetOwner, emoji });
+  }
+
+  /** Reaction tallies for a restaurant: emoji → count. */
+  getReactionCounts(ownerHex: string): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (!this.conn) return out;
+    const target = ownerHex.toLowerCase();
+    for (const r of this.conn.db.visit_reaction.iter()) {
+      if (r.targetOwner.toHexString() === target) out[r.emoji] = (out[r.emoji] ?? 0) + 1;
+    }
+    return out;
+  }
+
+  /** The current player's reaction emoji on a restaurant, or null. */
+  myReaction(ownerHex: string): string | null {
+    if (!this.conn || !this.identity) return null;
+    const meHex = this.identity.toHexString();
+    const target = ownerHex.toLowerCase();
+    for (const r of this.conn.db.visit_reaction.iter()) {
+      if (r.reactor.toHexString() === meHex && r.targetOwner.toHexString() === target) return r.emoji;
+    }
+    return null;
+  }
+
+  /** Sign / re-sign a restaurant's guestbook (empty message removes the note). */
+  signGuestbook(ownerHex: string, message: string): void {
+    if (!this.conn || !this.identity) return;
+    const targetOwner = parseHexToIdentity(ownerHex);
+    if (!targetOwner) return;
+    const authorName = this.nameFor(this.identity.toHexString()) || "A visitor";
+    this.conn.reducers.signGuestbook({ targetOwner, message, authorName });
+  }
+
+  deleteGuestbookEntry(entryId: bigint): void {
+    this.conn?.reducers.deleteGuestbookEntry({ entryId });
+  }
+
+  /** The caller's current guestbook note on a restaurant, or "" if none. */
+  myGuestbookNote(ownerHex: string): string {
+    if (!this.conn || !this.identity) return "";
+    const meHex = this.identity.toHexString();
+    const target = ownerHex.toLowerCase();
+    for (const e of this.conn.db.guestbook_entry.iter()) {
+      if (e.author.toHexString() === meHex && e.targetOwner.toHexString() === target) return e.message;
+    }
+    return "";
+  }
+
+  /** Guestbook notes left FOR the current player (their restaurant), newest first. */
+  getMyGuestbook(): { id: bigint; authorName: string; message: string }[] {
+    if (!this.conn || !this.identity) return [];
+    const meHex = this.identity.toHexString();
+    const rows = [] as { id: bigint; authorName: string; message: string }[];
+    for (const e of this.conn.db.guestbook_entry.iter()) {
+      if (e.targetOwner.toHexString() === meHex) rows.push({ id: e.id, authorName: e.authorName, message: e.message });
+    }
+    rows.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
+    return rows;
+  }
+
+  /** How many guestbook notes the current player has received. */
+  getMyGuestbookCount(): number {
+    return this.getMyGuestbook().length;
+  }
+
+  /** Emoji → count of reactions left on the current player's own restaurant. */
+  getMyReactionsReceived(): Record<string, number> {
+    if (!this.identity) return {};
+    return this.getReactionCounts(this.identity.toHexString());
+  }
+
   /** All active_guest rows in the local subscription cache, regardless
    * of which restaurant they belong to. Tagged with restaurantId so
    * the caller can filter. Same role as listAllStaffActors but for

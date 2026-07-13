@@ -745,6 +745,41 @@ pub struct Favorite {
     pub created_at: Timestamp,
 }
 
+/// A visitor's emoji reaction to a restaurant. At most one per
+/// (reactor, target_owner) — react_to_restaurant toggles it off with the same
+/// emoji or replaces it with a different one. Public so the visit overlay can
+/// tally reactions and the owner gets pinged.
+#[table(name = visit_reaction, public)]
+pub struct VisitReaction {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    /// Whose restaurant is being reacted to (the owner's identity).
+    #[index(btree)]
+    pub target_owner: Identity,
+    #[index(btree)]
+    pub reactor: Identity,
+    pub emoji: String,
+    pub created_at: Timestamp,
+}
+
+/// A signed note on a restaurant's guestbook. One per (author, target_owner),
+/// updatable by re-signing (empty message removes it). Public so the owner
+/// reads their book and gets pinged.
+#[table(name = guestbook_entry, public)]
+pub struct GuestbookEntry {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub target_owner: Identity,
+    #[index(btree)]
+    pub author: Identity,
+    pub author_name: String,
+    pub message: String,
+    pub created_at: Timestamp,
+}
+
 /// P5.8 — a single visit event. The visitor's client inserts a row
 /// via record_visit when entering VisitMode; the host's client picks
 /// the row up via subscription and renders a toast. Rows are

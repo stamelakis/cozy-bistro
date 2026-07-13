@@ -265,6 +265,16 @@ export const FurnitureMeta = __t.object("FurnitureMeta", {
 });
 export type FurnitureMeta = __Infer<typeof FurnitureMeta>;
 
+export const GuestbookEntry = __t.object("GuestbookEntry", {
+  id: __t.u64(),
+  targetOwner: __t.identity(),
+  author: __t.identity(),
+  authorName: __t.string(),
+  message: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type GuestbookEntry = __Infer<typeof GuestbookEntry>;
+
 export const HiredStaffMember = __t.object("HiredStaffMember", {
   memberId: __t.string(),
   restaurantId: __t.u64(),
@@ -611,6 +621,15 @@ export const VisitEvent = __t.object("VisitEvent", {
   visitedAt: __t.timestamp(),
 });
 export type VisitEvent = __Infer<typeof VisitEvent>;
+
+export const VisitReaction = __t.object("VisitReaction", {
+  id: __t.u64(),
+  targetOwner: __t.identity(),
+  reactor: __t.identity(),
+  emoji: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type VisitReaction = __Infer<typeof VisitReaction>;
 
 export const WeatherSchedule = __t.object("WeatherSchedule", {
   id: __t.u64(),

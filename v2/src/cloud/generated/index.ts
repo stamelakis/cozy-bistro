@@ -70,6 +70,7 @@ import ConsumePendingSalaryReducer from "./consume_pending_salary_reducer";
 import ConsumePendingTrainingCompletionsReducer from "./consume_pending_training_completions_reducer";
 import ConsumePendingVisitRollupReducer from "./consume_pending_visit_rollup_reducer";
 import CreateRestaurantReducer from "./create_restaurant_reducer";
+import DeleteGuestbookEntryReducer from "./delete_guestbook_entry_reducer";
 import DeleteHiredStaffMemberReducer from "./delete_hired_staff_member_reducer";
 import DeleteLayoutPresetReducer from "./delete_layout_preset_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
@@ -89,6 +90,7 @@ import PlaceFromInventoryReducer from "./place_from_inventory_reducer";
 import PlaceFurnitureReducer from "./place_furniture_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
+import ReactToRestaurantReducer from "./react_to_restaurant_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
 import RefreshNeighborhoodReducer from "./refresh_neighborhood_reducer";
 import RegisterStaffActorReducer from "./register_staff_actor_reducer";
@@ -138,6 +140,7 @@ import SetRestaurantPublicReducer from "./set_restaurant_public_reducer";
 import SetRestaurantSignStyleReducer from "./set_restaurant_sign_style_reducer";
 import SetRestaurantThemeOverridesReducer from "./set_restaurant_theme_overrides_reducer";
 import SetWaiterRestSpotReducer from "./set_waiter_rest_spot_reducer";
+import SignGuestbookReducer from "./sign_guestbook_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
@@ -178,6 +181,7 @@ import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
 import FurnitureInventoryRow from "./furniture_inventory_table";
 import FurnitureMetaRow from "./furniture_meta_table";
+import GuestbookEntryRow from "./guestbook_entry_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
 import LayoutPresetRow from "./layout_preset_table";
@@ -206,6 +210,7 @@ import StaffActorRow from "./staff_actor_table";
 import StaffStatRow from "./staff_stat_table";
 import StatSnapshotRow from "./stat_snapshot_table";
 import VisitEventRow from "./visit_event_table";
+import VisitReactionRow from "./visit_reaction_table";
 import WeatherStateRow from "./weather_state_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -498,6 +503,23 @@ const tablesSchema = __schema({
       { name: 'furniture_meta_def_id_key', constraint: 'unique', columns: ['defId'] },
     ],
   }, FurnitureMetaRow),
+  guestbook_entry: __table({
+    name: 'guestbook_entry',
+    indexes: [
+      { accessor: 'author', name: 'guestbook_entry_author_idx_btree', algorithm: 'btree', columns: [
+        'author',
+      ] },
+      { accessor: 'id', name: 'guestbook_entry_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'target_owner', name: 'guestbook_entry_target_owner_idx_btree', algorithm: 'btree', columns: [
+        'targetOwner',
+      ] },
+    ],
+    constraints: [
+      { name: 'guestbook_entry_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GuestbookEntryRow),
   hired_staff_member: __table({
     name: 'hired_staff_member',
     indexes: [
@@ -866,6 +888,23 @@ const tablesSchema = __schema({
       { name: 'visit_event_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, VisitEventRow),
+  visit_reaction: __table({
+    name: 'visit_reaction',
+    indexes: [
+      { accessor: 'id', name: 'visit_reaction_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'reactor', name: 'visit_reaction_reactor_idx_btree', algorithm: 'btree', columns: [
+        'reactor',
+      ] },
+      { accessor: 'target_owner', name: 'visit_reaction_target_owner_idx_btree', algorithm: 'btree', columns: [
+        'targetOwner',
+      ] },
+    ],
+    constraints: [
+      { name: 'visit_reaction_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, VisitReactionRow),
   weather_state: __table({
     name: 'weather_state',
     indexes: [
@@ -917,6 +956,7 @@ const reducersSchema = __reducers(
   __reducerSchema("consume_pending_training_completions", ConsumePendingTrainingCompletionsReducer),
   __reducerSchema("consume_pending_visit_rollup", ConsumePendingVisitRollupReducer),
   __reducerSchema("create_restaurant", CreateRestaurantReducer),
+  __reducerSchema("delete_guestbook_entry", DeleteGuestbookEntryReducer),
   __reducerSchema("delete_hired_staff_member", DeleteHiredStaffMemberReducer),
   __reducerSchema("delete_layout_preset", DeleteLayoutPresetReducer),
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
@@ -936,6 +976,7 @@ const reducersSchema = __reducers(
   __reducerSchema("place_furniture", PlaceFurnitureReducer),
   __reducerSchema("place_order", PlaceOrderReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
+  __reducerSchema("react_to_restaurant", ReactToRestaurantReducer),
   __reducerSchema("record_visit", RecordVisitReducer),
   __reducerSchema("refresh_neighborhood", RefreshNeighborhoodReducer),
   __reducerSchema("register_staff_actor", RegisterStaffActorReducer),
@@ -985,6 +1026,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_restaurant_sign_style", SetRestaurantSignStyleReducer),
   __reducerSchema("set_restaurant_theme_overrides", SetRestaurantThemeOverridesReducer),
   __reducerSchema("set_waiter_rest_spot", SetWaiterRestSpotReducer),
+  __reducerSchema("sign_guestbook", SignGuestbookReducer),
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),

@@ -11,6 +11,7 @@ mod achievements;
 mod leaderboard;
 mod friends;
 mod favorites;
+mod social;
 mod pedestrians;
 mod chat;
 mod weather;
