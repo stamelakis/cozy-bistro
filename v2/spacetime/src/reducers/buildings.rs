@@ -11,7 +11,7 @@
 //! space each player gets.
 
 use spacetimedb::{reducer, ReducerContext, Table, Identity};
-use crate::tables::{building, restaurant, player, player_save, neighborhood_slot, Building, NeighborhoodSlot, Restaurant};
+use crate::tables::{building, favorite, restaurant, player, player_save, neighborhood_slot, Building, NeighborhoodSlot, Restaurant};
 
 /// Seed N unowned buildings on the city map. Called once from the
 /// `init` lifecycle reducer when the module is first published —
@@ -194,8 +194,14 @@ pub fn refresh_neighborhood(ctx: &ReducerContext) -> Result<(), String> {
         let rot = r.id.wrapping_mul(2654435761).wrapping_add(bucket as u64) % 100_003;
         cands.push((r.id, r.owner, home, dist, rot));
     }
-    // Closest level first; equal levels shuffle by the rotation jitter.
-    cands.sort_by_key(|c| (c.3, c.4));
+    // Pin the viewer's FAVORITES: they sort ahead of everyone else so they
+    // always claim a neighborhood plot (up to the ~11 available) — a favorited
+    // restaurant becomes a permanent, always-visitable neighbour. Within the
+    // favorites (and within the rest) it's still closest-level first, then the
+    // rotation jitter.
+    let favs: std::collections::HashSet<u64> = ctx.db.favorite().player().filter(viewer)
+        .map(|f| f.restaurant_id).collect();
+    cands.sort_by_key(|c| (if favs.contains(&c.0) { 0u8 } else { 1u8 }, c.3, c.4));
 
     // Two-pass assignment. Pass 1 honors each candidate's HOME plot (the "same
     // identity" rule) — the closest-level candidate wins a contested home. Pass

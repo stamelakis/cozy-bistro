@@ -963,6 +963,11 @@ export class Engine {
       setTimeScale: (s) => this.setTimeScale(s),
     });
     this.cloudModal = new CloudModal(container, this.cloud);
+    // Social-hub Visit buttons enter visit mode for a favorited restaurant.
+    // Favorites are pinned into the neighborhood so their plot is always
+    // rendered; returns false (→ "not nearby") when the owner isn't a current
+    // neighbor.
+    this.cloudModal.onVisit = (ownerHex: string): boolean => this.visitMode.visitByOwnerHex(ownerHex);
     // Door-plaque editor: click the plaque on the door lintel to edit
     // the restaurant name + sign style. Wire the scene-update callback
     // so a saved edit instantly repaints the in-world plaque, and seed

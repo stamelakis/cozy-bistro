@@ -16,7 +16,7 @@ import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 // Friends + Leaderboards remain the social meat. A username search
 // is added inside the friends tab so players can find each other
 // without needing a friend code.
-type Tab = "leaderboards" | "friends";
+type Tab = "leaderboards" | "friends" | "favorites";
 
 const CATEGORIES = [
   { id: "daily_revenue", label: "Daily Revenue", scoreLabel: "$" },
@@ -30,6 +30,10 @@ export class CloudModal {
   private tab: Tab = "leaderboards";
   private leaderboardCategory = "daily_revenue";
   private unsubscribe?: () => void;
+  /** Wired by Engine — enter visit mode for an owner's plot. Returns true if
+   * they're a current neighbor (favorites are pinned, so it's reliable for
+   * them). Used by the Visit buttons. */
+  onVisit?: (ownerHex: string) => boolean;
 
   constructor(parent: HTMLElement, cloud: SpacetimeClient) {
     this.cloud = cloud;
@@ -89,6 +93,7 @@ export class CloudModal {
     } as Partial<CSSStyleDeclaration>);
     const tabList: { id: Tab; label: string }[] = [
       { id: "leaderboards", label: "🏆 Leaderboards" },
+      { id: "favorites",    label: "⭐ Favorites" },
       { id: "friends",      label: "👥 Friends" },
     ];
     for (const t of tabList) {
@@ -148,7 +153,74 @@ export class CloudModal {
       return;
     }
     if (this.tab === "leaderboards") this.renderLeaderboards();
+    else if (this.tab === "favorites") this.renderFavorites();
     else this.renderFriends();
+  }
+
+  private esc(s: string): string {
+    return s.replace(/[&<>]/g, (c) => (c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;"));
+  }
+
+  /** A "🏃 Visit" button that enters visit mode via the Engine-wired callback,
+   * or null if visiting isn't wired. Shows "not nearby" when the owner isn't a
+   * current neighbor (can happen for friends, who aren't pinned like favorites). */
+  private makeVisitBtn(ownerHex: string): HTMLButtonElement | null {
+    if (!this.onVisit) return null;
+    const btn = document.createElement("button");
+    btn.textContent = "🏃 Visit";
+    Object.assign(btn.style, {
+      background: "rgba(220,180,130,0.28)", color: "#fff5dc",
+      border: "1px solid rgba(255,220,150,0.5)", borderRadius: "6px",
+      padding: "5px 10px", cursor: "pointer", font: "inherit", fontWeight: "600",
+      whiteSpace: "nowrap", flexShrink: "0",
+    } as Partial<CSSStyleDeclaration>);
+    btn.onclick = () => {
+      const ok = this.onVisit?.(ownerHex) ?? false;
+      if (ok) { this.hide(); return; }
+      btn.textContent = "not nearby";
+      window.setTimeout(() => { btn.textContent = "🏃 Visit"; }, 1400);
+    };
+    return btn;
+  }
+
+  private renderFavorites(): void {
+    const favs = this.cloud.getFavoriteRestaurants();
+    if (favs.length === 0) {
+      const p = document.createElement("div");
+      p.innerHTML = "You haven't favorited any restaurants yet.<br>"
+        + "<span style=\"opacity:0.7\">Visit a neighbor and tap ⭐ Favorite — your favorites get pinned to your street so they're always a click away.</span>";
+      Object.assign(p.style, { textAlign: "center", padding: "24px 14px", opacity: "0.9", lineHeight: "1.6" } as Partial<CSSStyleDeclaration>);
+      this.body.appendChild(p);
+      return;
+    }
+    for (const f of favs) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex", alignItems: "center", gap: "10px",
+        padding: "8px 10px", marginBottom: "6px",
+        background: "rgba(255,245,220,0.05)",
+        border: "1px solid rgba(255,245,220,0.14)", borderRadius: "8px",
+      } as Partial<CSSStyleDeclaration>);
+      const info = document.createElement("div");
+      Object.assign(info.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
+      const stars = f.rating > 0 ? `${f.rating.toFixed(1)}★` : "unrated";
+      info.innerHTML = `<div style="font-weight:700">${this.esc(f.name)}</div>`
+        + `<div style="font-size:11px;opacity:0.7">${stars} · ${f.favorites} favorite${f.favorites === 1 ? "" : "s"}</div>`;
+      row.appendChild(info);
+      const visit = this.makeVisitBtn(f.ownerHex);
+      if (visit) row.appendChild(visit);
+      const unfav = document.createElement("button");
+      unfav.textContent = "★ Unfavorite";
+      Object.assign(unfav.style, {
+        background: "rgba(255,217,134,0.14)", color: "#ffd986",
+        border: "1px solid rgba(255,217,134,0.5)", borderRadius: "6px",
+        padding: "5px 10px", cursor: "pointer", font: "inherit", fontWeight: "600",
+        whiteSpace: "nowrap", flexShrink: "0",
+      } as Partial<CSSStyleDeclaration>);
+      unfav.onclick = () => { this.cloud.removeFavorite(f.restaurantId); this.refresh(); };
+      row.appendChild(unfav);
+      this.body.appendChild(row);
+    }
   }
 
   private renderLeaderboards(): void {

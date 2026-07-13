@@ -513,6 +513,24 @@ export class VisitMode {
     this.onExit?.();
   }
 
+  /** Enter visit mode for a given owner if their plot is a current neighbor
+   * (favorites are pinned into the neighborhood, so a favorited restaurant is
+   * always rendered and thus findable here). Used by the Social hub's Visit
+   * buttons. Returns false if that owner isn't on the street right now. */
+  visitByOwnerHex(ownerHex: string): boolean {
+    if (this.activePlot) return false;
+    const target = ownerHex.toLowerCase();
+    const kids = this.scene.cityBuildings?.children ?? [];
+    for (const child of kids) {
+      const plot = this.findPlot(child);
+      if (plot && plot.ownerHex && plot.ownerHex.toLowerCase() === target) {
+        this.enter(plot);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ─── Live staff render (Phase H follow-up) ───────────────────────
 
   /** Subscribe to the host's staff_actor table and render every row

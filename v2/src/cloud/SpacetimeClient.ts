@@ -5146,6 +5146,27 @@ export class SpacetimeClient {
     return n;
   }
 
+  /** The current player's favorited restaurants with display metadata, newest
+   * first. Skips restaurants no longer in the cache (owner gone). */
+  getFavoriteRestaurants(): { restaurantId: bigint; ownerHex: string; name: string; rating: number; favorites: number }[] {
+    if (!this.conn) return [];
+    const ownerByRid = new Map<bigint, string>();
+    for (const r of this.conn.db.restaurant.iter()) ownerByRid.set(r.id, r.owner.toHexString());
+    const out: { restaurantId: bigint; ownerHex: string; name: string; rating: number; favorites: number }[] = [];
+    for (const rid of this.getMyFavoriteRestaurantIds()) {
+      const ownerHex = ownerByRid.get(rid);
+      if (!ownerHex) continue;
+      out.push({
+        restaurantId: rid,
+        ownerHex,
+        name: this.getRestaurantNameByOwnerHex(ownerHex) ?? "Cozy Bistro",
+        rating: this.getRestaurantRatingByOwnerHex(ownerHex),
+        favorites: this.getFavoriteCount(rid),
+      });
+    }
+    return out;
+  }
+
   /** All active_guest rows in the local subscription cache, regardless
    * of which restaurant they belong to. Tagged with restaurantId so
    * the caller can filter. Same role as listAllStaffActors but for
