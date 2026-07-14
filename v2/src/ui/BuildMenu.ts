@@ -4,6 +4,7 @@ import type { LuxuryTier } from "../data/types";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells, type PersistedPlacement } from "../game/FurnitureRegistry";
+import { PlacementGrid } from "../scene/PlacementGrid";
 import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 import { closeMobileSheets } from "./MobileUI";
@@ -77,6 +78,11 @@ export class BuildMenu {
   private readonly game: Game;
   private readonly loader: ModelLoader;
   private readonly scene: THREE.Scene;
+  /** Mobile tap-to-place aid — lights up valid floor cells (Phase 1). */
+  private readonly placementGrid = new PlacementGrid();
+  /** Set true around a tap so onPointerMove skips the drag finger-lift and the
+   * tapped cell is placed EXACTLY (absolute), not the cell above the thumb. */
+  private suppressTouchLift = false;
   private readonly camera: THREE.Camera;
   private readonly canvas: HTMLCanvasElement;
   private readonly registry: FurnitureRegistry;
@@ -825,6 +831,7 @@ export class BuildMenu {
     // Show / hide the seat-slot markers — they're a placement aid only.
     this.seatMarkers?.setEnabled(this.moveMode || this.placingDef != null);
     this.syncTouchControls();
+    this.refreshPlacementGrid();
   }
 
   /** Restore the carried original to its starting pose + visibility, and
@@ -851,7 +858,44 @@ export class BuildMenu {
     }
     this.placingDef = null;
     this.currentPlan = null;
+    this.placementGrid.hide();
   }
+
+  /** Mobile placement aid: light up every VALID cell for the current FLOOR
+   * (tile) item so the player can tap one instead of dragging a ghost. No-op on
+   * desktop, for non-tile items, or when nothing is being placed. */
+  private refreshPlacementGrid(): void {
+    const def = this.placingDef;
+    const onMobile = document.body.classList.contains("cb-mobile");
+    if (!onMobile || !def || def.placement !== "tile") { this.placementGrid.hide(); return; }
+    const slabY = this.currentFloorY();
+    const seen = new Set<string>();
+    const cells: { x: number; z: number }[] = [];
+    for (let cx = BuildMenu.INTERIOR_CELL_MIN_X; cx <= BuildMenu.INTERIOR_CELL_MAX_X; cx += 1) {
+      for (let cz = BuildMenu.INTERIOR_CELL_MIN_Z; cz <= BuildMenu.INTERIOR_CELL_MAX_Z; cz += 1) {
+        const plan = this.computePlacementPlan(def, new THREE.Vector3(cx, slabY, cz));
+        if (plan.quality === "blocked") continue;
+        const key = `${plan.x},${plan.z}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cells.push({ x: plan.x, z: plan.z });
+      }
+    }
+    this.placementGrid.show(this.currentMount(), cells, 0.03);
+  }
+
+  /** Mobile tap-to-place: a stationary touch fires no pointermove, so
+   * currentPlan would be stale and the item would land where the ghost last
+   * was. Sync the plan to the tapped cell first (with the finger-lift OFF so
+   * the tapped tile is placed exactly), then the click that follows commits
+   * there. Floor (tile) items only; drags keep working via pointermove. */
+  private onPointerDownPlace = (e: PointerEvent): void => {
+    if (e.pointerType !== "touch") return;
+    if (!this.placingDef || this.placingDef.placement !== "tile") return;
+    this.suppressTouchLift = true;
+    this.onPointerMove(e);
+    this.suppressTouchLift = false;
+  };
 
   private toggleSellMode(): void {
     this.sellMode = !this.sellMode;
@@ -1010,6 +1054,7 @@ export class BuildMenu {
   private attachInput(): void {
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("click", this.onClick);
+    this.canvas.addEventListener("pointerdown", this.onPointerDownPlace);
     window.addEventListener("keydown", (e) => {
       // Don't hijack typing in a text field (e.g. the restaurant-name or
       // login modal): R would rotate the hidden ghost and Esc would cancel
@@ -1425,7 +1470,7 @@ export class BuildMenu {
     // move-pickup have no preview) — there you want the item right under the
     // finger. Desktop keeps a 1:1 mapping.
     const positioning = this.preview != null;
-    const touchLift = positioning && document.body.classList.contains("cb-mobile") ? 60 : 0;
+    const touchLift = positioning && !this.suppressTouchLift && document.body.classList.contains("cb-mobile") ? 60 : 0;
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - touchLift - rect.top) / rect.height) * 2 - 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
@@ -2339,6 +2384,9 @@ export class BuildMenu {
       if (def.id.startsWith("window")) this.onWindowPlaced?.(solid);
       if (def.id === "stove" || def.id === "stove-electric") this.onStovePlaced?.(solid);
       if (def.category === "lamp") this.onLampPlaced?.(solid);
+      // A cell just got occupied — rebuild the mobile placement grid so the
+      // player can keep dropping multiples without the taken tile lighting up.
+      this.refreshPlacementGrid();
     });
     if (plan.quality === "snap-perfect") {
       this.flashRoot("Perfect placement!", "success");
