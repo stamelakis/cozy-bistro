@@ -867,7 +867,10 @@ export class BuildMenu {
   private refreshPlacementGrid(): void {
     const def = this.placingDef;
     const onMobile = document.body.classList.contains("cb-mobile");
-    if (!onMobile || !def || def.placement !== "tile") { this.placementGrid.hide(); return; }
+    // Floor items either tag placement:"tile" or leave it undefined (most do —
+    // only wall/ceiling/surface/edge items set the field), so treat undefined
+    // as a floor tile. Getting this wrong hid the grid for nearly every item.
+    if (!onMobile || !def || (def.placement ?? "tile") !== "tile") { this.placementGrid.hide(); return; }
     const slabY = this.currentFloorY();
     const seen = new Set<string>();
     const cells: { x: number; z: number }[] = [];
@@ -891,7 +894,7 @@ export class BuildMenu {
    * there. Floor (tile) items only; drags keep working via pointermove. */
   private onPointerDownPlace = (e: PointerEvent): void => {
     if (e.pointerType !== "touch") return;
-    if (!this.placingDef || this.placingDef.placement !== "tile") return;
+    if (!this.placingDef || (this.placingDef.placement ?? "tile") !== "tile") return;
     this.suppressTouchLift = true;
     this.onPointerMove(e);
     this.suppressTouchLift = false;
@@ -1115,6 +1118,8 @@ export class BuildMenu {
     // Reveal the floating touch controls (⟳ rotate / ✓ place / ✕ done) for
     // this placement — syncTouchControls picks the right buttons for the mode.
     this.syncTouchControls();
+    // Light up the mobile tap-to-place grid for this item (floor items only).
+    this.refreshPlacementGrid();
   }
 
   /** Synchronously clone an already-placed model into a translucent ghost.
