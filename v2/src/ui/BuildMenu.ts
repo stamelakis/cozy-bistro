@@ -858,16 +858,25 @@ export class BuildMenu {
     this.placementGrid.hide();
   }
 
-  /** Mobile placement aid: light up every VALID cell for the current FLOOR
-   * (tile) item so the player can tap one instead of dragging a ghost. No-op on
-   * desktop, for non-tile items, or when nothing is being placed. */
+  /** Placement kinds that use the tap-to-place cell grid: floor items (tile, or
+   * the undefined default that most furniture leaves) AND ceiling items — both
+   * resolve to a snapped cell via the floor-plane raycast and just differ in
+   * which occupancy layer (tile vs ceiling) computePlacementPlan checks. Wall /
+   * surface items use their own flows and aren't gridded (yet). */
+  private usesPlacementGrid(def: FurnitureDef | null | undefined): boolean {
+    if (!def) return false;
+    const p = def.placement ?? "tile";
+    return p === "tile" || p === "ceiling";
+  }
+
+  /** Mobile placement aid: light up every VALID cell for the current floor /
+   * ceiling item so the player can tap one instead of dragging a ghost. A
+   * ceiling item is placed by tapping the floor spot below it — the lamp mounts
+   * on the ceiling above. No-op on desktop or for wall/surface items. */
   private refreshPlacementGrid(): void {
     const def = this.placingDef;
     const onMobile = document.body.classList.contains("cb-mobile");
-    // Floor items either tag placement:"tile" or leave it undefined (most do —
-    // only wall/ceiling/surface/edge items set the field), so treat undefined
-    // as a floor tile. Getting this wrong hid the grid for nearly every item.
-    if (!onMobile || !def || (def.placement ?? "tile") !== "tile") { this.placementGrid.hide(); return; }
+    if (!onMobile || !def || !this.usesPlacementGrid(def)) { this.placementGrid.hide(); return; }
     const slabY = this.currentFloorY();
     const seen = new Set<string>();
     const cells: { x: number; z: number }[] = [];
@@ -891,7 +900,7 @@ export class BuildMenu {
    * there. Floor (tile) items only; drags keep working via pointermove. */
   private onPointerDownPlace = (e: PointerEvent): void => {
     if (e.pointerType !== "touch") return;
-    if (!this.placingDef || (this.placingDef.placement ?? "tile") !== "tile") return;
+    if (!this.usesPlacementGrid(this.placingDef)) return;
     // Sync currentPlan to the tapped cell — a stationary tap fires no
     // pointermove, so without this the click would commit a stale plan. No lift
     // is applied for tile items, so the tapped tile is placed exactly.
@@ -1479,8 +1488,8 @@ export class BuildMenu {
     // is obsolete and actively harmful: a stray pointermove fired right after a
     // touch pointerdown re-applied it, landing the item ~1 diagonal tile up.
     // So: no lift for tile items; keep it for wall/ceiling/surface (still drag).
-    const nonTile = (this.placingDef?.placement ?? "tile") !== "tile";
-    const touchLift = positioning && nonTile
+    const nonGrid = !this.usesPlacementGrid(this.placingDef);
+    const touchLift = positioning && nonGrid
       && e.pointerType === "touch" && document.body.classList.contains("cb-mobile") ? 60 : 0;
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - touchLift - rect.top) / rect.height) * 2 - 1);
