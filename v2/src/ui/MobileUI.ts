@@ -49,6 +49,7 @@ export function initMobileUI(): void {
   injectStyles();
   buildChrome();
   watchModals();
+  initLongPressTooltips();
   applyMode();
   window.addEventListener("resize", applyMode, { passive: true });
   window.addEventListener("orientationchange", applyMode, { passive: true });
@@ -65,6 +66,68 @@ export function setMobileInGame(inGame: boolean): void {
  * desktop (nothing is ever in the open state there). */
 export function closeMobileSheets(): void {
   closeAllSheets();
+}
+
+/** Long-press → tooltip. Native `title=` tooltips (the manage panel is full of
+ * them — Expand/grant/boost hints, staff work-status, etc.) never appear on
+ * touch. On mobile a ~450 ms press on any element carrying a title pops the text
+ * as a bubble at the finger; a release or scroll dismisses it, and the press is
+ * stopped from also firing the element's click so holding-for-info can't
+ * accidentally actuate a button. */
+function initLongPressTooltips(): void {
+  let timer: number | null = null;
+  let tip: HTMLElement | null = null;
+  let sx = 0;
+  let sy = 0;
+  let suppressClick = false;
+
+  const hide = (): void => {
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    if (tip) { tip.remove(); tip = null; }
+  };
+  const show = (text: string, x: number, y: number): void => {
+    tip = document.createElement("div");
+    tip.className = "cb-lp-tip";
+    tip.textContent = text;
+    document.body.appendChild(tip);
+    const r = tip.getBoundingClientRect();
+    const left = Math.max(8, Math.min(x - r.width / 2, window.innerWidth - r.width - 8));
+    let top = y - r.height - 14;
+    if (top < 8) top = y + 20; // no room above → flip below the finger
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  };
+
+  document.addEventListener("touchstart", (e) => {
+    suppressClick = false;
+    if (!document.body.classList.contains(MOBILE_CLASS) || e.touches.length !== 1) { hide(); return; }
+    let el = e.target as HTMLElement | null;
+    let title = "";
+    while (el && el !== document.body) {
+      const ti = el.getAttribute?.("title");
+      if (ti && ti.trim()) { title = ti.trim(); break; }
+      el = el.parentElement;
+    }
+    if (!title) return;
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY;
+    timer = window.setTimeout(() => {
+      timer = null;
+      suppressClick = true;
+      show(title, sx, sy);
+    }, 450);
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (e) => {
+    if (timer === null && !tip) return;
+    const t = e.touches[0];
+    if (t && (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12)) hide();
+  }, { passive: true });
+  document.addEventListener("touchend", hide, { passive: true });
+  document.addEventListener("touchcancel", hide, { passive: true });
+  document.addEventListener("click", (e) => {
+    if (suppressClick) { e.preventDefault(); e.stopPropagation(); suppressClick = false; }
+  }, true);
 }
 
 // ── mode toggle ──────────────────────────────────────────────────────
@@ -471,6 +534,19 @@ body.cb-mobile .cb-modal-body > div:first-child > button:last-child {
   font-size: 18px !important;
   flex: 0 0 auto !important;
 }
+
+/* long-press tooltip — mobile surrogate for a title= hover */
+.cb-lp-tip {
+  position: fixed; z-index: 3000;
+  max-width: 240px; padding: 8px 11px;
+  background: rgba(20,14,9,0.97); color: #fff5dc;
+  border: 1px solid rgba(216,185,143,0.5); border-radius: 8px;
+  font: 12px/1.4 system-ui, sans-serif;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  pointer-events: none; white-space: normal;
+  animation: cbLpIn .12s ease-out;
+}
+@keyframes cbLpIn { from { opacity: 0 } to { opacity: 1 } }
 
 /* --- floating touch controls for placing / moving furniture (no keyboard):
    ⟳ rotate (left), ✓ place (right-inner), ✕ done (right-outer). Shown only on
