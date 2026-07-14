@@ -180,13 +180,20 @@ function buildChrome(): void {
  * (fixed + full-viewport + the 45%-black backdrop). Tag them — and their
  * inner box — so the stylesheet can full-screen them on mobile. */
 function maybeTagModal(el: HTMLElement): void {
-  if (!(el instanceof HTMLElement) || el.classList.contains("cb-modal-overlay")) {
+  if (!(el instanceof HTMLElement) || el.classList.contains("cb-modal-overlay")
+      || el.classList.contains("cb-upg-root")) {
+    // cb-upg-root has its own bespoke bottom-sheet treatment — don't double-tag.
     return;
   }
   const s = el.style;
   if (s.position !== "fixed") return;
   const fullW = s.width === "100vw" || s.inset === "0px" || s.width === "100%";
-  const backdropLike = s.background.includes("rgba(0, 0, 0, 0.45)");
+  // Any dark translucent backdrop — tolerant of the alpha value AND of
+  // whitespace. Keying on the exact "rgba(0, 0, 0, 0.45)" string silently
+  // missed Help (0.55), Analytics ("rgba(0,0,0,0.5)", no spaces) and the Sign
+  // modal (0.55), so those stayed desktop-centred on mobile and clipped off
+  // both ends — the "can't scroll up or down to reach everything" bug.
+  const backdropLike = /rgba\(\s*0\s*,\s*0\s*,\s*0\s*,/.test(s.background);
   if (!fullW || !backdropLike) return;
   el.classList.add("cb-modal-overlay");
   const box = el.firstElementChild;
@@ -261,6 +268,9 @@ body.cb-mobile .cb-sidebar {
   border-radius: 0 16px 16px 0 !important;
   transform: translateX(-104%) !important;
   font-size: 14px !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
 }
 body.cb-mobile .cb-sidebar.cb-open { transform: translateX(0) !important; }
 
@@ -276,6 +286,9 @@ body.cb-mobile .cb-buildmenu {
   border-radius: 16px 0 0 16px !important;
   transform: translateX(104%) !important;
   font-size: 13px !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  -webkit-overflow-scrolling: touch !important;
 }
 body.cb-mobile .cb-buildmenu.cb-open { transform: translateX(0) !important; }
 
@@ -405,6 +418,12 @@ body.cb-mobile .cb-modal-overlay {
   background: rgba(10,7,4,0.55) !important;
   align-items: stretch !important;
   justify-content: stretch !important;
+  /* Dynamic viewport height so the sheet fits the ACTUAL visible area — a
+     plain 100vh (the modals' inline value) sits partly behind the mobile
+     browser's URL bar, hiding the bottom of the content past where you can
+     scroll. */
+  height: 100dvh !important;
+  max-height: 100dvh !important;
 }
 body.cb-mobile .cb-modal-body {
   width: 100% !important;
