@@ -44,8 +44,10 @@ export class PlacementGrid {
       fill.position.set(c.x, y, c.z);
       fill.renderOrder = 9990;
       this.group.add(fill);
+      // NOTE: edgeGeom's corners are already authored in the XZ (floor) plane,
+      // so — unlike the PlaneGeometry fill — it must NOT be rotated, or the
+      // outline stands up vertically instead of lying flat on the ground.
       const edge = new THREE.LineLoop(this.edgeGeom, this.edgeMat);
-      edge.rotation.x = -Math.PI / 2;
       edge.position.set(c.x, y + 0.002, c.z);
       edge.renderOrder = 9991;
       this.group.add(edge);

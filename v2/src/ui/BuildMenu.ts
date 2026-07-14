@@ -1475,7 +1475,11 @@ export class BuildMenu {
     // move-pickup have no preview) — there you want the item right under the
     // finger. Desktop keeps a 1:1 mapping.
     const positioning = this.preview != null;
-    const touchLift = positioning && !this.suppressTouchLift && document.body.classList.contains("cb-mobile") ? 60 : 0;
+    // The finger-lift only makes sense for an actual finger. A mouse in the
+    // narrow (cb-mobile) view was getting lifted too, so clicks landed ~1-2
+    // cells above the cursor. Gate it on touch input.
+    const touchLift = positioning && !this.suppressTouchLift
+      && e.pointerType === "touch" && document.body.classList.contains("cb-mobile") ? 60 : 0;
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - touchLift - rect.top) / rect.height) * 2 - 1);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
