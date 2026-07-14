@@ -858,16 +858,22 @@ export class BuildMenu {
     this.placementGrid.hide();
   }
 
-  /** Placement kinds that use the tap-to-place cell grid: floor (tile / the
-   * undefined default) and ceiling — both resolve to a snapped floor CELL via
-   * the floor-plane raycast. Wall + surface items are NOT gridded: walls mount
-   * up on the wall (a floor square + floor raycast reads and lands a diagonal
-   * tile low), so they need vertical wall-stripe markers + a wall raycast — a
-   * separate redesign. Until then they keep the drag-a-ghost flow. */
+  /** Placement kinds that use the tap-to-place grid (everything except surface,
+   * which has its own host-slot flow). Floor (tile / undefined) + ceiling use
+   * the flat CELL grid via the floor-plane raycast; wall / edge / wall-shelf use
+   * vertical wall STRIPES you tap directly (see usesWallStripes). */
   private usesPlacementGrid(def: FurnitureDef | null | undefined): boolean {
     if (!def) return false;
+    return (def.placement ?? "tile") !== "surface";
+  }
+
+  /** Gridded kinds rendered as vertical wall stripes, whose tap is resolved by
+   * raycasting the stripes (not the floor plane). Wall-mounted items live up on
+   * the wall, so a floor raycast would land a diagonal tile low. */
+  private usesWallStripes(def: FurnitureDef | null | undefined): boolean {
+    if (!def) return false;
     const p = def.placement ?? "tile";
-    return p === "tile" || p === "ceiling";
+    return p === "wall" || p === "edge" || p === "wall-shelf";
   }
 
   /** Mobile placement aid: light up every VALID cell for the current floor /
@@ -880,6 +886,26 @@ export class BuildMenu {
     if (!onMobile || !def || !this.usesPlacementGrid(def)) { this.placementGrid.hide(); return; }
     const slabY = this.currentFloorY();
     const seen = new Set<string>();
+    if (this.usesWallStripes(def)) {
+      // Wall / edge / wall-shelf: probe a half-cell grid (interior + a margin so
+      // perimeter walls are covered), let computePlacementPlan snap each probe to
+      // its nearest valid wall mount, and dedupe into vertical stripe markers
+      // that each carry their plan (so the tap raycast knows what to place).
+      const marks: { x: number; z: number; rotY: number; plan: PlacementPlan }[] = [];
+      for (let sx = -6; sx <= 6; sx += 0.5) {
+        for (let sz = -6; sz <= 6; sz += 0.5) {
+          const plan = this.computePlacementPlan(def, new THREE.Vector3(sx, slabY, sz));
+          if (plan.quality === "blocked") continue;
+          const key = `${plan.x.toFixed(2)},${plan.z.toFixed(2)},${plan.rotY.toFixed(2)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          marks.push({ x: plan.x, z: plan.z, rotY: plan.rotY, plan });
+        }
+      }
+      this.placementGrid.showWall(this.currentMount(), marks, slabY);
+      return;
+    }
+    // Floor / ceiling: a flat tile per valid interior cell.
     const cells: { x: number; z: number }[] = [];
     for (let cx = BuildMenu.INTERIOR_CELL_MIN_X; cx <= BuildMenu.INTERIOR_CELL_MAX_X; cx += 1) {
       for (let cz = BuildMenu.INTERIOR_CELL_MIN_Z; cz <= BuildMenu.INTERIOR_CELL_MAX_Z; cz += 1) {
@@ -902,9 +928,28 @@ export class BuildMenu {
   private onPointerDownPlace = (e: PointerEvent): void => {
     if (e.pointerType !== "touch") return;
     if (!this.usesPlacementGrid(this.placingDef)) return;
-    // Sync currentPlan to the tapped cell — a stationary tap fires no
-    // pointermove, so without this the click would commit a stale plan. No lift
-    // is applied for tile items, so the tapped tile is placed exactly.
+    if (this.usesWallStripes(this.placingDef)) {
+      // Wall items: raycast the tap against the vertical wall stripes and adopt
+      // the hit stripe's plan (the click that follows commits it). A floor
+      // raycast can't be used — the mount lives up on the wall.
+      const rect = this.canvas.getBoundingClientRect();
+      this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      this.pointerNdc.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+      this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+      const hits = this.raycaster.intersectObjects([...this.placementGrid.getPickables()], false);
+      const plan = hits.length > 0 ? (hits[0].object.userData.plan as PlacementPlan | undefined) : undefined;
+      if (!plan) return; // tapped empty space — ignore
+      this.currentPlan = plan;
+      this.hoverValid = true;
+      if (this.preview) {
+        this.preview.position.set(plan.x, this.previewBaseY + this.currentFloorY(), plan.z);
+        this.preview.rotation.y = plan.rotY;
+        this.tintPreview(plan.quality);
+      }
+      return;
+    }
+    // Floor / ceiling: sync currentPlan to the tapped cell — a stationary tap
+    // fires no pointermove. No lift for grid items, so the tap is exact.
     this.onPointerMove(e);
   };
 
@@ -1479,6 +1524,10 @@ export class BuildMenu {
     // Run the raycaster in placing / sell / move modes so we always
     // know which cell a click would hit.
     if (!this.placingDef && !this.sellMode && !this.moveMode && !this.storeMode) return;
+    // Mobile wall placement uses tap-the-stripe (onPointerDownPlace raycasts the
+    // wall markers), not the floor-plane raycast — which would land a diagonal
+    // tile low. Skip the hover/drag update so it can't override the tapped plan.
+    if (this.usesWallStripes(this.placingDef) && document.body.classList.contains("cb-mobile")) return;
     const rect = this.canvas.getBoundingClientRect();
     // On touch the fingertip covers the target cell. While positioning a ghost
     // (placing new furniture or carrying a moved item) lift the raycast a little
