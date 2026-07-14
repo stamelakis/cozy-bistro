@@ -80,9 +80,6 @@ export class BuildMenu {
   private readonly scene: THREE.Scene;
   /** Mobile tap-to-place aid — lights up valid floor cells (Phase 1). */
   private readonly placementGrid = new PlacementGrid();
-  /** Set true around a tap so onPointerMove skips the drag finger-lift and the
-   * tapped cell is placed EXACTLY (absolute), not the cell above the thumb. */
-  private suppressTouchLift = false;
   private readonly camera: THREE.Camera;
   private readonly canvas: HTMLCanvasElement;
   private readonly registry: FurnitureRegistry;
@@ -895,9 +892,10 @@ export class BuildMenu {
   private onPointerDownPlace = (e: PointerEvent): void => {
     if (e.pointerType !== "touch") return;
     if (!this.placingDef || (this.placingDef.placement ?? "tile") !== "tile") return;
-    this.suppressTouchLift = true;
+    // Sync currentPlan to the tapped cell — a stationary tap fires no
+    // pointermove, so without this the click would commit a stale plan. No lift
+    // is applied for tile items, so the tapped tile is placed exactly.
     this.onPointerMove(e);
-    this.suppressTouchLift = false;
   };
 
   private toggleSellMode(): void {
@@ -1475,10 +1473,14 @@ export class BuildMenu {
     // move-pickup have no preview) — there you want the item right under the
     // finger. Desktop keeps a 1:1 mapping.
     const positioning = this.preview != null;
-    // The finger-lift only makes sense for an actual finger. A mouse in the
-    // narrow (cb-mobile) view was getting lifted too, so clicks landed ~1-2
-    // cells above the cursor. Gate it on touch input.
-    const touchLift = positioning && !this.suppressTouchLift
+    // The finger-lift only makes sense for an actual finger (a mouse in the
+    // narrow view was getting lifted too), AND only for the old drag-a-ghost
+    // flow. Floor ("tile") items now use the tap-to-place grid, where the lift
+    // is obsolete and actively harmful: a stray pointermove fired right after a
+    // touch pointerdown re-applied it, landing the item ~1 diagonal tile up.
+    // So: no lift for tile items; keep it for wall/ceiling/surface (still drag).
+    const nonTile = (this.placingDef?.placement ?? "tile") !== "tile";
+    const touchLift = positioning && nonTile
       && e.pointerType === "touch" && document.body.classList.contains("cb-mobile") ? 60 : 0;
     this.pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNdc.y = -(((e.clientY - touchLift - rect.top) / rect.height) * 2 - 1);
