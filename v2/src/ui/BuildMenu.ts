@@ -858,15 +858,16 @@ export class BuildMenu {
     this.placementGrid.hide();
   }
 
-  /** Placement kinds that use the tap-to-place grid. Everything EXCEPT surface
-   * (on-table) items, which have a different host-slot flow: floor (tile /
-   * undefined), ceiling, and the three wall kinds (edge lines, wall-mounted,
-   * wall-shelf). All of them resolve a target via the floor-plane raycast +
-   * computePlacementPlan, so a tap snaps correctly; the grid just previews where
-   * those valid targets are. */
+  /** Placement kinds that use the tap-to-place cell grid: floor (tile / the
+   * undefined default) and ceiling — both resolve to a snapped floor CELL via
+   * the floor-plane raycast. Wall + surface items are NOT gridded: walls mount
+   * up on the wall (a floor square + floor raycast reads and lands a diagonal
+   * tile low), so they need vertical wall-stripe markers + a wall raycast — a
+   * separate redesign. Until then they keep the drag-a-ghost flow. */
   private usesPlacementGrid(def: FurnitureDef | null | undefined): boolean {
     if (!def) return false;
-    return (def.placement ?? "tile") !== "surface";
+    const p = def.placement ?? "tile";
+    return p === "tile" || p === "ceiling";
   }
 
   /** Mobile placement aid: light up every VALID cell for the current floor /
@@ -880,33 +881,17 @@ export class BuildMenu {
     const slabY = this.currentFloorY();
     const seen = new Set<string>();
     const cells: { x: number; z: number }[] = [];
-    const record = (plan: PlacementPlan): void => {
-      if (plan.quality === "blocked") return;
-      const key = `${plan.x.toFixed(2)},${plan.z.toFixed(2)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      cells.push({ x: plan.x, z: plan.z });
-    };
-    const kind = def.placement ?? "tile";
-    if (kind === "tile" || kind === "ceiling") {
-      // Floor / ceiling: one probe per interior cell centre.
-      for (let cx = BuildMenu.INTERIOR_CELL_MIN_X; cx <= BuildMenu.INTERIOR_CELL_MAX_X; cx += 1) {
-        for (let cz = BuildMenu.INTERIOR_CELL_MIN_Z; cz <= BuildMenu.INTERIOR_CELL_MAX_Z; cz += 1) {
-          record(this.computePlacementPlan(def, new THREE.Vector3(cx, slabY, cz)));
-        }
-      }
-    } else {
-      // Wall / edge / wall-shelf: probe a half-cell grid (interior + a margin so
-      // perimeter walls are covered) and let computePlacementPlan snap each probe
-      // to its nearest valid wall line or mount point, then dedupe. Reuses the
-      // real validity/snapping instead of re-deriving the edge coordinate system.
-      for (let sx = -6; sx <= 6; sx += 0.5) {
-        for (let sz = -6; sz <= 6; sz += 0.5) {
-          record(this.computePlacementPlan(def, new THREE.Vector3(sx, slabY, sz)));
-        }
+    for (let cx = BuildMenu.INTERIOR_CELL_MIN_X; cx <= BuildMenu.INTERIOR_CELL_MAX_X; cx += 1) {
+      for (let cz = BuildMenu.INTERIOR_CELL_MIN_Z; cz <= BuildMenu.INTERIOR_CELL_MAX_Z; cz += 1) {
+        const plan = this.computePlacementPlan(def, new THREE.Vector3(cx, slabY, cz));
+        if (plan.quality === "blocked") continue;
+        const key = `${plan.x},${plan.z}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cells.push({ x: plan.x, z: plan.z });
       }
     }
-    this.placementGrid.show(this.currentMount(), cells, kind === "tile" || kind === "ceiling" ? 0.03 : 0.05);
+    this.placementGrid.show(this.currentMount(), cells, 0.03);
   }
 
   /** Mobile tap-to-place: a stationary touch fires no pointermove, so
@@ -1228,6 +1213,10 @@ export class BuildMenu {
     this.placingDef = null;
     this.placingFromStorage = false;
     this.currentPlan = null;
+    // Hide the tap-to-place grid — this is the main stop-placing path (mode
+    // switches, exitBuildModes, the ✕ Done button), and leaving it out is why
+    // the green tiles lingered after closing build/move.
+    this.placementGrid.hide();
     this.syncTouchControls();
     // If nothing else needs the markers, hide them.
     if (!this.moveMode && this.holdingUid == null) {
