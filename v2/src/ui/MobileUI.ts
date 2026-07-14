@@ -313,6 +313,30 @@ body.cb-mobile .cb-menupanel {
 }
 body.cb-mobile .cb-menupanel.cb-open { transform: translateY(0) !important; }
 
+/* "Your menu" customer-view card → fit the VISIBLE viewport (dvh, not the
+   88vh that spilled behind the URL bar so both ends were unreachable) and
+   scroll its full height, with a fixed finger-sized ✕. Tapping anywhere also
+   closes it (handled in MenuPanel). */
+body.cb-mobile .cbm-cmback { padding: 12px !important; }
+body.cb-mobile .cbm-cmcard {
+  box-sizing: border-box !important;
+  width: calc(100vw - 24px) !important;
+  max-width: calc(100vw - 24px) !important;
+  max-height: calc(100dvh - 24px) !important;
+  padding: 30px 18px 26px !important;
+}
+body.cb-mobile .cbm-cmclose {
+  position: fixed !important;
+  top: calc(16px + env(safe-area-inset-top, 0px)) !important;
+  right: 16px !important;
+  width: 40px !important; height: 40px !important;
+  font-size: 22px !important;
+  background: rgba(40,28,16,0.55) !important;
+  color: #fff5dc !important;
+  border-radius: 50% !important;
+  z-index: 5 !important;
+}
+
 /* dimmed backdrop behind an open sheet */
 .cb-backdrop { display: none; }
 body.cb-mobile .cb-backdrop {

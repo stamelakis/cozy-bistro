@@ -509,7 +509,11 @@ export class MenuPanel {
   private showCustomerMenu(): void {
     if (!this.customerMenuBack) {
       const back = this.el("div", "cbm-cmback");
-      back.onclick = (e) => { if (e.target === back) back.style.display = "none"; };
+      // It's a read-only preview — tapping ANYWHERE dismisses it (a scroll
+      // gesture is a drag, not a click, so reading still works). The old
+      // target===back check only closed on a direct backdrop hit, which barely
+      // exists on a phone where the card fills the screen.
+      back.onclick = () => { back.style.display = "none"; };
       const card = this.el("div", "cbm-cmcard");
       const close = document.createElement("button");
       close.className = "cbm-cmclose";
