@@ -891,15 +891,29 @@ export class BuildMenu {
       // perimeter walls are covered), let computePlacementPlan snap each probe to
       // its nearest valid wall mount, and dedupe into vertical stripe markers
       // that each carry their plan (so the tap raycast knows what to place).
+      // Edge items (windows / partitions) already snap to discrete grid lines,
+      // so their stripes come out clean. Wall / wall-shelf DECOR instead projects
+      // continuously along the wall (findNearestWall), so a 0.5 probe grid smears
+      // it into a dense line of overlapping stripes. Snap those to whole units
+      // ALONG the wall so the markers are discrete like windows.
+      const kind = def.placement;
+      const discreteDecor = kind === "wall" || kind === "wall-shelf";
       const marks: { x: number; z: number; rotY: number; plan: PlacementPlan }[] = [];
       for (let sx = -6; sx <= 6; sx += 0.5) {
         for (let sz = -6; sz <= 6; sz += 0.5) {
           const plan = this.computePlacementPlan(def, new THREE.Vector3(sx, slabY, sz));
           if (plan.quality === "blocked") continue;
-          const key = `${plan.x.toFixed(2)},${plan.z.toFixed(2)},${plan.rotY.toFixed(2)}`;
+          let mx = plan.x, mz = plan.z;
+          if (discreteDecor) {
+            // A wall runs along X when its mount normal is ±Z (|sin(rotY)| small),
+            // else along Z — snap only the along-wall axis, keep the wall face.
+            if (Math.abs(Math.sin(plan.rotY)) < 0.5) mx = Math.round(plan.x);
+            else mz = Math.round(plan.z);
+          }
+          const key = `${mx.toFixed(2)},${mz.toFixed(2)},${plan.rotY.toFixed(2)}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          marks.push({ x: plan.x, z: plan.z, rotY: plan.rotY, plan });
+          marks.push({ x: mx, z: mz, rotY: plan.rotY, plan: { ...plan, x: mx, z: mz } });
         }
       }
       this.placementGrid.showWall(this.currentMount(), marks, slabY);
