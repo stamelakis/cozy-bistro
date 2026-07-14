@@ -255,14 +255,95 @@ export class UpgradeModal {
         color: locked ? "rgba(255,245,220,0.4)" : "#fff5dc",
         border: active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)",
         borderRadius: "4px",
-        cursor: locked ? "not-allowed" : "pointer",
+        cursor: "pointer",
         font: "inherit", fontSize: "11px",
         fontWeight: active ? "700" : "500",
       } as Partial<CSSStyleDeclaration>);
-      btn.disabled = locked;
-      btn.onclick = () => { if (locked) return; this.selectedTier = tier; this.refresh(); };
+      // Locked tiers are clickable now (NOT disabled) — tapping one opens a
+      // gate: pay-to-unlock for the very next tier, or "unlock the one before
+      // it first" for anything higher up.
+      btn.onclick = () => {
+        if (locked) { this.showTierGate(tier); return; }
+        this.selectedTier = tier;
+        this.refresh();
+      };
       this.tabs.appendChild(btn);
     }
+  }
+
+  /** A locked tier tab was tapped. The NEXT tier offers a pay-to-unlock prompt
+   * (same buyExpansion path as the sidebar Expand button); any tier beyond that
+   * explains you must unlock the one before it first. */
+  private showTierGate(tier: LuxuryTier): void {
+    const cur = this.game.getLuxuryTier();
+    let title: string;
+    let message: string;
+    let pay: { label: string; disabled: boolean; action: () => void } | null = null;
+    if (tier === cur + 1) {
+      const cost = this.game.getExpansionCost();
+      const can = this.game.economy.canAfford(cost);
+      title = `Unlock Tier ${tier}?`;
+      message = `Expand your restaurant to Tier ${tier} for $${cost.toLocaleString()} — it opens new higher-tier dishes to add and develop.`;
+      pay = {
+        label: can ? `Pay $${cost.toLocaleString()}` : `Need $${cost.toLocaleString()}`,
+        disabled: !can,
+        action: () => { if (this.game.buyExpansion()) { this.selectedTier = tier; this.refresh(); } },
+      };
+    } else {
+      title = `Tier ${tier} is locked`;
+      message = `Unlock Tier ${tier - 1} first — tiers unlock one at a time.`;
+    }
+    // Layered over the modal body. Appended to this.root (a depth-2 node) so
+    // MobileUI's depth-1 modal tagger ignores it; small centred card fits any
+    // screen. Tapping the dim backdrop dismisses it.
+    const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+      position: "absolute", inset: "0", display: "flex",
+      alignItems: "center", justifyContent: "center",
+      background: "rgba(0,0,0,0.45)", zIndex: "30", padding: "20px",
+    } as Partial<CSSStyleDeclaration>);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    const card = document.createElement("div");
+    Object.assign(card.style, {
+      boxSizing: "border-box", width: "100%", maxWidth: "320px",
+      background: "rgba(34,24,16,0.98)", color: "#fff5dc",
+      border: "1px solid #d8b98f", borderRadius: "12px",
+      padding: "20px 20px 16px", textAlign: "center",
+      font: "13px/1.5 system-ui, sans-serif",
+      boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+    } as Partial<CSSStyleDeclaration>);
+    const h = document.createElement("div");
+    Object.assign(h.style, { fontSize: "16px", fontWeight: "700", marginBottom: "8px" } as Partial<CSSStyleDeclaration>);
+    h.textContent = title;
+    const p = document.createElement("div");
+    Object.assign(p.style, { opacity: "0.9", marginBottom: "16px" } as Partial<CSSStyleDeclaration>);
+    p.textContent = message;
+    const row = document.createElement("div");
+    Object.assign(row.style, { display: "flex", gap: "8px" } as Partial<CSSStyleDeclaration>);
+    const mkBtn = (label: string, primary: boolean, disabled: boolean, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      Object.assign(b.style, {
+        flex: "1", minHeight: "46px", padding: "10px 14px", borderRadius: "8px",
+        fontWeight: "700", fontSize: "13px", cursor: disabled ? "default" : "pointer",
+        border: primary ? "none" : "1px solid rgba(255,245,220,0.28)",
+        background: primary ? (disabled ? "rgba(120,180,120,0.28)" : "rgba(120,200,120,0.92)") : "transparent",
+        color: primary ? (disabled ? "rgba(255,245,220,0.5)" : "#17240f") : "#fff5dc",
+      } as Partial<CSSStyleDeclaration>);
+      b.disabled = disabled;
+      if (!disabled) b.onclick = onClick;
+      return b;
+    };
+    if (pay) {
+      const payInfo = pay;
+      row.appendChild(mkBtn(payInfo.label, true, payInfo.disabled, () => { payInfo.action(); overlay.remove(); }));
+      row.appendChild(mkBtn("Not now", false, false, () => overlay.remove()));
+    } else {
+      row.appendChild(mkBtn("Got it", false, false, () => overlay.remove()));
+    }
+    card.append(h, p, row);
+    overlay.appendChild(card);
+    this.root.appendChild(overlay);
   }
 
   private renderContent(): void {
