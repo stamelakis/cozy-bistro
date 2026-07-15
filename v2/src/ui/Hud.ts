@@ -33,6 +33,7 @@ export interface HudActions {
   openExpand: () => void;
   openPantry: () => void;
   openStaff: () => void;
+  openSettings: () => void;
   openCloud: () => void;
   resetSave: () => void;
   isMuted: () => boolean;
@@ -90,9 +91,6 @@ export class Hud {
   private readonly actions: HudActions;
   private readonly fields: Record<string, HTMLElement> = {};
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
-  private muteBtn?: HTMLButtonElement;
-  private musicBtn?: HTMLButtonElement;
-  private volumeSlider?: HTMLInputElement;
   private openCloseBtn?: HTMLButtonElement;
   /** Span inside the title block that shows the live online-player
    * count. Updated each HUD tick via actions.getOnlineCount. */
@@ -127,7 +125,7 @@ export class Hud {
     this.buildGraceBanner();
     this.buildStatsGrid();
     this.buildOpenCloseRow();
-    this.buildSpeedRow();
+    // Audio controls (volume / mute / music) live in the Settings modal now.
     this.buildModalIconRow();
     // buildDevSection removed in P12 — the old "Dev tools" sub-menu
     // (game-speed + tuning sliders + reset save + starter grant) was
@@ -370,60 +368,9 @@ export class Hud {
     this.openCloseBtn = btn;
   }
 
-  private buildSpeedRow(): void {
-    // Speed / pause buttons have moved into the Dev tools dropdown
-    // (see buildDevSection). This row now hosts the audio controls:
-    // a master SFX volume slider plus the existing mute and music
-    // toggles. Speed control isn't something a casual player needs at
-    // their fingertips most of the time — the volume slider is.
-    const row = document.createElement("div");
-    Object.assign(row.style, {
-      display: "flex", gap: "3px", marginTop: "5px", alignItems: "center",
-    } as Partial<CSSStyleDeclaration>);
-    // Speaker icon on the left as a visual cue that the slider drives
-    // sound effects.
-    const speakerIcon = document.createElement("span");
-    speakerIcon.textContent = "🔊";
-    Object.assign(speakerIcon.style, {
-      fontSize: "12px", flex: "0 0 18px", textAlign: "center",
-    } as Partial<CSSStyleDeclaration>);
-    row.appendChild(speakerIcon);
-    // The slider itself — 0..100 (integer, easy to think about) maps
-    // directly onto the SfxPlayer's 0..1 volume.
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = "0";
-    slider.max = "100";
-    slider.step = "1";
-    slider.value = String(Math.round(this.actions.getSfxVolume() * 100));
-    Object.assign(slider.style, {
-      flex: "1", minWidth: "0",
-      cursor: "pointer",
-      accentColor: "#7bc97b",
-    } as Partial<CSSStyleDeclaration>);
-    slider.title = "Sound effects volume";
-    slider.oninput = () => {
-      const v = Number(slider.value);
-      this.actions.setSfxVolume(v / 100);
-    };
-    row.appendChild(slider);
-    this.volumeSlider = slider;
-    const mute = document.createElement("button");
-    Object.assign(mute.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
-    mute.style.flex = "0 0 28px";
-    mute.onclick = () => { this.actions.toggleMute(); this.update(); };
-    row.appendChild(mute);
-    this.muteBtn = mute;
-    // Music toggle — independent from SFX so the player can leave the
-    // pad off but still hear plates clinking + the kitchen sizzling.
-    const music = document.createElement("button");
-    Object.assign(music.style, this.tinyBtnStyle() as Partial<CSSStyleDeclaration>);
-    music.style.flex = "0 0 28px";
-    music.onclick = () => { this.actions.toggleMusic(); this.update(); };
-    row.appendChild(music);
-    this.musicBtn = music;
-    this.root.appendChild(row);
-  }
+  // buildSpeedRow removed — the audio controls (SFX volume slider + mute +
+  // music toggle) moved into the Settings modal (Engine.installAudioSection),
+  // alongside graphics quality and the account actions.
 
   /** Single icon row for opening all the modals. Tooltips on hover. */
   private buildModalIconRow(): void {
@@ -492,6 +439,12 @@ export class Hud {
           "pantry when it runs low. Each role costs a per-day wage. Assign members to floors and " +
           "set the waiter rest spot here.",
         click: this.actions.openStaff, tint: "rgba(160, 200, 180, 0.22)" },
+      { icon: "⚙ Settings",   title:
+          "SETTINGS — graphics, sound & account.\n" +
+          "Graphics quality + FPS options, sound / music volume, and account " +
+          "actions (log out, reset save). Everything that used to sit down the " +
+          "side of the screen, in one place.",
+        click: this.actions.openSettings, tint: "rgba(200, 205, 215, 0.20)" },
       // Slots button — DEV-only convenience. Hidden in production
       // (multiplayer single-slot per player, autosaved). The tag
       // here keeps the button identifiable so the post-construction
@@ -565,19 +518,6 @@ export class Hud {
   // bottom of the sidebar via Engine.installResetSaveSection so it
   // sits below every other section (HUD, expand, stock, staff)
   // instead of crowding the modal-icon row.
-
-  private tinyBtnStyle(): Record<string, string> {
-    return {
-      padding: "3px 4px",
-      background: "rgba(255,245,220,0.08)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px",
-      cursor: "pointer",
-      font: "inherit",
-      fontSize: "11px",
-    };
-  }
 
   update(): void {
     const money = Math.round(this.game.economy.getMoney());
@@ -723,26 +663,6 @@ export class Hud {
         ? "rgba(120, 200, 120, 0.35)"
         : "rgba(255,245,220,0.08)";
       btn.style.fontWeight = key === activeKey ? "700" : "400";
-    }
-    if (this.volumeSlider) {
-      // Keep the slider in sync if anything else (admin tools etc.)
-      // changes the volume; skip the assignment if the user is mid-drag
-      // so we don't fight their input.
-      const target = String(Math.round(this.actions.getSfxVolume() * 100));
-      if (document.activeElement !== this.volumeSlider && this.volumeSlider.value !== target) {
-        this.volumeSlider.value = target;
-      }
-    }
-    if (this.muteBtn) {
-      const muted = this.actions.isMuted();
-      this.muteBtn.textContent = muted ? "🔇" : "🔈";
-      this.muteBtn.title = muted ? "Sound off — click to enable" : "Sound on — click to mute";
-    }
-    if (this.musicBtn) {
-      const muted = this.actions.isMusicMuted();
-      this.musicBtn.textContent = muted ? "🎵̸" : "🎵";
-      this.musicBtn.style.opacity = muted ? "0.45" : "1";
-      this.musicBtn.title = muted ? "Music off — click to enable" : "Music on — click to mute";
     }
     if (this.devToolsBtn) {
       // Show Dev tools ONLY for the admin account. Non-admin test

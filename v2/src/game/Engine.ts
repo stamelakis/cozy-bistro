@@ -14,6 +14,7 @@ import { Hud } from "../ui/Hud";
 import { Sidebar } from "../ui/Sidebar";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffModal } from "../ui/StaffModal";
+import { SettingsModal } from "../ui/SettingsModal";
 import { PantryModal } from "../ui/PantryModal";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
@@ -108,6 +109,7 @@ export class Engine {
   readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffModal: StaffModal;
+  readonly settingsModal: SettingsModal;
   readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
@@ -707,6 +709,7 @@ export class Engine {
       openExpand: () => this.expandModal.show(),
       openPantry: () => this.pantryModal.show(),
       openStaff: () => this.staffModal.show(),
+      openSettings: () => this.settingsModal.show(),
       openCloud: () => this.cloudModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
@@ -743,11 +746,13 @@ export class Engine {
     // 10th top-bar button). The StaffPanel now lives inside the modal; its
     // floor / rest-spot callbacks are wired below via staffModal.panel.
     this.staffModal = new StaffModal(container, this.game);
+    this.settingsModal = new SettingsModal(container);
     // Character-wipe button at the very bottom of every section.
     // Visible to ALL players (not gated to admin) — this is the
     // standard "delete account" affordance. Lives down here so it
     // can't be misclicked from the busy modal-icon row at the top.
     this.installGraphicsSection();
+    this.installAudioSection();
     this.installResetSaveSection();
     // Hook the floor-reassign UI: when the player switches a member's
     // home storey, move their 3D character to the new floor's slab
@@ -2964,7 +2969,6 @@ export class Engine {
    * via setSavedGraphicsQuality so the next session boots on the
    * right preset. */
   private installGraphicsSection(): void {
-    this.sidebar.addSeparator();
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {
       display: "flex", flexDirection: "column", gap: "4px",
@@ -3084,11 +3088,86 @@ export class Engine {
     showRow.appendChild(showLab);
     wrap.appendChild(showRow);
 
-    this.sidebar.body.appendChild(wrap);
+    this.settingsModal.body.appendChild(wrap);
 
     // Build the FPS badge lazily on demand.  When showFps starts true
     // (restored from localStorage), unhide it right away.
     if (this.showFps) this.setShowFps(true);
+  }
+
+  /** Sound section of the Settings modal — master SFX volume slider plus
+   * mute (SFX) and music toggles. Lifted out of the HUD so audio lives with
+   * the other rarely-touched controls. Wired straight to the SfxPlayer; the
+   * modal's onShow hook re-syncs the icons + slider to live values whenever
+   * the player reopens it. */
+  private installAudioSection(): void {
+    const wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      display: "flex", flexDirection: "column", gap: "8px",
+    } as Partial<CSSStyleDeclaration>);
+    const header = document.createElement("div");
+    header.textContent = "🔊 SOUND";
+    Object.assign(header.style, {
+      fontSize: "10px", fontWeight: "700", letterSpacing: "0.06em", opacity: "0.7",
+    } as Partial<CSSStyleDeclaration>);
+    wrap.appendChild(header);
+
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "flex", gap: "8px", alignItems: "center",
+    } as Partial<CSSStyleDeclaration>);
+
+    // 0..100 slider maps onto the SfxPlayer's 0..1 volume.
+    const slider = document.createElement("input");
+    slider.type = "range"; slider.min = "0"; slider.max = "100"; slider.step = "1";
+    slider.value = String(Math.round(this.sfx.getVolume() * 100));
+    Object.assign(slider.style, {
+      flex: "1", minWidth: "0", cursor: "pointer", accentColor: "#7bc97b",
+    } as Partial<CSSStyleDeclaration>);
+    slider.title = "Sound effects volume";
+    slider.oninput = () => this.sfx.setVolume(Number(slider.value) / 100);
+    row.appendChild(slider);
+
+    const iconBtn = (): HTMLButtonElement => {
+      const b = document.createElement("button");
+      Object.assign(b.style, {
+        flex: "0 0 auto", padding: "7px 12px", minWidth: "46px",
+        background: "rgba(255,245,220,0.10)", color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.25)", borderRadius: "7px",
+        cursor: "pointer", font: "inherit", fontSize: "16px", lineHeight: "1",
+      } as Partial<CSSStyleDeclaration>);
+      return b;
+    };
+    const mute = iconBtn();
+    mute.onclick = () => { this.sfx.setMuted(!this.sfx.isMuted()); refresh(); };
+    row.appendChild(mute);
+    // Music toggle is independent of SFX — silence the pad but keep the
+    // kitchen sizzle, or vice versa. Restart the loop when re-enabling.
+    const music = iconBtn();
+    music.onclick = () => {
+      const next = !this.sfx.isMusicMuted();
+      this.sfx.setMusicMuted(next);
+      if (!next) this.sfx.startMusic();
+      refresh();
+    };
+    row.appendChild(music);
+    wrap.appendChild(row);
+    this.settingsModal.body.appendChild(wrap);
+
+    const refresh = (): void => {
+      // Don't fight a mid-drag: only assign the slider when it isn't focused.
+      const target = String(Math.round(this.sfx.getVolume() * 100));
+      if (document.activeElement !== slider && slider.value !== target) slider.value = target;
+      const sMuted = this.sfx.isMuted();
+      mute.textContent = sMuted ? "🔇" : "🔈";
+      mute.title = sMuted ? "Sound off — click to enable" : "Sound on — click to mute";
+      const mMuted = this.sfx.isMusicMuted();
+      music.textContent = mMuted ? "🎵̸" : "🎵";
+      music.style.opacity = mMuted ? "0.45" : "1";
+      music.title = mMuted ? "Music off — click to enable" : "Music on — click to mute";
+    };
+    refresh();
+    this.settingsModal.setOnShow(refresh);
   }
 
   /** Phase I (H.68) — enter waiter-rest-spot placement mode.  Shows
@@ -3437,7 +3516,16 @@ export class Engine {
    * separated from gameplay actions and can't be misclicked from
    * the busier modal-icon row at the top of the HUD. */
   private installResetSaveSection(): void {
-    this.sidebar.addSeparator();
+    const section = document.createElement("div");
+    Object.assign(section.style, {
+      display: "flex", flexDirection: "column", gap: "6px",
+    } as Partial<CSSStyleDeclaration>);
+    const acctHeader = document.createElement("div");
+    acctHeader.textContent = "👤 ACCOUNT";
+    Object.assign(acctHeader.style, {
+      fontSize: "10px", fontWeight: "700", letterSpacing: "0.06em", opacity: "0.7",
+    } as Partial<CSSStyleDeclaration>);
+    section.appendChild(acctHeader);
 
     // Phase I (H.73) — Logout button.  Sits just above Reset save in
     // the same section so the two account-level controls live
@@ -3465,7 +3553,7 @@ export class Engine {
       "browser to someone else.";
     logoutBtn.onclick = () => this.logout();
     logoutWrap.appendChild(logoutBtn);
-    this.sidebar.body.appendChild(logoutWrap);
+    section.appendChild(logoutWrap);
 
     const wrap = document.createElement("div");
     Object.assign(wrap.style, { marginBottom: "4px" } as Partial<CSSStyleDeclaration>);
@@ -3488,7 +3576,8 @@ export class Engine {
       "you need to type RESET to proceed.";
     btn.onclick = () => this.resetSave();
     wrap.appendChild(btn);
-    this.sidebar.body.appendChild(wrap);
+    section.appendChild(wrap);
+    this.settingsModal.body.appendChild(section);
   }
 
   /** Phase I (H.73) — log out the current session.  Fires the server
