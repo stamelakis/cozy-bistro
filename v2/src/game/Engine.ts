@@ -13,7 +13,7 @@ import { TrashSpawner } from "./TrashSpawner";
 import { Hud } from "../ui/Hud";
 import { Sidebar } from "../ui/Sidebar";
 import { BuildMenu } from "../ui/BuildMenu";
-import { StaffPanel } from "../ui/StaffPanel";
+import { StaffModal } from "../ui/StaffModal";
 import { PantryModal } from "../ui/PantryModal";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
@@ -107,7 +107,7 @@ export class Engine {
   readonly seatMarkers: SeatMarkers;
   readonly sidebar: Sidebar;
   readonly hud: Hud;
-  readonly staffPanel: StaffPanel;
+  readonly staffModal: StaffModal;
   readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
@@ -706,6 +706,7 @@ export class Engine {
       openDecor: () => this.decorModal.show(),
       openExpand: () => this.expandModal.show(),
       openPantry: () => this.pantryModal.show(),
+      openStaff: () => this.staffModal.show(),
       openCloud: () => this.cloudModal.show(),
       resetSave: () => this.resetSave(),
       isMuted: () => this.sfx.isMuted(),
@@ -734,11 +735,14 @@ export class Engine {
     // Prominent top-screen banner shown when a shortage is actually BLOCKING
     // service (0 clean plates/glasses, or an ingredient out with nothing on the
     // way). Overlay on document.body; its fix button opens the Pantry.
-    this.serviceAlert = new ServiceAlertBanner(this.game, () => this.pantryModal.show());
+    this.serviceAlert = new ServiceAlertBanner(this.game, (target) =>
+      target === "staff" ? this.staffModal.show({ highlight: "errand" }) : this.pantryModal.show());
     this.sidebar.addSeparator();
     this.stockWidget = new StockStatusWidget(this.sidebar.body, this.game);
-    this.sidebar.addSeparator();
-    this.staffPanel = new StaffPanel(this.sidebar.body, this.game);
+    // Staff management moved OUT of the cramped sidebar into its own popup (the
+    // 10th top-bar button). The StaffPanel now lives inside the modal; its
+    // floor / rest-spot callbacks are wired below via staffModal.panel.
+    this.staffModal = new StaffModal(container, this.game);
     // Character-wipe button at the very bottom of every section.
     // Visible to ALL players (not gated to admin) — this is the
     // standard "delete account" affordance. Lives down here so it
@@ -749,7 +753,7 @@ export class Engine {
     // home storey, move their 3D character to the new floor's slab
     // and clear any cached path on the router so they don't try to
     // walk back to the old floor's home spot.
-    this.staffPanel.onStaffFloorChanged = (memberId, oldFloor, newFloor) => {
+    this.staffModal.panel.onStaffFloorChanged = (memberId, oldFloor, newFloor) => {
       const fromChefWaiter = this.router?.getCharacterByMemberId(memberId);
       const fromErrand = this.errand?.findCharacterByMemberId(memberId);
       const char = fromChefWaiter ?? fromErrand;
@@ -762,10 +766,10 @@ export class Engine {
     // place mode (next canvas click is captured + raycast against the
     // focused storey's floor plane); Clear fires the cloud reducer
     // and falls the StaffRouter back to the built-in default.
-    this.staffPanel.onSetWaiterRestSpot = () => this.enterWaiterRestPlacement();
-    this.staffPanel.onClearWaiterRestSpot = () => {
+    this.staffModal.panel.onSetWaiterRestSpot = () => this.enterWaiterRestPlacement();
+    this.staffModal.panel.onClearWaiterRestSpot = () => {
       this.cloud.clearWaiterRestSpot();
-      this.staffPanel.setWaiterRestStatus(null);
+      this.staffModal.panel.setWaiterRestStatus(null);
       this.floatingText?.pop(0, 1, "📍 Waiter rest spot cleared", "#ffd986");
     };
     // Modals still live on the page-level container so they overlay the world.
@@ -1705,7 +1709,7 @@ export class Engine {
       // cache to sync — just the UI label needs a one-time pull.
       try {
         const restSpot = this.cloud.getWaiterRestSpot();
-        this.staffPanel.setWaiterRestStatus(restSpot);
+        this.staffModal.panel.setWaiterRestStatus(restSpot);
         if (restSpot) {
           console.log(`[H.68] waiter rest spot hydrate: F${restSpot.floor} (${restSpot.x.toFixed(1)}, ${restSpot.z.toFixed(1)})`);
         }
@@ -3199,7 +3203,7 @@ export class Engine {
         return;
       }
       this.cloud.setWaiterRestSpot(hit.x, hit.z, hit.floor);
-      this.staffPanel.setWaiterRestStatus({ x: hit.x, z: hit.z, floor: hit.floor });
+      this.staffModal.panel.setWaiterRestStatus({ x: hit.x, z: hit.z, floor: hit.floor });
       this.floatingText?.pop(hit.x, hit.z, `📍 Waiter rest spot set`, "#86ff86", hit.floor);
       // Phase 9.33 — confirmation flash: an expanding, fading ring at the
       // chosen tile so the click visibly "lands". Self-removes; outlives
@@ -4153,7 +4157,6 @@ export class Engine {
       if (this.cloud?.isReady()) this.game.cooking.restorePantryFromCloud();
       this.hud.update();
       this.serviceAlert.update();
-      this.staffPanel.update();
       this.menuPanel.update();
       this.expandWidget.update();
       this.stockWidget.update();

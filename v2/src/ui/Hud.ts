@@ -32,6 +32,7 @@ export interface HudActions {
   openDecor: () => void;
   openExpand: () => void;
   openPantry: () => void;
+  openStaff: () => void;
   openCloud: () => void;
   resetSave: () => void;
   isMuted: () => boolean;
@@ -485,6 +486,12 @@ export class Hud {
           "leaderboards. Visiting other players' restaurants is a future feature; for now this is " +
           "the lobby.",
         click: this.actions.openCloud, tint: "rgba(160, 200, 220, 0.24)" },
+      { icon: "👥 Staff",      title:
+          "STAFF — hire, fire, assign & train your crew.\n" +
+          "Chefs cook, waiters serve, the barman makes drinks, and errand helpers restock the " +
+          "pantry when it runs low. Each role costs a per-day wage. Assign members to floors and " +
+          "set the waiter rest spot here.",
+        click: this.actions.openStaff, tint: "rgba(160, 200, 180, 0.22)" },
       // Slots button — DEV-only convenience. Hidden in production
       // (multiplayer single-slot per player, autosaved). The tag
       // here keeps the button identifiable so the post-construction

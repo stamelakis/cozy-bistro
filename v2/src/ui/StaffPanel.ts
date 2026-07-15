@@ -243,6 +243,23 @@ export class StaffPanel {
     this.rows[role] = { label, activity, hire, members };
   }
 
+  /** Pulse a role's hire (+) button and scroll it into view — used when the
+   * service alert routes the player here (e.g. ingredients stuck → hire an
+   * errand helper) so the relevant control is obvious. */
+  highlightHire(role: StaffRole): void {
+    const btn = this.rows[role]?.hire;
+    if (!btn) return;
+    btn.scrollIntoView({ block: "center", behavior: "smooth" });
+    btn.animate(
+      [
+        { boxShadow: "0 0 0 0 rgba(120,220,140,0.9)", transform: "scale(1)" },
+        { boxShadow: "0 0 0 10px rgba(120,220,140,0)", transform: "scale(1.18)" },
+        { boxShadow: "0 0 0 0 rgba(120,220,140,0)", transform: "scale(1)" },
+      ],
+      { duration: 900, iterations: 3, easing: "ease-out" },
+    );
+  }
+
   /** Cache of the most-recent roster signature per role. Lets
    * renderMembers SKIP the destroy-and-rebuild pass when nothing
    * changed since the last update — without this, the 5Hz HUD tick

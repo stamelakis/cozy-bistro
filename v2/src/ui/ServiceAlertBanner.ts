@@ -23,12 +23,14 @@ const GRACE_MS = 2500;
 export class ServiceAlertBanner {
   private readonly root: HTMLElement;
   private readonly text: HTMLElement;
+  private readonly fixBtn: HTMLButtonElement;
+  private fixTarget: "pantry" | "staff" = "pantry";
   private dismissedSig: string | null = null;
   private blockedSince: number | null = null;
 
   constructor(
     private readonly game: Game,
-    private readonly onFix: () => void,
+    private readonly onFix: (target: "pantry" | "staff") => void,
   ) {
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
@@ -61,9 +63,9 @@ export class ServiceAlertBanner {
     Object.assign(this.text.style, { flex: "1", minWidth: "0" } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.text);
 
-    const fixBtn = document.createElement("button");
-    fixBtn.textContent = "Open Pantry";
-    Object.assign(fixBtn.style, {
+    this.fixBtn = document.createElement("button");
+    this.fixBtn.textContent = "Open Pantry";
+    Object.assign(this.fixBtn.style, {
       flexShrink: "0",
       background: "rgba(255,255,255,0.94)",
       color: "#7a1818",
@@ -73,8 +75,8 @@ export class ServiceAlertBanner {
       cursor: "pointer",
       font: "700 12px system-ui, sans-serif",
     } as Partial<CSSStyleDeclaration>);
-    fixBtn.onclick = () => this.onFix();
-    this.root.appendChild(fixBtn);
+    this.fixBtn.onclick = () => this.onFix(this.fixTarget);
+    this.root.appendChild(this.fixBtn);
 
     const closeBtn = document.createElement("button");
     closeBtn.textContent = "✕";
@@ -119,6 +121,13 @@ export class ServiceAlertBanner {
     }
     this.dismissedSig = null;           // set changed → force back into view
     this.text.innerHTML = this.renderProblems(problems);
+    // Route the fix button by the active blocker: an ingredient stuck with
+    // nothing inbound is fixed by hiring an errand helper (it restocks the
+    // pantry), so send the player to the Staff modal; clean-plate/glass
+    // shortages still go to the Pantry.
+    const ingredientStuck = problems.some((p) => !p.startsWith("Out of clean"));
+    this.fixTarget = ingredientStuck ? "staff" : "pantry";
+    this.fixBtn.textContent = ingredientStuck ? "Hire errand helper" : "Open Pantry";
     this.root.style.display = "flex";
   }
 
@@ -161,7 +170,7 @@ export class ServiceAlertBanner {
   private fixHint(problem: string): string {
     return problem.startsWith("Out of clean")
       ? "Buy more sets in the Pantry, or add a dishwasher / another waiter."
-      : "Open the Pantry to turn on Auto-shop or raise your stock targets.";
+      : "Hire an errand helper (Staff) to restock — it buys groceries when the pantry runs low.";
   }
 }
 
