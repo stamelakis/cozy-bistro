@@ -313,7 +313,12 @@ export class StaffPanel {
       const info = this.workloadBadgeInfo(role, m.id);
       return info?.count ?? 0;
     };
-    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}/D${m.isDeactivated ? 1 : 0}`).join(",");
+    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => {
+      // Include the errand trip so the work pill re-renders when what a helper
+      // is fetching changes, even if the backlog count stays the same.
+      const trip = role === "errand" ? (this.game.getErrandTripSummary?.(m.id) ?? "") : "";
+      return `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}/D${m.isDeactivated ? 1 : 0}/${trip}`;
+    }).join(",");
     if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
       return;
     }
@@ -322,81 +327,91 @@ export class StaffPanel {
     hostEl.style.display = "block";
     const showFloorButtons = tier >= 2;
     for (const member of members) {
-      const row = document.createElement("div");
-      Object.assign(row.style, {
-        display: "flex", alignItems: "center", gap: "6px",
-        padding: "5px 8px",
-        marginTop: "4px",
-        fontSize: "11px",
-        background: "rgba(255,255,255,0.035)",
-        borderRadius: "7px",
+      const card = document.createElement("div");
+      Object.assign(card.style, {
+        marginTop: "7px",
+        padding: "9px 11px",
+        background: "rgba(255,255,255,0.05)",
+        borderRadius: "10px",
+        opacity: member.isDeactivated ? "0.55" : "1",
       } as Partial<CSSStyleDeclaration>);
-      // H.97 — Per-member level chip BEFORE the name, so the player
-      // sees at a glance who's mentored. upgradeLevel starts at 0 and
-      // climbs with each completed training. Capped visual at 5 to
-      // match the recipe-tier ceiling; the underlying number keeps
-      // accumulating for fractional speed bonuses but the player
-      // doesn't see "Lv 12" cluttering the row.
-      const levelChip = document.createElement("span");
+
+      // ── Header: level badge · name · fire / rehire ──
+      const header = document.createElement("div");
+      Object.assign(header.style, { display: "flex", alignItems: "center", gap: "8px" } as Partial<CSSStyleDeclaration>);
       const lvl = Math.max(0, Math.min(5, member.upgradeLevel | 0));
+      const levelChip = document.createElement("span");
       levelChip.textContent = `Lv${lvl}`;
       Object.assign(levelChip.style, {
-        fontSize: "9px",
-        fontWeight: "700",
-        padding: "1px 4px",
-        borderRadius: "3px",
+        fontSize: "10px", fontWeight: "700",
+        padding: "2px 7px", borderRadius: "999px",
         background: lvl >= 4 ? "rgba(255,200,90,0.35)"
           : lvl >= 2 ? "rgba(170,200,255,0.25)"
           : "rgba(255,255,255,0.10)",
-        color: "#fff5dc",
-        marginRight: "5px",
-        flex: "0 0 auto",
-        fontVariantNumeric: "tabular-nums",
-        opacity: lvl === 0 ? "0.55" : "1",
+        color: "#fff5dc", flex: "0 0 auto",
+        fontVariantNumeric: "tabular-nums", opacity: lvl === 0 ? "0.6" : "1",
       } as Partial<CSSStyleDeclaration>);
       levelChip.title = `Training level ${lvl}. Higher = faster cook / wash / errand times.`;
-      row.appendChild(levelChip);
+      header.appendChild(levelChip);
 
       const name = document.createElement("span");
       name.textContent = member.name;
       Object.assign(name.style, {
         flex: "1", overflow: "hidden", textOverflow: "ellipsis",
-        whiteSpace: "nowrap", opacity: "0.9",
+        whiteSpace: "nowrap", fontSize: "13px", fontWeight: "600",
       } as Partial<CSSStyleDeclaration>);
-      row.appendChild(name);
-      // Per-member workload badge — Phase I (H.72) generalised what
-      // used to be a chef-only "🍳 N" indicator so every role gets a
-      // visual cue when they're busy.  Each role picks a different
-      // emoji (cooking pan / mixing glass / serving tray / shopping
-      // bag) and queries its own Game accessor.  Same color ramp
-      // applies across the board — green = fine, amber = catching
-      // up, red = hire help — so the player learns one visual
-      // language and reads any role's load at a glance.
-      const badgeInfo = this.workloadBadgeInfo(role, member.id);
-      if (badgeInfo && badgeInfo.count > 0) {
-        const badge = document.createElement("span");
-        badge.textContent = `${badgeInfo.emoji} ${badgeInfo.count}`;
-        badge.title = badgeInfo.tooltip;
-        const n = badgeInfo.count;
-        const bg = n >= 5
-          ? "rgba(220, 80, 80, 0.55)"
-          : n >= 3
-            ? "rgba(220, 170, 80, 0.45)"
-            : "rgba(120, 200, 120, 0.35)";
-        Object.assign(badge.style, {
-          fontSize: "10px",
-          fontWeight: "700",
-          padding: "1px 5px",
-          borderRadius: "3px",
-          background: bg,
-          color: "#fff5dc",
-          marginRight: "4px",
-          flex: "0 0 auto",
-          fontVariantNumeric: "tabular-nums",
+      header.appendChild(name);
+
+      if (member.isDeactivated) {
+        // No-negative-money: benched member — greyed above + a free ↺ Rehire.
+        const reactivate = document.createElement("button");
+        reactivate.textContent = "↺ Rehire";
+        reactivate.title = `Reactivate ${member.name} (Lv${lvl} ${role}) — free, resumes wages`;
+        Object.assign(reactivate.style, {
+          flex: "0 0 auto", padding: "4px 9px", borderRadius: "7px",
+          fontSize: "11px", fontWeight: "700",
+          background: "rgba(120, 200, 120, 0.30)", color: "#eaffea",
+          border: "1px solid rgba(150, 230, 150, 0.55)",
+          cursor: "pointer", font: "inherit", whiteSpace: "nowrap",
         } as Partial<CSSStyleDeclaration>);
-        row.appendChild(badge);
+        reactivate.onclick = () => { if (this.game.reactivateStaffMember(member.id)) this.update(); };
+        header.appendChild(reactivate);
+      } else {
+        const severance = this.game.staff.getStaffFireCost(role);
+        const fire = document.createElement("button");
+        fire.textContent = "✕";
+        fire.title = `Fire ${member.name} (Lv${lvl} ${role}) — costs $${severance} severance`;
+        Object.assign(fire.style, {
+          flex: "0 0 auto", width: "24px", height: "24px", padding: "0",
+          fontSize: "12px", fontWeight: "700",
+          background: "rgba(200, 120, 120, 0.22)", color: "#fff5dc",
+          border: "1px solid rgba(255, 180, 180, 0.45)", borderRadius: "7px",
+          cursor: "pointer", font: "inherit", lineHeight: "1",
+        } as Partial<CSSStyleDeclaration>);
+        fire.onclick = () => { if (this.game.fireStaffMember(member.id)) this.update(); };
+        header.appendChild(fire);
       }
+      card.appendChild(header);
+
+      // ── Work status: an enlarged pill spelling out what they're doing ──
+      const workRow = document.createElement("div");
+      Object.assign(workRow.style, { marginTop: "7px" } as Partial<CSSStyleDeclaration>);
+      workRow.appendChild(this.workStatusPill(role, member.id));
+      card.appendChild(workRow);
+      // ── Floor: a labelled selector, only when upper storeys exist ──
       if (showFloorButtons) {
+        const floorRow = document.createElement("div");
+        Object.assign(floorRow.style, {
+          display: "flex", alignItems: "center", gap: "5px",
+          marginTop: "8px", flexWrap: "wrap",
+        } as Partial<CSSStyleDeclaration>);
+        const floorLabel = document.createElement("span");
+        floorLabel.textContent = "Floor";
+        Object.assign(floorLabel.style, {
+          fontSize: "9.5px", fontWeight: "700", opacity: "0.55",
+          textTransform: "uppercase", letterSpacing: "0.07em", marginRight: "3px",
+        } as Partial<CSSStyleDeclaration>);
+        floorRow.appendChild(floorLabel);
         const current = member.homeFloor ?? 0;
         for (let idx = 0; idx < numStoreys; idx += 1) {
           const unlocked = idx === 0 || tier >= idx + 1;
@@ -408,7 +423,7 @@ export class StaffPanel {
             : `Floor ${idx} — unlocks at tier ${idx + 1}`;
           btn.disabled = !unlocked;
           Object.assign(btn.style, {
-            width: "20px", height: "20px", padding: "0",
+            width: "24px", height: "24px", padding: "0",
             fontSize: "11px", fontWeight: "700",
             background: isActive
               ? "rgba(255, 210, 120, 0.45)"
@@ -417,7 +432,7 @@ export class StaffPanel {
             border: isActive
               ? "1px solid rgba(255, 220, 150, 0.85)"
               : "1px solid rgba(255,245,220,0.22)",
-            borderRadius: "3px",
+            borderRadius: "6px",
             cursor: unlocked ? "pointer" : "not-allowed",
             opacity: unlocked ? "1" : "0.4",
             font: "inherit",
@@ -431,58 +446,57 @@ export class StaffPanel {
               }
             };
           }
-          row.appendChild(btn);
+          floorRow.appendChild(btn);
         }
+        card.appendChild(floorRow);
       }
-      // Per-member fire button — far right of the row. Replaces the
-      // old role-level − button at the top, which was problematic now
-      // that staff can be individually trained: the player needs to
-      // choose WHO to let go, not "whoever the LIFO picks". Wears the
-      // member's name in the tooltip + severance cost so misclicks
-      // self-correct.
-      if (member.isDeactivated) {
-        // No-negative-money: benched member — grey the whole row + offer a
-        // free Reactivate (↺) in place of Fire. Reactivating just resumes
-        // their wages; they kept every upgrade.
-        row.style.opacity = "0.5";
-        const reactivate = document.createElement("button");
-        reactivate.textContent = "↺ rehire";
-        reactivate.title = `Reactivate ${member.name} (Lv${member.upgradeLevel | 0} ${role}) — free, resumes wages`;
-        Object.assign(reactivate.style, {
-          height: "18px", padding: "0 6px", marginLeft: "4px",
-          fontSize: "10px", fontWeight: "700",
-          background: "rgba(120, 200, 120, 0.30)", color: "#eaffea",
-          border: "1px solid rgba(150, 230, 150, 0.55)", borderRadius: "3px",
-          cursor: "pointer", font: "inherit", lineHeight: "1", whiteSpace: "nowrap",
-        } as Partial<CSSStyleDeclaration>);
-        reactivate.onclick = () => {
-          if (this.game.reactivateStaffMember(member.id)) this.update();
-        };
-        row.appendChild(reactivate);
-      } else {
-        const fire = document.createElement("button");
-        fire.textContent = "−";
-        const severance = this.game.staff.getStaffFireCost(role);
-        const trainingLvl = this.game.getMemberUpgradeLevel(member.id);
-        fire.title = `Fire ${member.name} (L${trainingLvl} ${role}) — costs $${severance} severance`;
-        Object.assign(fire.style, {
-          width: "20px", height: "20px", padding: "0",
-          marginLeft: "2px",
-          fontSize: "13px", fontWeight: "700",
-          background: "rgba(200, 120, 120, 0.22)",
-          color: "#fff5dc",
-          border: "1px solid rgba(255, 180, 180, 0.45)",
-          borderRadius: "3px",
-          cursor: "pointer",
-          font: "inherit",
-          lineHeight: "1",
-        } as Partial<CSSStyleDeclaration>);
-        fire.onclick = () => {
-          if (this.game.fireStaffMember(member.id)) this.update();
-        };
-        row.appendChild(fire);
+      hostEl.appendChild(card);
+    }
+  }
+
+  /** The enlarged per-member work-status pill: an icon + a plain-language line
+   * of what they're doing right now (cooking, serving, fetching groceries…),
+   * coloured green→amber→red by load. Idle members get a subtle grey pill. */
+  private workStatusPill(role: StaffRole, memberId: string): HTMLElement {
+    const info = this.workloadBadgeInfo(role, memberId);
+    const n = info?.count ?? 0;
+    const pill = document.createElement("span");
+    Object.assign(pill.style, {
+      display: "inline-flex", alignItems: "center", gap: "6px", maxWidth: "100%",
+      padding: "5px 10px", borderRadius: "8px", fontSize: "11.5px", fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    const emoji = document.createElement("span");
+    emoji.style.fontSize = "14px";
+    emoji.style.flex = "0 0 auto";
+    const desc = document.createElement("span");
+    Object.assign(desc.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    if (!info || n === 0) {
+      emoji.textContent = "💤";
+      desc.textContent = role === "errand" ? "Idle by the supply counter" : "Idle — nothing queued";
+      Object.assign(pill.style, { background: "rgba(255,255,255,0.06)", color: "rgba(255,245,220,0.6)", fontWeight: "500" });
+      if (info) pill.title = info.tooltip;
+    } else {
+      emoji.textContent = info.emoji;
+      desc.textContent = this.workDescription(role, memberId, n);
+      const bg = n >= 5 ? "rgba(220,80,80,0.5)" : n >= 3 ? "rgba(220,170,80,0.42)" : "rgba(120,200,120,0.34)";
+      Object.assign(pill.style, { background: bg, color: "#fff5dc" });
+      pill.title = info.tooltip;
+    }
+    pill.append(emoji, desc);
+    return pill;
+  }
+
+  /** Short plain-language description of a member's current job for the pill. */
+  private workDescription(role: StaffRole, memberId: string, n: number): string {
+    switch (role) {
+      case "chef": return `Cooking · ${n} in the queue`;
+      case "barman": return `Mixing drinks · ${n} in the queue`;
+      case "waiter": return `Serving · ${n} task${n === 1 ? "" : "s"}`;
+      case "errand": {
+        const trip = this.game.getErrandTripSummary?.(memberId) ?? "";
+        return trip ? `Bringing back ${trip}` : "On a shopping trip";
       }
-      hostEl.appendChild(row);
+      default: return `Working · ${n}`;
     }
   }
 
