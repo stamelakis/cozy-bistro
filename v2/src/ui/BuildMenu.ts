@@ -959,7 +959,12 @@ export class BuildMenu {
         cells.push({ x: plan.x, z: plan.z });
       }
     }
-    this.placementGrid.show(this.currentMount(), cells, 0.03);
+    // Lift the tiles onto the FOCUSED storey's slab. The storey mounts sit at
+    // world y=0 (they're visibility groups, not vertically offset — items get
+    // +floorY baked into their own position), so a constant y here would pin
+    // every floor's grid to the ground. slabY = currentFloorY() puts an
+    // upper-floor grid on its own slab, matching the preview + wall stripes.
+    this.placementGrid.show(this.currentMount(), cells, slabY + 0.03);
   }
 
   /** Mobile tap-to-place: a stationary touch fires no pointermove, so
