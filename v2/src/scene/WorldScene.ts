@@ -1647,10 +1647,7 @@ export class WorldScene {
     // Sun: bright during day, dim during dawn/dusk, near-black at
     // night. Floor dropped to 0.04 (was 0.12) so streetlamps actually
     // pop against the dark instead of fighting the residual sun.
-    // Livelier grade (user ask): lift the night floor (0.04 → 0.18) and push the
-    // daytime a touch higher so the scene reads bright + colourful rather than
-    // dim. Lamps still pop after dusk, just against a less-black room.
-    const sunIntensity = 0.18 + dayness * 1.92;
+    const sunIntensity = 0.04 + dayness * 1.78;
     this.sunLight.intensity = sunIntensity;
     this.sunLight.color.setHex(mixColors(0xaab8d6, 0xfff4d8, dayness));
 
@@ -1669,15 +1666,12 @@ export class WorldScene {
     // beyond the lamps' pools of light. The night ambient still has
     // SOME value so the player can navigate without lamps; we just
     // shouldn't paint the entire scene a flat bluish glow.
-    // Whiter, brighter daylight (0xfff1d6 → 0xfff7e8) so material colours read
-    // true and vivid instead of washed sepia, and a less-muddy, brighter night
-    // blue. Night floor lifted 0.14 → 0.42 so the whole room stays lively.
-    this.ambientLight.color.setHex(mixColors(0x8a94ac, 0xfff7e8, dayness));
-    this.ambientLight.intensity = 0.42 + dayness * 0.98;
+    this.ambientLight.color.setHex(mixColors(0x707a92, 0xfff1d6, dayness));
+    this.ambientLight.intensity = 0.14 + dayness * 0.86;
 
     // Fill (sky bounce) — fades with daylight. Floor dropped to 0.06
     // so back-lit surfaces don't read as "the sun's still up a bit."
-    this.fillLight.intensity = 0.16 + dayness * 0.52;
+    this.fillLight.intensity = 0.06 + dayness * 0.44;
 
     // Sky color — sunrise/sunset orange during the transitions, deep
     // navy at night, cream during the day.
