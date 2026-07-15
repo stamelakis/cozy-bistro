@@ -207,36 +207,44 @@ export class StaffPanel {
   private addRow(role: StaffRole): void {
     const block = document.createElement("div");
     Object.assign(block.style, {
-      marginBottom: "5px",
-      padding: "4px 6px",
-      background: "rgba(255,245,220,0.04)",
-      borderRadius: "4px",
+      marginBottom: "10px",
+      padding: "10px 12px",
+      background: "rgba(255,245,220,0.05)",
+      border: "1px solid rgba(255,245,220,0.10)",
+      borderRadius: "10px",
     } as Partial<CSSStyleDeclaration>);
 
     const top = document.createElement("div");
-    Object.assign(top.style, { display: "flex", alignItems: "center", gap: "6px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(top.style, { display: "flex", alignItems: "center", gap: "8px" } as Partial<CSSStyleDeclaration>);
     const label = document.createElement("span");
-    Object.assign(label.style, { fontWeight: "600", fontSize: "12px", flex: "1" } as Partial<CSSStyleDeclaration>);
+    Object.assign(label.style, { fontWeight: "700", fontSize: "13.5px", flex: "1", lineHeight: "1.25" } as Partial<CSSStyleDeclaration>);
     // Hire (+) stays here because adding a new member is a generic
     // role-level action ("I need another chef"). Per-member fire (−)
     // lives in the member row below — necessary now that training
     // raises individual member value, so the player has to be able
     // to pick which specific member to let go.
-    const hire = this.makeBtn("+", "rgba(120,200,120,0.22)");
+    const hire = document.createElement("button");
+    hire.textContent = "＋ Hire";
+    Object.assign(hire.style, {
+      flex: "0 0 auto", padding: "6px 11px", borderRadius: "7px",
+      background: "rgba(120,200,120,0.28)", color: "#eaffea",
+      border: "1px solid rgba(150,230,150,0.5)", cursor: "pointer",
+      font: "inherit", fontSize: "12px", fontWeight: "700", whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
     hire.onclick = () => { if (this.game.hireStaff(role)) this.update(); };
     top.appendChild(label);
     top.appendChild(hire);
     block.appendChild(top);
 
     const activity = document.createElement("div");
-    Object.assign(activity.style, { fontSize: "10px", opacity: "0.75", marginTop: "2px" } as Partial<CSSStyleDeclaration>);
+    Object.assign(activity.style, { fontSize: "11px", opacity: "0.75", marginTop: "3px" } as Partial<CSSStyleDeclaration>);
     block.appendChild(activity);
 
     // Per-member floor-assignment rows. Only populated when the current
     // tier has unlocked at least one upper storey (no point showing a
     // single-button picker on a ground-only restaurant).
     const members = document.createElement("div");
-    Object.assign(members.style, { marginTop: "3px", display: "none" } as Partial<CSSStyleDeclaration>);
+    Object.assign(members.style, { marginTop: "8px", display: "none" } as Partial<CSSStyleDeclaration>);
     block.appendChild(members);
 
     this.root.appendChild(block);
@@ -316,9 +324,12 @@ export class StaffPanel {
     for (const member of members) {
       const row = document.createElement("div");
       Object.assign(row.style, {
-        display: "flex", alignItems: "center", gap: "3px",
-        padding: "2px 0",
-        fontSize: "10px",
+        display: "flex", alignItems: "center", gap: "6px",
+        padding: "5px 8px",
+        marginTop: "4px",
+        fontSize: "11px",
+        background: "rgba(255,255,255,0.035)",
+        borderRadius: "7px",
       } as Partial<CSSStyleDeclaration>);
       // H.97 — Per-member level chip BEFORE the name, so the player
       // sees at a glance who's mentored. upgradeLevel starts at 0 and
@@ -397,8 +408,8 @@ export class StaffPanel {
             : `Floor ${idx} — unlocks at tier ${idx + 1}`;
           btn.disabled = !unlocked;
           Object.assign(btn.style, {
-            width: "16px", height: "18px", padding: "0",
-            fontSize: "10px", fontWeight: "700",
+            width: "20px", height: "20px", padding: "0",
+            fontSize: "11px", fontWeight: "700",
             background: isActive
               ? "rgba(255, 210, 120, 0.45)"
               : "rgba(120, 180, 200, 0.18)",
@@ -455,9 +466,9 @@ export class StaffPanel {
         const trainingLvl = this.game.getMemberUpgradeLevel(member.id);
         fire.title = `Fire ${member.name} (L${trainingLvl} ${role}) — costs $${severance} severance`;
         Object.assign(fire.style, {
-          width: "16px", height: "18px", padding: "0",
-          marginLeft: "4px",
-          fontSize: "12px", fontWeight: "700",
+          width: "20px", height: "20px", padding: "0",
+          marginLeft: "2px",
+          fontSize: "13px", fontWeight: "700",
           background: "rgba(200, 120, 120, 0.22)",
           color: "#fff5dc",
           border: "1px solid rgba(255, 180, 180, 0.45)",
@@ -473,18 +484,6 @@ export class StaffPanel {
       }
       hostEl.appendChild(row);
     }
-  }
-
-  private makeBtn(text: string, bg: string): HTMLButtonElement {
-    const b = document.createElement("button");
-    b.textContent = text;
-    Object.assign(b.style, {
-      width: "26px", height: "22px",
-      background: bg, color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)", borderRadius: "4px",
-      cursor: "pointer", font: "inherit", fontSize: "13px", fontWeight: "700",
-    } as Partial<CSSStyleDeclaration>);
-    return b;
   }
 
   update(): void {
