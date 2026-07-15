@@ -14,6 +14,10 @@ import { Hud } from "../ui/Hud";
 import { Sidebar } from "../ui/Sidebar";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffModal } from "../ui/StaffModal";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { PantryModal } from "../ui/PantryModal";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
@@ -108,6 +112,10 @@ export class Engine {
   readonly sidebar: Sidebar;
   readonly hud: Hud;
   readonly staffModal: StaffModal;
+  /** Cartoon colour-grade post pass (saturation + contrast). Lazy; falls back
+   * to direct render if it ever fails so it can't black-screen. */
+  private composer?: EffectComposer;
+  private composerTried = false;
   readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
@@ -3764,6 +3772,44 @@ export class Engine {
     this.lastResizeCheckAt = performance.now();
   };
 
+  /** Cartoon / "happy" colour grade — a lightweight fullscreen post pass that
+   * punches up SATURATION + a touch of contrast so the world reads vivid and
+   * cheerful rather than realistic (cartoonish, not just brighter). One cheap
+   * pass; does NOT recompile the scene shaders (that's the light-count freeze,
+   * unaffected). OutputPass keeps colour-space + tone mapping correct; a
+   * multisampled target preserves antialiasing. Tune live in the console:
+   * `__cartoon.uSat.value = 1.6`, `__cartoon.uContrast.value = 1.1`. */
+  private setupComposer(): void {
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const rt = new THREE.WebGLRenderTarget(Math.max(1, size.x), Math.max(1, size.y), { samples: 4 });
+    const composer = new EffectComposer(this.renderer, rt);
+    composer.setPixelRatio(this.renderer.getPixelRatio());
+    composer.setSize(this.container.clientWidth, this.container.clientHeight);
+    composer.addPass(new RenderPass(this.scene.threeScene, this.camera.threeCamera));
+    const cartoon = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        uSat: { value: 1.35 },
+        uContrast: { value: 1.06 },
+      },
+      vertexShader:
+        "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+      fragmentShader:
+        "uniform sampler2D tDiffuse; uniform float uSat; uniform float uContrast; varying vec2 vUv;\n" +
+        "void main(){\n" +
+        "  vec4 c = texture2D(tDiffuse, vUv); vec3 col = c.rgb;\n" +
+        "  float l = dot(col, vec3(0.2126, 0.7152, 0.0722));\n" +
+        "  col = mix(vec3(l), col, uSat);\n" +
+        "  col = (col - 0.5) * uContrast + 0.5;\n" +
+        "  gl_FragColor = vec4(max(col, 0.0), c.a);\n" +
+        "}",
+    });
+    composer.addPass(cartoon);
+    composer.addPass(new OutputPass());
+    this.composer = composer;
+    (window as unknown as { __cartoon?: unknown }).__cartoon = cartoon.uniforms;
+  }
+
   private resizeIfNeeded(): void {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -3772,6 +3818,7 @@ export class Engine {
       return;
     }
     this.renderer.setSize(w, h);
+    this.composer?.setSize(w, h);
     this.camera.resize(w, h);
   }
 
@@ -4170,7 +4217,21 @@ export class Engine {
       this.hudAccumulator = 0;
     }
 
-    this.renderer.render(this.scene.threeScene, this.camera.threeCamera);
+    if (!this.composerTried) {
+      this.composerTried = true;
+      try { this.setupComposer(); } catch (e) { console.warn("[cartoon] composer setup failed — direct render:", e); }
+    }
+    if (this.composer) {
+      try {
+        this.composer.render();
+      } catch (e) {
+        console.warn("[cartoon] composer render failed — falling back to direct:", e);
+        this.composer = undefined;
+        this.renderer.render(this.scene.threeScene, this.camera.threeCamera);
+      }
+    } else {
+      this.renderer.render(this.scene.threeScene, this.camera.threeCamera);
+    }
   };
 }
 
