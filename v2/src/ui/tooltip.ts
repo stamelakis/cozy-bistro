@@ -99,6 +99,11 @@ export function attachTooltip(element: HTMLElement, text: string, delayMs: numbe
   // Strip native tooltip so the browser doesn't double-render with its
   // OS-styled bubble.
   element.removeAttribute("title");
+  // Mirror the text into data-tip so the mobile long-press handler
+  // (MobileUI.initLongPressTooltips) can surface it on touch devices — it
+  // walks up from the touched element reading title / data-tip. Without this
+  // an attachTooltip element (title stripped) would show nothing on a phone.
+  element.dataset.tip = text;
   let timer: number | null = null;
   const clear = (): void => {
     if (timer !== null) { window.clearTimeout(timer); timer = null; }

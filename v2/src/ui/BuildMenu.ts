@@ -223,6 +223,24 @@ export class BuildMenu {
     wall: "🧱", door: "🚪", bathroom: "🚽", decoration: "🖼️",
     plant: "🪴", lamp: "💡",
   };
+  /** One-line "what is this category for" blurb, shown as a hover / long-press
+   * tooltip on each category tile. */
+  private static readonly CATEGORY_DESCRIPTIONS: Record<FurnitureDef["category"], string> = {
+    table: "Tables — where guests sit to eat. Each one adds seats; pair them with chairs. Fancier tables seat more and lift the room's appeal.",
+    chair: "Chairs — a guest needs a chair at a table to be seated and served. AUTO-ARRANGE snaps loose chairs onto nearby empty seats.",
+    stove: "Cooking stations — chefs cook food orders here. More stoves means more dishes cooking at once, so the kitchen keeps up when it's busy.",
+    wash: "Dishwashing — sinks & dishwashers that clean dirty plates and glasses so they can be reused. Run out of clean dishware and service stalls.",
+    appliance: "Appliances — extra kitchen equipment that supports cooking and prep.",
+    counter: "Counters — work and serving surfaces for the kitchen and front-of-house.",
+    bar: "Bar — the barman makes and serves drinks here. Bar seats let guests order drinks directly; table drinks get delivered by a waiter.",
+    storage: "Storage — shelves & fridges that raise how much ingredient stock your pantry can hold, so you restock less often.",
+    wall: "Walls & partitions — interior dividers to shape rooms and guide the layout. They snap along the floor grid lines.",
+    door: "Doors & windows — the front door lets guests in; windows open up the walls and brighten the room. Both mount on exterior walls.",
+    bathroom: "Bathroom — toilets and washbasins that add comfort and a touch of class for your guests.",
+    decoration: "Decor — pictures, rugs and trinkets that raise ambience and customer satisfaction. Mood, not mechanics.",
+    plant: "Plants — greenery that warms up the space and nudges satisfaction. Pure decoration.",
+    lamp: "Lighting — lamps that light the room at night and add cosy warmth. Mount them on ceilings or on surfaces.",
+  };
   /** Title bar DOM element — text + arrow updated on collapse toggle.
    * Also exposed as the drag-handle for PanelDragResize. */
   titleEl?: HTMLDivElement;
@@ -348,13 +366,14 @@ export class BuildMenu {
       fontSize: "12px",
       fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
+    attachTooltip(sellBtn, "SELL — refund 50% of an item's cost and remove it.\nClick this, then tap the item you want to sell. (Esc exits.)");
     sellBtn.onclick = () => this.toggleSellMode();
     actionRow.appendChild(sellBtn);
     this.sellBtn = sellBtn;
 
     const storeBtn = document.createElement("button");
     storeBtn.textContent = "STORE";
-    storeBtn.title = "Stash an item into the storage room (no refund) to re-place it free later";
+    attachTooltip(storeBtn, "STORE — stash an item into the storage room (no refund) so you can re-place it for free later.\nClick this, then tap the item.");
     Object.assign(storeBtn.style, {
       padding: "6px 4px",
       background: "rgba(150, 200, 190, 0.18)",
@@ -372,6 +391,7 @@ export class BuildMenu {
 
     const moveBtn = document.createElement("button");
     moveBtn.textContent = "MOVE";
+    attachTooltip(moveBtn, "MOVE — pick up a placed item and set it down elsewhere, free.\nClick this, tap the item, then tap the new spot. R rotates, Esc cancels.");
     Object.assign(moveBtn.style, {
       padding: "6px 4px",
       background: "rgba(120, 160, 220, 0.18)",
@@ -404,7 +424,7 @@ export class BuildMenu {
     } as Partial<CSSStyleDeclaration>);
     const autoBtn = document.createElement("button");
     autoBtn.textContent = "AUTO-ARRANGE";
-    autoBtn.title = "Snap every chair to its nearest empty table seat slot";
+    attachTooltip(autoBtn, "AUTO-ARRANGE — snap every loose chair to its nearest empty table seat, so guests can actually sit down.");
     Object.assign(autoBtn.style, {
       padding: "6px 4px",
       background: "rgba(140, 200, 140, 0.22)",
@@ -443,6 +463,7 @@ export class BuildMenu {
     // re-place it for free. Populated live from the server inventory.
     const storageHeader = document.createElement("div");
     storageHeader.textContent = "📦 STORAGE";
+    attachTooltip(storageHeader, "STORAGE — furniture you've stashed (via STORE) but not placed. Click an entry below to re-place it for free.");
     Object.assign(storageHeader.style, {
       marginTop: "10px", fontSize: "11px", fontWeight: "700",
       color: "#cfe8df", letterSpacing: "0.5px",
@@ -475,13 +496,14 @@ export class BuildMenu {
     } as Partial<CSSStyleDeclaration>);
     const layoutHeader = document.createElement("div");
     layoutHeader.textContent = "🗂 LAYOUTS";
+    attachTooltip(layoutHeader, "LAYOUTS — saved furniture arrangements. Save the current one with + SAVE, then click a preset to load it (current furniture goes to storage, anything missing is bought).");
     Object.assign(layoutHeader.style, {
       fontSize: "11px", fontWeight: "700", color: "#cfe8df", letterSpacing: "0.5px",
     } as Partial<CSSStyleDeclaration>);
     layoutRow.appendChild(layoutHeader);
     const saveLayoutBtn = document.createElement("button");
     saveLayoutBtn.textContent = "+ SAVE";
-    saveLayoutBtn.title = "Save the current furniture layout as a named preset";
+    attachTooltip(saveLayoutBtn, "Save the current furniture layout as a named preset you can reload later.");
     Object.assign(saveLayoutBtn.style, {
       padding: "2px 8px", fontSize: "10px", fontWeight: "700",
       background: "rgba(150, 200, 190, 0.18)", color: "#eafff7",
@@ -628,7 +650,9 @@ export class BuildMenu {
       ).length;
       const empty = count === 0;
       const tile = document.createElement("button");
-      tile.disabled = empty;
+      // Not `disabled` even when empty — a disabled button fires no hover /
+      // touch events, which would swallow its description tooltip. Empty tiles
+      // just get no click handler + a dimmed look instead.
       Object.assign(tile.style, {
         display: "flex", flexDirection: "column", alignItems: "center",
         justifyContent: "center", gap: "3px",
@@ -660,6 +684,9 @@ export class BuildMenu {
         tile.onmouseleave = () => { tile.style.background = "rgba(255,245,220,0.06)"; tile.style.borderColor = "rgba(255,245,220,0.16)"; };
         tile.onclick = () => { this.selectedCategory = cat; this.renderTierContent(); };
       }
+      attachTooltip(tile, BuildMenu.CATEGORY_DESCRIPTIONS[cat] + (empty
+        ? `\n\nNothing in Tier ${this.selectedTier} yet — try another tier.`
+        : `\n\nTier ${this.selectedTier}: ${count} item${count === 1 ? "" : "s"}. Click to browse.`));
       grid.appendChild(tile);
     }
     this.tierContentEl!.appendChild(grid);
@@ -682,6 +709,7 @@ export class BuildMenu {
     back.onmouseenter = () => { back.style.background = "rgba(255,245,220,0.17)"; };
     back.onmouseleave = () => { back.style.background = "rgba(255,245,220,0.09)"; };
     back.onclick = () => { this.selectedCategory = null; this.renderTierContent(); };
+    attachTooltip(back, "Back to all categories.");
     this.tierContentEl!.appendChild(back);
 
     const items = furnitureCatalog.filter(
@@ -1028,7 +1056,7 @@ export class BuildMenu {
       const def = furnitureCatalog.find((d) => d.id === defId);
       const btn = document.createElement("button");
       btn.textContent = `${def?.name ?? defId} ×${qty}`;
-      btn.title = "Click, then click the floor to re-place (free)";
+      attachTooltip(btn, `${def?.name ?? defId} — stored ×${qty}. Click, then tap the floor to re-place one for free.`);
       Object.assign(btn.style, {
         display: "block", width: "100%", textAlign: "left",
         padding: "4px 6px", fontSize: "11px",
@@ -1094,7 +1122,7 @@ export class BuildMenu {
       Object.assign(row.style, { display: "flex", gap: "3px" } as Partial<CSSStyleDeclaration>);
       const loadBtn = document.createElement("button");
       loadBtn.textContent = name;
-      loadBtn.title = "Load this layout (rearranges your furniture)";
+      attachTooltip(loadBtn, `Load "${name}" — current furniture goes to storage, then this layout is placed (re-using storage, buying anything missing).`);
       Object.assign(loadBtn.style, {
         flex: "1", textAlign: "left", padding: "4px 6px", fontSize: "11px",
         background: "rgba(150, 200, 190, 0.12)", color: "#eafff7",
@@ -1105,7 +1133,7 @@ export class BuildMenu {
       row.appendChild(loadBtn);
       const delBtn = document.createElement("button");
       delBtn.textContent = "✕";
-      delBtn.title = "Delete this layout";
+      attachTooltip(delBtn, `Delete the "${name}" layout preset.`);
       Object.assign(delBtn.style, {
         padding: "4px 7px", fontSize: "11px",
         background: "rgba(220, 120, 100, 0.15)", color: "#ffd9cf",

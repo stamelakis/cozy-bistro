@@ -104,7 +104,7 @@ function initLongPressTooltips(): void {
     let el = e.target as HTMLElement | null;
     let title = "";
     while (el && el !== document.body) {
-      const ti = el.getAttribute?.("title");
+      const ti = el.getAttribute?.("title") || el.getAttribute?.("data-tip");
       if (ti && ti.trim()) { title = ti.trim(); break; }
       el = el.parentElement;
     }
