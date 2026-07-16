@@ -28,6 +28,10 @@ export class FloorSelector {
   /** Optional notifier fired after a focus change (BuildMenu uses this
    * to teleport its active placement preview to the new floor). */
   onFocusChanged?: () => void;
+  /** Engine wires this to the shared tier-unlock gate — tapping a locked floor
+   * button offers to expand to the tier that unlocks it (FloorSelector has no
+   * Game reference of its own, so it delegates). */
+  onLockedFloorClick?: (requiredTier: number) => void;
   /** Engine wires this to query the registry's resolved seat slots and
    * classify each floor by what kind of orders it serves. Without it
    * the per-floor "food only / drinks only / mix / nothing" sub-labels
@@ -137,7 +141,7 @@ export class FloorSelector {
    * the same index — the camera tween is a no-op when already there. */
   private select(idx: number): void {
     const tier = this.scene.getLuxuryTier();
-    if (idx > 0 && tier < idx + 1) return; // locked
+    if (idx > 0 && tier < idx + 1) { this.onLockedFloorClick?.(idx + 1); return; } // locked → offer to unlock
 
     this.scene.setFocusedStorey(idx);
 
@@ -165,14 +169,16 @@ export class FloorSelector {
       const isActive = idx === focused;
       const label = idx === 0 ? "G" : String(idx);
       btn.textContent = unlocked ? label : `🔒`;
-      btn.disabled = !unlocked;
+      // Locked floors stay clickable so tapping one opens the unlock gate
+      // (select() routes locked taps there); the 🔒 + dimming still read locked.
+      btn.disabled = false;
       btn.title = !unlocked
         ? `Floor ${idx} — unlocks at tier ${idx + 1}`
         : idx === 0
           ? "Ground floor"
           : `Floor ${idx}`;
-      btn.style.opacity = unlocked ? "1" : "0.45";
-      btn.style.cursor = unlocked ? "pointer" : "not-allowed";
+      btn.style.opacity = unlocked ? "1" : "0.55";
+      btn.style.cursor = "pointer";
       btn.style.background = isActive
         ? "rgba(255, 210, 120, 0.45)"
         : "rgba(120, 180, 200, 0.18)";

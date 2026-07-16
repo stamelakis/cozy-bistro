@@ -2,6 +2,7 @@ import type { Game } from "../game/Game";
 import { getIngredientCost } from "../data/ingredients";
 import { GLASS_SETS, PLATE_SETS, type DishKind, type DishwareSetDef } from "../data/dishwareCatalog";
 import { ingredientIcon } from "./foodIcons";
+import { showTierGate } from "./tierUnlock";
 
 /**
  * Pantry browser — two-tab interface:
@@ -503,7 +504,8 @@ export class PantryModal {
     // Luxury-tier gate — match the recipe + furniture unlock pattern.
     // T2+ dishware needs the player to have expanded to that tier.
     if (set.tier > this.game.getLuxuryTier()) {
-      this.flashRow(set.id, "rgba(220, 120, 120, 0.45)");
+      // Locked by tier — open the shared unlock gate instead of just flashing.
+      showTierGate(this.game, set.tier, () => this.refresh());
       return;
     }
     const free = this.game.dishware.getFreeCapacity();
@@ -608,9 +610,12 @@ export class PantryModal {
       const canFit = free >= set.setSize;
       const canAfford = this.game.economy.getMoney() >= set.cost;
       const enabled = !locked && canFit && canAfford;
-      entry.buyBtn.disabled = !enabled;
-      entry.buyBtn.style.opacity = enabled ? "1" : "0.35";
-      entry.buyBtn.style.cursor = enabled ? "pointer" : "not-allowed";
+      // Locked buy buttons stay clickable — tapping 🔒 opens the unlock gate
+      // (handleBuyDishSet routes tier-locked sets there). Only unlocked-but-
+      // unbuyable buttons are truly disabled.
+      entry.buyBtn.disabled = locked ? false : !enabled;
+      entry.buyBtn.style.opacity = enabled ? "1" : locked ? "0.6" : "0.35";
+      entry.buyBtn.style.cursor = (locked || enabled) ? "pointer" : "not-allowed";
       // Just the price — the per-click ×4 lives in the row text now.
       entry.buyBtn.textContent = locked ? "🔒" : `$${set.cost}`;
       entry.buyBtn.title = locked

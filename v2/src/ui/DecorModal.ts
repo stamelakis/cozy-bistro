@@ -1,6 +1,7 @@
 import type { Game } from "../game/Game";
 import { RESTAURANT_THEMES, scaledThemeCost } from "../data/themes";
 import { WorldScene } from "../scene/WorldScene";
+import { showTierGate } from "./tierUnlock";
 
 /**
  * Interior-theme picker as a modal (was DecorPanel). Click outside
@@ -220,6 +221,11 @@ export class DecorModal {
             if (this.game.applyTheme(this.activeFloor, theme.id)) this.refresh();
           };
         }
+      } else if (locked) {
+        // Clicking a tier-locked theme opens the shared unlock gate instead
+        // of doing nothing.
+        row.style.cursor = "pointer";
+        row.onclick = () => showTierGate(this.game, theme.tier, () => this.refresh());
       }
       this.body.appendChild(row);
     }

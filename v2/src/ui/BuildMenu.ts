@@ -9,6 +9,7 @@ import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
 import { closeMobileSheets } from "./MobileUI";
 import { attachTooltip } from "./tooltip";
+import { showTierGate } from "./tierUnlock";
 import { FurnitureThumbnails } from "./FurnitureThumbnails";
 
 /** A single user action that can be undone. The BuildMenu records one of
@@ -593,12 +594,12 @@ export class BuildMenu {
       // cost; if it's further out we point at the next tier to unlock first.
       const isNextTier = tier === playerTier + 1;
       const nextCost = unlocked ? 0 : this.game.getExpansionCost();
-      const lockedMsg = isNextTier
-        ? `🔒 Tier ${t} is your next unlock — expand your restaurant to Tier ${t} for $${nextCost.toLocaleString()} (open the ⤢ Expand panel).`
-        : `🔒 Tier ${t} is locked — tiers unlock one at a time. Reach Tier ${playerTier + 1} first: $${nextCost.toLocaleString()} to expand there (⤢ Expand panel).`;
+      const lockedTip = isNextTier
+        ? `🔒 Tier ${t} — click to unlock: expand to Tier ${t} for $${nextCost.toLocaleString()}.`
+        : `🔒 Tier ${t} — click to expand to your next tier (Tier ${playerTier + 1}, $${nextCost.toLocaleString()}). Tiers unlock one at a time.`;
       attachTooltip(btn, unlocked
         ? `Tier ${t} — ${count} item${count === 1 ? "" : "s"}. Higher tiers unlock fancier furniture.`
-        : lockedMsg);
+        : lockedTip);
       Object.assign(btn.style, {
         flex: "1",
         padding: "5px 0",
@@ -622,7 +623,16 @@ export class BuildMenu {
             this.renderTierTabs();
             this.renderTierContent();
           }
-        : () => this.flashRoot(lockedMsg, "info");
+        : () => {
+            // Offer to unlock the next tier right here (one at a time). On a
+            // successful purchase, jump straight to the freshly unlocked tier.
+            showTierGate(this.game, tier, () => {
+              this.selectedTier = this.game.getLuxuryTier() as LuxuryTier;
+              this.selectedCategory = null;
+              this.renderTierTabs();
+              this.renderTierContent();
+            });
+          };
       this.tierTabsEl.appendChild(btn);
     }
   }

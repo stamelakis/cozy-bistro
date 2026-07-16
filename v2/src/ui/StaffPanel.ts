@@ -2,6 +2,7 @@ import type { Game } from "../game/Game";
 import type { StaffRole } from "../systems/StaffSystem";
 import { WorldScene } from "../scene/WorldScene";
 import { attachTooltip } from "./tooltip";
+import { showTierGate } from "./tierUnlock";
 
 /**
  * Enlarged staff panel with per-role activity badges + payroll summary.
@@ -231,7 +232,12 @@ export class StaffPanel {
       border: "1px solid rgba(150,230,150,0.5)", cursor: "pointer",
       font: "inherit", fontSize: "12px", fontWeight: "700", whiteSpace: "nowrap",
     } as Partial<CSSStyleDeclaration>);
-    hire.onclick = () => { if (this.game.hireStaff(role)) this.update(); };
+    hire.onclick = () => {
+      // Tier-locked role → open the shared unlock gate instead of a dead click.
+      const ut = this.game.getRoleUnlockTier(role);
+      if (this.game.getLuxuryTier() < ut) { showTierGate(this.game, ut, () => this.update()); return; }
+      if (this.game.hireStaff(role)) this.update();
+    };
     top.appendChild(label);
     top.appendChild(hire);
     block.appendChild(top);
@@ -539,8 +545,8 @@ export class StaffPanel {
       row.hire.title = hireGate.ok
         ? `Hire ${label} ($${hireCost}) — adds $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day payroll`
         : `${hireGate.reason} · would cost $${hireCost} + $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day`;
-      row.hire.disabled = !hireGate.ok;
-      row.hire.style.opacity = hireGate.ok ? "1" : "0.4";
+      row.hire.disabled = locked ? false : !hireGate.ok;
+      row.hire.style.opacity = hireGate.ok ? "1" : locked ? "0.6" : "0.4";
       // Per-member fire buttons (one per row in `members`) replaced
       // the old role-level − here; renderMembers builds them.
       this.renderMembers(role, row.members);

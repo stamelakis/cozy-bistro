@@ -15,6 +15,7 @@ import { Sidebar } from "../ui/Sidebar";
 import { BuildMenu } from "../ui/BuildMenu";
 import { StaffModal } from "../ui/StaffModal";
 import { SettingsModal } from "../ui/SettingsModal";
+import { showTierGate } from "../ui/tierUnlock";
 import { PantryModal } from "../ui/PantryModal";
 import { MenuPanel } from "../ui/MenuPanel";
 import { UpgradeModal } from "../ui/UpgradeModal";
@@ -808,6 +809,12 @@ export class Engine {
     // so it can read NUM_STOREYS / STOREY_HEIGHT statics. The
     // onFocusChanged callback is wired AFTER BuildMenu exists below.
     this.floorSelector = new FloorSelector(container, this.scene, this.camera);
+    // Tapping a locked floor button offers to expand to the tier that unlocks
+    // it (shared gate — same as the build/recipe/decor/pantry/staff locks).
+    this.floorSelector.onLockedFloorClick = (tier) => showTierGate(this.game, tier, () => {
+      this.floorSelector.update();
+      this.buildMenu?.refreshTierTabs();
+    });
     // Camera-control widget (zoom + rotate buttons with live indicators).
     // Pinned top-left so it doesn't clash with the top-center FloorSelector.
     // Polled from the same 5 Hz HUD tick below so the zoom % and compass

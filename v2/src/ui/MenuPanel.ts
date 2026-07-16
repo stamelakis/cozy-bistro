@@ -4,6 +4,7 @@ import { getRecipeLuxuryTier, maxActiveRecipesPerCategory } from "../systems/Coo
 import { APPLIANCE_LABELS } from "../data/types";
 import type { ApplianceId, RecipeDefinition } from "../data/types";
 import { attachTooltip } from "./tooltip";
+import { showTierGate } from "./tierUnlock";
 import { recipeIcon, ingredientIcon, recipeImage } from "./foodIcons";
 
 /** Display order + labels for the five courses. Swiping up / down the
@@ -351,7 +352,13 @@ export class MenuPanel {
       this.lastSig = ""; this.render();
       return;
     }
-    if (getRecipeLuxuryTier(recipe) > this.game.getLuxuryTier()) return; // tier-locked
+    const rTier = getRecipeLuxuryTier(recipe);
+    if (rTier > this.game.getLuxuryTier()) {
+      // Locked by tier — offer to unlock it right here (one tier at a time)
+      // instead of doing nothing.
+      showTierGate(this.game, rTier, () => { this.lastSig = ""; this.render(); });
+      return;
+    }
     const provided = this.game.getProvidedAppliances?.();
     const missing = provided
       ? this.game.cooking.getRecipeAppliances(recipe).filter((a) => !provided.has(a))
@@ -458,7 +465,7 @@ export class MenuPanel {
     // Toggle pill
     if (lockedByTier) {
       this.tog.className = "cbm-tog lock";
-      this.tog.textContent = `🔒 Reach Tier ${tier} to unlock`;
+      this.tog.textContent = `🔒 Unlock Tier ${tier}`;
     } else if (!makeable) {
       this.tog.className = "cbm-tog need";
       this.tog.textContent = `Needs ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
