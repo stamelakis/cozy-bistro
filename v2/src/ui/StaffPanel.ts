@@ -337,10 +337,17 @@ export class StaffPanel {
       borderBottom: `1px solid ${meta.color}44`,
       display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
     } as Partial<CSSStyleDeclaration>);
-    const fallback = document.createElement("span");
-    fallback.textContent = meta.icon;
-    Object.assign(fallback.style, { position: "absolute", fontSize: "30px", opacity: "0.34" } as Partial<CSSStyleDeclaration>);
-    portrait.appendChild(fallback);
+    // Role badge, pinned LEFT so it never sits on top of the model (it was
+    // absolutely positioned with no offset, so flex-centring dropped it right
+    // on the character's chest). Doubles as the fallback when the GLB/WebGL
+    // isn't available.
+    const roleBadge = document.createElement("span");
+    roleBadge.textContent = meta.icon;
+    Object.assign(roleBadge.style, {
+      position: "absolute", left: "7px", top: "50%", transform: "translateY(-50%)",
+      fontSize: "22px", opacity: "0.5", pointerEvents: "none",
+    } as Partial<CSSStyleDeclaration>);
+    portrait.appendChild(roleBadge);
     const canvas = document.createElement("canvas");
     canvas.width = 128; canvas.height = 128;
     Object.assign(canvas.style, {

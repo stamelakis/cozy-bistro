@@ -29,6 +29,21 @@ const FPS = 20;
  * gives a friendly three-quarter view rather than a passport photo. */
 const VIEW_DIR = new THREE.Vector3(0.34, 0.14, -1).normalize();
 
+/**
+ * Framing is computed from KNOWN rig numbers, never from Box3.setFromObject:
+ * that reads the BIND pose, which RiggedCharacter warns is "hip-centred, which
+ * misleads a bbox/bone computation into floating the body ~0.9 m" — doing it
+ * that way centred on the hips and cut every head off.
+ *
+ * The animated truth: clips are authored FEET-AT-ORIGIN, and RIGGED_SCALE 0.9
+ * on a ~2 m GLB lands them ~1.8 m tall. So the body occupies y ∈ [0, 1.8].
+ */
+const RIG_HEIGHT = 1.8;
+/** Waist-up bust — the face + uniform are what identify the role, and they fill
+ * the short portrait strip instead of shrinking a whole body into 84 px. */
+const FRAME_CENTER_Y = RIG_HEIGHT * 0.76; // ≈1.37, chest/head
+const FRAME_HALF = RIG_HEIGHT * 0.30;     // ≈0.54 → shows y ≈ 0.83 … 1.91
+
 interface RoleRig {
   scene: THREE.Scene;
   cam: THREE.OrthographicCamera;
@@ -109,37 +124,20 @@ export class StaffPortraits {
     rim.position.set(-4, 3, 4);
     scene.add(rim);
 
-    // Frame the whole body once from the bind pose. The idle clip only shifts
-    // the body a few cm, so a fixed frame (with padding) never clips them.
+    // Fixed frame from the rig's known animated dimensions (see the constants).
+    // The idle clip only shifts the body a couple of centimetres, so a static
+    // frame never clips them.
     root.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(root);
-    const center = box.getCenter(new THREE.Vector3());
-    const diag = box.getSize(new THREE.Vector3()).length() || 2;
-    const dist = diag * 2 + 2;
-
-    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, dist * 2 + 20);
+    const target = new THREE.Vector3(0, FRAME_CENTER_Y, 0);
+    const dist = 8;
+    const cam = new THREE.OrthographicCamera(
+      -FRAME_HALF, FRAME_HALF, FRAME_HALF, -FRAME_HALF, 0.01, dist * 2 + 20,
+    );
     cam.up.set(0, 1, 0);
-    cam.position.copy(center).addScaledVector(VIEW_DIR, dist);
-    cam.lookAt(center);
-    cam.updateMatrixWorld(true);
-
-    // Size the ortho frustum so the body fills the frame from this angle.
-    const forward = new THREE.Vector3().subVectors(center, cam.position).normalize();
-    const right = new THREE.Vector3().crossVectors(forward, cam.up).normalize();
-    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
-    let maxR = 0, maxU = 0;
-    for (let i = 0; i < 8; i += 1) {
-      const c = new THREE.Vector3(
-        i & 1 ? box.max.x : box.min.x,
-        i & 2 ? box.max.y : box.min.y,
-        i & 4 ? box.max.z : box.min.z,
-      ).sub(center);
-      maxR = Math.max(maxR, Math.abs(c.dot(right)));
-      maxU = Math.max(maxU, Math.abs(c.dot(up)));
-    }
-    const half = (Math.max(maxR, maxU) || 1) * 1.1;
-    cam.left = -half; cam.right = half; cam.top = half; cam.bottom = -half;
+    cam.position.copy(target).addScaledVector(VIEW_DIR, dist);
+    cam.lookAt(target);
     cam.updateProjectionMatrix();
+    cam.updateMatrixWorld(true);
 
     const rig: RoleRig = { scene, cam, controller, targets: [] };
     this.rigs.set(role, rig);
