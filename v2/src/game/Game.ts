@@ -537,6 +537,15 @@ export class Game {
     if (Array.isArray(save.achievements)) {
       this.achievements.hydrate(save.achievements as string[]);
     }
+    // Manual-claim state. MIGRATION: a save predating manual-claim has no
+    // `achievementsClaimed` — every award it unlocked was auto-granted under
+    // the old system, so treat all prior unlocks as already claimed (don't
+    // resurface them as claimable). New saves carry the real claimed set.
+    if (Array.isArray(save.achievementsClaimed)) {
+      this.achievements.hydrateClaimed(save.achievementsClaimed);
+    } else {
+      this.achievements.hydrateClaimed(this.achievements.snapshot());
+    }
     // Lifetime counters — preserve any field absent from the save so
     // a partial old save doesn't wipe newer counters. Sets get
     // re-hydrated from string arrays.

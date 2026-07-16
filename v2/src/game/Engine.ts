@@ -35,6 +35,8 @@ import { AnalyticsModal } from "../ui/AnalyticsModal";
 import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
+import { AwardPopup } from "../ui/AwardPopup";
+import type { Achievement } from "./AchievementSystem";
 import { SlotsModal } from "../ui/SlotsModal";
 import { AdminModal } from "../ui/AdminModal";
 import { RestaurantSignModal } from "../ui/RestaurantSignModal";
@@ -111,6 +113,7 @@ export class Engine {
   readonly hud: Hud;
   readonly staffModal: StaffModal;
   readonly settingsModal: SettingsModal;
+  private readonly awardPopup: AwardPopup;
   readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
@@ -979,7 +982,8 @@ export class Engine {
     // if a race condition somewhere else triggers show() early.
     this.helpModal.canShow = () => !this.game.isAuthGated();
     this.statsModal = new StatsModal(container, this.game);
-    this.achievementsModal = new AchievementsModal(container, this.game);
+    this.achievementsModal = new AchievementsModal(container, this.game, (a) => this.claimAward(a));
+    this.awardPopup = new AwardPopup(container, (a) => this.claimAward(a));
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
     this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud, {
       isPaused: () => this.paused,
@@ -1043,15 +1047,17 @@ export class Engine {
     // NOT call onUnlock, so already-claimed achievements never
     // re-grant on reload.
     this.game.achievements.onUnlock = (a) => {
-      const reward = a.cashReward ?? 0;
-      if (reward > 0) {
-        this.game.economy.rewardAchievement(reward);
-      }
-      const label = reward > 0
-        ? `🏆 ${a.name} · +$${reward.toLocaleString("en-US")}`
-        : `🏆 ${a.name}`;
-      this.floatingText.pop(0, 5, label, "#ffd986");
+      // Manual claim: DON'T grant the reward here. Celebrate + queue a claim
+      // popup; the cash is paid only when the player hits Claim (in the popup
+      // or later from the Awards panel). SpacetimeClient wraps this callback to
+      // ALSO record the unlock server-side, so that still happens.
       this.sfx.chime();
+      this.awardPopup.enqueue(a);
+      // Persist the unlock immediately so the UNCLAIMED state survives even a
+      // hard crash (no beforeunload save). Otherwise the cloud-hydrate path
+      // could re-import it as a historical unlock and auto-claim it, robbing
+      // the player of the reward they never got to collect.
+      this.saver?.saveNow();
     };
     // Auto-show the welcome modal on a brand-new visit — but ONLY
     // after auth completes (see enterGame below). Triggering it
@@ -1663,7 +1669,15 @@ export class Engine {
         const cloudUnlocks = this.cloud.listMyAchievements();
         let added = 0;
         for (const id of cloudUnlocks) {
-          if (this.game.achievements.markUnlockedSilent(id)) added += 1;
+          if (this.game.achievements.markUnlockedSilent(id)) {
+            added += 1;
+            // Historical server-recorded unlock NOT in the local save → assume
+            // it was already dealt with (auto-granted pre-feature, or claimed
+            // on the device that earned it), so it doesn't resurface as
+            // claimable here. Unlocks already present from the save keep their
+            // real claimed state — markUnlockedSilent returns false for those.
+            this.game.achievements.markClaimedSilent(id);
+          }
         }
         if (added > 0) {
           console.log(`[H.59] achievement hydrate: ${added} unlock(s) imported from cloud (total ${this.game.achievements.count()}/${this.game.achievements.total()})`);
@@ -2975,6 +2989,23 @@ export class Engine {
    * row. Active button highlighted. The chosen value is persisted
    * via setSavedGraphicsQuality so the next session boots on the
    * right preset. */
+  /** Grant an award's reward + mark it claimed (idempotent). Fired by the win
+   * popup and the Awards panel's Claim buttons. The cash goes through the same
+   * capped server path as before — we just defer it from unlock to claim. */
+  private claimAward(a: Achievement): void {
+    if (!this.game.achievements.claim(a.id)) return; // not unlocked, or already claimed
+    const reward = a.cashReward ?? 0;
+    if (reward > 0) this.game.economy.rewardAchievement(reward);
+    this.floatingText.pop(0, 5, reward > 0
+      ? `🏆 ${a.name} · +$${reward.toLocaleString("en-US")}`
+      : `🏆 ${a.name}`, "#ffd986");
+    this.sfx.chime();
+    // Persist the claim IMMEDIATELY: the money was already added server-side,
+    // so the claimed flag MUST stick or a reload would let them claim again.
+    this.saver?.saveNow();
+    if (this.achievementsModal.isOpen()) this.achievementsModal.refresh();
+  }
+
   private installGraphicsSection(): void {
     const wrap = document.createElement("div");
     Object.assign(wrap.style, {

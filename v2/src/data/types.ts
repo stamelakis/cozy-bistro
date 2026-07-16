@@ -261,6 +261,12 @@ export interface SaveGameState {
   dayHistory?: unknown[];
   /** Unlocked achievement ids. v2-specific. */
   achievements?: string[];
+  /** Awards the player has manually CLAIMED the reward for. Separate from
+   * `achievements` (unlocked): an award can be unlocked but not yet claimed,
+   * in which case its Claim button stays live in the Awards panel. Absent on
+   * saves predating manual-claim → migrated to equal `achievements` (every
+   * award unlocked under the old system was already auto-granted). */
+  achievementsClaimed?: string[];
   /** Selected interior theme id — legacy single-theme field. Still
    * written on save so old loaders keep working; for new saves this
    * holds the GROUND floor's theme, and `themeByFloor` carries the

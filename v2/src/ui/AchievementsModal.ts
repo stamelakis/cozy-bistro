@@ -37,12 +37,15 @@ const CATEGORY_ORDER: AchievementCategory[] = [
 
 export class AchievementsModal {
   private readonly game: Game;
+  /** Engine wires this to grant the reward + persist the claim. */
+  private readonly onClaim: (a: Achievement) => void;
   private readonly root: HTMLElement;
   private readonly listEl: HTMLElement;
   private readonly countEl: HTMLElement;
 
-  constructor(parent: HTMLElement, game: Game) {
+  constructor(parent: HTMLElement, game: Game, onClaim: (a: Achievement) => void) {
     this.game = game;
+    this.onClaim = onClaim;
     this.root = document.createElement("div");
     Object.assign(this.root.style, {
       position: "fixed",
@@ -103,8 +106,11 @@ export class AchievementsModal {
 
   show(): void { this.refresh(); this.root.style.display = "flex"; }
   hide(): void { this.root.style.display = "none"; }
+  /** True while the panel is on-screen — Engine skips a redundant rebuild
+   * when a claim happens from the win popup with the panel closed. */
+  isOpen(): boolean { return this.root.style.display !== "none"; }
 
-  private refresh(): void {
+  refresh(): void {
     this.countEl.textContent = `${this.game.achievements.count()} / ${this.game.achievements.total()} unlocked`;
     this.listEl.innerHTML = "";
     // Bucket achievements by category so we can render section
@@ -187,34 +193,53 @@ export class AchievementsModal {
     // genuine milestones. Strikethrough + "claimed" tag once unlocked,
     // since the cash is already in the till.
     const reward = a.cashReward ?? 0;
-    if (reward > 0) {
+    const claimed = this.game.achievements.isClaimed(a.id);
+    const bgByTier =
+      reward >= 50_000 ? "rgba(255,200,90,0.40)" : // T7 gold
+      reward >= 15_000 ? "rgba(255,180,90,0.32)" : // T6
+      reward >=  5_000 ? "rgba(170,200,255,0.25)" : // T5 blue
+      reward >=  1_500 ? "rgba(170,200,255,0.18)" : // T4
+      reward >=    500 ? "rgba(140,210,140,0.18)" : // T3 green
+      reward >=    150 ? "rgba(140,210,140,0.12)" : // T2
+                         "rgba(255,255,255,0.08)";  // T1
+    if (unlocked && !claimed) {
+      // WON but not claimed → a live Claim button + gold row highlight so it
+      // reads as actionable. Rewards are only paid when the player claims.
+      const claimBtn = document.createElement("button");
+      claimBtn.textContent = reward > 0 ? `Claim +$${reward.toLocaleString("en-US")}` : "Claim";
+      Object.assign(claimBtn.style, {
+        flex: "0 0 auto", padding: "6px 12px", borderRadius: "9px",
+        fontWeight: "800", fontSize: "11px", cursor: "pointer", border: "none",
+        background: "linear-gradient(180deg, #ffd472, #f0b43c)", color: "#3a2708",
+        whiteSpace: "nowrap", boxShadow: "0 2px 6px rgba(240,180,60,0.35)",
+      } as Partial<CSSStyleDeclaration>);
+      claimBtn.onclick = () => { this.onClaim(a); this.refresh(); };
+      row.appendChild(claimBtn);
+      row.style.background = "rgba(240,190,80,0.10)";
+      row.style.borderRadius = "6px";
+    } else if (reward > 0) {
+      // Locked (preview the prize, dimmed) OR claimed (struck-through + ✓).
       const prize = document.createElement("div");
-      const bgByTier =
-        reward >= 50_000 ? "rgba(255,200,90,0.40)" : // T7 gold
-        reward >= 15_000 ? "rgba(255,180,90,0.32)" : // T6
-        reward >=  5_000 ? "rgba(170,200,255,0.25)" : // T5 blue
-        reward >=  1_500 ? "rgba(170,200,255,0.18)" : // T4
-        reward >=    500 ? "rgba(140,210,140,0.18)" : // T3 green
-        reward >=    150 ? "rgba(140,210,140,0.12)" : // T2
-                           "rgba(255,255,255,0.08)";  // T1
-      prize.textContent = `+$${reward.toLocaleString("en-US")}`;
-      prize.title = unlocked
-        ? `Claimed — $${reward.toLocaleString("en-US")} already paid out.`
-        : `Cash bonus paid out when this achievement unlocks.`;
+      prize.textContent = claimed ? `+$${reward.toLocaleString("en-US")} ✓` : `+$${reward.toLocaleString("en-US")}`;
+      prize.title = claimed
+        ? `Claimed — $${reward.toLocaleString("en-US")} paid out.`
+        : `Cash reward — unlock this, then claim it.`;
       Object.assign(prize.style, {
-        fontSize: "11px",
-        fontWeight: "700",
-        padding: "3px 8px",
-        borderRadius: "10px",
-        background: bgByTier,
-        color: unlocked ? "#a8e2a8" : "#fff5dc",
-        flex: "0 0 auto",
-        fontVariantNumeric: "tabular-nums",
-        textDecoration: unlocked ? "line-through" : "none",
-        opacity: unlocked ? "0.7" : "1",
-        whiteSpace: "nowrap",
+        fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "10px",
+        background: bgByTier, color: claimed ? "#a8e2a8" : "#fff5dc",
+        flex: "0 0 auto", fontVariantNumeric: "tabular-nums",
+        textDecoration: claimed ? "line-through" : "none",
+        opacity: claimed ? "0.7" : "1", whiteSpace: "nowrap",
       } as Partial<CSSStyleDeclaration>);
       row.appendChild(prize);
+    } else if (claimed) {
+      // Reward-less award, collected.
+      const done = document.createElement("span");
+      done.textContent = "✓";
+      Object.assign(done.style, {
+        color: "#a8e2a8", fontWeight: "800", flex: "0 0 auto", opacity: "0.8", fontSize: "13px",
+      } as Partial<CSSStyleDeclaration>);
+      row.appendChild(done);
     }
     return row;
   }

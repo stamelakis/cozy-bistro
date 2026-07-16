@@ -108,6 +108,8 @@ export class Hud {
    * non-admin accounts. The button now opens AdminModal directly
    * instead of toggling a sub-menu. */
   private devToolsBtn?: HTMLButtonElement;
+  /** Small "N to claim" badge pinned to the Awards button. */
+  private awardsBadge?: HTMLElement;
   /** Opening-grace banner under the title — a live countdown of the
    * rent-and-wages-free period. Shown only while the grace is active. */
   private graceBanner?: HTMLElement;
@@ -501,7 +503,25 @@ export class Hud {
     // Secondary row now uses the same "big" size so the layout is uniform —
     // user wanted Awards/Ledger/Cloud/Slots/Help at the same size as the
     // first row of Upgrades/Pantry/Decor/Trends.
-    for (const b of buttons2) row2.appendChild(mkBtn(b, "big"));
+    for (const b of buttons2) {
+      const btn = mkBtn(b, "big");
+      // Pin an unclaimed-award count badge to the Awards button so a player who
+      // dismissed the win popup still sees there's a reward waiting to claim.
+      if (b.click === this.actions.openAchievements) {
+        btn.style.position = "relative";
+        const badge = document.createElement("span");
+        Object.assign(badge.style, {
+          position: "absolute", top: "-6px", right: "-6px", display: "none",
+          minWidth: "16px", height: "16px", padding: "0 4px", boxSizing: "border-box",
+          borderRadius: "8px", background: "linear-gradient(180deg,#ffd472,#f0b43c)",
+          color: "#3a2708", font: "800 10px/16px system-ui, sans-serif", textAlign: "center",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.4)", pointerEvents: "none",
+        } as Partial<CSSStyleDeclaration>);
+        btn.appendChild(badge);
+        this.awardsBadge = badge;
+      }
+      row2.appendChild(btn);
+    }
     // Stash a ref to the dev tools button (only entry in buttons3)
     // so update() can hide it for non-admin players.
     for (const b of buttons3) {
@@ -671,6 +691,11 @@ export class Hud {
       // AdminModal directly.
       const shouldShow = this.actions.isAdmin?.() ?? false;
       this.devToolsBtn.style.display = shouldShow ? "" : "none";
+    }
+    if (this.awardsBadge) {
+      const n = this.game.achievements.unclaimedCount();
+      this.awardsBadge.textContent = n > 99 ? "99+" : String(n);
+      this.awardsBadge.style.display = n > 0 ? "block" : "none";
     }
   }
 }

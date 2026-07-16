@@ -678,6 +678,38 @@ export class AchievementSystem {
     return true;
   }
 
+  // ── Manual-claim state ──────────────────────────────────────────
+  // Rewards are NOT auto-granted on unlock: the player claims each award from
+  // the win popup or the Awards panel. `claimed` is a subset of `unlocked`.
+  private claimed = new Set<string>();
+
+  /** Snapshot of CLAIMED award ids for save persistence. */
+  snapshotClaimed(): string[] { return Array.from(this.claimed); }
+  hydrateClaimed(ids?: string[]): void { this.claimed = new Set(ids ?? []); }
+  isClaimed(id: string): boolean { return this.claimed.has(id); }
+
+  /** Mark an award claimed with NO side effect — used by the cloud-hydrate
+   * path for historical unlocks the server already recorded, so a fresh
+   * device doesn't resurface them as claimable (they were dealt with). */
+  markClaimedSilent(id: string): void { this.claimed.add(id); }
+
+  /** Claim an unlocked-but-unclaimed award. Returns true ONLY on the flip
+   * unclaimed → claimed, so the caller pays the reward exactly once. */
+  claim(id: string): boolean {
+    if (!this.unlocked.has(id)) return false; // not earned yet
+    if (this.claimed.has(id)) return false;   // already claimed
+    this.claimed.add(id);
+    return true;
+  }
+
+  /** Unlocked but not yet claimed — drives the panel's Claim buttons and the
+   * HUD "N to claim" badge. */
+  unclaimedCount(): number {
+    let n = 0;
+    for (const id of this.unlocked) if (!this.claimed.has(id)) n += 1;
+    return n;
+  }
+
   /** Per-tick check; rate-limited to once a second to keep predicate cost low. */
   update(dt: number, game: Game): void {
     this.elapsedSinceCheck += dt;
