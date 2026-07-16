@@ -3,6 +3,8 @@ import { STAFF_UPGRADE_MAX, getTrainingDurationHours, type StaffRole } from "../
 import { WorldScene } from "../scene/WorldScene";
 import { attachTooltip } from "./tooltip";
 import { showTierGate } from "./tierUnlock";
+import { confirmAction } from "./confirmDialog";
+import { StaffPortraits } from "./StaffPortraits";
 
 /**
  * Staff manager — a TILE GRID, one tile per hired person.
@@ -33,16 +35,32 @@ import { showTierGate } from "./tierUnlock";
  * minute, so a per-game-day wage = per-minute × this. */
 const GAME_MINUTES_PER_DAY = 12;
 
-const ROLE_META: Record<StaffRole, { icon: string; label: string; short: string; blurb: string }> = {
-  chef:   { icon: "🍳", label: "Chef", short: "Chef",
+/** Per-role identity: emoji, labels, and a signature COLOUR that tints the
+ * portrait + accents the tile, so a role is recognisable at a glance even
+ * before the 3-D portrait has loaded. */
+const ROLE_META: Record<StaffRole, { icon: string; label: string; short: string; color: string; blurb: string }> = {
+  chef:   { icon: "🍳", label: "Chef", short: "Chef", color: "#ff9d6e",
     blurb: "Cooks food orders at the stove. More chefs = more dishes cooking at once." },
-  barman: { icon: "🍸", label: "Barman", short: "Barman",
+  barman: { icon: "🍸", label: "Barman", short: "Barman", color: "#c78ce0",
     blurb: "Mixes and serves drinks at the bar. Table drinks get delivered by a waiter." },
-  waiter: { icon: "🍽", label: "Waiter", short: "Waiter",
+  waiter: { icon: "🍽", label: "Waiter", short: "Waiter", color: "#6ec8ff",
     blurb: "Takes orders, delivers food, and clears dirty plates to the sink." },
-  errand: { icon: "📦", label: "Errand Helper", short: "Helper",
+  errand: { icon: "📦", label: "Errand Helper", short: "Helper", color: "#8fd18f",
     blurb: "Shops for groceries when the pantry runs low, so recipes never stall." },
 };
+
+/** Section headers — deliberately loud. The first pass used 9.5px at 0.5
+ * opacity and players didn't see them at all. */
+function sectionHeader(text: string): HTMLElement {
+  const el = document.createElement("div");
+  el.textContent = text;
+  Object.assign(el.style, {
+    fontSize: "12px", fontWeight: "800", letterSpacing: "0.16em",
+    color: "#ffd986", marginBottom: "8px", paddingBottom: "5px",
+    borderBottom: "1px solid rgba(255,217,134,0.30)",
+  } as Partial<CSSStyleDeclaration>);
+  return el;
+}
 
 const ROLES: StaffRole[] = ["chef", "barman", "waiter", "errand"];
 
@@ -82,6 +100,8 @@ export class StaffPanel {
 
   private readonly hireChips: Partial<Record<StaffRole, { btn: HTMLButtonElement; sub: HTMLElement }>> = {};
   private readonly tiles = new Map<string, TileRefs>();
+  /** Live idle-animated model portraits (one rig per role, blitted per tile). */
+  private readonly portraits = new StaffPortraits();
   /** Structure signature — see RENDER DISCIPLINE in the class doc. */
   private gridSig = "";
 
@@ -98,12 +118,7 @@ export class StaffPanel {
     parent.appendChild(this.root);
 
     // ── HIRE BAR ──────────────────────────────────────────────
-    const hireHeader = document.createElement("div");
-    hireHeader.textContent = "HIRE";
-    Object.assign(hireHeader.style, {
-      fontSize: "9.5px", fontWeight: "700", letterSpacing: "0.08em",
-      opacity: "0.5", marginBottom: "5px",
-    } as Partial<CSSStyleDeclaration>);
+    const hireHeader = sectionHeader("＋ HIRE STAFF");
     this.root.appendChild(hireHeader);
     attachTooltip(hireHeader,
       "Add someone to the payroll. Each role costs a one-off hire fee plus a " +
@@ -119,13 +134,7 @@ export class StaffPanel {
     for (const role of ROLES) this.buildHireChip(role);
 
     // ── TILE GRID ─────────────────────────────────────────────
-    const rosterHeader = document.createElement("div");
-    rosterHeader.textContent = "YOUR CREW";
-    Object.assign(rosterHeader.style, {
-      fontSize: "9.5px", fontWeight: "700", letterSpacing: "0.08em",
-      opacity: "0.5", marginBottom: "5px",
-    } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(rosterHeader);
+    this.root.appendChild(sectionHeader("👥 YOUR CREW"));
 
     this.grid = document.createElement("div");
     Object.assign(this.grid.style, {
@@ -198,6 +207,13 @@ export class StaffPanel {
       background: "rgba(120,200,120,0.16)", color: "#eaffea",
       border: "1px solid rgba(150,230,150,0.38)", minWidth: "0",
     } as Partial<CSSStyleDeclaration>);
+    // A big, unmistakable ＋ so the chip reads as "add one of these" instantly.
+    const plus = document.createElement("span");
+    plus.textContent = "＋";
+    Object.assign(plus.style, {
+      fontSize: "20px", fontWeight: "900", lineHeight: "0.85",
+      color: "#b6f5b6", flex: "0 0 auto",
+    } as Partial<CSSStyleDeclaration>);
     const top = document.createElement("span");
     Object.assign(top.style, {
       fontSize: "11.5px", fontWeight: "700", whiteSpace: "nowrap",
@@ -206,14 +222,25 @@ export class StaffPanel {
     top.textContent = `${meta.icon} ${meta.short}`;
     const sub = document.createElement("span");
     Object.assign(sub.style, { fontSize: "9.5px", opacity: "0.85", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
-    btn.append(top, sub);
-    btn.onclick = () => {
-      const ut = this.game.getRoleUnlockTier(role);
-      if (this.game.getLuxuryTier() < ut) { showTierGate(this.game, ut, () => this.update()); return; }
-      if (this.game.hireStaff(role)) this.update();
-    };
+    btn.append(plus, top, sub);
+    btn.onclick = () => this.onHireClick(role);
     this.hireBar.appendChild(btn);
     this.hireChips[role] = { btn, sub };
+  }
+
+  /** Hiring spends cash AND commits to an ongoing wage, so it asks first. */
+  private onHireClick(role: StaffRole): void {
+    const ut = this.game.getRoleUnlockTier(role);
+    if (this.game.getLuxuryTier() < ut) { showTierGate(this.game, ut, () => this.update()); return; }
+    const meta = ROLE_META[role];
+    const cost = this.game.staff.getStaffHireCost(role);
+    const perDay = Math.round(this.game.admin.payrollPerStaffPerMinute * GAME_MINUTES_PER_DAY);
+    confirmAction({
+      title: `Hire a ${meta.label}?`,
+      message: `${meta.blurb}\n\n${compactDollars(cost)} to hire, then $${perDay}/day in wages for as long as they work here.`,
+      confirmLabel: `Hire · ${compactDollars(cost)}`,
+      onConfirm: () => { if (this.game.hireStaff(role)) this.update(); },
+    });
   }
 
   private syncHireBar(): void {
@@ -274,6 +301,8 @@ export class StaffPanel {
     this.gridSig = sig;
     this.grid.innerHTML = "";
     this.tiles.clear();
+    // Old tile canvases are about to be discarded — stop painting into them.
+    this.portraits.detachAll();
     let any = false;
     for (const role of ROLES) {
       for (const m of this.game.staff.getMembers(role)) {
@@ -290,19 +319,50 @@ export class StaffPanel {
     const benched = !!member.isDeactivated;
     const tile = document.createElement("div");
     Object.assign(tile.style, {
-      display: "flex", flexDirection: "column", gap: "6px",
-      padding: "9px 9px 8px", minWidth: "0",
+      display: "flex", flexDirection: "column", minWidth: "0", overflow: "hidden",
       background: benched ? "rgba(255,255,255,0.03)" : "rgba(255,245,220,0.06)",
-      border: `1px solid ${benched ? "rgba(255,245,220,0.08)" : "rgba(255,245,220,0.14)"}`,
+      // Role-coloured edge: the profession reads instantly, even at a glance.
+      border: `1px solid ${benched ? "rgba(255,245,220,0.10)" : `${meta.color}55`}`,
       borderRadius: "10px", opacity: benched ? "0.6" : "1",
     } as Partial<CSSStyleDeclaration>);
 
-    // Head: role icon · name · level chip
+    // ── PORTRAIT: the REAL rigged model playing its idle clip, so the tile
+    // shows who this actually is and breathes instead of being a frozen
+    // cut-out. Tinted with the role colour; the role emoji sits behind as a
+    // fallback if WebGL / the GLB isn't available.
+    const portrait = document.createElement("div");
+    Object.assign(portrait.style, {
+      position: "relative", height: "84px", flex: "0 0 auto",
+      background: `linear-gradient(180deg, ${meta.color}3a, ${meta.color}0d)`,
+      borderBottom: `1px solid ${meta.color}44`,
+      display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+    } as Partial<CSSStyleDeclaration>);
+    const fallback = document.createElement("span");
+    fallback.textContent = meta.icon;
+    Object.assign(fallback.style, { position: "absolute", fontSize: "30px", opacity: "0.34" } as Partial<CSSStyleDeclaration>);
+    portrait.appendChild(fallback);
+    const canvas = document.createElement("canvas");
+    canvas.width = 128; canvas.height = 128;
+    Object.assign(canvas.style, {
+      position: "relative", height: "100%", width: "auto", display: "block",
+    } as Partial<CSSStyleDeclaration>);
+    portrait.appendChild(canvas);
+    this.portraits.attach(role, canvas);
+    tile.appendChild(portrait);
+
+    // Everything below the portrait gets its own padding (the portrait itself
+    // runs edge-to-edge).
+    const body = document.createElement("div");
+    Object.assign(body.style, {
+      display: "flex", flexDirection: "column", gap: "6px",
+      padding: "7px 9px 8px", minWidth: "0",
+    } as Partial<CSSStyleDeclaration>);
+    tile.appendChild(body);
+
+    // Head: name · level chip (the role is already carried by the portrait +
+    // the tile's colour, so no emoji needed here).
     const head = document.createElement("div");
     Object.assign(head.style, { display: "flex", alignItems: "center", gap: "5px", minWidth: "0" } as Partial<CSSStyleDeclaration>);
-    const icon = document.createElement("span");
-    icon.textContent = meta.icon;
-    Object.assign(icon.style, { fontSize: "15px", flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
     const name = document.createElement("span");
     name.textContent = member.name;
     Object.assign(name.style, {
@@ -314,17 +374,17 @@ export class StaffPanel {
       flex: "0 0 auto", fontSize: "9.5px", fontWeight: "800",
       padding: "2px 6px", borderRadius: "999px", fontVariantNumeric: "tabular-nums",
     } as Partial<CSSStyleDeclaration>);
-    head.append(icon, name, levelChip);
-    tile.appendChild(head);
+    head.append(name, levelChip);
+    body.appendChild(head);
 
     // Status pill — what they're doing right now.
     const status = document.createElement("div");
-    tile.appendChild(status);
+    body.appendChild(status);
 
     // Meta line — role · wage · (floor when there's no selector)
     const metaLine = document.createElement("div");
     Object.assign(metaLine.style, { fontSize: "9.5px", opacity: "0.6" } as Partial<CSSStyleDeclaration>);
-    tile.appendChild(metaLine);
+    body.appendChild(metaLine);
 
     // Actions — assign (floor) · train · fire
     const actions = document.createElement("div");
@@ -381,7 +441,7 @@ export class StaffPanel {
       font: "inherit", fontSize: "10px", fontWeight: "700", lineHeight: "1.35",
     } as Partial<CSSStyleDeclaration>);
     actions.appendChild(fire);
-    tile.appendChild(actions);
+    body.appendChild(actions);
 
     const refs: TileRefs = { root: tile, levelChip, status, meta: metaLine, train, fire, floorSel };
     this.tiles.set(member.id, refs);
@@ -436,7 +496,15 @@ export class StaffPanel {
       refs.fire.style.color = "#fff5dc";
       refs.fire.style.border = "1px solid rgba(255,180,180,0.45)";
       refs.fire.title = `Fire ${member.name} (Lv${lvl} ${meta.label}) — costs ${compactDollars(severance)} severance. Their training is lost.`;
-      refs.fire.onclick = () => { if (this.game.fireStaffMember(memberId)) this.update(); };
+      refs.fire.onclick = () => confirmAction({
+        title: `Fire ${member.name}?`,
+        message: lvl > 0
+          ? `${compactDollars(severance)} severance now.\n\nTheir Lv${lvl} training is lost for good — a replacement ${meta.label} starts back at Lv0.`
+          : `${compactDollars(severance)} severance now.\n\nYou can hire another ${meta.label} later at the usual cost.`,
+        confirmLabel: `Fire · ${compactDollars(severance)}`,
+        danger: true,
+        onConfirm: () => { if (this.game.fireStaffMember(memberId)) this.update(); },
+      });
     }
   }
 
@@ -610,6 +678,15 @@ export class StaffPanel {
     // Waiter rest spot only matters once a waiter exists.
     this.restRow.style.display = this.game.staff.getStaffCount("waiter") > 0 ? "flex" : "none";
   }
+
+  /** Host modal calls this on show / hide. The portrait render loop only runs
+   * while the panel is actually on screen, so a closed Staff menu costs nothing. */
+  setVisible(on: boolean): void {
+    if (on) { this.update(); this.portraits.start(); }
+    else this.portraits.stop();
+  }
+
+  dispose(): void { this.portraits.dispose(); }
 
   update(): void {
     this.syncHireBar();

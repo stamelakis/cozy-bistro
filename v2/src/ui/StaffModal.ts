@@ -59,7 +59,8 @@ export class StaffModal {
   }
 
   show(opts?: { highlight?: StaffRole }): void {
-    this.panel.update();
+    // setVisible also starts the tiles' live model portraits (idle animation).
+    this.panel.setVisible(true);
     this.root.style.display = "flex";
     if (this.refreshTimer == null) {
       this.refreshTimer = window.setInterval(() => this.panel.update(), 400);
@@ -73,6 +74,8 @@ export class StaffModal {
 
   hide(): void {
     this.root.style.display = "none";
+    // Stops the portrait render loop — a closed Staff menu costs no GPU.
+    this.panel.setVisible(false);
     if (this.refreshTimer != null) { window.clearInterval(this.refreshTimer); this.refreshTimer = null; }
   }
 }
