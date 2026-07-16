@@ -587,34 +587,42 @@ export class BuildMenu {
       const count = furnitureCatalog.filter((d) => inferQualityTier(d) === tier).length;
       const btn = document.createElement("button");
       btn.textContent = unlocked ? `T${t}` : `🔒 T${t}`;
-      btn.title = unlocked
-        ? `Tier ${t} — ${count} item${count === 1 ? "" : "s"}`
-        : `Tier ${t} — locked. Reach restaurant tier ${t} (Expand menu) to unlock these items.`;
-      btn.disabled = !unlocked;
+      // Locked tiers are now CLICKABLE (no dead "forbidden" cursor): clicking
+      // explains how to reach them instead of doing nothing. Expansions go ONE
+      // tier at a time, so if this is the very next tier we show its expansion
+      // cost; if it's further out we point at the next tier to unlock first.
+      const isNextTier = tier === playerTier + 1;
+      const nextCost = unlocked ? 0 : this.game.getExpansionCost();
+      const lockedMsg = isNextTier
+        ? `🔒 Tier ${t} is your next unlock — expand your restaurant to Tier ${t} for $${nextCost.toLocaleString()} (open the ⤢ Expand panel).`
+        : `🔒 Tier ${t} is locked — tiers unlock one at a time. Reach Tier ${playerTier + 1} first: $${nextCost.toLocaleString()} to expand there (⤢ Expand panel).`;
+      attachTooltip(btn, unlocked
+        ? `Tier ${t} — ${count} item${count === 1 ? "" : "s"}. Higher tiers unlock fancier furniture.`
+        : lockedMsg);
       Object.assign(btn.style, {
         flex: "1",
         padding: "5px 0",
         background: !unlocked
-          ? "rgba(255,245,220,0.04)"
+          ? "rgba(255,245,220,0.05)"
           : (active ? "rgba(120, 200, 120, 0.30)" : "rgba(255,245,220,0.08)"),
-        color: unlocked ? "#fff5dc" : "rgba(255,245,220,0.40)",
+        color: unlocked ? "#fff5dc" : "rgba(255,245,220,0.55)",
         border: !unlocked
-          ? "1px solid rgba(255,245,220,0.10)"
+          ? "1px solid rgba(255,245,220,0.12)"
           : (active ? "1px solid rgba(120, 200, 120, 0.7)" : "1px solid rgba(255,245,220,0.18)"),
         borderRadius: "4px",
-        cursor: unlocked ? "pointer" : "not-allowed",
+        cursor: "pointer",
         font: "inherit", fontSize: "11px",
         fontWeight: active ? "700" : "500",
-        opacity: unlocked ? "1" : "0.65",
+        opacity: unlocked ? "1" : "0.8",
       } as Partial<CSSStyleDeclaration>);
-      if (unlocked) {
-        btn.onclick = () => {
-          this.selectedTier = tier;
-          this.selectedCategory = null; // back to the category grid for the new tier
-          this.renderTierTabs();
-          this.renderTierContent();
-        };
-      }
+      btn.onclick = unlocked
+        ? () => {
+            this.selectedTier = tier;
+            this.selectedCategory = null; // back to the category grid for the new tier
+            this.renderTierTabs();
+            this.renderTierContent();
+          }
+        : () => this.flashRoot(lockedMsg, "info");
       this.tierTabsEl.appendChild(btn);
     }
   }
