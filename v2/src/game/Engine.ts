@@ -36,6 +36,7 @@ import { HelpModal } from "../ui/HelpModal";
 import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
 import { AwardPopup } from "../ui/AwardPopup";
+import { Tutorial, type TutorialStep } from "../ui/Tutorial";
 import type { Achievement } from "./AchievementSystem";
 import { SlotsModal } from "../ui/SlotsModal";
 import { AdminModal } from "../ui/AdminModal";
@@ -114,6 +115,7 @@ export class Engine {
   readonly staffModal: StaffModal;
   readonly settingsModal: SettingsModal;
   private readonly awardPopup: AwardPopup;
+  private readonly tutorial: Tutorial;
   readonly pantryModal: PantryModal;
   readonly menuPanel: MenuPanel;
   readonly upgradeModal: UpgradeModal;
@@ -984,6 +986,24 @@ export class Engine {
     this.statsModal = new StatsModal(container, this.game);
     this.achievementsModal = new AchievementsModal(container, this.game, (a) => this.claimAward(a));
     this.awardPopup = new AwardPopup(container, (a) => this.claimAward(a));
+
+    // ── TUTORIAL ──────────────────────────────────────────────────
+    // A brand-new player is auto-shown the help guide; the chef takes over the
+    // moment they dismiss it. Progress is persisted per step so closing the tab
+    // mid-run resumes where they left off rather than starting over.
+    this.tutorial = new Tutorial(container);
+    this.tutorial.setScript(this.buildTutorialScript());
+    this.tutorial.onStepChanged = (id) => {
+      this.game.tutorialStepId = id;
+      this.saver?.saveNow();
+    };
+    this.tutorial.onFinish = (completed) => {
+      this.game.tutorialDone = true;
+      this.game.tutorialStepId = null;
+      this.saver?.saveNow();
+      console.log(`[Tutorial] ${completed ? "completed" : "skipped by player"}`);
+    };
+    this.helpModal.onHide = () => this.maybeStartTutorial();
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
     this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud, {
       isPaused: () => this.paused,
@@ -2989,6 +3009,46 @@ export class Engine {
    * row. Active button highlighted. The chosen value is persisted
    * via setSavedGraphicsQuality so the next session boots on the
    * right preset. */
+  /** The chef takes over when the first-visit guide is dismissed. No-ops for
+   * anyone who already finished or skipped it — and for saves that predate the
+   * tutorial, which hydrate marks done so a veteran re-reading the guide never
+   * gets ambushed by onboarding. */
+  private maybeStartTutorial(): void {
+    if (this.game.tutorialDone || this.tutorial.active) return;
+    if (this.game.isAuthGated()) return; // login still owns the screen
+    this.tutorial.start(this.game.tutorialStepId);
+  }
+
+  /** Phase 1 — the spine, proving the machinery end to end: the chef talks,
+   * Next advances, a step can spotlight a live element, and a step can WAIT on
+   * the player actually doing the thing. The full build → hire → menu → open →
+   * tour script lands in Phase 2. */
+  private buildTutorialScript(): TutorialStep[] {
+    const ownsCategory = (cat: string): boolean =>
+      this.registry.snapshotItems().some((i) => getFurnitureDef(i.defId)?.category === cat);
+    const buildMenu = (): HTMLElement | null => document.querySelector<HTMLElement>(".cb-buildmenu");
+    return [
+      {
+        id: "intro-welcome",
+        say: "You're the new boss — this place is all yours!\n\nRight now that's four walls and a front door. No tables, no kitchen, nobody in the back. We fix that together.",
+      },
+      {
+        id: "intro-money",
+        say: "Good news: the bank believes in you. There's $10,000 in the till to turn this empty room into a restaurant.\n\nLet's go spend some of it.",
+      },
+      {
+        id: "build-table",
+        say: "Everything starts with somewhere to sit.\n\nOpen the BUILD menu, choose Tables, then click a spot on the floor to put your first one down.",
+        target: buildMenu,
+        until: () => ownsCategory("table"),
+      },
+      {
+        id: "intro-done",
+        say: "That's your first table — and that's the whole trick: pick it, place it, own it.\n\nNext up we'll get you a kitchen and a crew.",
+      },
+    ];
+  }
+
   /** Grant an award's reward + mark it claimed (idempotent). Fired by the win
    * popup and the Awards panel's Claim buttons. The cash goes through the same
    * capped server path as before — we just defer it from unlock to claim. */

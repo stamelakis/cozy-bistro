@@ -261,6 +261,14 @@ export interface SaveGameState {
   dayHistory?: unknown[];
   /** Unlocked achievement ids. v2-specific. */
   achievements?: string[];
+  /** Tutorial progress — the step id the player is currently on. Persisted so
+   * closing the tab mid-run resumes exactly there instead of restarting. */
+  tutorialStepId?: string | null;
+  /** True once the tutorial was completed OR skipped. Absent on saves predating
+   * the tutorial → migrated to TRUE (that player is already playing; don't
+   * ambush them with onboarding). A brand-new player has no save at all, so the
+   * default `false` is what actually starts the run. */
+  tutorialDone?: boolean;
   /** Awards the player has manually CLAIMED the reward for. Separate from
    * `achievements` (unlocked): an award can be unlocked but not yet claimed,
    * in which case its Claim button stays live in the Awards panel. Absent on

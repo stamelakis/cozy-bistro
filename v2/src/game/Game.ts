@@ -165,6 +165,11 @@ export class Game {
   readonly weather: WeatherSystem;
   readonly history: DayHistory;
   readonly achievements: AchievementSystem;
+  /** Tutorial progress. `tutorialDone` defaults FALSE so a brand-new player
+   * (who has no save to hydrate) gets the run; hydrate flips it true for saves
+   * that predate the tutorial. See hydrate(). */
+  tutorialStepId: string | null = null;
+  tutorialDone = false;
   readonly dishware: DishwareSystem;
 
   /** Auto-shop accumulator (seconds since last attempt). */
@@ -546,6 +551,13 @@ export class Game {
     } else {
       this.achievements.hydrateClaimed(this.achievements.snapshot());
     }
+    // Tutorial. MIGRATION: a save with no `tutorialDone` field belongs to
+    // someone who was already playing before the tutorial existed — mark them
+    // done rather than ambushing a veteran with onboarding. Brand-new players
+    // have no save to hydrate at all, so they keep the default false and get
+    // the run.
+    this.tutorialDone = typeof save.tutorialDone === "boolean" ? save.tutorialDone : true;
+    this.tutorialStepId = typeof save.tutorialStepId === "string" ? save.tutorialStepId : null;
     // Lifetime counters — preserve any field absent from the save so
     // a partial old save doesn't wipe newer counters. Sets get
     // re-hydrated from string arrays.

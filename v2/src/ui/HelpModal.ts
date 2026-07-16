@@ -531,6 +531,12 @@ export class HelpModal {
     this.root.style.display = "flex";
   }
 
+  /** Fired every time the guide is dismissed. Engine hangs the tutorial off
+   * this: a brand-new player is shown the help automatically, and the moment
+   * they close it the chef takes over. (Guarded on the tutorial's own
+   * done-flag, so re-reading the guide later doesn't restart it.) */
+  onHide?: () => void;
+
   hide(): void {
     this.root.style.display = "none";
     try {
@@ -538,6 +544,7 @@ export class HelpModal {
     } catch {
       // ignore — quota errors, private browsing, etc.
     }
+    this.onHide?.();
   }
 
   /** True if the player has never dismissed the help before. Engine

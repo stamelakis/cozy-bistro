@@ -383,6 +383,8 @@ export class SaveSystem {
       dayHistory: this.game.history.snapshot(),
       achievements: this.game.achievements.snapshot(),
       achievementsClaimed: this.game.achievements.snapshotClaimed(),
+      tutorialStepId: this.game.tutorialStepId,
+      tutorialDone: this.game.tutorialDone,
       // Lifetime player counters — fed by the various interaction
       // sites (BuildMenu place, DecorModal theme apply, ExpandWidget
       // boost, VisitMode enter, ChatPanel send, weather tint tick)
