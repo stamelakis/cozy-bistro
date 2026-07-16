@@ -403,6 +403,12 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     const observer = new MutationObserver(() => {
       const nowExpanded = sentinel.style.display !== "none";
       if (nowExpanded === isExpanded) return;
+      // While the mobile layer owns the layout (cb-mobile), just track the
+      // expanded/collapsed state — DON'T run the geometry pass. applyForState
+      // reads + clamps against the full-screen mobile rect and would corrupt
+      // the desktop anchors (anchoredTop/Bottom), stranding the panel when the
+      // viewport widens back to desktop. Same guard the resize handler uses.
+      if (document.body.classList.contains("cb-mobile")) { isExpanded = nowExpanded; return; }
       applyForState(nowExpanded);
     });
     observer.observe(sentinel, { attributes: true, attributeFilter: ["style"] });
@@ -419,6 +425,11 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
     if (expandDirection === "up" && typeof ResizeObserver !== "undefined") {
       const ro = new ResizeObserver(() => {
         if (!isExpanded || armed) return;
+        // Mobile layer owns the layout — don't bake the full-screen sheet's
+        // geometry into inline `top` (it strands the panel when the viewport
+        // widens back to desktop). The frozen desktop inline top takes over on
+        // exit. Same guard the resize handler + mutation observer use.
+        if (document.body.classList.contains("cb-mobile")) return;
         const h = root.offsetHeight;
         let t = anchoredBottom - h;
         if (t + h > window.innerHeight - VIEWPORT_PADDING) t = window.innerHeight - VIEWPORT_PADDING - h;
@@ -440,7 +451,19 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
   // bottom edge keeps riding the viewport bottom, and re-cache the anchor.
   {
     let lastVH = window.innerHeight;
+    let pending = false;
     window.addEventListener("resize", () => {
+      // Defer to the next frame so MobileUI.applyMode (a SYNCHRONOUS resize
+      // listener) has toggled `cb-mobile` BEFORE we read it below. Listener
+      // order isn't guaranteed: if our handler runs first on the widen-back
+      // resize it would still see cb-mobile ON, bail, and never re-home the
+      // panel to its desktop anchor — the "preview mobile, widen back, panels
+      // stranded" bug. rAF always runs after the synchronous resize listeners,
+      // so cb-mobile reflects the final mode here.
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+      pending = false;
       const dvh = window.innerHeight - lastVH;
       lastVH = window.innerHeight;
       // While the mobile layer owns the layout (cb-mobile is on), the panels
@@ -481,6 +504,7 @@ export function makeDraggableResizable(opts: PanelDragResizeOptions): void {
       root.style.left = `${newLeft}px`;
       root.style.top = `${newTop}px`;
       updateAnchorsFromRect();
+      });
     });
   }
 
