@@ -3041,8 +3041,14 @@ export class Engine {
       this.registry.snapshotItems().some((i) => getFurnitureDef(i.defId)?.category === cat);
     const hired = (role: "chef" | "waiter" | "errand"): boolean =>
       this.game.staff.getStaffCount(role) >= 1;
-    const el = (sel: string) => (): HTMLElement | null => document.querySelector<HTMLElement>(sel);
-    const sidebar = el(".cb-sidebar");
+    // NB: resolves to null when the element is off-screen. Spotlighting a thing
+    // the player cannot see is worse than not spotlighting at all — see the
+    // note on `visible` about sheets being parked off-screen rather than hidden.
+    const el = (sel: string) => (): HTMLElement | null => {
+      const e = document.querySelector<HTMLElement>(sel);
+      return visible(e) ? e : null;
+    };
+    const sidebarEl = (): HTMLElement | null => document.querySelector<HTMLElement>(".cb-sidebar");
     /**
      * Is this thing actually on screen? Measured by RECT, deliberately not by
      * `offsetParent !== null` — offsetParent is null for every `position: fixed`
@@ -3053,7 +3059,14 @@ export class Engine {
     const visible = (e: HTMLElement | null): boolean => {
       if (!e) return false;
       const r = e.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
+      if (r.width <= 0 || r.height <= 0) return false;
+      // ...and ON SCREEN. MobileUI parks a CLOSED sheet off-screen with a
+      // transform (translateX(104%)) rather than hiding it, so a closed build
+      // menu still measures a full-size 354x752 rect. Without this check the
+      // chef confidently spotlights a category tile the player cannot see or
+      // reach, inside a sheet that isn't open — and never points at Build.
+      return r.right > 0 && r.bottom > 0
+        && r.left < window.innerWidth && r.top < window.innerHeight;
     };
     /**
      * Build-step target that FOLLOWS the player through the menu's drill-down,
@@ -3074,6 +3087,32 @@ export class Engine {
     const btn = (label: string) => (): HTMLElement | null =>
       [...document.querySelectorAll<HTMLElement>("button")]
         .find((b) => (b.textContent ?? "").includes(label) && visible(b)) ?? null;
+    /**
+     * The control that OPENS a panel. The chef used to just conjure each panel
+     * open, which taught the player nothing — they'd never find it again on
+     * their own. So he points at the real path and waits for them to walk it.
+     * On a phone that path starts one step further back: the sidebar is a
+     * closed sheet, so they need the bottom bar's Manage button first.
+     */
+    const opener = (label: string) => (): HTMLElement | null =>
+      visible(sidebarEl()) ? btn(label)() : btn("Manage")();
+    /**
+     * A control that lives INSIDE the sidebar (the expand/boost/grant widget).
+     * Same deal as `opener`: on a phone the sidebar is a closed sheet, so point
+     * at Manage first. Once it's open, reposition()'s auto-scroll brings the
+     * control into view — these sit at the top of a long scrolling strip.
+     */
+    const inSidebar = (sel: string) => (): HTMLElement | null =>
+      visible(sidebarEl()) ? el(sel)() : btn("Manage")();
+    /** A modal's backing element, reached past TS's `private`. */
+    const rootOf = (m: unknown): HTMLElement | null =>
+      (m as { root?: HTMLElement })?.root ?? null;
+    /** Open AND on screen — the player actually got there. */
+    const isOpen = (m: unknown): boolean => visible(rootOf(m));
+    /** The modal itself as a spotlight target, but only while it's really open;
+     * a closed one measures 0x0 and would just leave a stale hole behind. */
+    const modalEl = (m: unknown) => (): HTMLElement | null =>
+      isOpen(m) ? rootOf(m) : null;
     /** Tour steps pop ONE panel at a time — close the rest so they can't stack. */
     const onlyShow = (open?: () => void) => (): void => {
       for (const m of [this.upgradeModal, this.pantryModal, this.cloudModal, this.decorModal, this.staffModal]) {
@@ -3119,16 +3158,25 @@ export class Engine {
       { id: "first-guest-done", say: "THERE! A customer! An actual human with actual money!\n\nYour crew takes it from here — they cook, serve and clean on their own. You run the place." },
 
       // ── THE TOUR ─────────────────────────────────────────────
-      { id: "tour-manage", say: "This strip is your dashboard: cash, rating, the day, and every panel worth opening.\n\nThat OPEN/CLOSED button? That's your doors. Close up and the guests stop coming.", onEnter: onlyShow(), target: sidebar },
-      { id: "tour-upgrades", say: "UPGRADES! Level up a recipe and it sells for more and scores better.\n\nCosts money and REAL time — start one and go live your life.", onEnter: onlyShow(() => this.upgradeModal.show()) },
-      { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nSet a stock target, flip on Auto-shop, and your errand helper keeps it topped up forever.", onEnter: onlyShow(() => this.pantryModal.show()) },
-      { id: "tour-social", say: "SOCIAL! Other players, out there, right now, in their own restaurants.\n\nFriends, leaderboards, visits. Go be nosy.", onEnter: onlyShow(() => this.cloudModal.show()) },
-      { id: "tour-decor", say: "DECOR. This is the fun one.\n\nA nicer room pulls in more guests AND lifts your stars. Pretty literally pays.", onEnter: onlyShow(() => this.decorModal.show()) },
+      // Each panel is TWO steps: the player opens it themselves (so they can
+      // find it again tomorrow), then the chef explains it with the open panel
+      // spotlighted. On desktop the sidebar is always up, so every "-find" step
+      // whose panel is already reachable just auto-advances — no dead taps.
+      { id: "tour-manage-find", say: "Right. The grand tour.\n\nEverything you run this place with lives under MANAGE. Open it up.", onEnter: onlyShow(), target: () => visible(sidebarEl()) ? null : btn("Manage")(), until: () => visible(sidebarEl()) },
+      { id: "tour-manage", say: "THIS is your dashboard: cash, rating, the day, and every panel worth opening.\n\nThat OPEN/CLOSED button? Those are your doors. Close up and the guests stop coming.", target: el(".cb-sidebar") },
+      { id: "tour-upgrades-find", say: "See ⚡ UPGRADES in there? Tap it.\n\nI'm not going to open these for you — you'll never find them again if I do.", target: opener("⚡ Upgrades"), until: () => isOpen(this.upgradeModal) },
+      { id: "tour-upgrades", say: "UPGRADES! Level up a recipe and it sells for more and scores better.\n\nCosts money and REAL time — start one and go live your life.", target: modalEl(this.upgradeModal) },
+      { id: "tour-pantry-find", say: "Close that and find 🧺 PANTRY. Same place.", onEnter: onlyShow(), target: opener("🧺 Pantry"), until: () => isOpen(this.pantryModal) },
+      { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nSet a stock target, flip on Auto-shop, and your errand helper keeps it topped up forever.", target: modalEl(this.pantryModal) },
+      { id: "tour-social-find", say: "Next: 👋 SOCIAL. Go on, I'll wait.", onEnter: onlyShow(), target: opener("👋 Social"), until: () => isOpen(this.cloudModal) },
+      { id: "tour-social", say: "SOCIAL! Other players, out there, right now, in their own restaurants.\n\nFriends, leaderboards, visits. Go be nosy.", target: modalEl(this.cloudModal) },
+      { id: "tour-decor-find", say: "Last one, and it's my favourite: 🎨 DECOR.", onEnter: onlyShow(), target: opener("🎨 Decor"), until: () => isOpen(this.decorModal) },
+      { id: "tour-decor", say: "DECOR. This is the fun one.\n\nA nicer room pulls in more guests AND lifts your stars. Pretty literally pays.", target: modalEl(this.decorModal) },
 
       // ── THE LONG GAME ────────────────────────────────────────
-      { id: "closer-expand", say: "See this? EXPAND. Cash in, tier up — fancier furniture, better recipes, whole new FLOORS.\n\nThat's the ladder. Climb it.", onEnter: onlyShow(), target: el(".cb-xw-expand") },
-      { id: "closer-boost", say: "BOOST. Pay a little, and guests come flooding in for a minute.\n\nPerfect for when the kitchen's warm and you want chaos.", target: el(".cb-xw-boost") },
-      { id: "closer-grant", say: "And if it all goes sideways and you're flat broke — this button hands you a starter grant.\n\nWe've all been there. No judgement.", target: el(".cb-xw-grant") },
+      { id: "closer-expand", say: "See this? EXPAND. Cash in, tier up — fancier furniture, better recipes, whole new FLOORS.\n\nThat's the ladder. Climb it.", onEnter: onlyShow(), target: inSidebar(".cb-xw-expand") },
+      { id: "closer-boost", say: "BOOST. Pay a little, and guests come flooding in for a minute.\n\nPerfect for when the kitchen's warm and you want chaos.", target: inSidebar(".cb-xw-boost") },
+      { id: "closer-grant", say: "And if it all goes sideways and you're flat broke — this button hands you a starter grant.\n\nWe've all been there. No judgement.", target: inSidebar(".cb-xw-grant") },
 
       // ── OUT ──────────────────────────────────────────────────
       { id: "outro", say: "That's everything! Look at this place. LOOK AT IT.\n\nStars are earned around here — 5★ takes great food AND a great room. Go get them, boss. I need to sit down.", onEnter: onlyShow() },

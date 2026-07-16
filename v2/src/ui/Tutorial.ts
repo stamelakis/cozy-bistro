@@ -45,6 +45,9 @@ const TICK_MS = 120;
  */
 const WAIT_GRACE_MS = 30_000;
 
+/** Spotlight dim. Gentle on purpose — see the note where `spot` is built. */
+const DIM = "rgba(6,4,2,0.38)";
+
 export class Tutorial {
   private readonly root: HTMLElement;
   private readonly spot: HTMLElement;
@@ -62,6 +65,9 @@ export class Tutorial {
   private idx = -1;
   private timer: number | null = null;
   private graceTimer: number | null = null;
+  /** The element we've already auto-scrolled to, so we do it once per target
+   * and never fight the player's own scrolling. */
+  private scrolledFor: HTMLElement | null = null;
 
   /** Fired whenever the active step changes — Engine persists the id so a
    * reload resumes here instead of restarting the whole thing. */
@@ -82,11 +88,17 @@ export class Tutorial {
 
     // Spotlight: a hole punched through a huge box-shadow. Cheap, and it dims
     // everything except the target with one element.
+    //
+    // The dim is deliberately GENTLE. This is a soft guide: the player has to
+    // read and USE the panel the chef is talking about, and every panel opens
+    // BELOW this overlay (sheets are z-index 900, we're 3000), so whatever he
+    // dims, he dims for the person trying to follow him. A blackout that hides
+    // the game is worse than no spotlight at all.
     this.spot = document.createElement("div");
     Object.assign(this.spot.style, {
       position: "absolute", left: "-100px", top: "-100px", width: "0", height: "0",
       borderRadius: "10px", pointerEvents: "none",
-      boxShadow: "0 0 0 9999px rgba(6,4,2,0.62)",
+      boxShadow: `0 0 0 9999px ${DIM}`,
       transition: "left 180ms ease, top 180ms ease, width 180ms ease, height 180ms ease",
       outline: "2px solid rgba(255,217,134,0.9)", outlineOffset: "2px",
     } as Partial<CSSStyleDeclaration>);
@@ -204,6 +216,7 @@ export class Tutorial {
   private enter(): void {
     const step = this.steps[this.idx];
     if (!step) return;
+    this.scrolledFor = null;   // new step, new target: allow one auto-scroll
     try { step.onEnter?.(); } catch { /* a panel refusing to open must not kill the run */ }
     this.says.textContent = step.say;
     this.progress.textContent = `${this.idx + 1} / ${this.steps.length}`;
@@ -237,12 +250,20 @@ export class Tutorial {
   /** Re-measure the target every tick — panels move, scroll, and re-render. */
   private reposition(): void {
     const step = this.steps[this.idx];
-    const el = step?.target?.() ?? null;
+    let el = step?.target?.() ?? null;
+    // A 0x0 target (a closed panel still in the DOM) is no target at all. Bail
+    // to the same path as "no target" rather than leaving the last hole behind.
+    if (el) {
+      const b = el.getBoundingClientRect();
+      if (b.width <= 0 || b.height <= 0) el = null;
+    }
     if (!el || !el.isConnected) {
-      // No target (or its panel is closed): park the hole off-screen so the
-      // box-shadow dims the whole view, and hide the arrow.
+      // No target: show NO dim at all. Parking the hole off-screen would dim
+      // the entire view — including, on the tour steps, the very panel the chef
+      // just opened and is asking the player to look at.
       Object.assign(this.spot.style, { left: "-100px", top: "-100px", width: "0", height: "0" });
       this.spot.style.outline = "none";
+      this.spot.style.boxShadow = "none";
       this.arrow.style.display = "none";
       // Nothing to dodge — send him home, or he'd keep whatever corner the last
       // target chased him into for the rest of the tutorial.
@@ -250,6 +271,19 @@ export class Tutorial {
       this.panel.style.right = "auto"; this.panel.style.left = "18px";
       return;
     }
+    // Scroll it into view first — a target below the fold (the Expand button in
+    // a long sidebar) would otherwise get a spotlight the player never sees,
+    // leaving the chef pointing at nothing. Only when it's actually out of
+    // view, and only once per target, or we'd fight the player's own scrolling
+    // on every 120ms tick.
+    if (this.scrolledFor !== el) {
+      const b = el.getBoundingClientRect();
+      const off = b.bottom > window.innerHeight - 8 || b.top < 8
+        || b.right > window.innerWidth - 8 || b.left < 8;
+      if (off) el.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      this.scrolledFor = el;
+    }
+
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) { this.arrow.style.display = "none"; return; }
     const pad = 6;
@@ -257,6 +291,7 @@ export class Tutorial {
       left: `${Math.round(r.left - pad)}px`, top: `${Math.round(r.top - pad)}px`,
       width: `${Math.round(r.width + pad * 2)}px`, height: `${Math.round(r.height + pad * 2)}px`,
       outline: "2px solid rgba(255,217,134,0.9)",
+      boxShadow: `0 0 0 9999px ${DIM}`,
     });
     // Arrow above the target, flipping below when it'd fall off the top.
     const above = r.top > 54;
