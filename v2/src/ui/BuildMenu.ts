@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { furnitureCatalog, inferQualityTier, scaledCost, type FurnitureDef } from "../data/furnitureCatalog";
-import type { LuxuryTier } from "../data/types";
+import { APPLIANCE_LABELS, type LuxuryTier } from "../data/types";
 import type { ModelLoader } from "../assets/ModelLoader";
 import type { Game } from "../game/Game";
 import { FurnitureRegistry, footprintCells, type PersistedPlacement } from "../game/FurnitureRegistry";
@@ -242,6 +242,74 @@ export class BuildMenu {
     plant: "Plants — greenery that warms up the space and nudges satisfaction. Pure decoration.",
     lamp: "Lighting — lamps that light the room at night and add cosy warmth. Mount them on ceilings or on surfaces.",
   };
+  /** Where each kind of item MOUNTS. Shown as a colour-coded letter badge next
+   * to the item's name on its tile, and spelled out in the hover tooltip.
+   * `placement` is undefined on most catalog entries and means "tile" — plain
+   * floor furniture. */
+  private static readonly PLACEMENT_INFO: Record<NonNullable<FurnitureDef["placement"]>, {
+    letter: string; label: string; color: string; how: string;
+  }> = {
+    tile: { letter: "F", label: "Floor", color: "#8fd18f",
+      how: "Goes on a floor tile and takes up that cell." },
+    edge: { letter: "E", label: "Edge", color: "#7fd0c8",
+      how: "Sits ON the line between two tiles, not in a cell — the tiles either side stay usable." },
+    wall: { letter: "W", label: "Wall", color: "#8fb6e8",
+      how: "Mounts on an existing wall at chest height, facing into the room. Needs a wall to hang on." },
+    "wall-shelf": { letter: "U", label: "Upper wall", color: "#b9d2f5",
+      how: "Mounts high on a wall. The tile in front of it must be empty or hold something low (counter / sink / stove) for clearance." },
+    ceiling: { letter: "C", label: "Ceiling", color: "#c3a5e8",
+      how: "Hangs from the ceiling. It does NOT block the floor tile underneath — aim at the spot below where you want it." },
+    surface: { letter: "S", label: "On furniture", color: "#e8c07a",
+      how: "Stands ON TOP of a counter / table that has a free spot. It moves and sells together with whatever it's standing on." },
+  };
+  /** Short "what is this" lead line per category — the opening line of an
+   * item's hover tooltip, before its own specific stats. */
+  private static readonly CATEGORY_ROLE: Record<FurnitureDef["category"], string> = {
+    table: "A table for guests to eat at.",
+    chair: "Seating for guests.",
+    stove: "A cooking station for your chefs.",
+    wash: "Cleans dirty plates + glasses so they can be used again.",
+    appliance: "Kitchen equipment.",
+    counter: "A work / serving surface.",
+    bar: "A bar fixture — the barman's station.",
+    storage: "Storage for ingredients + dishware.",
+    wall: "An interior wall / partition.",
+    door: "A doorway or window.",
+    bathroom: "A bathroom fixture — guest comfort + ambience.",
+    decoration: "Decoration — lifts the room's appeal.",
+    plant: "Greenery — lifts the room's appeal.",
+    lamp: "Lighting.",
+  };
+
+  /** Plain-English "what is this item FOR", built from the def's ACTUAL
+   * gameplay fields so each tooltip says something true and specific about
+   * that piece rather than generic filler. */
+  private static purposeOf(def: FurnitureDef): string[] {
+    const out: string[] = [BuildMenu.CATEGORY_ROLE[def.category]];
+    if (def.provides) {
+      out.push(`Unlocks recipes that need a ${APPLIANCE_LABELS[def.provides] ?? def.provides} — without one, those dishes can't be cooked.`);
+    }
+    if (def.seatSlots?.length) {
+      out.push(`Seats ${def.seatSlots.length} — put chairs on its seat spots to make them count.`);
+    }
+    if (def.seatingCapacity) {
+      out.push(`Seats ${def.seatingCapacity} guest${def.seatingCapacity === 1 ? "" : "s"} when placed at a table.`);
+    }
+    if (def.surface === "drink") out.push("Drinks only — no food is served here.");
+    if (def.stockCapacity) out.push(`+${def.stockCapacity} pantry capacity per ingredient.`);
+    if (def.dishCapacity) out.push(`Holds ${def.dishCapacity} more plates / glasses.`);
+    if (def.surfaceSlots?.length) {
+      out.push(`${def.surfaceSlots.length} spot${def.surfaceSlots.length === 1 ? "" : "s"} on top for "S" items.`);
+    }
+    if (def.flat) out.push("Flat — other furniture can go on top of it.");
+    const appeal: string[] = [];
+    if (def.attractionBonus) appeal.push(`✨ +${def.attractionBonus} appeal`);
+    if (def.ratingBonus) appeal.push(`★ +${def.ratingBonus.toFixed(2)} rating`);
+    if (def.style) appeal.push(`style ${def.style}`);
+    if (def.comfort) appeal.push(`comfort ${def.comfort}`);
+    if (appeal.length > 0) out.push(appeal.join(" · "));
+    return out;
+  }
   /** Title bar DOM element — text + arrow updated on collapse toggle.
    * Also exposed as the drag-handle for PanelDragResize. */
   titleEl?: HTMLDivElement;
@@ -529,7 +597,13 @@ export class BuildMenu {
     const hint = document.createElement("div");
     hint.innerHTML = `Click item → click floor to place. R = rotate. Esc = cancel.<br/>
       Preview tints: <span style="color:#70e070">green</span> = perfect (chair snapped to a table seat),
-      <span style="color:#ffd47a">yellow</span> = OK, <span style="color:#ff5050">red</span> = blocked.`;
+      <span style="color:#ffd47a">yellow</span> = OK, <span style="color:#ff5050">red</span> = blocked.<br/>
+      Where it goes: <b style="color:#8fd18f">F</b> floor ·
+      <b style="color:#7fd0c8">E</b> edge ·
+      <b style="color:#8fb6e8">W</b> wall ·
+      <b style="color:#b9d2f5">U</b> upper wall ·
+      <b style="color:#c3a5e8">C</b> ceiling ·
+      <b style="color:#e8c07a">S</b> on furniture`;
     Object.assign(hint.style, { marginTop: "8px", opacity: "0.85", fontSize: "10px", lineHeight: "1.35" } as Partial<CSSStyleDeclaration>);
     body.appendChild(hint);
 
@@ -806,14 +880,32 @@ export class BuildMenu {
     }).catch(() => { spinner.textContent = "🪑"; spinner.style.fontSize = "22px"; });
     tile.appendChild(thumb);
 
-    // Name — clamped to ~2 lines.
+    // Name, with a placement letter-badge in front of it so the player can see
+    // at a glance WHERE a piece goes: F floor · E edge · W wall · U upper wall ·
+    // C ceiling · S on furniture. The hover tooltip spells the letter out.
+    const pinfo = BuildMenu.PLACEMENT_INFO[def.placement ?? "tile"];
+    const nameRow = document.createElement("div");
+    Object.assign(nameRow.style, {
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      gap: "3px", minWidth: "0",
+    } as Partial<CSSStyleDeclaration>);
+    const badge = document.createElement("span");
+    badge.textContent = pinfo.letter;
+    Object.assign(badge.style, {
+      flex: "0 0 auto", minWidth: "12px", height: "12px", lineHeight: "12px",
+      marginTop: "1px", textAlign: "center", borderRadius: "3px",
+      fontSize: "8px", fontWeight: "800",
+      background: pinfo.color, color: "#1c1308",
+    } as Partial<CSSStyleDeclaration>);
+    nameRow.appendChild(badge);
     const name = document.createElement("div");
     name.textContent = def.name;
     Object.assign(name.style, {
       fontSize: "10.5px", fontWeight: "600", lineHeight: "1.2",
-      maxHeight: "2.4em", overflow: "hidden",
+      maxHeight: "2.4em", overflow: "hidden", minWidth: "0",
     } as Partial<CSSStyleDeclaration>);
-    tile.appendChild(name);
+    nameRow.appendChild(name);
+    tile.appendChild(nameRow);
 
     // Cost + optional drinks-only marker.
     const meta = document.createElement("div");
@@ -842,11 +934,13 @@ export class BuildMenu {
       tile.style.borderColor = "rgba(255,245,220,0.16)";
     };
     tile.onclick = () => this.startPlacing(def);
+    const cells = def.size.width * def.size.depth;
     attachTooltip(tile,
       `${def.name} — $${scaledCost(def)}\n` +
-      `${def.size.width}×${def.size.depth} tile${def.size.width * def.size.depth === 1 ? "" : "s"}` +
-      (def.surface === "drink" ? " · serves drinks only" : "") +
-      "\nClick, then click the floor to place. R = rotate.");
+      `${pinfo.letter} · ${pinfo.label} · ${def.size.width}×${def.size.depth} tile${cells === 1 ? "" : "s"}\n` +
+      `\n${BuildMenu.purposeOf(def).join("\n")}\n` +
+      `\nWHERE IT GOES — ${pinfo.how}\n` +
+      `Click it, then click where you want it. R = rotate, Esc = cancel.`);
     into.appendChild(tile);
   }
 
