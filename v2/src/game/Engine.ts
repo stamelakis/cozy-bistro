@@ -4238,6 +4238,14 @@ export class Engine {
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.pedestrians?.update(dt);
+    // Keep the primary chef/waiter/errand bodies in step with who's actually
+    // on payroll — a new restaurant has nobody, and hiring should visibly put
+    // someone in the room. Three boolean writes; not worth throttling.
+    this.scene.syncPrimaryStaffVisibility({
+      chef: this.game.staff.getStaffCount("chef"),
+      waiter: this.game.staff.getStaffCount("waiter"),
+      errand: this.game.staff.getStaffCount("errand"),
+    });
     // P5 — pull the current server pedestrian list every frame and
     // reconcile the renderer against it. Cheap: list is tiny (<24
     // rows) and the renderer only adds/removes models on changes,

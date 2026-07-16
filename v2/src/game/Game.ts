@@ -174,8 +174,12 @@ export class Game {
 
   /** Auto-shop accumulator (seconds since last attempt). */
   private autoShopClock = 0;
-  /** Set false to disable auto-shop (player will have to manage stock manually). */
-  autoShopEnabled = true;
+  /** Set false to disable auto-shop (player will have to manage stock manually).
+   * Starts OFF for a NEW restaurant: the tutorial's whole pantry beat is "flip
+   * on Auto-shop", and the "Enable Auto-shop" award is meaningless if it's
+   * already on. Existing saves keep whatever they had — see hydrate, which
+   * treats a missing flag as on so nobody's auto-shop silently switches off. */
+  autoShopEnabled = false;
   /** Whether the restaurant is OPEN for business. When CLOSED, rent + staff
    * wages are PAUSED (and no guests spawn). Persisted in the save blob +
    * mirrored to player_save.restaurant_open so the server's offline rent /
@@ -389,22 +393,14 @@ export class Game {
       dishwasherPro: this.countPlacedById?.("dishwasher-pro") ?? 0,
     });
     if (save) this.hydrate(save);
-    // Seed the cooking menu with one default recipe so guests have
-    // something to order. (CookingSystem hydrate would handle this on
-    // load; for a fresh game we need to bootstrap it manually.)
+    // A brand-new restaurant starts EMPTY — no menu, no crew, nothing. The
+    // tutorial walks the player through putting a dish on the menu and hiring
+    // each role, and those are their first awards. Handing the whole lot over
+    // at boot both spoiled that and fired a fistful of awards for doing
+    // nothing. (Loading a save skips this entirely; hydrate restores it.)
     if (!save) {
       this.cooking.syncLuxuryUnlocks(this.luxuryTier);
-      if (this.cooking.getMenuRecipeIds().length === 0) {
-        this.cooking.addToMenu("toast");
-      }
-      // Starter staff: one of each role so the chef/waiter/errand bodies
-      // visible in the world (placed by WorldScene.populateCharacters) are
-      // actually accounted for in the panel — previously they would work
-      // but the panel said 0 hired, which confused players. Payroll is $0
-      // by default so this is a "free starter pack", not a cost.
-      this.staff.addStaff("chef");
-      this.staff.addStaff("waiter");
-      this.staff.addStaff("errand");
+      this.cooking.clearMenuForNewGame();
     }
     this.seedPantryIfEmpty();
   }
@@ -632,6 +628,11 @@ export class Game {
     }
     if (typeof save.autoShopEnabled === "boolean") {
       this.autoShopEnabled = save.autoShopEnabled;
+    } else {
+      // Save predates the flag. It defaulted ON back then, and the field now
+      // defaults OFF for new restaurants — so without this an old save would
+      // silently lose auto-shop and quietly starve its own pantry.
+      this.autoShopEnabled = true;
     }
     if (typeof save.restaurantOpen === "boolean") {
       this.restaurantOpen = save.restaurantOpen;

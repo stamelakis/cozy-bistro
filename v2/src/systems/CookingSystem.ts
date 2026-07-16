@@ -248,6 +248,23 @@ export class CookingSystem {
     });
   }
 
+  /**
+   * Empty the menu for a BRAND-NEW restaurant.
+   *
+   * The constructor seeds the default tier-1 dishes on purpose — hydrate falls
+   * back to them for a legacy save that has no menuRecipeIds field, so that
+   * seed must stay. But a new player is meant to start with nothing and put
+   * their first dish on the menu themselves (the tutorial walks them through
+   * it, and it's their "On The Menu" award). Hence a separate, explicit call
+   * rather than gutting the constructor.
+   *
+   * Not removeFromMenu() in a loop: that one refuses to remove the last dish.
+   */
+  clearMenuForNewGame(): void {
+    this.menuRecipeIds = [];
+    this.cloud?.setActiveMenu(this.menuRecipeIds);
+  }
+
   isOnMenu(recipeId: string): boolean {
     return this.menuRecipeIds.includes(recipeId);
   }

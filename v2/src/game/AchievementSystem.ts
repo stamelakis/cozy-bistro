@@ -372,9 +372,12 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: "first-chat",      name: "Say Hi",             category: "intro",
     description: "Send your first chat message.",
     predicate: (g) => g.playerCounters.chatsSent >= 1 },
+  // 2, not 1: the first weather is set the instant the world boots, so this
+  // fired before the player had done anything at all — and it never matched its
+  // own description. Seeing it CHANGE means time actually passed.
   { id: "first-weather",   name: "Outside Awareness",  category: "intro",
-    description: "Experience a full day of weather.",
-    predicate: (g) => g.playerCounters.weathersSeen.size >= 1 },
+    description: "See the weather change.",
+    predicate: (g) => g.playerCounters.weathersSeen.size >= 2 },
   { id: "first-shopping",  name: "Stocking Up",        category: "intro",
     description: "Buy at least one ingredient set.",
     predicate: (g) => g.economy.getDailyExpenses() > 0 || g.history.recent().some((d) => d.expenses > 0) },
@@ -522,15 +525,26 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: "pantry-auto-shop", name: "Set It and Forget It", category: "pantry",
     description: "Enable Auto-shop.",
     predicate: (g) => g.autoShopEnabled === true },
+  // Threshold is 8 despite the id: the target STARTS at 5
+  // (DEFAULT_STOCK_TARGET, which is also the no-fridge ceiling), so "raise it
+  // to 5" was handed out at boot for a value the player never chose. 8 needs a
+  // fridge for the headroom AND a deliberate tap on +. Id left alone on
+  // purpose — it's the save key, and renaming it would strip this award from
+  // everyone who already earned it.
   { id: "pantry-stock-5", name: "Stocked Up", category: "pantry",
-    description: "Raise the per-ingredient stock target to 5.",
-    predicate: (g) => g.getStockTarget() >= 5 },
+    description: "Raise the per-ingredient stock target to 8.",
+    predicate: (g) => g.getStockTarget() >= 8 },
   { id: "pantry-stock-10", name: "Deep Pantry", category: "pantry",
     description: "Raise the per-ingredient stock target to 10.",
     predicate: (g) => g.getStockTarget() >= 10 },
+  // Must actually OWN fridges. The old test (max > min) was true from the very
+  // first frame of an empty restaurant: with no fridges the ceiling is the
+  // no-fridge base of 5, the target already sits at 5, so "max it out" was
+  // satisfied by having done nothing whatsoever. Requiring real fridge capacity
+  // is also what the description always claimed.
   { id: "pantry-stock-max", name: "Mise en Place", category: "pantry",
-    description: "Max out the stock target (depends on your fridges).",
-    predicate: (g) => g.getMaxStockTarget() > g.getMinStockTarget() && g.getStockTarget() >= g.getMaxStockTarget() },
+    description: "Max out the stock target (needs fridges to raise the ceiling).",
+    predicate: (g) => g.getFridgeStockBonus() > 0 && g.getStockTarget() >= g.getMaxStockTarget() },
   { id: "pantry-12-stocked", name: "Well-Provisioned", category: "pantry",
     description: "Have 12 different ingredients with stock ≥ 5.",
     predicate: (g) => g.cooking.getPantry().filter((s) => s.quantity >= 5).length >= 12 },

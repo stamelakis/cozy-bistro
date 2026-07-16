@@ -4943,4 +4943,23 @@ export class WorldScene {
     console.log(`[WorldScene] populateCharacters done: chef=${this.chefChar ? "OK" : "MISSING"} waiter=${this.waiterChar ? "OK" : "MISSING"} errand=${this.errandChar ? "OK" : "MISSING"} — resolving staffReady`);
     this.resolveStaffReady();
   }
+
+  /**
+   * Show/hide the three PRIMARY staff bodies to match who's actually hired.
+   *
+   * populateCharacters builds chef/waiter/errand unconditionally — they're
+   * singletons the router and the server-position lerp hold references to, so
+   * they can't simply not exist. But a brand-new restaurant has nobody on
+   * payroll, and three strangers loitering in an empty room rather undercuts
+   * "you're starting from nothing". Hiding is cosmetic and safe: with no staff
+   * hired there are no server actors to drive them anyway.
+   *
+   * Extra staff (2nd chef onward) are spawned/removed for real by
+   * spawnExtraStaff, so they're not our problem here.
+   */
+  syncPrimaryStaffVisibility(counts: { chef: number; waiter: number; errand: number }): void {
+    if (this.chefChar) this.chefChar.root.visible = counts.chef > 0;
+    if (this.waiterChar) this.waiterChar.root.visible = counts.waiter > 0;
+    if (this.errandChar) this.errandChar.root.visible = counts.errand > 0;
+  }
 }
