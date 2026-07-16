@@ -1,572 +1,625 @@
 import type { Game } from "../game/Game";
-import type { StaffRole } from "../systems/StaffSystem";
+import { STAFF_UPGRADE_MAX, getTrainingDurationHours, type StaffRole } from "../systems/StaffSystem";
 import { WorldScene } from "../scene/WorldScene";
 import { attachTooltip } from "./tooltip";
 import { showTierGate } from "./tierUnlock";
 
 /**
- * Enlarged staff panel with per-role activity badges + payroll summary.
+ * Staff manager — a TILE GRID, one tile per hired person.
  *
- * Per row: role label · count · working/idle badges · hire (+ cost) ·
- * fire (- severance).
+ * The old layout was four role sections each stacking a vertical list of member
+ * cards; past a handful of staff it became a long scroll where nothing was
+ * scannable. Now:
  *
- * Footer: total payroll/min and total hire cost for next reinforcement.
+ *   • HIRE BAR   — one compact chip per role (icon · count · cost). Click to
+ *                  hire; a tier-locked role opens the shared unlock gate.
+ *   • TILE GRID  — every member is one tile: who they are, what they're doing
+ *                  right now, and their three actions (assign floor, train,
+ *                  fire) inline. Scans left-to-right instead of scrolling.
+ *   • FOOTER     — payroll + ticket flow + the waiter rest spot.
+ *
+ * Training moved HERE from the Upgrades modal: it's a per-person action, so it
+ * belongs on the person's tile.
+ *
+ * RENDER DISCIPLINE: the host modal refreshes at ~2.5 Hz. Rebuilding tiles on
+ * every tick destroys a button between mousedown and mouseup ("click, nothing
+ * happens, click again" — a real bug we already fixed once). So the grid is
+ * rebuilt ONLY when the roster STRUCTURE changes (who exists, their level /
+ * floor / benched state, the tier); everything volatile (status pill, training
+ * countdown, affordability) is updated IN PLACE on the live elements.
  */
+
 /** A game-day is 720s = 12 real minutes, and wages are charged per real
- * minute, so a per-game-day wage = per-minute × this. Keeps the "/day"
- * payroll display comparable to the "/day" rent shown elsewhere. */
+ * minute, so a per-game-day wage = per-minute × this. */
 const GAME_MINUTES_PER_DAY = 12;
+
+const ROLE_META: Record<StaffRole, { icon: string; label: string; short: string; blurb: string }> = {
+  chef:   { icon: "🍳", label: "Chef", short: "Chef",
+    blurb: "Cooks food orders at the stove. More chefs = more dishes cooking at once." },
+  barman: { icon: "🍸", label: "Barman", short: "Barman",
+    blurb: "Mixes and serves drinks at the bar. Table drinks get delivered by a waiter." },
+  waiter: { icon: "🍽", label: "Waiter", short: "Waiter",
+    blurb: "Takes orders, delivers food, and clears dirty plates to the sink." },
+  errand: { icon: "📦", label: "Errand Helper", short: "Helper",
+    blurb: "Shops for groceries when the pantry runs low, so recipes never stall." },
+};
+
+const ROLES: StaffRole[] = ["chef", "barman", "waiter", "errand"];
+
+/** $1,200 → "$1.2k" so it fits on a tile button. */
+function compactDollars(n: number): string {
+  if (n >= 10_000) return `$${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `$${(n / 1000).toFixed(1)}k`;
+  return `$${Math.round(n)}`;
+}
+
+/** Seconds → "2.1h" / "14m" / "45s" for the training countdown. */
+function formatEta(seconds: number): string {
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 60) return `${Math.round(seconds / 60)}m`;
+  return `${Math.max(1, Math.round(seconds))}s`;
+}
+
+interface TileRefs {
+  root: HTMLElement;
+  levelChip: HTMLElement;
+  status: HTMLElement;
+  meta: HTMLElement;
+  train: HTMLButtonElement;
+  fire: HTMLButtonElement;
+  floorSel?: HTMLSelectElement;
+}
 
 export class StaffPanel {
   private readonly root: HTMLElement;
   private readonly game: Game;
-  private readonly rows: Record<StaffRole, {
-    label: HTMLElement; activity: HTMLElement;
-    hire: HTMLButtonElement;
-    members: HTMLElement;
-  }> = {} as Record<StaffRole, { label: HTMLElement; activity: HTMLElement; hire: HTMLButtonElement; members: HTMLElement }>;
-  private payrollLine?: HTMLElement;
-  /** Fired when the player reassigns a member to a new home floor.
-   * Engine wires this to WorldScene.relocateStaff so the model is
-   * re-parented + Y-shifted to the new storey. */
-  onStaffFloorChanged?: (memberId: string, oldFloor: number, newFloor: number) => void;
-
-  /** Phase I (H.68) — Fired when the player clicks "Set Waiter Rest
-   * Spot".  Engine handles entering placement mode (click-on-floor
-   * → fire reducer).  Optional so the panel works in isolation
-   * during tests / visit mode. */
-  onSetWaiterRestSpot?: () => void;
-
-  /** Phase I (H.68) — Fired when the player clicks "Clear" next to
-   * the rest spot label.  Engine handles the cloud round-trip. */
-  onClearWaiterRestSpot?: () => void;
-
-  /** Phase I (H.68) — Renders "📍 Rest spot: set / not set" + the
-   * Set / Clear buttons.  Engine pokes this label via setWaiterRestStatus
-   * after a hydrate or after a reducer round-trip. */
+  private readonly hireBar: HTMLElement;
+  private readonly grid: HTMLElement;
+  private readonly emptyNote: HTMLElement;
+  private readonly payrollLine: HTMLElement;
   private waiterRestLabel?: HTMLElement;
+  private readonly restRow: HTMLElement;
+
+  private readonly hireChips: Partial<Record<StaffRole, { btn: HTMLButtonElement; sub: HTMLElement }>> = {};
+  private readonly tiles = new Map<string, TileRefs>();
+  /** Structure signature — see RENDER DISCIPLINE in the class doc. */
+  private gridSig = "";
+
+  /** Fired when the player reassigns a member to a new home floor. Engine wires
+   * this to WorldScene.relocateStaff so the model moves to the new storey. */
+  onStaffFloorChanged?: (memberId: string, oldFloor: number, newFloor: number) => void;
+  /** Engine enters floor-click placement mode for the waiter rest spot. */
+  onSetWaiterRestSpot?: () => void;
+  onClearWaiterRestSpot?: () => void;
 
   constructor(parent: HTMLElement, game: Game) {
     this.game = game;
-    // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
     parent.appendChild(this.root);
 
-    const title = document.createElement("div");
-    title.textContent = "👥 STAFF";
-    Object.assign(title.style, {
-      fontWeight: "700", fontSize: "12px", letterSpacing: "0.04em",
-      marginBottom: "6px", textAlign: "center", opacity: "0.9",
+    // ── HIRE BAR ──────────────────────────────────────────────
+    const hireHeader = document.createElement("div");
+    hireHeader.textContent = "HIRE";
+    Object.assign(hireHeader.style, {
+      fontSize: "9.5px", fontWeight: "700", letterSpacing: "0.08em",
+      opacity: "0.5", marginBottom: "5px",
     } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(title);
-    attachTooltip(title,
-      "STAFF — the people running your restaurant.\n" +
-      "• Chef cooks orders at the stove. Each placed stove gets one chef; more chefs = more dishes/min.\n" +
-      "• Waiter takes orders and brings food. Faster service when you have more waiters per table.\n" +
-      "• Errand helper buys groceries when the pantry runs low (per the auto-shop list).\n" +
-      "Hire + Fire per role. Each role costs a per-day wage paid from your cash (shown at the bottom). " +
-      "Train staff in the Upgrades modal to raise their effective tier."
-    );
+    this.root.appendChild(hireHeader);
+    attachTooltip(hireHeader,
+      "Add someone to the payroll. Each role costs a one-off hire fee plus a " +
+      "per-day wage out of your cash. A role you haven't unlocked yet opens the " +
+      "tier gate instead.");
 
-    const rolesToShow: StaffRole[] = ["chef", "barman", "waiter", "errand"];
-    rolesToShow.forEach((role) => this.addRow(role));
-    // Build-time sanity check the player can grep in DevTools — if
-    // this line is missing from the console output, the browser is
-    // serving a cached StaffPanel and a hard reload + Vite restart
-    // is needed. Logs the exact roster the panel knows about so a
-    // mis-ordered or missing role is immediately obvious.
-    console.log(`[StaffPanel] mounted rows for: ${rolesToShow.join(", ")}`);
+    this.hireBar = document.createElement("div");
+    Object.assign(this.hireBar.style, {
+      display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(108px, 1fr))",
+      gap: "5px", marginBottom: "12px",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.hireBar);
+    for (const role of ROLES) this.buildHireChip(role);
 
-    // Footer: total payroll + status.
+    // ── TILE GRID ─────────────────────────────────────────────
+    const rosterHeader = document.createElement("div");
+    rosterHeader.textContent = "YOUR CREW";
+    Object.assign(rosterHeader.style, {
+      fontSize: "9.5px", fontWeight: "700", letterSpacing: "0.08em",
+      opacity: "0.5", marginBottom: "5px",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(rosterHeader);
+
+    this.grid = document.createElement("div");
+    Object.assign(this.grid.style, {
+      display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(184px, 1fr))",
+      gap: "7px",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.grid);
+
+    this.emptyNote = document.createElement("div");
+    this.emptyNote.textContent = "Nobody hired yet — guests will sit and wait forever. Hire a chef and a waiter to get started.";
+    Object.assign(this.emptyNote.style, {
+      fontSize: "11px", opacity: "0.5", fontStyle: "italic",
+      padding: "14px 4px", textAlign: "center", display: "none",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.emptyNote);
+
+    // ── FOOTER: payroll + rest spot ───────────────────────────
     this.payrollLine = document.createElement("div");
     Object.assign(this.payrollLine.style, {
-      marginTop: "6px",
-      paddingTop: "6px",
+      marginTop: "10px", paddingTop: "8px",
       borderTop: "1px solid rgba(255,245,220,0.15)",
-      fontSize: "10px",
-      opacity: "0.75",
-      textAlign: "center",
+      fontSize: "10.5px", opacity: "0.8", textAlign: "center",
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.payrollLine);
 
-    // Phase I (H.68) — waiter rest-spot controls.  Chefs / helpers /
-    // barmen already auto-anchor near their station; waiters had no
-    // resting position before this, so they'd hover wherever they
-    // last finished a delivery.  This block lets the player click a
-    // tile to pin where idle waiters should congregate.
-    const restRow = document.createElement("div");
-    Object.assign(restRow.style, {
-      marginTop: "6px",
-      paddingTop: "6px",
+    this.restRow = document.createElement("div");
+    Object.assign(this.restRow.style, {
+      marginTop: "7px", paddingTop: "7px",
       borderTop: "1px solid rgba(255,245,220,0.15)",
-      display: "flex", gap: "4px", alignItems: "center",
-      fontSize: "10px",
+      display: "flex", gap: "5px", alignItems: "center", fontSize: "10px",
     } as Partial<CSSStyleDeclaration>);
     this.waiterRestLabel = document.createElement("span");
     this.waiterRestLabel.textContent = "📍 Waiter rest: not set";
-    Object.assign(this.waiterRestLabel.style, {
-      flex: "1", opacity: "0.85",
-    } as Partial<CSSStyleDeclaration>);
+    Object.assign(this.waiterRestLabel.style, { flex: "1", opacity: "0.85" } as Partial<CSSStyleDeclaration>);
     attachTooltip(this.waiterRestLabel,
       "Where your waiters go when they have nothing to do.\n" +
-      "Click Set, then click on any floor tile inside your restaurant.\n" +
-      "Chefs / helpers / barmen automatically rest near their station;\n" +
-      "waiters get this manual control because they have no fixed anchor."
-    );
-    restRow.appendChild(this.waiterRestLabel);
+      "Click Set, then click any floor tile inside your restaurant.\n" +
+      "Chefs / helpers / barmen automatically rest near their station; waiters " +
+      "have no fixed anchor, so they get this manual control.");
+    this.restRow.appendChild(this.waiterRestLabel);
+    this.restRow.appendChild(this.smallBtn("Set", "rgba(120,180,200,0.18)", "rgba(255,245,220,0.25)",
+      () => this.onSetWaiterRestSpot?.()));
+    this.restRow.appendChild(this.smallBtn("Clear", "rgba(200,120,100,0.18)", "rgba(200,120,100,0.35)",
+      () => this.onClearWaiterRestSpot?.()));
+    this.root.appendChild(this.restRow);
 
-    const setBtn = document.createElement("button");
-    setBtn.textContent = "Set";
-    Object.assign(setBtn.style, {
-      padding: "3px 7px",
-      background: "rgba(120, 180, 200, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255,245,220,0.25)",
-      borderRadius: "4px", cursor: "pointer",
+    this.update();
+  }
+
+  private smallBtn(text: string, bg: string, border: string, onClick: () => void): HTMLButtonElement {
+    const b = document.createElement("button");
+    b.textContent = text;
+    Object.assign(b.style, {
+      padding: "3px 8px", background: bg, color: "#fff5dc",
+      border: `1px solid ${border}`, borderRadius: "5px", cursor: "pointer",
       font: "inherit", fontSize: "10px", fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
-    setBtn.onclick = () => this.onSetWaiterRestSpot?.();
-    restRow.appendChild(setBtn);
-
-    const clearBtn = document.createElement("button");
-    clearBtn.textContent = "Clear";
-    Object.assign(clearBtn.style, {
-      padding: "3px 7px",
-      background: "rgba(200, 120, 100, 0.18)",
-      color: "#fff5dc",
-      border: "1px solid rgba(200, 120, 100, 0.35)",
-      borderRadius: "4px", cursor: "pointer",
-      font: "inherit", fontSize: "10px", fontWeight: "600",
-    } as Partial<CSSStyleDeclaration>);
-    clearBtn.onclick = () => this.onClearWaiterRestSpot?.();
-    restRow.appendChild(clearBtn);
-
-    this.root.appendChild(restRow);
+    b.onclick = onClick;
+    return b;
   }
 
-  /** Phase I (H.72) — pick the right emoji + count + tooltip for the
-   * per-member workload badge by role.  Returns null when the role
-   * has no workload accessor wired yet (defensive — keeps the UI
-   * silent rather than throwing on an unknown role).  Same color
-   * ramp logic in the caller works against any role's count.
-   *
-   * Counts:
-   *   chef    — queued + cooking tickets routed to this chef
-   *   barman  — queued + cooking BAR tickets routed to this barman
-   *   waiter  — concurrent tasks they own (deliver + wash + take-order)
-   *   errand  — 1 if on a trip, 0 if loitering by the counter
-   */
-  private workloadBadgeInfo(
-    role: StaffRole,
-    memberId: string,
-  ): { emoji: string; count: number; tooltip: string } | null {
-    switch (role) {
-      case "chef": {
-        const n = this.game.getChefBacklog?.(memberId) ?? 0;
-        return { emoji: "🍳", count: n, tooltip:
-          `${n} tickets in this chef's backlog (queued + cooking). ` +
-          `Hire another chef if this stays high — waiters spill to other floors when same-floor chefs hit 4+.` };
-      }
-      case "barman": {
-        const n = this.game.getBarmanBacklog?.(memberId) ?? 0;
-        return { emoji: "🍸", count: n, tooltip:
-          `${n} drinks in this barman's queue (queued + mixing). ` +
-          `Hire another barman if this stays high.` };
-      }
-      case "waiter": {
-        const n = this.game.getWaiterBacklog?.(memberId) ?? 0;
-        return { emoji: "🍽", count: n, tooltip:
-          `${n} active task(s) — meal delivery, wash trip, and take-order count together.` };
-      }
-      case "errand": {
-        const n = this.game.getErrandBacklog?.(memberId) ?? 0;
-        const trip = this.game.getErrandTripSummary?.(memberId) ?? "";
-        return { emoji: "📦", count: n, tooltip:
-          n > 0
-            ? (trip ? `Bringing back: ${trip}.` : "On a shopping trip.")
-            : "Idle by the supply counter." };
-      }
-      default:
-        return null;
-    }
-  }
+  // ── HIRE BAR ────────────────────────────────────────────────
 
-  /** Phase I (H.68) — Update the rest-spot status label after a
-   * hydrate / set / clear.  Engine calls this so the panel reflects
-   * the live cloud value. */
-  setWaiterRestStatus(spot: { x: number; z: number; floor: number } | null): void {
-    if (!this.waiterRestLabel) return;
-    if (spot) {
-      const floorLabel = spot.floor === 0 ? "G" : `F${spot.floor}`;
-      this.waiterRestLabel.textContent =
-        `📍 Waiter rest: ${floorLabel} (${spot.x.toFixed(1)}, ${spot.z.toFixed(1)})`;
-    } else {
-      this.waiterRestLabel.textContent = "📍 Waiter rest: not set";
-    }
-  }
-
-  private addRow(role: StaffRole): void {
-    const block = document.createElement("div");
-    Object.assign(block.style, {
-      marginBottom: "10px",
-      padding: "10px 12px",
-      background: "rgba(255,245,220,0.05)",
-      border: "1px solid rgba(255,245,220,0.10)",
-      borderRadius: "10px",
+  private buildHireChip(role: StaffRole): void {
+    const meta = ROLE_META[role];
+    const btn = document.createElement("button");
+    Object.assign(btn.style, {
+      display: "flex", flexDirection: "column", alignItems: "center", gap: "1px",
+      padding: "7px 4px", borderRadius: "8px", cursor: "pointer", font: "inherit",
+      background: "rgba(120,200,120,0.16)", color: "#eaffea",
+      border: "1px solid rgba(150,230,150,0.38)", minWidth: "0",
     } as Partial<CSSStyleDeclaration>);
-
-    const top = document.createElement("div");
-    Object.assign(top.style, { display: "flex", alignItems: "center", gap: "8px" } as Partial<CSSStyleDeclaration>);
-    const label = document.createElement("span");
-    Object.assign(label.style, { fontWeight: "700", fontSize: "13.5px", flex: "1", lineHeight: "1.25" } as Partial<CSSStyleDeclaration>);
-    // Hire (+) stays here because adding a new member is a generic
-    // role-level action ("I need another chef"). Per-member fire (−)
-    // lives in the member row below — necessary now that training
-    // raises individual member value, so the player has to be able
-    // to pick which specific member to let go.
-    const hire = document.createElement("button");
-    hire.textContent = "＋ Hire";
-    Object.assign(hire.style, {
-      flex: "0 0 auto", padding: "6px 11px", borderRadius: "7px",
-      background: "rgba(120,200,120,0.28)", color: "#eaffea",
-      border: "1px solid rgba(150,230,150,0.5)", cursor: "pointer",
-      font: "inherit", fontSize: "12px", fontWeight: "700", whiteSpace: "nowrap",
+    const top = document.createElement("span");
+    Object.assign(top.style, {
+      fontSize: "11.5px", fontWeight: "700", whiteSpace: "nowrap",
+      overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%",
     } as Partial<CSSStyleDeclaration>);
-    hire.onclick = () => {
-      // Tier-locked role → open the shared unlock gate instead of a dead click.
+    top.textContent = `${meta.icon} ${meta.short}`;
+    const sub = document.createElement("span");
+    Object.assign(sub.style, { fontSize: "9.5px", opacity: "0.85", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
+    btn.append(top, sub);
+    btn.onclick = () => {
       const ut = this.game.getRoleUnlockTier(role);
       if (this.game.getLuxuryTier() < ut) { showTierGate(this.game, ut, () => this.update()); return; }
       if (this.game.hireStaff(role)) this.update();
     };
-    top.appendChild(label);
-    top.appendChild(hire);
-    block.appendChild(top);
-
-    const activity = document.createElement("div");
-    Object.assign(activity.style, { fontSize: "11px", opacity: "0.75", marginTop: "3px" } as Partial<CSSStyleDeclaration>);
-    block.appendChild(activity);
-
-    // Per-member floor-assignment rows. Only populated when the current
-    // tier has unlocked at least one upper storey (no point showing a
-    // single-button picker on a ground-only restaurant).
-    const members = document.createElement("div");
-    Object.assign(members.style, { marginTop: "8px", display: "none" } as Partial<CSSStyleDeclaration>);
-    block.appendChild(members);
-
-    this.root.appendChild(block);
-    this.rows[role] = { label, activity, hire, members };
+    this.hireBar.appendChild(btn);
+    this.hireChips[role] = { btn, sub };
   }
 
-  /** Pulse a role's hire (+) button and scroll it into view — used when the
-   * service alert routes the player here (e.g. ingredients stuck → hire an
-   * errand helper) so the relevant control is obvious. */
+  private syncHireBar(): void {
+    const perStaff = this.game.admin.payrollPerStaffPerMinute;
+    for (const role of ROLES) {
+      const chip = this.hireChips[role];
+      if (!chip) continue;
+      const meta = ROLE_META[role];
+      const count = this.game.staff.getStaffCount(role);
+      const cost = this.game.staff.getStaffHireCost(role);
+      const unlockTier = this.game.getRoleUnlockTier(role);
+      const locked = this.game.getLuxuryTier() < unlockTier;
+      const gate = this.game.canHireStaff(role);
+      chip.sub.textContent = locked ? `🔒 Tier ${unlockTier}` : `+${compactDollars(cost)} · ${count} on staff`;
+      // Locked chips stay CLICKABLE — they open the unlock gate.
+      chip.btn.disabled = locked ? false : !gate.ok;
+      chip.btn.style.opacity = locked ? "0.72" : gate.ok ? "1" : "0.42";
+      attachTooltip(chip.btn, locked
+        ? `${meta.label} — locked.\n${meta.blurb}\nClick to unlock Tier ${unlockTier}.`
+        : gate.ok
+          ? `Hire a ${meta.label} for ${compactDollars(cost)}.\n${meta.blurb}\nAdds $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day to payroll.`
+          : `Can't hire: ${gate.reason}.\n${meta.blurb}\nWould cost ${compactDollars(cost)} + $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day.`);
+    }
+  }
+
+  /** Pulse a role's hire chip — used when the service alert routes the player
+   * here (e.g. ingredients stuck → hire an errand helper). */
   highlightHire(role: StaffRole): void {
-    const btn = this.rows[role]?.hire;
+    const btn = this.hireChips[role]?.btn;
     if (!btn) return;
     btn.scrollIntoView({ block: "center", behavior: "smooth" });
-    btn.animate(
-      [
-        { boxShadow: "0 0 0 0 rgba(120,220,140,0.9)", transform: "scale(1)" },
-        { boxShadow: "0 0 0 10px rgba(120,220,140,0)", transform: "scale(1.18)" },
-        { boxShadow: "0 0 0 0 rgba(120,220,140,0)", transform: "scale(1)" },
-      ],
-      { duration: 900, iterations: 3, easing: "ease-out" },
-    );
+    btn.animate([
+      { boxShadow: "0 0 0 0 rgba(120,220,140,0.9)", transform: "scale(1)" },
+      { boxShadow: "0 0 0 10px rgba(120,220,140,0)", transform: "scale(1.15)" },
+      { boxShadow: "0 0 0 0 rgba(120,220,140,0)", transform: "scale(1)" },
+    ], { duration: 900, iterations: 3, easing: "ease-out" });
   }
 
-  /** Cache of the most-recent roster signature per role. Lets
-   * renderMembers SKIP the destroy-and-rebuild pass when nothing
-   * changed since the last update — without this, the 5Hz HUD tick
-   * wiped (innerHTML = "") and recreated every member row every
-   * 200ms, which meant the floor-selector buttons disappeared
-   * between mousedown and mouseup whenever a click straddled a
-   * render boundary. User-visible effect: "click button, nothing
-   * happens, click again, finally works". */
-  private memberRosterSig: Record<string, string> = {};
+  // ── TILE GRID ───────────────────────────────────────────────
 
-  /** Build (or rebuild) the per-member roster with one floor selector
-   * per member. Called from `update` whenever the panel refreshes —
-   * but actually rebuilds only when the roster signature changed
-   * (members added / fired / reassigned / training-flag toggled).
-   * Otherwise the existing DOM stays put so in-flight clicks aren't
-   * destroyed mid-gesture. */
-  private renderMembers(role: StaffRole, hostEl: HTMLElement): void {
+  /** Everything that changes the tile STRUCTURE. Volatile values (backlog,
+   * training countdown, money) are deliberately NOT here — they're refreshed
+   * in place so a rebuild can't eat an in-flight click. */
+  private computeGridSig(): string {
+    const tier = this.game.getLuxuryTier();
+    const parts: string[] = [`t${tier}`, `s${WorldScene.getNumStoreys()}`];
+    for (const role of ROLES) {
+      for (const m of this.game.staff.getMembers(role)) {
+        parts.push(`${m.id}:${role}@${m.homeFloor ?? 0}/L${m.upgradeLevel | 0}/D${m.isDeactivated ? 1 : 0}`);
+      }
+    }
+    return parts.join(",");
+  }
+
+  private rebuildGridIfNeeded(): void {
+    const sig = this.computeGridSig();
+    if (sig === this.gridSig) return;
+    this.gridSig = sig;
+    this.grid.innerHTML = "";
+    this.tiles.clear();
+    let any = false;
+    for (const role of ROLES) {
+      for (const m of this.game.staff.getMembers(role)) {
+        this.grid.appendChild(this.buildTile(role, m));
+        any = true;
+      }
+    }
+    this.grid.style.display = any ? "grid" : "none";
+    this.emptyNote.style.display = any ? "none" : "block";
+  }
+
+  private buildTile(role: StaffRole, member: { id: string; name: string; homeFloor?: number; upgradeLevel?: number; isDeactivated?: boolean }): HTMLElement {
+    const meta = ROLE_META[role];
+    const benched = !!member.isDeactivated;
+    const tile = document.createElement("div");
+    Object.assign(tile.style, {
+      display: "flex", flexDirection: "column", gap: "6px",
+      padding: "9px 9px 8px", minWidth: "0",
+      background: benched ? "rgba(255,255,255,0.03)" : "rgba(255,245,220,0.06)",
+      border: `1px solid ${benched ? "rgba(255,245,220,0.08)" : "rgba(255,245,220,0.14)"}`,
+      borderRadius: "10px", opacity: benched ? "0.6" : "1",
+    } as Partial<CSSStyleDeclaration>);
+
+    // Head: role icon · name · level chip
+    const head = document.createElement("div");
+    Object.assign(head.style, { display: "flex", alignItems: "center", gap: "5px", minWidth: "0" } as Partial<CSSStyleDeclaration>);
+    const icon = document.createElement("span");
+    icon.textContent = meta.icon;
+    Object.assign(icon.style, { fontSize: "15px", flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
+    const name = document.createElement("span");
+    name.textContent = member.name;
+    Object.assign(name.style, {
+      flex: "1", minWidth: "0", fontSize: "12.5px", fontWeight: "700",
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
+    const levelChip = document.createElement("span");
+    Object.assign(levelChip.style, {
+      flex: "0 0 auto", fontSize: "9.5px", fontWeight: "800",
+      padding: "2px 6px", borderRadius: "999px", fontVariantNumeric: "tabular-nums",
+    } as Partial<CSSStyleDeclaration>);
+    head.append(icon, name, levelChip);
+    tile.appendChild(head);
+
+    // Status pill — what they're doing right now.
+    const status = document.createElement("div");
+    tile.appendChild(status);
+
+    // Meta line — role · wage · (floor when there's no selector)
+    const metaLine = document.createElement("div");
+    Object.assign(metaLine.style, { fontSize: "9.5px", opacity: "0.6" } as Partial<CSSStyleDeclaration>);
+    tile.appendChild(metaLine);
+
+    // Actions — assign (floor) · train · fire
+    const actions = document.createElement("div");
+    Object.assign(actions.style, { display: "flex", gap: "4px", alignItems: "center", marginTop: "1px" } as Partial<CSSStyleDeclaration>);
+
+    let floorSel: HTMLSelectElement | undefined;
     const tier = this.game.getLuxuryTier();
     const numStoreys = WorldScene.getNumStoreys();
-    const members = this.game.staff.getMembers(role);
-    // Always render member rows so the per-member fire button is
-    // reachable, even on tier 1 where there's only one floor to
-    // assign to. The floor-button strip is suppressed at tier 1
-    // since the player has no assignment choice to make there.
-    if (members.length === 0) {
-      if (hostEl.childElementCount > 0 || hostEl.style.display !== "none") {
-        hostEl.style.display = "none";
-        hostEl.innerHTML = "";
-        this.memberRosterSig[role] = "";
+    if (tier >= 2) {
+      // ASSIGN — a compact floor picker. Only meaningful once an upper storey
+      // exists, so a ground-only restaurant doesn't carry a dead control.
+      floorSel = document.createElement("select");
+      Object.assign(floorSel.style, {
+        flex: "0 0 auto", padding: "3px 4px", borderRadius: "6px", cursor: "pointer",
+        background: "rgba(120,180,200,0.18)", color: "#fff5dc",
+        border: "1px solid rgba(255,245,220,0.22)", font: "inherit", fontSize: "10px", fontWeight: "700",
+      } as Partial<CSSStyleDeclaration>);
+      for (let idx = 0; idx < numStoreys; idx += 1) {
+        const unlocked = idx === 0 || tier >= idx + 1;
+        const opt = document.createElement("option");
+        opt.value = String(idx);
+        opt.textContent = idx === 0 ? "Floor G" : `Floor ${idx}`;
+        opt.disabled = !unlocked;
+        floorSel.appendChild(opt);
       }
-      return;
-    }
-    // Signature captures everything that affects what the UI draws:
-    // tier (gates the active floor buttons), the member list (id +
-    // current home floor). If two consecutive ticks produce the
-    // same string, the existing DOM is correct as-is.
-    // Signature also includes the per-member workload count so the
-    // row rebuilds whenever any backlog changes (otherwise the
-    // badge would stay stale at the original value).  Phase I
-    // (H.72) — extended from chef-only to all four roles so the
-    // barman / waiter / errand badges also live-update.
-    const backlogFor = (m: { id: string }): number => {
-      const info = this.workloadBadgeInfo(role, m.id);
-      return info?.count ?? 0;
-    };
-    const sig = `t${tier}|n${numStoreys}|` + members.map((m) => {
-      // Include the errand trip so the work pill re-renders when what a helper
-      // is fetching changes, even if the backlog count stays the same.
-      const trip = role === "errand" ? (this.game.getErrandTripSummary?.(m.id) ?? "") : "";
-      return `${m.id}@${m.homeFloor ?? 0}/b${backlogFor(m)}/L${m.upgradeLevel | 0}/D${m.isDeactivated ? 1 : 0}/${trip}`;
-    }).join(",");
-    if (this.memberRosterSig[role] === sig && hostEl.style.display === "block") {
-      return;
-    }
-    this.memberRosterSig[role] = sig;
-    hostEl.innerHTML = "";
-    hostEl.style.display = "block";
-    const showFloorButtons = tier >= 2;
-    for (const member of members) {
-      const card = document.createElement("div");
-      Object.assign(card.style, {
-        marginTop: "7px",
-        padding: "9px 11px",
-        background: "rgba(255,255,255,0.05)",
-        borderRadius: "10px",
-        opacity: member.isDeactivated ? "0.55" : "1",
-      } as Partial<CSSStyleDeclaration>);
-
-      // ── Header: level badge · name · fire / rehire ──
-      const header = document.createElement("div");
-      Object.assign(header.style, { display: "flex", alignItems: "center", gap: "8px" } as Partial<CSSStyleDeclaration>);
-      const lvl = Math.max(0, Math.min(5, member.upgradeLevel | 0));
-      const levelChip = document.createElement("span");
-      levelChip.textContent = `Lv${lvl}`;
-      Object.assign(levelChip.style, {
-        fontSize: "10px", fontWeight: "700",
-        padding: "2px 7px", borderRadius: "999px",
-        background: lvl >= 4 ? "rgba(255,200,90,0.35)"
-          : lvl >= 2 ? "rgba(170,200,255,0.25)"
-          : "rgba(255,255,255,0.10)",
-        color: "#fff5dc", flex: "0 0 auto",
-        fontVariantNumeric: "tabular-nums", opacity: lvl === 0 ? "0.6" : "1",
-      } as Partial<CSSStyleDeclaration>);
-      levelChip.title = `Training level ${lvl}. Higher = faster cook / wash / errand times.`;
-      header.appendChild(levelChip);
-
-      const name = document.createElement("span");
-      name.textContent = member.name;
-      Object.assign(name.style, {
-        flex: "1", overflow: "hidden", textOverflow: "ellipsis",
-        whiteSpace: "nowrap", fontSize: "13px", fontWeight: "600",
-      } as Partial<CSSStyleDeclaration>);
-      header.appendChild(name);
-
-      if (member.isDeactivated) {
-        // No-negative-money: benched member — greyed above + a free ↺ Rehire.
-        const reactivate = document.createElement("button");
-        reactivate.textContent = "↺ Rehire";
-        reactivate.title = `Reactivate ${member.name} (Lv${lvl} ${role}) — free, resumes wages`;
-        Object.assign(reactivate.style, {
-          flex: "0 0 auto", padding: "4px 9px", borderRadius: "7px",
-          fontSize: "11px", fontWeight: "700",
-          background: "rgba(120, 200, 120, 0.30)", color: "#eaffea",
-          border: "1px solid rgba(150, 230, 150, 0.55)",
-          cursor: "pointer", font: "inherit", whiteSpace: "nowrap",
-        } as Partial<CSSStyleDeclaration>);
-        reactivate.onclick = () => { if (this.game.reactivateStaffMember(member.id)) this.update(); };
-        header.appendChild(reactivate);
-      } else {
-        const severance = this.game.staff.getStaffFireCost(role);
-        const fire = document.createElement("button");
-        fire.textContent = "✕";
-        fire.title = `Fire ${member.name} (Lv${lvl} ${role}) — costs $${severance} severance`;
-        Object.assign(fire.style, {
-          flex: "0 0 auto", width: "24px", height: "24px", padding: "0",
-          fontSize: "12px", fontWeight: "700",
-          background: "rgba(200, 120, 120, 0.22)", color: "#fff5dc",
-          border: "1px solid rgba(255, 180, 180, 0.45)", borderRadius: "7px",
-          cursor: "pointer", font: "inherit", lineHeight: "1",
-        } as Partial<CSSStyleDeclaration>);
-        fire.onclick = () => { if (this.game.fireStaffMember(member.id)) this.update(); };
-        header.appendChild(fire);
-      }
-      card.appendChild(header);
-
-      // ── Work status: an enlarged pill spelling out what they're doing ──
-      const workRow = document.createElement("div");
-      Object.assign(workRow.style, { marginTop: "7px" } as Partial<CSSStyleDeclaration>);
-      workRow.appendChild(this.workStatusPill(role, member.id));
-      card.appendChild(workRow);
-      // ── Floor: a labelled selector, only when upper storeys exist ──
-      if (showFloorButtons) {
-        const floorRow = document.createElement("div");
-        Object.assign(floorRow.style, {
-          display: "flex", alignItems: "center", gap: "5px",
-          marginTop: "8px", flexWrap: "wrap",
-        } as Partial<CSSStyleDeclaration>);
-        const floorLabel = document.createElement("span");
-        floorLabel.textContent = "Floor";
-        Object.assign(floorLabel.style, {
-          fontSize: "9.5px", fontWeight: "700", opacity: "0.55",
-          textTransform: "uppercase", letterSpacing: "0.07em", marginRight: "3px",
-        } as Partial<CSSStyleDeclaration>);
-        floorRow.appendChild(floorLabel);
-        const current = member.homeFloor ?? 0;
-        for (let idx = 0; idx < numStoreys; idx += 1) {
-          const unlocked = idx === 0 || tier >= idx + 1;
-          const isActive = idx === current;
-          const btn = document.createElement("button");
-          btn.textContent = idx === 0 ? "G" : String(idx);
-          btn.title = unlocked
-            ? (idx === 0 ? "Ground" : `Floor ${idx}`)
-            : `Floor ${idx} — unlocks at tier ${idx + 1}`;
-          btn.disabled = !unlocked;
-          Object.assign(btn.style, {
-            width: "24px", height: "24px", padding: "0",
-            fontSize: "11px", fontWeight: "700",
-            background: isActive
-              ? "rgba(255, 210, 120, 0.45)"
-              : "rgba(120, 180, 200, 0.18)",
-            color: isActive ? "#fffff0" : "#fff5dc",
-            border: isActive
-              ? "1px solid rgba(255, 220, 150, 0.85)"
-              : "1px solid rgba(255,245,220,0.22)",
-            borderRadius: "6px",
-            cursor: unlocked ? "pointer" : "not-allowed",
-            opacity: unlocked ? "1" : "0.4",
-            font: "inherit",
-          } as Partial<CSSStyleDeclaration>);
-          if (unlocked && !isActive) {
-            btn.onclick = () => {
-              const old = member.homeFloor ?? 0;
-              if (this.game.staff.setMemberHomeFloor(member.id, idx)) {
-                this.onStaffFloorChanged?.(member.id, old, idx);
-                this.update();
-              }
-            };
-          }
-          floorRow.appendChild(btn);
+      floorSel.onchange = () => {
+        const next = parseInt(floorSel!.value, 10);
+        const old = member.homeFloor ?? 0;
+        if (next === old) return;
+        if (this.game.staff.setMemberHomeFloor(member.id, next)) {
+          this.onStaffFloorChanged?.(member.id, old, next);
+          this.update();
         }
-        card.appendChild(floorRow);
-      }
-      hostEl.appendChild(card);
+      };
+      attachTooltip(floorSel, `Which floor ${member.name} works on. They'll cook / serve / rest up there.`);
+      actions.appendChild(floorSel);
+    }
+
+    // TRAIN — per-person, so it lives on the person (was in the Upgrades modal).
+    const train = document.createElement("button");
+    Object.assign(train.style, {
+      flex: "1", minWidth: "0", padding: "4px 5px", borderRadius: "6px",
+      cursor: "pointer", font: "inherit", fontSize: "10px", fontWeight: "700",
+      background: "rgba(140,170,230,0.24)", color: "#eef3ff",
+      border: "1px solid rgba(160,190,240,0.42)", whiteSpace: "nowrap",
+      overflow: "hidden", textOverflow: "ellipsis",
+    } as Partial<CSSStyleDeclaration>);
+    actions.appendChild(train);
+
+    // FIRE / REHIRE
+    const fire = document.createElement("button");
+    Object.assign(fire.style, {
+      flex: "0 0 auto", padding: "4px 7px", borderRadius: "6px", cursor: "pointer",
+      font: "inherit", fontSize: "10px", fontWeight: "700", lineHeight: "1.35",
+    } as Partial<CSSStyleDeclaration>);
+    actions.appendChild(fire);
+    tile.appendChild(actions);
+
+    const refs: TileRefs = { root: tile, levelChip, status, meta: metaLine, train, fire, floorSel };
+    this.tiles.set(member.id, refs);
+    this.refreshTile(role, member.id, refs);
+    return tile;
+  }
+
+  /** Volatile per-tile refresh — runs every tick on the LIVE elements, so no
+   * rebuild is needed and no in-flight click is destroyed. */
+  private refreshTile(role: StaffRole, memberId: string, refs: TileRefs): void {
+    const member = this.game.staff.getMembers(role).find((m) => m.id === memberId);
+    if (!member) return;
+    const meta = ROLE_META[role];
+    const lvl = Math.max(0, member.upgradeLevel | 0);
+    const perStaff = this.game.admin.payrollPerStaffPerMinute;
+
+    // Level chip
+    refs.levelChip.textContent = `Lv${lvl}`;
+    refs.levelChip.style.background = lvl >= 4 ? "rgba(255,200,90,0.35)"
+      : lvl >= 2 ? "rgba(170,200,255,0.25)" : "rgba(255,255,255,0.10)";
+    refs.levelChip.style.color = "#fff5dc";
+    refs.levelChip.style.opacity = lvl === 0 ? "0.6" : "1";
+    refs.levelChip.title = `Training level ${lvl} of ${STAFF_UPGRADE_MAX}. Higher = faster work.`;
+
+    // Status pill
+    refs.status.innerHTML = "";
+    refs.status.appendChild(member.isDeactivated ? this.benchedPill() : this.workStatusPill(role, memberId));
+
+    // Meta line — wage, and the floor when there's no picker to show it.
+    const wage = Math.round((perStaff + lvl) * GAME_MINUTES_PER_DAY);
+    const floorTxt = this.game.getLuxuryTier() >= 2 ? "" : ` · Floor G`;
+    refs.meta.textContent = `${meta.label} · $${wage}/day${floorTxt}`;
+
+    // Floor picker value
+    if (refs.floorSel) refs.floorSel.value = String(member.homeFloor ?? 0);
+
+    // Train button
+    this.syncTrainBtn(refs.train, memberId, member.name, !!member.isDeactivated);
+
+    // Fire / rehire
+    if (member.isDeactivated) {
+      refs.fire.textContent = "↺";
+      refs.fire.style.background = "rgba(120,200,120,0.30)";
+      refs.fire.style.color = "#eaffea";
+      refs.fire.style.border = "1px solid rgba(150,230,150,0.55)";
+      refs.fire.title = `Rehire ${member.name} — free, resumes their wage.`;
+      refs.fire.onclick = () => { if (this.game.reactivateStaffMember(memberId)) this.update(); };
+    } else {
+      const severance = this.game.staff.getStaffFireCost(role);
+      refs.fire.textContent = "✕";
+      refs.fire.style.background = "rgba(200,120,120,0.22)";
+      refs.fire.style.color = "#fff5dc";
+      refs.fire.style.border = "1px solid rgba(255,180,180,0.45)";
+      refs.fire.title = `Fire ${member.name} (Lv${lvl} ${meta.label}) — costs ${compactDollars(severance)} severance. Their training is lost.`;
+      refs.fire.onclick = () => { if (this.game.fireStaffMember(memberId)) this.update(); };
     }
   }
 
-  /** The enlarged per-member work-status pill: an icon + a plain-language line
-   * of what they're doing right now (cooking, serving, fetching groceries…),
-   * coloured green→amber→red by load. Idle members get a subtle grey pill. */
+  /** Train button state machine: in-progress → maxed → tier-locked → someone
+   * else training → affordable / too expensive. */
+  private syncTrainBtn(btn: HTMLButtonElement, memberId: string, name: string, benched: boolean): void {
+    const level = this.game.getMemberUpgradeLevel(memberId);
+    const remaining = this.game.getMemberTrainingRemainingSeconds(memberId);
+    const setState = (text: string, enabled: boolean, tip: string, onClick?: () => void): void => {
+      btn.textContent = text;
+      btn.disabled = !enabled;
+      btn.style.opacity = enabled ? "1" : "0.45";
+      btn.style.cursor = enabled ? "pointer" : "not-allowed";
+      btn.onclick = enabled && onClick ? onClick : null;
+      btn.title = tip;
+    };
+
+    if (remaining != null && remaining > 0) {
+      setState(`📚 ${formatEta(remaining)}`, false, `${name} is at school — ${formatEta(remaining)} left. Training runs in real time, even offline.`);
+      return;
+    }
+    if (level >= STAFF_UPGRADE_MAX) {
+      setState("★ Maxed", false, `${name} is fully trained (Lv${STAFF_UPGRADE_MAX}) — as fast as they get.`);
+      return;
+    }
+    const target = level + 1;
+    const hours = getTrainingDurationHours(target);
+    const requiredTier = this.game.getMemberUpgradeRequiredTier(memberId);
+    const playerTier = this.game.getLuxuryTier();
+    if (requiredTier !== null && requiredTier > playerTier) {
+      // Tier-locked → clickable, opens the shared unlock gate.
+      setState(`🔒 T${requiredTier}`, true,
+        `Training to Lv${target} needs restaurant Tier ${requiredTier} (you're on ${playerTier}). Click to unlock.`,
+        () => showTierGate(this.game, requiredTier, () => this.update()));
+      return;
+    }
+    if (benched) {
+      setState("📚 Benched", false, `${name} is benched — rehire them before training.`);
+      return;
+    }
+    const otherId = this.game.getCurrentlyTrainingMemberId();
+    if (otherId !== null && otherId !== memberId) {
+      const other = this.game.staff.getMember(otherId);
+      setState("📚 Busy", false, other
+        ? `The school only has one chair — ${other.name} is training right now.`
+        : "Someone else is training right now.");
+      return;
+    }
+    const cost = this.game.getMemberUpgradeCost(memberId);
+    const can = this.game.canUpgradeMember(memberId);
+    setState(`📚 ${compactDollars(cost)}`, can,
+      can
+        ? `Train ${name} to Lv${target} — ${compactDollars(cost)} and ${hours}h of real time. Raises their speed permanently.`
+        : `Need ${compactDollars(cost)} to train ${name} to Lv${target}.`,
+      () => { if (this.game.upgradeMember(memberId)) this.update(); });
+  }
+
+  private benchedPill(): HTMLElement {
+    const pill = document.createElement("span");
+    pill.textContent = "🪑 Benched — not working";
+    Object.assign(pill.style, {
+      display: "inline-block", maxWidth: "100%", padding: "4px 8px", borderRadius: "7px",
+      fontSize: "10.5px", fontWeight: "600",
+      background: "rgba(255,190,90,0.18)", color: "rgba(255,225,170,0.95)",
+      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    } as Partial<CSSStyleDeclaration>);
+    pill.title = "Benched because you ran out of money. Rehire (↺) when you can afford the wage again.";
+    return pill;
+  }
+
+  /** Icon + plain-language line of what they're doing right now, coloured
+   * green → amber → red by load. Idle gets a quiet grey pill. */
   private workStatusPill(role: StaffRole, memberId: string): HTMLElement {
     const info = this.workloadBadgeInfo(role, memberId);
     const n = info?.count ?? 0;
     const pill = document.createElement("span");
     Object.assign(pill.style, {
-      display: "inline-flex", alignItems: "center", gap: "6px", maxWidth: "100%",
-      padding: "5px 10px", borderRadius: "8px", fontSize: "11.5px", fontWeight: "600",
+      display: "flex", alignItems: "center", gap: "5px", maxWidth: "100%",
+      padding: "4px 8px", borderRadius: "7px", fontSize: "10.5px", fontWeight: "600",
     } as Partial<CSSStyleDeclaration>);
     const emoji = document.createElement("span");
-    emoji.style.fontSize = "14px";
-    emoji.style.flex = "0 0 auto";
+    Object.assign(emoji.style, { fontSize: "12px", flex: "0 0 auto" } as Partial<CSSStyleDeclaration>);
     const desc = document.createElement("span");
     Object.assign(desc.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as Partial<CSSStyleDeclaration>);
     if (!info || n === 0) {
       emoji.textContent = "💤";
-      desc.textContent = role === "errand" ? "Idle by the supply counter" : "Idle — nothing queued";
+      desc.textContent = role === "errand" ? "Idle at the counter" : "Idle";
       Object.assign(pill.style, { background: "rgba(255,255,255,0.06)", color: "rgba(255,245,220,0.6)", fontWeight: "500" });
       if (info) pill.title = info.tooltip;
     } else {
       emoji.textContent = info.emoji;
       desc.textContent = this.workDescription(role, memberId, n);
-      const bg = n >= 5 ? "rgba(220,80,80,0.5)" : n >= 3 ? "rgba(220,170,80,0.42)" : "rgba(120,200,120,0.34)";
-      Object.assign(pill.style, { background: bg, color: "#fff5dc" });
+      pill.style.background = n >= 5 ? "rgba(220,80,80,0.5)" : n >= 3 ? "rgba(220,170,80,0.42)" : "rgba(120,200,120,0.34)";
+      pill.style.color = "#fff5dc";
       pill.title = info.tooltip;
     }
     pill.append(emoji, desc);
     return pill;
   }
 
-  /** Short plain-language description of a member's current job for the pill. */
+  /** Per-role workload accessor + tooltip. */
+  private workloadBadgeInfo(role: StaffRole, memberId: string): { emoji: string; count: number; tooltip: string } | null {
+    switch (role) {
+      case "chef": {
+        const n = this.game.getChefBacklog?.(memberId) ?? 0;
+        return { emoji: "🍳", count: n, tooltip:
+          `${n} ticket(s) in this chef's backlog (queued + cooking). Hire another chef if it stays high.` };
+      }
+      case "barman": {
+        const n = this.game.getBarmanBacklog?.(memberId) ?? 0;
+        return { emoji: "🍸", count: n, tooltip: `${n} drink(s) queued or being mixed.` };
+      }
+      case "waiter": {
+        const n = this.game.getWaiterBacklog?.(memberId) ?? 0;
+        return { emoji: "🍽", count: n, tooltip:
+          `${n} active task(s) — delivery, wash trip and take-order all count.` };
+      }
+      case "errand": {
+        const n = this.game.getErrandBacklog?.(memberId) ?? 0;
+        const trip = this.game.getErrandTripSummary?.(memberId) ?? "";
+        return { emoji: "📦", count: n, tooltip:
+          n > 0 ? (trip ? `Bringing back: ${trip}.` : "On a shopping trip.") : "Idle by the supply counter." };
+      }
+      default: return null;
+    }
+  }
+
   private workDescription(role: StaffRole, memberId: string, n: number): string {
     switch (role) {
-      case "chef": return `Cooking · ${n} in the queue`;
-      case "barman": return `Mixing drinks · ${n} in the queue`;
-      case "waiter": return `Serving · ${n} task${n === 1 ? "" : "s"}`;
+      case "chef": return `Cooking · ${n}`;
+      case "barman": return `Mixing · ${n}`;
+      case "waiter": return `Serving · ${n}`;
       case "errand": {
         const trip = this.game.getErrandTripSummary?.(memberId) ?? "";
-        return trip ? `Bringing back ${trip}` : "On a shopping trip";
+        return trip ? `Fetching ${trip}` : "Shopping";
       }
       default: return `Working · ${n}`;
     }
   }
 
-  update(): void {
+  // ── FOOTER ──────────────────────────────────────────────────
+
+  /** Engine calls this after a hydrate / set / clear so the label reflects the
+   * live cloud value. */
+  setWaiterRestStatus(spot: { x: number; z: number; floor: number } | null): void {
+    if (!this.waiterRestLabel) return;
+    this.waiterRestLabel.textContent = spot
+      ? `📍 Waiter rest: ${spot.floor === 0 ? "G" : `F${spot.floor}`} (${spot.x.toFixed(1)}, ${spot.z.toFixed(1)})`
+      : "📍 Waiter rest: not set";
+  }
+
+  private syncFooter(): void {
+    const perStaff = this.game.admin.payrollPerStaffPerMinute;
     let totalCount = 0;
     let totalPayroll = 0;
-    const perStaff = this.game.admin.payrollPerStaffPerMinute;
-    (["chef", "barman", "waiter", "errand"] as StaffRole[]).forEach((role) => {
-      const count = this.game.staff.getStaffCount(role);
-      const hireCost = this.game.staff.getStaffHireCost(role);
-      const label = this.game.staff.getStaffRoleLabel(role);
-      const working = this.game.getStaffWorkingCount?.(role) ?? 0;
-      const idle = Math.max(0, count - working);
-      // Role payroll = base × count + sum-of-training-levels. Pulled
-      // from StaffSystem so it stays in sync with what tickSalary
-      // actually charges (each training level adds $1/min per
-      // member, on top of the base per-staff wage).
-      const rolePayroll = this.game.staff.getRolePayrollPerMinute(role, perStaff);
-      const row = this.rows[role];
-      const unlockTier = this.game.getRoleUnlockTier(role);
-      const locked = this.game.getLuxuryTier() < unlockTier;
-      // Title row now includes the role payroll so the player can see
-      // expenses per category, not just an aggregate footer. Locked
-      // roles (e.g. barman before tier 2) gain a small "🔒 tier N"
-      // tag so the player sees the unlock without hovering.
-      const lockTag = locked
-        ? ` <span style="opacity:0.7;font-weight:600;font-size:10px;color:#ffd47a">🔒 tier ${unlockTier}</span>`
-        : "";
-      row.label.innerHTML = `${label} (${count}) <span style="opacity:0.65;font-weight:400;font-size:11px">· $${Math.round(rolePayroll * GAME_MINUTES_PER_DAY)}/day</span>${lockTag}`;
-      row.activity.innerHTML = locked
-        ? `<span style="opacity:0.5">Unlocks at tier ${unlockTier}</span>`
-        : count === 0
-          ? `<span style="opacity:0.4">none hired</span>`
-          : `<span style="color:#a8e2a8">▶ ${working} working</span> · <span style="color:#ffd47a">⏸ ${idle} idle</span>`;
-      // Two gates on the hire button: tier unlock + cash. Title
-      // string surfaces whichever is blocking so the player isn't
-      // guessing why the + is greyed out (e.g. barman before tier
-      // 2 reads "Unlocks at tier 2" instead of just "disabled").
-      const hireGate = this.game.canHireStaff(role);
-      row.hire.title = hireGate.ok
-        ? `Hire ${label} ($${hireCost}) — adds $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day payroll`
-        : `${hireGate.reason} · would cost $${hireCost} + $${Math.round(perStaff * GAME_MINUTES_PER_DAY)}/day`;
-      row.hire.disabled = locked ? false : !hireGate.ok;
-      row.hire.style.opacity = hireGate.ok ? "1" : locked ? "0.6" : "0.4";
-      // Per-member fire buttons (one per row in `members`) replaced
-      // the old role-level − here; renderMembers builds them.
-      this.renderMembers(role, row.members);
-      totalCount += count;
-      totalPayroll += rolePayroll;
-    });
-    if (this.payrollLine) {
-      if (totalCount === 0) {
-        this.payrollLine.textContent = "No staff hired — guests wait forever.";
-      } else {
-        const stats = this.game.getTicketStats?.();
-        const totalTickets = stats
-          ? stats.queued + stats.cooking + stats.ready + stats.delivering
-          : 0;
-        const queueLine = stats && totalTickets > 0
-          ? ` · 📋 ${stats.queued} queued · 🍳 ${stats.cooking} cooking · 🍽 ${stats.delivering + stats.ready} delivering`
-          : ` · idle — no pending tickets`;
-        this.payrollLine.textContent =
-          `${totalCount} hired · $${Math.round(totalPayroll * GAME_MINUTES_PER_DAY)}/day${queueLine}`;
+    for (const role of ROLES) {
+      totalCount += this.game.staff.getStaffCount(role);
+      totalPayroll += this.game.staff.getRolePayrollPerMinute(role, perStaff);
+    }
+    if (totalCount === 0) {
+      this.payrollLine.textContent = "No staff hired — guests wait forever.";
+      return;
+    }
+    const stats = this.game.getTicketStats?.();
+    const pending = stats ? stats.queued + stats.cooking + stats.ready + stats.delivering : 0;
+    const flow = stats && pending > 0
+      ? ` · 📋 ${stats.queued} queued · 🍳 ${stats.cooking} cooking · 🍽 ${stats.delivering + stats.ready} out`
+      : " · no pending tickets";
+    this.payrollLine.textContent =
+      `${totalCount} on payroll · $${Math.round(totalPayroll * GAME_MINUTES_PER_DAY)}/day${flow}`;
+    // Waiter rest spot only matters once a waiter exists.
+    this.restRow.style.display = this.game.staff.getStaffCount("waiter") > 0 ? "flex" : "none";
+  }
+
+  update(): void {
+    this.syncHireBar();
+    this.rebuildGridIfNeeded();
+    for (const role of ROLES) {
+      for (const m of this.game.staff.getMembers(role)) {
+        const refs = this.tiles.get(m.id);
+        if (refs) this.refreshTile(role, m.id, refs);
       }
     }
+    this.syncFooter();
   }
 }

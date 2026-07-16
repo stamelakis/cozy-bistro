@@ -31,7 +31,9 @@ export class StaffModal {
     const body = document.createElement("div");
     Object.assign(body.style, {
       position: "relative",
-      width: "min(560px, calc(100vw - 40px))", maxHeight: "86vh",
+      // Wide enough for the roster TILE GRID to run 2-3 columns on desktop
+      // (it auto-fills at minmax(184px, 1fr)) and collapse to 1 on a phone.
+      width: "min(760px, calc(100vw - 40px))", maxHeight: "86vh",
       display: "flex", flexDirection: "column", padding: "16px 20px 18px",
       background: "rgba(28, 20, 14, 0.96)", color: "#fff5dc",
       font: "12px/1.45 system-ui, sans-serif", borderRadius: "12px",
