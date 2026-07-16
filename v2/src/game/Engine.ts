@@ -1004,6 +1004,12 @@ export class Engine {
       console.log(`[Tutorial] ${completed ? "completed" : "skipped by player"}`);
     };
     this.helpModal.onHide = () => this.maybeStartTutorial();
+    this.helpModal.onReplayTutorial = () => {
+      this.game.tutorialDone = false;
+      this.game.tutorialStepId = null;
+      this.saver?.saveNow();
+      this.maybeStartTutorial();
+    };
     this.slotsModal = new SlotsModal(container, this.saver.getActiveSlot(), this.cloud);
     this.adminModal = new AdminModal(container, this.game, this.sfx, this.cloud, {
       isPaused: () => this.paused,

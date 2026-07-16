@@ -420,10 +420,37 @@ export class HelpModal {
     } as Partial<CSSStyleDeclaration>);
     body.appendChild(this.content);
 
+    const footerRow = document.createElement("div");
+    Object.assign(footerRow.style, {
+      display: "flex", gap: "8px", marginTop: "12px",
+      alignSelf: "center", flexWrap: "wrap", justifyContent: "center",
+    } as Partial<CSSStyleDeclaration>);
+    body.appendChild(footerRow);
+
+    // A new player gets the tutorial automatically when this modal closes, and
+    // everyone already playing is marked done so they're never ambushed by it.
+    // This is the only way back in — for the curious, for anyone who skipped,
+    // and for testing without making a fresh account.
+    const replay = document.createElement("button");
+    replay.textContent = "↻ Replay tutorial";
+    replay.title = "Walk through the chef's guided tour again from the start";
+    Object.assign(replay.style, {
+      padding: "9px 18px",
+      background: "transparent",
+      color: "#fff5dc",
+      border: "1px solid rgba(255,245,220,0.4)",
+      borderRadius: "6px",
+      cursor: "pointer",
+      font: "inherit",
+      fontSize: "13px",
+      fontWeight: "600",
+    } as Partial<CSSStyleDeclaration>);
+    replay.onclick = () => { this.hide(); this.onReplayTutorial?.(); };
+    footerRow.appendChild(replay);
+
     const footer = document.createElement("button");
     footer.textContent = "Got it — start playing";
     Object.assign(footer.style, {
-      marginTop: "12px",
       padding: "9px 18px",
       background: "rgba(120, 200, 120, 0.25)",
       color: "#fff5dc",
@@ -433,10 +460,9 @@ export class HelpModal {
       font: "inherit",
       fontSize: "13px",
       fontWeight: "600",
-      alignSelf: "center",
     } as Partial<CSSStyleDeclaration>);
     footer.onclick = () => this.hide();
-    body.appendChild(footer);
+    footerRow.appendChild(footer);
 
     this.selectTab(0);
   }
@@ -536,6 +562,11 @@ export class HelpModal {
    * they close it the chef takes over. (Guarded on the tutorial's own
    * done-flag, so re-reading the guide later doesn't restart it.) */
   onHide?: () => void;
+
+  /** Fired by the "↻ Replay tutorial" button, AFTER hide() (so onHide's
+   * new-player check has already run and declined). Engine clears the done-flag
+   * and restarts the chef from step one. */
+  onReplayTutorial?: () => void;
 
   hide(): void {
     this.root.style.display = "none";
