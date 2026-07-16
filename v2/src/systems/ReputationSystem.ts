@@ -3,6 +3,13 @@ import { getFurnitureDefinition } from "../data/furniture";
 
 import { clamp } from "../data/util";
 export const maxRatingHistory = 500;
+/** The live star average reflects only the most RECENT votes, so the rating
+ * tracks how the restaurant is doing right now instead of being anchored by
+ * hundreds of votes of ancient history (a 500-vote window meant a balance
+ * change took ~500 customers to show, and a long-dead 5★ run pinned the
+ * average forever). The FULL history is still retained up to
+ * maxRatingHistory — the five-star achievements count across all of it. */
+export const ratingWindow = 30;
 const defaultUnratedAverage = 3;
 
 export class ReputationSystem {
@@ -105,11 +112,13 @@ export class ReputationSystem {
     return this.ratingHistory.reduce((sum, rating) => sum + rating, 0);
   }
 
-  /** Average of recorded ratings, or 3.0 when no ratings exist yet. */
+  /** Average of the most recent {@link ratingWindow} ratings, or 3.0 when no
+   * ratings exist yet. Windowed (not lifetime) so the score responds to the
+   * restaurant's CURRENT quality — see the ratingWindow doc. */
   getAverageRating(): number {
-    return this.ratingHistory.length === 0
-      ? defaultUnratedAverage
-      : this.getRatingTotal() / this.ratingHistory.length;
+    if (this.ratingHistory.length === 0) return defaultUnratedAverage;
+    const recent = this.ratingHistory.slice(-ratingWindow);
+    return recent.reduce((sum, r) => sum + r, 0) / recent.length;
   }
 
   /** Re-clamp the in-memory history (e.g. after a save repair). */

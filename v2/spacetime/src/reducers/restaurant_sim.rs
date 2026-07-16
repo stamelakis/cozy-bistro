@@ -2528,8 +2528,8 @@ fn append_tier_csv(existing: Option<&str>, tier: u32) -> String {
 ///
 /// Rating approximation: server has total_satisfaction_x100 +
 /// order_recipes (from H.16 + H.14 mirrors). Mirrors the FIRST step
-/// of GuestSpawner.finalizeVisit's rating math — `base = 2 + avgSat/2`
-/// clamped to 1..5 — but SKIPS dish quality bonus, dirty-restaurant
+/// of GuestSpawner.finalizeVisit's rating math — `base = 1 + avgSat/10`
+/// capped at 4.0★ — but SKIPS dish quality bonus, dirty-restaurant
 /// penalty, furniture vibe, bathroom score, smoke penalty, and the
 /// random jitter. Foreground play still computes the full rating
 /// (no approximation) because settleGuestDishes gates the server's
@@ -2573,14 +2573,19 @@ fn accumulate_pending_visit_rollup(ctx: &ReducerContext, g: &ActiveGuest) {
         dish_sat_bonus_x100 += dish_satisfaction_x100(kind, tier);
     }
 
-    // (total_satisfaction_x100 + dish_sat_bonus_x100) / 100 / count
-    // = avgSat. Then base = clamp(2 + avgSat/2, 1, 5), rounded.
-    // Integer math: × 100 / 200 = / 2.
+    // (total_satisfaction_x100 + dish_sat_bonus_x100) / 100 / count = avgSat.
     let adjusted_sat_x100 = (g.total_satisfaction_x100 as i64)
         .saturating_add(dish_sat_bonus_x100);
     let avg_sat_x100 = adjusted_sat_x100 / (course_count as i64);
-    // base_x100 = 200 + avg_sat_x100 / 2
-    let mut base_x100 = 200 + (avg_sat_x100 / 2);
+    // Food → base stars, MIRRORING GuestSpawner.finalizeVisit exactly (the two
+    // must stay in lockstep). Recipe satisfactionEffect spans 3..30, so the old
+    // `2 + avgSat/2` clamped to a free 5.0★ for any dish scoring 6+. Now:
+    // base = 1 + avgSat/10, capped at 4.0★ — food alone can never exceed 4★.
+    //   avgSat  3 → 1.3★ | 10 → 2.0★ | 20 → 3.0★ | 30+ → 4.0★ (cap)
+    // NB: this offline approximation skips the venue bonuses (vibe / bathroom)
+    // the foreground client adds, so a backgrounded restaurant tops out at 4★ —
+    // the 5th star is only earned while actually running the place.
+    let mut base_x100 = (100 + (avg_sat_x100 / 10)).min(400);
 
     // H.26 — dirty-pile penalty. Mirrors Game.isDishPileOverwhelming:
     // if total dirty pieces across the restaurant exceed 8, drop the
@@ -8425,19 +8430,23 @@ pub fn replace_seat_slots(
 /// Phase 9.6 — average visit rating × 100 from the cloud rating
 /// history CSV. 300 (3.0★) when no history exists yet so brand-new
 /// restaurants get a middling willingness-to-wait instead of zero.
+/// Live star average, over only the most RECENT votes — mirrors the client's
+/// `ReputationSystem.ratingWindow` so the queue reacts to how the restaurant is
+/// doing now, not to hundreds of votes of ancient history. Keep in lockstep
+/// with the client constant.
+const RATING_WINDOW: usize = 30;
+
 fn avg_rating_x100(ctx: &ReducerContext, rid: u64) -> i64 {
     let csv = ctx.db.restaurant().id().find(rid)
         .and_then(|r| r.cloud_rating_history_csv)
         .unwrap_or_default();
-    let mut sum = 0i64;
-    let mut n = 0i64;
-    for s in csv.split(',') {
-        if let Ok(v) = s.trim().parse::<i64>() {
-            sum += v;
-            n += 1;
-        }
-    }
-    if n == 0 { 300 } else { (sum * 100) / n }
+    let all: Vec<i64> = csv.split(',')
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .collect();
+    if all.is_empty() { return 300; }
+    let recent = &all[all.len().saturating_sub(RATING_WINDOW)..];
+    let sum: i64 = recent.iter().sum();
+    (sum * 100) / (recent.len() as i64)
 }
 
 /// Phase 9.6 — seat the longest-waiting "waiting" guest when a chair

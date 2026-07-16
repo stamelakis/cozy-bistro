@@ -4643,7 +4643,15 @@ export class GuestSpawner {
     }
     const adjustedSatisfaction = g.totalSatisfaction + dishSatBonus;
     const avgSat = g.order.length > 0 ? adjustedSatisfaction / g.order.length : 4;
-    let base = clamp(2 + avgSat / 2, 1, 5);
+    // Food → base stars. Recipe satisfactionEffect spans 3..30 (mean ~10.7),
+    // so the old `2 + avgSat/2` handed out a clamped 5.0★ for ANY dish scoring
+    // 6+ — 59 of 75 recipes — and 4★ for the cheapest starter. The 1-3★ band
+    // was unreachable except via penalties. Now: 1 + avgSat/10, capped at 4.0,
+    // so FOOD ALONE can never exceed 4★ — the last star has to be earned from
+    // the room (vibe / ratingBonus / bathroom, applied below). 5★ is elite:
+    // a maxed high-tier menu AND a fully built-out venue.
+    //   avgSat  3 → 1.3★ | 10 → 2.0★ | 20 → 3.0★ | 30+ → 4.0★ (cap)
+    let base = clamp(1 + avgSat / 10, 1, 4);
     // Penalty for a visibly dirty restaurant — drops the base rating by
     // 1 star so even an otherwise-good meal can drift to 3 stars.
     if (this.game.isDishPileOverwhelming()) {
