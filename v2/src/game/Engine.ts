@@ -3019,33 +3019,87 @@ export class Engine {
     this.tutorial.start(this.game.tutorialStepId);
   }
 
-  /** Phase 1 — the spine, proving the machinery end to end: the chef talks,
-   * Next advances, a step can spotlight a live element, and a step can WAIT on
-   * the player actually doing the thing. The full build → hire → menu → open →
-   * tour script lands in Phase 2. */
+  /** Phase 2 — the full run.
+   *
+   * Voice: an over-caffeinated optimist who is sincerely thrilled about a sink.
+   * Lines stay SHORT — he talks FAST, not long. Nobody reads a paragraph from a
+   * cartoon chef.
+   *
+   * Arc: intro → build the room → hire the crew → put a dish on the menu →
+   * first guest walks in (the payoff) → tour the panels → the long game.
+   * Awards fire on their own as they go (first furniture, first hire, first
+   * sale) and he sends them to claim each one, which teaches the claim flow
+   * without a contrived detour. */
   private buildTutorialScript(): TutorialStep[] {
-    const ownsCategory = (cat: string): boolean =>
+    const owns = (cat: string): boolean =>
       this.registry.snapshotItems().some((i) => getFurnitureDef(i.defId)?.category === cat);
-    const buildMenu = (): HTMLElement | null => document.querySelector<HTMLElement>(".cb-buildmenu");
+    const hired = (role: "chef" | "waiter" | "errand"): boolean =>
+      this.game.staff.getStaffCount(role) >= 1;
+    const el = (sel: string) => (): HTMLElement | null => document.querySelector<HTMLElement>(sel);
+    const buildMenu = el(".cb-buildmenu");
+    const sidebar = el(".cb-sidebar");
+    /** Find a live button by its label — used for the staff hire chips. */
+    const btn = (label: string) => (): HTMLElement | null =>
+      [...document.querySelectorAll<HTMLElement>("button")]
+        .find((b) => (b.textContent ?? "").includes(label) && b.offsetParent !== null) ?? null;
+    /** Tour steps pop ONE panel at a time — close the rest so they can't stack. */
+    const onlyShow = (open?: () => void) => (): void => {
+      for (const m of [this.upgradeModal, this.pantryModal, this.cloudModal, this.decorModal, this.staffModal]) {
+        try { (m as unknown as { hide?: () => void }).hide?.(); } catch { /* ignore */ }
+      }
+      try { open?.(); } catch { /* ignore */ }
+    };
+    /** The recipe panel is collapsible — make sure it's actually open. */
+    const openMenuPanel = (): void => {
+      const title = this.menuPanel.titleEl;
+      if (title && /expand/i.test(title.textContent ?? "")) title.click();
+    };
+
     return [
-      {
-        id: "intro-welcome",
-        say: "You're the new boss — this place is all yours!\n\nRight now that's four walls and a front door. No tables, no kitchen, nobody in the back. We fix that together.",
-      },
-      {
-        id: "intro-money",
-        say: "Good news: the bank believes in you. There's $10,000 in the till to turn this empty room into a restaurant.\n\nLet's go spend some of it.",
-      },
-      {
-        id: "build-table",
-        say: "Everything starts with somewhere to sit.\n\nOpen the BUILD menu, choose Tables, then click a spot on the floor to put your first one down.",
-        target: buildMenu,
-        until: () => ownsCategory("table"),
-      },
-      {
-        id: "intro-done",
-        say: "That's your first table — and that's the whole trick: pick it, place it, own it.\n\nNext up we'll get you a kitchen and a crew.",
-      },
+      // ── INTRO ────────────────────────────────────────────────
+      { id: "intro-welcome", say: "NEW BOSS! Okay. Okay okay okay. Deep breath.\n\nTHIS PLACE IS YOURS." },
+      { id: "intro-empty", say: "Four walls. One door. And the most beautiful emptiness I have ever seen.\n\nNo tables. No kitchen. Nobody. It's PERFECT. We get to build all of it." },
+      { id: "intro-money", say: "And there's $10,000 in the till. Right now. Today.\n\nI have never been this excited about a room with no chairs in it. Let's go." },
+
+      // ── BUILD THE ROOM ───────────────────────────────────────
+      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nOpen BUILD → Tables → click the floor. Go go go!", target: buildMenu, until: () => owns("table") },
+      // Advance on the claim — OR when there's simply nothing pending, so a
+      // player whose award didn't fire (or who already had it) is never parked
+      // waiting to claim a prize that doesn't exist.
+      { id: "award-first", say: "DING! That's an award — you get those for doing things, and I love doing things.\n\nHit Claim and the cash is yours. They don't collect themselves!", until: () => this.game.achievements.isClaimed("first-furniture") || this.game.achievements.unclaimedCount() === 0 },
+      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs. Pop them around the table — they only count as seats if they're AT one.", target: buildMenu, until: () => owns("chair") },
+      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking. No stove, no food. It's non-negotiable.", target: buildMenu, until: () => owns("stove") },
+      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters.", target: buildMenu, until: () => owns("counter") },
+      { id: "build-appliance", say: "Appliance time. Microwave, coffee machine, blender — pick your fighter.\n\nEach one unlocks recipes that need it. BUILD → Appliances.", target: buildMenu, until: () => owns("appliance") },
+      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildMenu, until: () => owns("storage") },
+      { id: "build-sink", say: "And a sink. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing.", target: buildMenu, until: () => owns("wash") },
+
+      // ── HIRE THE CREW ────────────────────────────────────────
+      { id: "hire-chef", say: "A room! You built a ROOM!\n\nNow: people. You need a chef. I'd apply, but I'm contractually busy narrating.", onEnter: onlyShow(() => this.staffModal.show()), target: btn("🍳 Chef"), until: () => hired("chef") },
+      { id: "hire-waiter", say: "A waiter! Someone to take orders and carry plates that aren't me.", target: btn("🍽 Waiter"), until: () => hired("waiter") },
+      { id: "hire-errand", say: "And an errand helper — they do the shopping so the pantry never runs dry.\n\nTrust me. You want this one.", target: btn("📦 Helper"), until: () => hired("errand") },
+
+      // ── PUT A DISH ON THE MENU ───────────────────────────────
+      { id: "menu-recipe", say: "Tiny problem: your menu is empty. Guests cannot order thin air. I've seen them try.\n\nOpen the MENU and add a dish!", onEnter: () => { onlyShow()(); openMenuPanel(); }, target: el(".cb-menupanel"), until: () => this.game.cooking.getMenuRecipeIds().length >= 1 },
+
+      // ── THE PAYOFF ───────────────────────────────────────────
+      { id: "first-guest", say: "Tables. Kitchen. Crew. A menu. You know what that is?\n\nA RESTAURANT. Watch the door. WATCH THE DOOR.", onEnter: onlyShow(), until: () => (this.spawner?.getGuestsInsideCount() ?? 0) > 0 },
+      { id: "first-guest-done", say: "THERE! A customer! An actual human with actual money!\n\nYour crew takes it from here — they cook, serve and clean on their own. You run the place." },
+
+      // ── THE TOUR ─────────────────────────────────────────────
+      { id: "tour-manage", say: "This strip is your dashboard: cash, rating, the day, and every panel worth opening.\n\nThat OPEN/CLOSED button? That's your doors. Close up and the guests stop coming.", onEnter: onlyShow(), target: sidebar },
+      { id: "tour-upgrades", say: "UPGRADES! Level up a recipe and it sells for more and scores better.\n\nCosts money and REAL time — start one and go live your life.", onEnter: onlyShow(() => this.upgradeModal.show()) },
+      { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nSet a stock target, flip on Auto-shop, and your errand helper keeps it topped up forever.", onEnter: onlyShow(() => this.pantryModal.show()) },
+      { id: "tour-social", say: "SOCIAL! Other players, out there, right now, in their own restaurants.\n\nFriends, leaderboards, visits. Go be nosy.", onEnter: onlyShow(() => this.cloudModal.show()) },
+      { id: "tour-decor", say: "DECOR. This is the fun one.\n\nA nicer room pulls in more guests AND lifts your stars. Pretty literally pays.", onEnter: onlyShow(() => this.decorModal.show()) },
+
+      // ── THE LONG GAME ────────────────────────────────────────
+      { id: "closer-expand", say: "See this? EXPAND. Cash in, tier up — fancier furniture, better recipes, whole new FLOORS.\n\nThat's the ladder. Climb it.", onEnter: onlyShow(), target: el(".cb-xw-expand") },
+      { id: "closer-boost", say: "BOOST. Pay a little, and guests come flooding in for a minute.\n\nPerfect for when the kitchen's warm and you want chaos.", target: el(".cb-xw-boost") },
+      { id: "closer-grant", say: "And if it all goes sideways and you're flat broke — this button hands you a starter grant.\n\nWe've all been there. No judgement.", target: el(".cb-xw-grant") },
+
+      // ── OUT ──────────────────────────────────────────────────
+      { id: "outro", say: "That's everything! Look at this place. LOOK AT IT.\n\nStars are earned around here — 5★ takes great food AND a great room. Go get them, boss. I need to sit down.", onEnter: onlyShow() },
     ];
   }
 

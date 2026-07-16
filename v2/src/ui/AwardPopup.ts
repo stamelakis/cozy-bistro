@@ -25,7 +25,10 @@ export class AwardPopup {
     Object.assign(this.root.style, {
       position: "fixed", inset: "0", display: "none",
       alignItems: "center", justifyContent: "center",
-      background: "rgba(8,5,3,0.55)", zIndex: "2000", padding: "20px",
+      // Above the tutorial overlay (z 3000): awards fire DURING the tutorial
+      // (first furniture, first hire, first sale) and the chef sends the player
+      // to claim them, so the card must sit on top of his dim, not under it.
+      background: "rgba(8,5,3,0.55)", zIndex: "3600", padding: "20px",
     } as Partial<CSSStyleDeclaration>);
     // Tapping the dim backdrop = "Later" (keeps it claimable in the panel).
     this.root.addEventListener("click", (e) => { if (e.target === this.root) this.dismiss(); });

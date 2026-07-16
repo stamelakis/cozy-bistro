@@ -36,6 +36,14 @@ export interface TutorialStep {
 }
 
 const TICK_MS = 120;
+/**
+ * SAFETY NET. A "do it yourself" step hides Next, so if its predicate can't go
+ * true the player is hard-parked with no way forward — which is exactly what an
+ * integration test caught (a step waiting on an award that had nothing to
+ * claim). After this long on one step we reveal an escape hatch. No script bug,
+ * confused player, or unforeseen game state can ever trap someone.
+ */
+const WAIT_GRACE_MS = 30_000;
 
 export class Tutorial {
   private readonly root: HTMLElement;
@@ -53,6 +61,7 @@ export class Tutorial {
   private steps: TutorialStep[] = [];
   private idx = -1;
   private timer: number | null = null;
+  private graceTimer: number | null = null;
 
   /** Fired whenever the active step changes — Engine persists the id so a
    * reload resumes here instead of restarting the whole thing. */
@@ -173,6 +182,7 @@ export class Tutorial {
   /** Stop without recording a result (e.g. teardown). */
   stop(): void {
     if (this.timer != null) { window.clearInterval(this.timer); this.timer = null; }
+    if (this.graceTimer != null) { window.clearTimeout(this.graceTimer); this.graceTimer = null; }
     this.chef.stop();
     this.root.style.display = "none";
     this.idx = -1;
@@ -199,7 +209,16 @@ export class Tutorial {
     this.progress.textContent = `${this.idx + 1} / ${this.steps.length}`;
     // A "do it yourself" step advances by DOING — no Next to shortcut past it.
     const waits = typeof step.until === "function";
+    this.nextBtn.textContent = "Next";
     this.nextBtn.style.display = waits ? "none" : "";
+    if (this.graceTimer != null) { window.clearTimeout(this.graceTimer); this.graceTimer = null; }
+    if (waits) {
+      // …but never hard-park them — see WAIT_GRACE_MS.
+      this.graceTimer = window.setTimeout(() => {
+        this.nextBtn.textContent = "Skip this →";
+        this.nextBtn.style.display = "";
+      }, WAIT_GRACE_MS);
+    }
     this.onStepChanged?.(step.id);
     this.reposition();
   }
