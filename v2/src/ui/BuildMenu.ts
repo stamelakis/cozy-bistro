@@ -742,6 +742,9 @@ export class BuildMenu {
       ).length;
       const empty = count === 0;
       const tile = document.createElement("button");
+      // Lets the tutorial spotlight ONE category ("BUILD → Tables") instead of
+      // waving at the whole menu — which on a phone is 87% of the screen.
+      tile.dataset.cat = cat;
       // Not `disabled` even when empty — a disabled button fires no hover /
       // touch events, which would swallow its description tooltip. Empty tiles
       // just get no click handler + a dimmed look instead.
@@ -817,6 +820,9 @@ export class BuildMenu {
       return;
     }
     const grid = document.createElement("div");
+    // Tagged so the tutorial can follow the player INTO a category and keep
+    // pointing at the item tiles rather than losing its target.
+    grid.dataset.itemGrid = cat;
     Object.assign(grid.style, {
       display: "grid",
       gridTemplateColumns: "repeat(3, minmax(0, 1fr))",

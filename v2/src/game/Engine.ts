@@ -3042,12 +3042,38 @@ export class Engine {
     const hired = (role: "chef" | "waiter" | "errand"): boolean =>
       this.game.staff.getStaffCount(role) >= 1;
     const el = (sel: string) => (): HTMLElement | null => document.querySelector<HTMLElement>(sel);
-    const buildMenu = el(".cb-buildmenu");
     const sidebar = el(".cb-sidebar");
+    /**
+     * Is this thing actually on screen? Measured by RECT, deliberately not by
+     * `offsetParent !== null` — offsetParent is null for every `position: fixed`
+     * element, which is what all our floating panels are, so that check calls a
+     * plainly-visible build menu invisible. A rect also catches 0x0 collapsed
+     * controls, which offsetParent does not.
+     */
+    const visible = (e: HTMLElement | null): boolean => {
+      if (!e) return false;
+      const r = e.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    };
+    /**
+     * Build-step target that FOLLOWS the player through the menu's drill-down,
+     * instead of spotlighting `.cb-buildmenu` wholesale — that's a narrow column
+     * on desktop but 87% of a phone screen, where "highlighting" it highlights
+     * nothing and the chef panel lands on top of the tiles it's telling you to
+     * tap. So: point at Build until the menu is open, then the one category
+     * tile, then that category's item grid. Null (no hole, just dim) while
+     * they're out placing it — the target is the 3D floor at that point.
+     */
+    const buildCat = (cat: string) => (): HTMLElement | null => {
+      const menu = document.querySelector<HTMLElement>(".cb-buildmenu");
+      if (!visible(menu)) return btn("Build")();
+      return menu!.querySelector<HTMLElement>(`[data-cat="${cat}"]`)
+        ?? menu!.querySelector<HTMLElement>(`[data-item-grid="${cat}"]`);
+    };
     /** Find a live button by its label — used for the staff hire chips. */
     const btn = (label: string) => (): HTMLElement | null =>
       [...document.querySelectorAll<HTMLElement>("button")]
-        .find((b) => (b.textContent ?? "").includes(label) && b.offsetParent !== null) ?? null;
+        .find((b) => (b.textContent ?? "").includes(label) && visible(b)) ?? null;
     /** Tour steps pop ONE panel at a time — close the rest so they can't stack. */
     const onlyShow = (open?: () => void) => (): void => {
       for (const m of [this.upgradeModal, this.pantryModal, this.cloudModal, this.decorModal, this.staffModal]) {
@@ -3068,17 +3094,17 @@ export class Engine {
       { id: "intro-money", say: "And there's $10,000 in the till. Right now. Today.\n\nI have never been this excited about a room with no chairs in it. Let's go." },
 
       // ── BUILD THE ROOM ───────────────────────────────────────
-      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nOpen BUILD → Tables → click the floor. Go go go!", target: buildMenu, until: () => owns("table") },
+      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nOpen BUILD → Tables → click the floor. Go go go!", target: buildCat("table"), until: () => owns("table") },
       // Advance on the claim — OR when there's simply nothing pending, so a
       // player whose award didn't fire (or who already had it) is never parked
       // waiting to claim a prize that doesn't exist.
       { id: "award-first", say: "DING! That's an award — you get those for doing things, and I love doing things.\n\nHit Claim and the cash is yours. They don't collect themselves!", until: () => this.game.achievements.isClaimed("first-furniture") || this.game.achievements.unclaimedCount() === 0 },
-      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs. Pop them around the table — they only count as seats if they're AT one.", target: buildMenu, until: () => owns("chair") },
-      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking. No stove, no food. It's non-negotiable.", target: buildMenu, until: () => owns("stove") },
-      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters.", target: buildMenu, until: () => owns("counter") },
-      { id: "build-appliance", say: "Appliance time. Microwave, coffee machine, blender — pick your fighter.\n\nEach one unlocks recipes that need it. BUILD → Appliances.", target: buildMenu, until: () => owns("appliance") },
-      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildMenu, until: () => owns("storage") },
-      { id: "build-sink", say: "And a sink. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing.", target: buildMenu, until: () => owns("wash") },
+      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs. Pop them around the table — they only count as seats if they're AT one.", target: buildCat("chair"), until: () => owns("chair") },
+      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking. No stove, no food. It's non-negotiable.", target: buildCat("stove"), until: () => owns("stove") },
+      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters.", target: buildCat("counter"), until: () => owns("counter") },
+      { id: "build-appliance", say: "Appliance time. Microwave, coffee machine, blender — pick your fighter.\n\nEach one unlocks recipes that need it. BUILD → Appliances.", target: buildCat("appliance"), until: () => owns("appliance") },
+      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildCat("storage"), until: () => owns("storage") },
+      { id: "build-sink", say: "And a sink. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing.", target: buildCat("wash"), until: () => owns("wash") },
 
       // ── HIRE THE CREW ────────────────────────────────────────
       { id: "hire-chef", say: "A room! You built a ROOM!\n\nNow: people. You need a chef. I'd apply, but I'm contractually busy narrating.", onEnter: onlyShow(() => this.staffModal.show()), target: btn("🍳 Chef"), until: () => hired("chef") },
@@ -3086,7 +3112,7 @@ export class Engine {
       { id: "hire-errand", say: "And an errand helper — they do the shopping so the pantry never runs dry.\n\nTrust me. You want this one.", target: btn("📦 Helper"), until: () => hired("errand") },
 
       // ── PUT A DISH ON THE MENU ───────────────────────────────
-      { id: "menu-recipe", say: "Tiny problem: your menu is empty. Guests cannot order thin air. I've seen them try.\n\nOpen the MENU and add a dish!", onEnter: () => { onlyShow()(); openMenuPanel(); }, target: el(".cb-menupanel"), until: () => this.game.cooking.getMenuRecipeIds().length >= 1 },
+      { id: "menu-recipe", say: "Tiny problem: your menu is empty. Guests cannot order thin air. I've seen them try.\n\nOpen the MENU and add a dish!", onEnter: () => { onlyShow()(); openMenuPanel(); }, target: el(".cbm-tog"), until: () => this.game.cooking.getMenuRecipeIds().length >= 1 },
 
       // ── THE PAYOFF ───────────────────────────────────────────
       { id: "first-guest", say: "Tables. Kitchen. Crew. A menu. You know what that is?\n\nA RESTAURANT. Watch the door. WATCH THE DOOR.", onEnter: onlyShow(), until: () => (this.spawner?.getGuestsInsideCount() ?? 0) > 0 },

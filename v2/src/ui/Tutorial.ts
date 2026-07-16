@@ -244,6 +244,10 @@ export class Tutorial {
       Object.assign(this.spot.style, { left: "-100px", top: "-100px", width: "0", height: "0" });
       this.spot.style.outline = "none";
       this.arrow.style.display = "none";
+      // Nothing to dodge — send him home, or he'd keep whatever corner the last
+      // target chased him into for the rest of the tutorial.
+      this.panel.style.top = "auto"; this.panel.style.bottom = "18px";
+      this.panel.style.right = "auto"; this.panel.style.left = "18px";
       return;
     }
     const r = el.getBoundingClientRect();
@@ -266,14 +270,39 @@ export class Tutorial {
         : [{ transform: "translateY(4px)" }, { transform: "translateY(-3px)" }, { transform: "translateY(4px)" }],
       { duration: 900, iterations: 1, easing: "ease-in-out" },
     );
-    // Keep the chef out of the way of whatever he's pointing at.
-    const panelRect = this.panel.getBoundingClientRect();
-    const overlaps = !(r.right < panelRect.left || r.left > panelRect.right
-      || r.bottom < panelRect.top || r.top > panelRect.bottom);
-    if (overlaps && r.left < window.innerWidth / 2) {
+    // Keep the chef out of the way of whatever he's pointing at. He's
+    // pointer-events:auto, so an overlap doesn't just look bad — his body eats
+    // the taps meant for the button he's pointing at.
+    const hits = (p: DOMRect): boolean =>
+      !(r.right < p.left || r.left > p.right || r.bottom < p.top || r.top > p.bottom);
+
+    // 1. Sideways. Works on desktop, where panels are narrow columns.
+    if (hits(this.panel.getBoundingClientRect()) && r.left < window.innerWidth / 2) {
       this.panel.style.left = "auto"; this.panel.style.right = "18px";
-    } else if (!overlaps && this.panel.style.right === "18px" && r.right > window.innerWidth / 2) {
+    } else if (!hits(this.panel.getBoundingClientRect())
+      && this.panel.style.right === "18px" && r.right > window.innerWidth / 2) {
       this.panel.style.right = "auto"; this.panel.style.left = "18px";
+    }
+
+    // 2. Vertically. On a phone every panel is a full-width sheet, so there IS
+    //    no sideways escape — the flip above is a no-op and the chef sits on
+    //    top of the target. Hop to whichever end actually has clearance.
+    //    A target taller than the viewport (a full-height sheet) has no escape
+    //    at all; those steps are read-only tours, so the chef stays put.
+    if (hits(this.panel.getBoundingClientRect())) {
+      const h = this.panel.offsetHeight;
+      const gap = 12;
+      if (window.innerHeight - r.bottom >= h + gap) {
+        this.panel.style.top = "auto"; this.panel.style.bottom = "18px";
+      } else if (r.top >= h + gap) {
+        this.panel.style.bottom = "auto"; this.panel.style.top = "18px";
+      }
+    } else if (this.panel.style.top === "18px" && r.top >= 0) {
+      // Target moved on; settle back to his usual spot when it's free.
+      const back = new DOMRect(this.panel.getBoundingClientRect().left,
+        window.innerHeight - this.panel.offsetHeight - 18,
+        this.panel.offsetWidth, this.panel.offsetHeight);
+      if (!hits(back)) { this.panel.style.top = "auto"; this.panel.style.bottom = "18px"; }
     }
   }
 
