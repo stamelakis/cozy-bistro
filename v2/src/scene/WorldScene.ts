@@ -4475,12 +4475,22 @@ export class WorldScene {
     // NOTE: demoReady/staffReady promises are created in the constructor
     // — see the field declarations. We only RESOLVE them here, never
     // re-create them, so the engine's `.then(...)` references stay live.
-    // Bare-minimum starter restaurant: front door, one cooking station,
-    // one sink (so dishwashing has a baseline), one 4-top dining table.
-    // Everything else — extra tables, fridge / microwave / counters,
-    // plants, lamps, decor, sidewalk props — is something the player
-    // earns and chooses from the build menu. This keeps a fresh save's
-    // canvas clean instead of pre-populating it with an entire bistro.
+    // A brand-new restaurant is EMPTY — nothing but the front door.
+    //
+    // The tutorial hands the player the keys to a bare room and walks them
+    // through furnishing it themselves (table → chairs → stove → counter →
+    // appliance → fridge → sink) and hiring their first crew, funded by the
+    // $10,000 opening grant (claim_starter_grant's first-grant branch). Pre-
+    // placing a stove/sink/table would step on every one of those lessons and
+    // contradict the chef's opening line ("nothing and nobody inside").
+    //
+    // The DOOR stays: guests spawn on the pavement and walk in through it, so
+    // without one the restaurant simply can't take customers — that's plumbing,
+    // not furniture, and it isn't something we ask the player to discover.
+    //
+    // NB: this only affects BRAND-NEW saves. Engine registers these demo
+    // placements solely when the restored save has no furniture, so existing
+    // players keep everything they own.
     const placements: { id: string; x: number; z: number; rotY?: number; tier?: number }[] = [
       // Front door (entrance — guests spawn outside and walk through it).
       // z=5.5 lines up with the (+0.5, +0.5)-shifted front wall.
@@ -4488,32 +4498,6 @@ export class WorldScene {
       // centered at its local origin and needs to sit ON the wall plane
       // rather than half a tile inside the building.
       { id: "door",         x:  0, z:  5.5, rotY: Math.PI },
-      // Essential appliances — stove + sink along the back wall.
-      { id: "stove",        x:  0, z: -4 },
-      { id: "sink",         x: -1, z: -4 },
-      // Starter kitchen counter — single 1×1 tile to the right of
-      // the stove, gives the player a workspace appliance from day
-      // one (a few recipes use the "counter" provides slot for
-      // prep). Bar-counter was here previously but the bar role
-      // doesn't unlock until tier 2 — leading with a regular counter
-      // matches the kitchen-first starter loop better.
-      { id: "counter",      x:  2,   z: -4, rotY: 0, tier: 1 },
-      // Starter 4-top: 2×2 table anchored at (0.5, 1.5). Chairs go
-      // in the four corner-adjacent cells (pinwheel pattern) so each
-      // chair sits AT a tile center rather than straddling tile
-      // borders. Each chair gets its own corner of the table top for
-      // the plate, so there's no plate conflict between adjacent seats.
-      { id: "small-table",  x:  0.5, z:  1.5, tier: 1 },
-      // Bench-style chairs around the 2×2 table — 2 on the north side
-      // (z=0) and 2 on the south side (z=3). Matches the bench layout
-      // shown in the player's reference. Kenney chair GLB has its back
-      // at -Z by default; for the back to point AWAY from the table,
-      // north chairs use rotY = 0 (back at -Z, customer facing south),
-      // south chairs use rotY = π (back at +Z, customer facing north).
-      { id: "wooden-chair", x:  0,   z:  0,   rotY: 0,        tier: 1 },
-      { id: "wooden-chair", x:  1,   z:  0,   rotY: 0,        tier: 1 },
-      { id: "wooden-chair", x:  0,   z:  3,   rotY: Math.PI,  tier: 1 },
-      { id: "wooden-chair", x:  1,   z:  3,   rotY: Math.PI,  tier: 1 },
     ];
 
     // Boot diagnostic — list every starter placement id the build is

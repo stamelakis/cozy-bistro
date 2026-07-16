@@ -3866,14 +3866,27 @@ pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(
     if r.last_grant_micros != 0 && now - r.last_grant_micros < GRANT_COOLDOWN_MICROS {
         return Ok(()); // not due yet — silent no-op
     }
-    let bonus_cents: i64 = ctx.db.building().owner_identity().filter(ctx.sender)
-        .next()
-        .map(|b| match b.kind.as_str() {
-            "small" => 100_000,  // $1,000
-            "large" => 200_000,  // $2,000
-            _ => 150_000,        // $1,500 (medium)
-        })
-        .unwrap_or(150_000);
+    // The FIRST grant is the player's OPENING BUDGET. A brand-new restaurant now
+    // starts genuinely EMPTY (only a front door — see WorldScene's starter
+    // placements), so the tutorial has to hand them enough to actually furnish
+    // AND staff the place: table, chairs, stove, counter, fridge, sink + three
+    // hires. Cheat-safe: `last_grant_micros == 0` means "never granted", it's
+    // server-owned, and it can only ever be true once.
+    // Every LATER grant is the unchanged plot-scaled 3h top-up.
+    const FIRST_GRANT_CENTS: i64 = 1_000_000; // $10,000 opening cash
+    let is_first_grant = r.last_grant_micros == 0;
+    let bonus_cents: i64 = if is_first_grant {
+        FIRST_GRANT_CENTS
+    } else {
+        ctx.db.building().owner_identity().filter(ctx.sender)
+            .next()
+            .map(|b| match b.kind.as_str() {
+                "small" => 100_000,  // $1,000
+                "large" => 200_000,  // $2,000
+                _ => 150_000,        // $1,500 (medium)
+            })
+            .unwrap_or(150_000)
+    };
     ctx.db.restaurant().id().update(Restaurant {
         cloud_money_cents: r.cloud_money_cents.saturating_add(bonus_cents),
         last_grant_micros: now,
@@ -3883,8 +3896,9 @@ pub fn claim_starter_grant(ctx: &ReducerContext, restaurant_id: u64) -> Result<(
         record_money_event(ctx, restaurant_id, "grant", bonus_cents, rr.cloud_money_cents);
     }
     log::info!(
-        "claim_starter_grant: restaurant {} granted {} cents (kind-based)",
+        "claim_starter_grant: restaurant {} granted {} cents ({})",
         restaurant_id, bonus_cents,
+        if is_first_grant { "FIRST — opening budget" } else { "recurring 3h, kind-based" },
     );
     Ok(())
 }
