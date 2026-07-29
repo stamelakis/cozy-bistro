@@ -340,6 +340,13 @@ export class MenuPanel {
     this.render();
   }
 
+  /** The course the carousel is currently showing (appetizer/main/side/…).
+   * The tutorial reads this to know whether the player has navigated to the
+   * course it's asking them to add a dish from. */
+  getCurrentCourseKey(): RecipeDefinition["category"] {
+    return this.courses[this.ci].key;
+  }
+
   /** Put the focused dish on / off the menu. Removing always works
    * (even a dish whose appliance was later sold). Adding is gated on
    * unlocked tier + all appliances present + the per-course cap of 3. */

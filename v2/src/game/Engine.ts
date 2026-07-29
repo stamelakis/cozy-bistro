@@ -3082,11 +3082,45 @@ export class Engine {
      * tile, then that category's item grid. Null (no hole, just dim) while
      * they're out placing it — the target is the 3D floor at that point.
      */
-    const buildCat = (cat: string) => (): HTMLElement | null => {
+    const ownsCount = (cat: string, n: number): boolean =>
+      this.registry.snapshotItems().filter((i) => getFurnitureDef(i.defId)?.category === cat).length >= n;
+    /**
+     * Guide the player to ONE specific item when a category has several. Walks
+     * them all the way in: Build button → the right category tile → the exact
+     * item tile. And when they're stuck in the WRONG category's item list (they
+     * came from placing chairs and now need Cooking), it points at the ← back
+     * button first — the missing "how do I get out of here" the user hit.
+     */
+    const buildItem = (defId: string) => (): HTMLElement | null => {
+      const cat = getFurnitureDef(defId)?.category;
       const menu = document.querySelector<HTMLElement>(".cb-buildmenu");
       if (!visible(menu)) return btn("Build")();
-      return menu!.querySelector<HTMLElement>(`[data-cat="${cat}"]`)
-        ?? menu!.querySelector<HTMLElement>(`[data-item-grid="${cat}"]`);
+      const item = menu!.querySelector<HTMLElement>(`[data-def-id="${defId}"]`);
+      if (visible(item)) return item;                                   // the item is on screen
+      const catTile = menu!.querySelector<HTMLElement>(`[data-cat="${cat}"]`);
+      if (visible(catTile)) return catTile;                            // on the category grid → open the category
+      const back = menu!.querySelector<HTMLElement>("[data-build-back]");
+      if (visible(back)) return back;                                  // in the WRONG category → go back first
+      return btn("Build")();
+    };
+    /**
+     * Menu-carousel step target. If the player isn't on the course we're asking
+     * for, point at the course arrows to guide them there; once they're on it,
+     * point at the + Add button. One step teaches navigate-then-add per course.
+     */
+    const menuCourse = (course: string) => (): HTMLElement | null => {
+      const panel = document.querySelector<HTMLElement>(".cb-menupanel");
+      if (!visible(panel)) return null;
+      if (this.menuPanel.getCurrentCourseKey() !== course) {
+        return panel!.querySelector<HTMLElement>(".cbm-coursebar") ?? panel!.querySelector<HTMLElement>(".cbm-course");
+      }
+      return panel!.querySelector<HTMLElement>(".cbm-tog");
+    };
+    const menuHas = (course: "appetizer" | "main" | "side" | "dessert" | "drink"): boolean =>
+      this.game.cooking.menuHasCategory(course);
+    const menuOpen = (): boolean => {
+      const t = this.menuPanel.titleEl;
+      return !!t && !/expand/i.test(t.textContent ?? "");
     };
     /** Find a live button by its label — used for the staff hire chips. */
     const btn = (label: string) => (): HTMLElement | null =>
@@ -3099,8 +3133,18 @@ export class Engine {
      * On a phone that path starts one step further back: the sidebar is a
      * closed sheet, so they need the bottom bar's Manage button first.
      */
-    const opener = (label: string) => (): HTMLElement | null =>
-      visible(sidebarEl()) ? btn(label)() : btn("Manage")();
+    const opener = (label: string) => (): HTMLElement | null => {
+      const sb = sidebarEl();
+      if (!visible(sb)) return btn("Manage")();   // mobile: sidebar is a closed sheet → open it
+      // Desktop: the sidebar is a tall SCROLLING list, and the button we want
+      // (Staff, Social) often sits below the fold. Find it by label regardless
+      // of scroll position — reposition's scrollIntoView brings it up. Using
+      // btn()'s strict on-screen test here would reject it and the chef would
+      // point at nothing.
+      const b = [...sb!.querySelectorAll<HTMLElement>("button")]
+        .find((x) => (x.textContent ?? "").includes(label));
+      return b && b.getBoundingClientRect().height > 0 ? b : null;
+    };
     /**
      * A control that lives INSIDE the sidebar (the expand/boost/grant widget).
      * Same deal as `opener`: on a phone the sidebar is a closed sheet, so point
@@ -3125,11 +3169,6 @@ export class Engine {
       }
       try { open?.(); } catch { /* ignore */ }
     };
-    /** The recipe panel is collapsible — make sure it's actually open. */
-    const openMenuPanel = (): void => {
-      const title = this.menuPanel.titleEl;
-      if (title && /expand/i.test(title.textContent ?? "")) title.click();
-    };
 
     return [
       // ── INTRO ────────────────────────────────────────────────
@@ -3138,25 +3177,39 @@ export class Engine {
       { id: "intro-money", say: "And there's $10,000 in the till. Right now. Today.\n\nI have never been this excited about a room with no chairs in it. Let's go." },
 
       // ── BUILD THE ROOM ───────────────────────────────────────
-      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nOpen BUILD → Tables → click the floor. Go go go!", target: buildCat("table"), until: () => owns("table") },
+      // Each step points at ONE specific item, and buildItem walks the player
+      // in (Build → category → item) and back OUT again if they're lost in the
+      // wrong category.
+      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nBUILD → Tables → grab the SMALL TABLE and click the floor. Go go go!", target: buildItem("small-table"), until: () => owns("table") },
       // Advance on the claim — OR when there's simply nothing pending, so a
       // player whose award didn't fire (or who already had it) is never parked
       // waiting to claim a prize that doesn't exist.
       { id: "award-first", say: "DING! That's an award — you get those for doing things, and I love doing things.\n\nHit Claim and the cash is yours. They don't collect themselves!", until: () => this.game.achievements.isClaimed("first-furniture") || this.game.achievements.unclaimedCount() === 0 },
-      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs. Pop them around the table — they only count as seats if they're AT one.", target: buildCat("chair"), until: () => owns("chair") },
-      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking. No stove, no food. It's non-negotiable.", target: buildCat("stove"), until: () => owns("stove") },
-      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters.", target: buildCat("counter"), until: () => owns("counter") },
-      { id: "build-appliance", say: "Appliance time. Microwave, coffee machine, blender — pick your fighter.\n\nEach one unlocks recipes that need it. BUILD → Appliances.", target: buildCat("appliance"), until: () => owns("appliance") },
-      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildCat("storage"), until: () => owns("storage") },
-      { id: "build-sink", say: "And a sink. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing.", target: buildCat("wash"), until: () => owns("wash") },
+      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs → WOODEN CHAIR. Give me FOUR, snug around the table — a chair only counts as a seat when it's AT one.", target: buildItem("wooden-chair"), until: () => ownsCount("chair", 4) },
+      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking → Gas Stove. No stove, no food. Non-negotiable.", target: buildItem("stove"), until: () => owns("stove") },
+      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters → Counter.", target: buildItem("counter"), until: () => owns("counter") },
+      { id: "build-appliance", say: "An appliance next. Grab the TOASTER — BUILD → Appliances → Toaster.\n\nEach appliance unlocks recipes that need it. Toast is a great start.", target: buildItem("toaster"), until: () => owns("appliance") },
+      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildItem("fridge-small"), until: () => owns("storage") },
+      { id: "build-sink", say: "And a SINK. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing → Sink.", target: buildItem("sink"), until: () => owns("wash") },
 
       // ── HIRE THE CREW ────────────────────────────────────────
-      { id: "hire-chef", say: "A room! You built a ROOM!\n\nNow: people. You need a chef. I'd apply, but I'm contractually busy narrating.", onEnter: onlyShow(() => this.staffModal.show()), target: btn("🍳 Chef"), until: () => hired("chef") },
-      { id: "hire-waiter", say: "A waiter! Someone to take orders and carry plates that aren't me.", target: btn("🍽 Waiter"), until: () => hired("waiter") },
-      { id: "hire-errand", say: "And an errand helper — they do the shopping so the pantry never runs dry.\n\nTrust me. You want this one.", target: btn("📦 Helper"), until: () => hired("errand") },
+      // Guide them to OPEN the staff panel themselves (it used to just appear),
+      // then point at each hire button in turn.
+      { id: "hire-open", say: "A room! You built a ROOM!\n\nNow: people. Everything crew-related lives under STAFF — open it up.", onEnter: onlyShow(), target: opener("👥 Staff"), until: () => isOpen(this.staffModal) },
+      { id: "hire-chef", say: "A CHEF first. Nothing gets cooked without one — I'd apply, but I'm contractually busy narrating.\n\nTap to hire.", target: btn("🍳 Chef"), until: () => hired("chef") },
+      { id: "hire-waiter", say: "Now a WAITER, to take orders and carry plates that aren't me.", target: btn("🍽 Waiter"), until: () => hired("waiter") },
+      { id: "hire-errand", say: "And an ERRAND helper — they do the shopping so the pantry never runs dry.\n\nTrust me. You want this one.", target: btn("📦 Helper"), until: () => hired("errand") },
 
-      // ── PUT A DISH ON THE MENU ───────────────────────────────
-      { id: "menu-recipe", say: "Tiny problem: your menu is empty. Guests cannot order thin air. I've seen them try.\n\nOpen the MENU and add a dish!", onEnter: () => { onlyShow()(); openMenuPanel(); }, target: el(".cbm-tog"), until: () => this.game.cooking.getMenuRecipeIds().length >= 1 },
+      // ── PUT DISHES ON THE MENU ───────────────────────────────
+      // Guide opening the menu, then walk EVERY course so the player leaves with
+      // a full menu and knows how to browse it.
+      { id: "menu-open", say: "Tiny problem: your menu is empty. Guests can't order thin air — I've watched them try.\n\nOpen the MENU (bottom of the screen) to fix that.", onEnter: onlyShow(), target: () => menuOpen() ? null : this.menuPanel.titleEl, until: () => menuOpen() },
+      { id: "menu-appetizer", say: "You start on APPETIZERS. Swipe the dishes to one you can make, then hit + Add to menu.", target: menuCourse("appetizer"), until: () => menuHas("appetizer") },
+      { id: "menu-main", say: "Now the MAINS — the money-makers. Use the course arrows up top to get there, then add one.", target: menuCourse("main"), until: () => menuHas("main") },
+      { id: "menu-side", say: "SIDES next. Cheap to make, they pad every order. Add one.", target: menuCourse("side"), until: () => menuHas("side") },
+      { id: "menu-dessert", say: "DESSERTS! Nobody NEEDS one, everybody wants one. Add a sweet.", target: menuCourse("dessert"), until: () => menuHas("dessert") },
+      { id: "menu-drink", say: "And DRINKS — the best margins in the house. Add one and your menu's complete.", target: menuCourse("drink"), until: () => menuHas("drink") },
+      { id: "menu-yourmenu", say: "Want to see it the way a guest does? Tap YOUR MENU for the customer's-eye view. Beautiful, right?", target: el(".cbm-yourmenu") },
 
       // ── THE PAYOFF ───────────────────────────────────────────
       { id: "first-guest", say: "Tables. Kitchen. Crew. A menu. You know what that is?\n\nA RESTAURANT. Watch the door. WATCH THE DOOR.", onEnter: onlyShow(), until: () => (this.spawner?.getGuestsInsideCount() ?? 0) > 0 },
@@ -3172,7 +3225,8 @@ export class Engine {
       { id: "tour-upgrades-find", say: "See ⚡ UPGRADES in there? Tap it.\n\nI'm not going to open these for you — you'll never find them again if I do.", target: opener("⚡ Upgrades"), until: () => isOpen(this.upgradeModal) },
       { id: "tour-upgrades", say: "UPGRADES! Level up a recipe and it sells for more and scores better.\n\nCosts money and REAL time — start one and go live your life.", target: modalEl(this.upgradeModal) },
       { id: "tour-pantry-find", say: "Close that and find 🧺 PANTRY. Same place.", onEnter: onlyShow(), target: opener("🧺 Pantry"), until: () => isOpen(this.pantryModal) },
-      { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nSet a stock target, flip on Auto-shop, and your errand helper keeps it topped up forever.", target: modalEl(this.pantryModal) },
+      { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nRight now every restock is a manual chore. Let's fix that.", target: modalEl(this.pantryModal) },
+      { id: "tour-autoshop", say: "See AUTO-SHOP: OFF at the bottom? Tap it ON.\n\nNow your errand helper does the shopping FOR you — the pantry stays topped up forever.", target: () => isOpen(this.pantryModal) ? el('[data-autoshop-toggle="1"]')() : opener("🧺 Pantry")(), until: () => this.game.autoShopEnabled === true },
       { id: "tour-social-find", say: "Next: 👋 SOCIAL. Go on, I'll wait.", onEnter: onlyShow(), target: opener("👋 Social"), until: () => isOpen(this.cloudModal) },
       { id: "tour-social", say: "SOCIAL! Other players, out there, right now, in their own restaurants.\n\nFriends, leaderboards, visits. Go be nosy.", target: modalEl(this.cloudModal) },
       { id: "tour-decor-find", say: "Last one, and it's my favourite: 🎨 DECOR.", onEnter: onlyShow(), target: opener("🎨 Decor"), until: () => isOpen(this.decorModal) },

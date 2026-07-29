@@ -377,12 +377,13 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: "first-chat",      name: "Say Hi",             category: "intro",
     description: "Send your first chat message.",
     predicate: (g) => g.playerCounters.chatsSent >= 1 },
-  // 2, not 1: the first weather is set the instant the world boots, so this
-  // fired before the player had done anything at all — and it never matched its
-  // own description. Seeing it CHANGE means time actually passed.
+  // Passive award — the weather changes on its own, so it must not pop during
+  // the tutorial (it was the FIRST thing a new player saw, before doing
+  // anything). Gate on having served a customer, like the cash ladder: any real
+  // playthrough clears it, but the intro can't.
   { id: "first-weather",   name: "Outside Awareness",  category: "intro",
-    description: "See the weather change.",
-    predicate: (g) => g.playerCounters.weathersSeen.size >= 2 },
+    description: "See the weather change once you're up and running.",
+    predicate: (g) => g.playerCounters.weathersSeen.size >= 2 && totalServed(g) >= 1 },
   // Actual ingredient purchases only — NOT "any expense", which fired the
   // instant the player first spent on furniture or a hire (and mislabelled it
   // as buying ingredients). Now it means what it says, and lines up with the

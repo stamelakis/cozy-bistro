@@ -247,6 +247,21 @@ export class Tutorial {
     }
   }
 
+  /** The chef's resting X — far enough right to clear the left sidebar so he
+   * never sits on the Manage / Upgrades / Staff buttons (the intro steps have
+   * no target, so he parks here). On mobile the sidebar is a closed off-screen
+   * sheet, which reports a left-of-viewport rect, so we fall back to the inset. */
+  private homeLeft(): number {
+    const sb = document.querySelector<HTMLElement>(".cb-sidebar");
+    if (sb) {
+      const r = sb.getBoundingClientRect();
+      if (r.width > 0 && r.right > 0 && r.left < 40 && r.right < window.innerWidth * 0.55) {
+        return Math.round(r.right + 12);
+      }
+    }
+    return 18;
+  }
+
   /** Re-measure the target every tick — panels move, scroll, and re-render. */
   private reposition(): void {
     const step = this.steps[this.idx];
@@ -268,7 +283,7 @@ export class Tutorial {
       // Nothing to dodge — send him home, or he'd keep whatever corner the last
       // target chased him into for the rest of the tutorial.
       this.panel.style.top = "auto"; this.panel.style.bottom = "18px";
-      this.panel.style.right = "auto"; this.panel.style.left = "18px";
+      this.panel.style.right = "auto"; this.panel.style.left = `${this.homeLeft()}px`;
       return;
     }
     // Scroll it into view first — a target below the fold (the Expand button in
@@ -316,7 +331,7 @@ export class Tutorial {
       this.panel.style.left = "auto"; this.panel.style.right = "18px";
     } else if (!hits(this.panel.getBoundingClientRect())
       && this.panel.style.right === "18px" && r.right > window.innerWidth / 2) {
-      this.panel.style.right = "auto"; this.panel.style.left = "18px";
+      this.panel.style.right = "auto"; this.panel.style.left = `${this.homeLeft()}px`;
     }
 
     // 2. Vertically. On a phone every panel is a full-width sheet, so there IS

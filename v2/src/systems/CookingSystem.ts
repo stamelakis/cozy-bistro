@@ -59,6 +59,15 @@ export class CookingSystem {
     return this.menuRecipeIds;
   }
 
+  /** True when the menu has at least one dish of the given course/category.
+   * Drives the tutorial's "put one of every kind on the menu" walk. */
+  menuHasCategory(category: RecipeDefinition["category"]): boolean {
+    return this.menuRecipeIds.some((id) => {
+      const r = recipes.find((rr) => rr.id === id);
+      return r?.category === category;
+    });
+  }
+
   getMenuRecipeIdsSnapshot(): string[] {
     return this.menuRecipeIds.slice();
   }

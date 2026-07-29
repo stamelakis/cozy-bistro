@@ -174,6 +174,9 @@ export class PantryModal {
 
     // Auto-shop toggle.
     this.toggle = document.createElement("button");
+    // Tagged so the tutorial can spotlight it and wait for the player to flip
+    // it on (which also triggers the first auto-shop + its awards).
+    this.toggle.dataset.autoshopToggle = "1";
     Object.assign(this.toggle.style, {
       marginTop: "10px",
       padding: "6px 10px",

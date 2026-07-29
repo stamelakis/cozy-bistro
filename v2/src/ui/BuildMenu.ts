@@ -791,6 +791,9 @@ export class BuildMenu {
    * return to the category grid. */
   private renderCategoryItems(cat: FurnitureDef["category"]): void {
     const back = document.createElement("button");
+    // Tagged so the tutorial can send a player who's in the WRONG category back
+    // to the category grid ("go back, then pick Cooking").
+    back.dataset.buildBack = "1";
     back.textContent = `← ${BuildMenu.CATEGORY_ICONS[cat]} ${BuildMenu.CATEGORY_LABELS[cat]}`;
     Object.assign(back.style, {
       display: "block", width: "100%", textAlign: "left",
@@ -839,6 +842,9 @@ export class BuildMenu {
    * reuse it. */
   private appendItemTile(into: HTMLElement, def: FurnitureDef): void {
     const tile = document.createElement("button");
+    // Lets the tutorial spotlight ONE specific item ("place a Small Table")
+    // instead of the whole category, when a category has several options.
+    tile.dataset.defId = def.id;
     Object.assign(tile.style, {
       display: "flex",
       flexDirection: "column",
