@@ -7,6 +7,7 @@ import { FurnitureRegistry, footprintCells, type PersistedPlacement } from "../g
 import { PlacementGrid } from "../scene/PlacementGrid";
 import type { SeatMarkers } from "../scene/SeatMarkers";
 import { fitFurniture, placementY, defHeight, snapToAdjacentWall, WALL_SHELF_MAX_BELOW_HEIGHT } from "../assets/fitFurniture";
+import { flashHighlight, showPlacementHint } from "./uiHints";
 import { closeMobileSheets } from "./MobileUI";
 import { attachTooltip } from "./tooltip";
 import { showTierGate } from "./tierUnlock";
@@ -621,6 +622,29 @@ export class BuildMenu {
     // closure, so a fresh render is the cleanest "forget what was
     // expanded" path — same effect as toggling tiers.
     if (!this.collapsed) { this.selectedCategory = null; this.renderTierContent(); }
+  }
+
+  /**
+   * Open the build menu straight to a specific item and pulse it — the "you
+   * need a Blender for this dish → here it is" jump. Expands the panel, selects
+   * the item's tier + category, renders, then highlights the tile.
+   */
+  revealItem(defId: string): void {
+    const def = furnitureCatalog.find((d) => d.id === defId);
+    if (!def) return;
+    if (this.collapsed) this.toggleCollapsed();          // make sure the body is showing
+    const playerTier = this.game.getLuxuryTier();
+    const tier = Math.min(inferQualityTier(def), playerTier) as LuxuryTier;
+    this.selectedTier = tier;
+    this.selectedCategory = def.category;
+    this.refreshTierTabs();
+    this.renderTierContent();
+    // The tile exists synchronously (its thumbnail streams in later); find and
+    // pulse it. Deferred a frame so layout settles before we scroll to it.
+    window.requestAnimationFrame(() => {
+      const tile = this.rootEl?.querySelector<HTMLElement>(`[data-def-id="${defId}"]`);
+      flashHighlight(tile);
+    });
   }
 
   /** Sync the title text with the collapse state. */
@@ -1305,6 +1329,10 @@ export class BuildMenu {
     if (this.sellMode) this.toggleSellMode(); // exit sell mode if entering place mode
     if (this.moveMode) this.toggleMoveMode();
     if (this.storeMode) this.toggleStoreMode();
+    // Discreet "this goes ON a counter / wall / …" hint for items that can't
+    // just drop on the floor. No-op for ordinary floor items and for any
+    // placement type the player has ticked "don't show again".
+    showPlacementHint(def.placement);
     // On mobile the build panel is a slide-in sheet covering the view —
     // close it so the player can see the floor they're placing on.
     closeMobileSheets();

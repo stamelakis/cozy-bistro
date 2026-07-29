@@ -5,7 +5,7 @@ import { Game } from "./Game";
 import { isServerSim } from "./featureFlags";
 import { GuestSpawner } from "./GuestSpawner";
 import { DishwareLeakWatcher } from "../systems/DishwareLeakWatcher";
-import { getFurnitureDef } from "../data/furnitureCatalog";
+import { getFurnitureDef, furnitureCatalog } from "../data/furnitureCatalog";
 import { disposeObject3D } from "../assets/disposeObject3D";
 import { PedestrianSpawner } from "./PedestrianSpawner";
 import { SharedPedestrians } from "./SharedPedestrians";
@@ -790,6 +790,27 @@ export class Engine {
     // thunk is lazy (upgradeModal is constructed just below), so the
     // forward reference resolves by the time a player clicks it.
     this.menuPanel = new MenuPanel(container, this.game, () => this.upgradeModal.show());
+    // Tapping "Add" on a dish you can't make yet (missing appliance) sends you
+    // to BUILD it, rather than silently doing nothing. Find the cheapest item
+    // that provides the missing appliance, make sure the build menu is open
+    // (on mobile that means tapping its bottom-bar button), then pulse it.
+    this.menuPanel.onNeedAppliance = (applianceId: string) => {
+      const provider = furnitureCatalog
+        .filter((d) => d.provides === applianceId)
+        .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+      if (!provider) return;
+      const menu = document.querySelector<HTMLElement>(".cb-buildmenu");
+      const onScreen = !!menu && (() => {
+        const r = menu.getBoundingClientRect();
+        return r.width > 0 && r.right > 0 && r.left < window.innerWidth;
+      })();
+      if (!onScreen) {
+        [...document.querySelectorAll<HTMLElement>("button")]
+          .find((b) => /Build/.test(b.textContent ?? "") && b.getBoundingClientRect().width > 0)
+          ?.click();
+      }
+      this.buildMenu.revealItem(provider.id);
+    };
     makeDraggableResizable({
       // v3 — old saved widths from when the panel's maxWidth was 760
       // overrode the new 500-max via PanelDragResize.applyLayout, which

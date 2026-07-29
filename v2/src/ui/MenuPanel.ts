@@ -43,6 +43,10 @@ export class MenuPanel {
   readonly titleEl: HTMLElement;
   readonly body: HTMLElement;
 
+  /** Fired when the player taps Add on a dish whose appliance they don't own
+   * yet. Engine opens the build menu on that appliance. */
+  onNeedAppliance?: (applianceId: string) => void;
+
   /** Precomputed per-course dish lists, deduped by id and sorted
    * Tier 1 → 5. `getRecipeLuxuryTier` is a pure function of the recipe
    * definition, so this never changes at runtime and is built once. */
@@ -207,7 +211,7 @@ export class MenuPanel {
 .cbm-tog{display:block;margin:0 auto;font:inherit;font-size:12px;font-weight:600;padding:7px 16px;border-radius:18px;cursor:pointer;border:1px solid rgba(120,200,120,.45);background:rgba(120,200,120,.16);color:#a8e2a8}
 .cbm-tog.off{border-color:rgba(255,245,220,.14);background:rgba(255,245,220,.05);color:rgba(255,245,220,.6)}
 .cbm-tog.lock{border-color:rgba(255,180,120,.5);background:rgba(255,180,120,.12);color:#ffd986;cursor:default}
-.cbm-tog.need{border-color:rgba(230,120,110,.5);background:rgba(230,120,110,.14);color:#f0b6ac;cursor:default}
+.cbm-tog.need{border-color:rgba(230,120,110,.5);background:rgba(230,120,110,.14);color:#f0b6ac;cursor:pointer}
 .cbm-detail{margin-top:10px;border-top:1px solid rgba(255,245,220,.14);padding-top:10px}
 .cbm-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:11px}
 .cbm-stat{background:rgba(255,245,220,.04);border-radius:8px;padding:6px 8px;text-align:center}
@@ -370,7 +374,12 @@ export class MenuPanel {
     const missing = provided
       ? this.game.cooking.getRecipeAppliances(recipe).filter((a) => !provided.has(a))
       : [];
-    if (missing.length > 0) return; // appliance missing
+    if (missing.length > 0) {
+      // Don't just refuse — send the player to BUILD the appliance they're
+      // missing. Engine opens the build menu on that item and pulses it.
+      this.onNeedAppliance?.(missing[0]);
+      return;
+    }
     const added = this.game.cooking.addToMenu(recipe.id);
     if (!added) { this.flashCap(); return; } // per-course cap hit
     this.lastSig = ""; this.render();
@@ -475,7 +484,8 @@ export class MenuPanel {
       this.tog.textContent = `🔒 Unlock Tier ${tier}`;
     } else if (!makeable) {
       this.tog.className = "cbm-tog need";
-      this.tog.textContent = `Needs ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")}`;
+      // Tapping it now jumps to BUILD for the missing appliance, so say so.
+      this.tog.textContent = `Needs ${missing.map((a) => APPLIANCE_LABELS[a]).join(", ")} → build it`;
     } else if (on) {
       this.tog.className = "cbm-tog";
       this.tog.textContent = "✓ On the menu";
