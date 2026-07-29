@@ -210,6 +210,13 @@ export class UpgradeModal {
     }
   }
 
+  /** Switch the modal to a section (recipes / staff). The tutorial uses this to
+   * walk the player from a recipe upgrade over to staff training. */
+  showSection(section: Section): void {
+    this.selectedSection = section;
+    this.refresh();
+  }
+
   private renderSectionTabs(): void {
     this.sectionTabs.innerHTML = "";
     const mk = (key: Section, label: string): HTMLButtonElement => {
@@ -410,6 +417,9 @@ export class UpgradeModal {
       row.appendChild(label);
 
       const btn = document.createElement("button");
+      // Tagged so the tutorial can spotlight an ACTIVE dish's Upgrade button.
+      btn.dataset.recipeUpgrade = recipe.id;
+      if (isOnMenu) btn.dataset.onMenu = "1";
       Object.assign(btn.style, {
         padding: "6px 12px",
         background: "rgba(120, 200, 120, 0.22)",
@@ -552,6 +562,7 @@ export class UpgradeModal {
       row.appendChild(label);
 
       const btn = document.createElement("button");
+      btn.dataset.staffTrain = m.id;   // tutorial spotlights a Train button
       Object.assign(btn.style, {
         padding: "8px 14px",
         background: "rgba(120, 200, 120, 0.22)",

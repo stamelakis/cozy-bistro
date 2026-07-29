@@ -300,6 +300,7 @@ export class Hud {
     ];
     for (const s of specs) {
       const card = document.createElement("div");
+      card.dataset.stat = s.key;   // lets the tutorial spotlight a specific stat (weather, rent, …)
       Object.assign(card.style, {
         display: "flex", flexDirection: "column",
         gap: "1px",

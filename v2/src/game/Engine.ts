@@ -3143,6 +3143,27 @@ export class Engine {
       const t = this.menuPanel.titleEl;
       return !!t && !/expand/i.test(t.textContent ?? "");
     };
+    // Upgrades: detect a STARTED upgrade (they take real time, so we advance on
+    // start, not completion) — either an in-flight timer or an already-raised level.
+    const anyRecipeUpgrading = (): boolean =>
+      this.game.cooking.isAnyRecipeTraining()
+      || Object.values(this.game.cooking.getRecipeUpgradeLevelsSnapshot()).some((l) => l > 1);
+    const anyStaffUpgrading = (): boolean =>
+      this.game.staff.isAnyMemberTraining()
+      || this.game.staff.snapshotMembers().some((m) => m.upgradeLevel > 0);
+    // Spotlight the Upgrade button of an ACTIVE (on-menu) dish; fall back to any
+    // dish, or to the Upgrades opener if the modal isn't open yet.
+    const recipeUpgradeBtn = (): HTMLElement | null => {
+      const root = rootOf(this.upgradeModal);
+      if (!visible(root)) return opener("⚡ Upgrades")();
+      return root!.querySelector<HTMLElement>('[data-recipe-upgrade][data-on-menu]:not([disabled])')
+        ?? root!.querySelector<HTMLElement>('[data-recipe-upgrade]:not([disabled])');
+    };
+    const staffTrainBtn = (): HTMLElement | null => {
+      const root = rootOf(this.upgradeModal);
+      if (!visible(root)) return opener("⚡ Upgrades")();
+      return root!.querySelector<HTMLElement>('[data-staff-train]:not([disabled])');
+    };
     /** Find a live button by its label — used for the staff hire chips. */
     const btn = (label: string) => (): HTMLElement | null =>
       [...document.querySelectorAll<HTMLElement>("button")]
@@ -3172,8 +3193,17 @@ export class Engine {
      * at Manage first. Once it's open, reposition()'s auto-scroll brings the
      * control into view — these sit at the top of a long scrolling strip.
      */
-    const inSidebar = (sel: string) => (): HTMLElement | null =>
-      visible(sidebarEl()) ? el(sel)() : btn("Manage")();
+    const inSidebar = (sel: string) => (): HTMLElement | null => {
+      const sb = sidebarEl();
+      if (!visible(sb)) return btn("Manage")();   // mobile: closed sheet → open it
+      // Find it inside the docked sidebar even when it's scrolled OUT of view
+      // (the Expand/Boost/Grant widget sits at the very top, and the tour just
+      // scrolled the list down to Social/Staff). reposition's scrollIntoView
+      // then brings it back up. The strict on-screen test would return null and
+      // the player would be left to discover the scroll themselves.
+      const e = sb!.querySelector<HTMLElement>(sel);
+      return e && e.getBoundingClientRect().height > 0 ? e : null;
+    };
     /** A modal's backing element, reached past TS's `private`. */
     const rootOf = (m: unknown): HTMLElement | null =>
       (m as { root?: HTMLElement })?.root ?? null;
@@ -3243,8 +3273,12 @@ export class Engine {
       // whose panel is already reachable just auto-advances — no dead taps.
       { id: "tour-manage-find", say: "Right. The grand tour.\n\nEverything you run this place with lives under MANAGE. Open it up.", onEnter: onlyShow(), target: () => visible(sidebarEl()) ? null : btn("Manage")(), until: () => visible(sidebarEl()) },
       { id: "tour-manage", say: "THIS is your dashboard: cash, rating, the day, and every panel worth opening.\n\nThat OPEN/CLOSED button? Those are your doors. Close up and the guests stop coming.", target: el(".cb-sidebar") },
+      { id: "tour-weather", say: "🌦 See the WEATHER? It's not just for show.\n\nSunny days pack the place; storms and cold snaps thin the crowd. Watch it, and BOOST or add DECOR when the skies turn against you.", target: inSidebar('[data-stat="weather"]') },
+      { id: "tour-economy", say: "💰 Your money, in one breath: guests paying for food = INCOME.\n\n🏠 RENT and 💵 WAGES are your daily EXPENSES — they tick every day whether anyone shows up or not. Keep income above them and you're golden.", target: inSidebar('[data-stat="wages"]') },
       { id: "tour-upgrades-find", say: "See ⚡ UPGRADES in there? Tap it.\n\nI'm not going to open these for you — you'll never find them again if I do.", target: opener("⚡ Upgrades"), until: () => isOpen(this.upgradeModal) },
-      { id: "tour-upgrades", say: "UPGRADES! Level up a recipe and it sells for more and scores better.\n\nCosts money and REAL time — start one and go live your life.", target: modalEl(this.upgradeModal) },
+      { id: "tour-upgrades", say: "UPGRADES! Two kinds: better RECIPES and better STAFF. Let's actually do one of each.", target: modalEl(this.upgradeModal) },
+      { id: "tour-upgrade-recipe", say: "Pick one of your ACTIVE dishes and hit Upgrade. A few dollars and some real time — then it sells for more and scores higher, forever.", onEnter: () => { onlyShow(() => this.upgradeModal.show())(); this.upgradeModal.showSection("recipes"); }, target: recipeUpgradeBtn, until: anyRecipeUpgrading },
+      { id: "tour-upgrade-staff", say: "Now your CREW. Switch to STAFF and train someone — faster cooking, faster service. It compounds.", onEnter: () => { this.upgradeModal.show(); this.upgradeModal.showSection("staff"); }, target: staffTrainBtn, until: anyStaffUpgrading },
       { id: "tour-pantry-find", say: "Close that and find 🧺 PANTRY. Same place.", onEnter: onlyShow(), target: opener("🧺 Pantry"), until: () => isOpen(this.pantryModal) },
       { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nRight now every restock is a manual chore. Let's fix that.", target: modalEl(this.pantryModal) },
       { id: "tour-autoshop", say: "See AUTO-SHOP: OFF at the bottom? Tap it ON.\n\nNow your errand helper does the shopping FOR you — the pantry stays topped up forever.", target: () => isOpen(this.pantryModal) ? el('[data-autoshop-toggle="1"]')() : opener("🧺 Pantry")(), until: () => this.game.autoShopEnabled === true },
