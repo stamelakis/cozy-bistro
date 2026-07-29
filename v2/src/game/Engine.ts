@@ -2501,6 +2501,13 @@ export class Engine {
    * another veil. */
   private seamlessRevealStarted = false;
 
+  /** Veil raised over the world while auth is being resolved, so a logged-out
+   * or slow-connecting player never sees the raw empty restaurant flash before
+   * the login screen. Lifted the instant we know the outcome (enter game / show
+   * login / show plot-picker). */
+  private authVeil: { remove: () => void } | null = null;
+  private liftAuthVeil(): void { this.authVeil?.remove(); this.authVeil = null; }
+
   /** Seamless reload — overlay a loading veil and keep it up until the
    * server snapshot has been applied to staff + guests, then lift it.
    * Without this the player watches everyone start at default positions
@@ -2595,6 +2602,11 @@ export class Engine {
    * picked a plot yet see the BuildingPickModal next; players with
    * a plot enter the game immediately. */
   private installAuthGate(container: HTMLElement): void {
+    // Cover the world immediately. The game keeps initialising behind this so
+    // it's ready to reveal, but the player sees a clean loading screen instead
+    // of the empty $0 restaurant flashing before login. Lifted at every exit:
+    // entering the game, or showing the login / plot-pick modal.
+    if (!this.authVeil) this.authVeil = this.showLoadingVeil();
     // didClaim=true means the player JUST claimed via the picker
     // (one-time starter cash bonus applies). didClaim=false means
     // a returning player whose plot was already on file (no bonus
@@ -2625,12 +2637,14 @@ export class Engine {
             }
             if (waited < 5000) { window.setTimeout(wait, 200); return; }
             console.warn("[Engine] enterGame(didClaim=true): Restaurant row never arrived after 5s — re-showing modal");
+            this.liftAuthVeil();
             new BuildingPickModal(container, this.cloud, () => enterGame(true));
           };
           window.setTimeout(wait, 200);
           return;
         }
         console.warn("[Engine] enterGame called with no Restaurant on cloud — forcing BuildingPickModal (cache may be stale; try Ctrl+Shift+R if this repeats)");
+        this.liftAuthVeil();
         new BuildingPickModal(container, this.cloud, () => enterGame(true));
         return;
       }
@@ -2686,6 +2700,10 @@ export class Engine {
         }
       }
       this.game.setAuthGated(false);
+      // Truly in now — drop the auth veil. revealWhenHydrated (below) raises its
+      // own hydration veil in the same tick, so the hand-off is seamless (both
+      // are the same dark screen).
+      this.liftAuthVeil();
       // Reveal the mobile bottom bar / camera chrome now that login +
       // plot-pick are behind us (no-op on desktop).
       setMobileInGame(true);
@@ -2859,6 +2877,7 @@ export class Engine {
           // claim_building auto-creates the Restaurant atomically (H.96), so
           // the modal's completion means both rows now exist. enterGame(true)
           // triggers the starter cash bonus.
+          this.liftAuthVeil();
           pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
         }
         window.setTimeout(wait, 250);
@@ -2913,7 +2932,7 @@ export class Engine {
       }
     });
     timer = window.setTimeout(() => {
-      if (!didAfterAuth) modal.show();
+      if (!didAfterAuth) { this.liftAuthVeil(); modal.show(); }
     }, 8000);
   }
 
@@ -3143,6 +3162,10 @@ export class Engine {
       const t = this.menuPanel.titleEl;
       return !!t && !/expand/i.test(t.textContent ?? "");
     };
+    // The full-screen "Your menu" customer-view overlay. When it's up it covers
+    // the Your-menu button, so the spotlight must NOT keep pointing at the now-
+    // hidden button — that left a stray empty hole + arrow floating over the card.
+    const customerViewOpen = (): boolean => visible(document.querySelector<HTMLElement>(".cbm-cmback"));
     // Upgrades: detect a STARTED upgrade (they take real time, so we advance on
     // start, not completion) — either an in-flight timer or an already-raised level.
     const anyRecipeUpgrading = (): boolean =>
@@ -3260,7 +3283,7 @@ export class Engine {
       { id: "menu-side", say: "SIDES next. Cheap to make, they pad every order. Add one.", target: menuCourse("side"), until: () => menuHas("side") },
       { id: "menu-dessert", say: "DESSERTS! Nobody NEEDS one, everybody wants one. Add a sweet.", target: menuCourse("dessert"), until: () => menuHas("dessert") },
       { id: "menu-drink", say: "And DRINKS — the best margins in the house. Add one and your menu's complete.", target: menuCourse("drink"), until: () => menuHas("drink") },
-      { id: "menu-yourmenu", say: "Want to see it the way a guest does? Tap YOUR MENU for the customer's-eye view. Beautiful, right?", target: el(".cbm-yourmenu") },
+      { id: "menu-yourmenu", say: "Want to see it the way a guest does? Tap YOUR MENU for the customer's-eye view. Beautiful, right?", target: () => customerViewOpen() ? null : el(".cbm-yourmenu")() },
 
       // ── THE PAYOFF ───────────────────────────────────────────
       { id: "first-guest", say: "Tables. Kitchen. Crew. A menu. You know what that is?\n\nA RESTAURANT. Watch the door. WATCH THE DOOR.", onEnter: onlyShow(), until: () => (this.spawner?.getGuestsInsideCount() ?? 0) > 0 },
