@@ -397,6 +397,7 @@ export class SaveSystem {
         visitsIn: this.game.playerCounters.visitsIn,
         chatsSent: this.game.playerCounters.chatsSent,
         boostsUsed: this.game.playerCounters.boostsUsed,
+        ingredientsPurchased: this.game.playerCounters.ingredientsPurchased,
         weathersSeen: Array.from(this.game.playerCounters.weathersSeen),
       },
       themeId: this.game.getCurrentTheme().id,

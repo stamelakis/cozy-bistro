@@ -618,9 +618,12 @@ export class StaffRouter {
 
   constructor(
     chefChar: AnimatedCharacter,
-    chefMemberId: string,
+    // null = don't attach this base body yet. A brand-new restaurant has an
+    // empty roster, so its base chef/waiter aren't anybody yet — the first hire
+    // spawns a real body. Loaded saves pass member #0's id and attach as before.
+    chefMemberId: string | null,
     waiterChar: AnimatedCharacter,
-    waiterMemberId: string,
+    waiterMemberId: string | null,
     stovePos: THREE.Vector2,
     pickupPos: THREE.Vector2,
     pathfind?: Pathfinding,
@@ -636,8 +639,8 @@ export class StaffRouter {
     this.getSpeedMultiplier = getSpeedMultiplier;
     this.getChefCookMultiplier = getChefCookMultiplier;
     this.getCookStations = getCookStations;
-    this.addChef(chefChar, chefMemberId);
-    this.addWaiter(waiterChar, waiterMemberId);
+    if (chefMemberId) this.addChef(chefChar, chefMemberId);
+    if (waiterMemberId) this.addWaiter(waiterChar, waiterMemberId);
   }
 
   /** Compute the chef's standing position one tile in front of a stove.

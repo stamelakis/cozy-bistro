@@ -1370,23 +1370,22 @@ export class Engine {
           "Chef or waiter character GLB failed to load. Check Network tab for chef.glb / waiter.glb.",
         );
       } else {
-        // Make sure the StaffSystem has a roster entry for every base
-        // staff character the world spawned (1 chef, 1 waiter, 1
-        // errand). A fresh save has an empty roster; a loaded save
-        // may already have the records. ensureBaseHeadcount pads
-        // missing ones with auto-named members so we can attach
-        // training to them.
-        // Barman count starts at 0 — the player hires one when they
-        // build a bar counter and want it staffed. No "base barman"
-        // gets pre-spawned with the world.
-        const baseCounts = { chef: 1, waiter: 1, errand: this.scene.errandChar ? 1 : 0, barman: 0 };
-        this.game.staff.ensureBaseHeadcount(baseCounts);
-        // First member of each role is the base char.
-        const chefId = this.game.staff.getMembers("chef")[0]!.id;
-        const waiterId = this.game.staff.getMembers("waiter")[0]!.id;
+        // Attach the base chef/waiter bodies to the router ONLY if the roster
+        // already has that role — i.e. a loaded save. A brand-new restaurant
+        // starts with an empty roster and nobody on the floor: leave the base
+        // bodies unattached and hidden, and let the first hire spawn a real
+        // body (handleStaffHired, which already spawns at slot 0 when the
+        // router is empty). We no longer pad the roster to a phantom 1/1/1 —
+        // that was the source of the "3 staff + a fistful of awards before you
+        // do anything" bug on fresh signup.
+        const chefMember = this.game.staff.getMembers("chef")[0] ?? null;
+        const waiterMember = this.game.staff.getMembers("waiter")[0] ?? null;
+        this.scene.chefBodyOwned = !!chefMember;
+        this.scene.waiterBodyOwned = !!waiterMember;
+        this.scene.syncPrimaryStaffVisibility();
         this.router = new StaffRouter(
-          this.scene.chefChar!, chefId,
-          this.scene.waiterChar!, waiterId,
+          this.scene.chefChar!, chefMember?.id ?? null,
+          this.scene.waiterChar!, waiterMember?.id ?? null,
           this.scene.stovePos, this.scene.pickupPos,
           this.pathfind,
           () => this.registry.getStoves(),
@@ -1407,7 +1406,7 @@ export class Engine {
         this.router.reparentCharacter = (char, toFloor) => {
           this.scene.reparentCharacterToFloor(char, toFloor);
         };
-        console.log("[Engine] real StaffRouter created with chef + waiter members", chefId, waiterId);
+        console.log("[Engine] real StaffRouter created; base chef/waiter attached:", !!chefMember, !!waiterMember);
       }
       this.spawner = new GuestSpawner(
         this.scene.threeScene, this.scene.characterLoader, this.scene.animator,
@@ -1899,10 +1898,16 @@ export class Engine {
         //   edge → door → supply counter → home
         // The ErrandRouter needs both anchors: the door (entry/exit
         // waypoint) and the supply counter (drop-off point).
-        const errandId = this.game.staff.getMembers("errand")[0]?.id ?? this.game.staff.addStaff("errand").id;
+        // Attach the base errand body only if the roster has an errand helper
+        // (loaded save). Fresh restaurant → null id, body stays hidden until
+        // the first errand hire spawns one. (Previously this force-added an
+        // errand member, which is exactly the staff-you-never-hired problem.)
+        const errandMember = this.game.staff.getMembers("errand")[0] ?? null;
+        this.scene.errandBodyOwned = !!errandMember;
+        this.scene.syncPrimaryStaffVisibility();
         this.errand = new ErrandRouter(
           this.scene.errandChar,
-          errandId,
+          errandMember?.id ?? null,
           this.scene.doorPos,
           this.scene.supplyCounterPos,
           this.pathfind,
@@ -4238,14 +4243,9 @@ export class Engine {
     this.errand?.update(dt);
     this.spawner?.update(dt);
     this.pedestrians?.update(dt);
-    // Keep the primary chef/waiter/errand bodies in step with who's actually
-    // on payroll — a new restaurant has nobody, and hiring should visibly put
-    // someone in the room. Three boolean writes; not worth throttling.
-    this.scene.syncPrimaryStaffVisibility({
-      chef: this.game.staff.getStaffCount("chef"),
-      waiter: this.game.staff.getStaffCount("waiter"),
-      errand: this.game.staff.getStaffCount("errand"),
-    });
+    // Keep any UNOWNED base staff body hidden (fresh restaurant, empty roster).
+    // No-op for loaded saves. Three boolean checks; not worth throttling.
+    this.scene.syncPrimaryStaffVisibility();
     // P5 — pull the current server pedestrian list every frame and
     // reconcile the renderer against it. Cheap: list is tiny (<24
     // rows) and the renderer only adds/removes models on changes,

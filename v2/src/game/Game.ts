@@ -244,6 +244,7 @@ export class Game {
     visitsIn: number;
     chatsSent: number;
     boostsUsed: number;
+    ingredientsPurchased: number;
     weathersSeen: Set<string>;
   } = {
     furniturePlaced: 0,
@@ -253,12 +254,13 @@ export class Game {
     visitsIn: 0,
     chatsSent: 0,
     boostsUsed: 0,
+    ingredientsPurchased: 0,
     weathersSeen: new Set<string>(),
   };
 
   /** Bump a numeric counter and persist on the next save tick. */
   bumpPlayerCounter(
-    key: "furniturePlaced" | "themeChanges" | "visitsOut" | "visitsIn" | "chatsSent" | "boostsUsed",
+    key: "furniturePlaced" | "themeChanges" | "visitsOut" | "visitsIn" | "chatsSent" | "boostsUsed" | "ingredientsPurchased",
     delta = 1,
   ): void {
     this.playerCounters[key] = Math.max(0, this.playerCounters[key] + delta);
@@ -565,6 +567,7 @@ export class Game {
       if (typeof pc.visitsIn === "number") this.playerCounters.visitsIn = Math.max(0, pc.visitsIn);
       if (typeof pc.chatsSent === "number") this.playerCounters.chatsSent = Math.max(0, pc.chatsSent);
       if (typeof pc.boostsUsed === "number") this.playerCounters.boostsUsed = Math.max(0, pc.boostsUsed);
+      if (typeof pc.ingredientsPurchased === "number") this.playerCounters.ingredientsPurchased = Math.max(0, pc.ingredientsPurchased);
       if (Array.isArray(pc.themesTried)) {
         for (const id of pc.themesTried) if (typeof id === "string") this.playerCounters.themesTried.add(id);
       }
@@ -1036,6 +1039,7 @@ export class Game {
     if (totalCost > 0 && !this.economy.spendMoney(totalCost, "ingredients")) {
       return; // not enough money for this trip — try again next interval
     }
+    if (totalCost > 0) this.bumpPlayerCounter("ingredientsPurchased");
     // Reserve so the next dispatch won't re-buy the same units.
     for (const [id, units] of list) this.cooking.addPendingErrandOrder(id, units);
     // Record what was dispatched + fire the errand helper. The list is

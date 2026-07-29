@@ -318,7 +318,12 @@ function ownsTier(g: Game, kind: "plate" | "glass", tier: number): boolean {
 const cashAt = (id: string, name: string, amount: number): Achievement => ({
   id, name, category: "cash",
   description: `Have $${amount.toLocaleString("en-US")} in the till.`,
-  predicate: (g) => g.economy.getMoney() >= amount,
+  // Gated on having SERVED someone, so the $10,000 opening grant alone can't
+  // trip the low tiers at boot (which read as "awards for doing nothing"). Any
+  // active player has served customers, so this changes nothing for them — it
+  // only stops a brand-new, grant-funded till from unlocking cash milestones
+  // before the first sale.
+  predicate: (g) => g.economy.getMoney() >= amount && totalServed(g) >= 1,
 });
 
 const dayAt = (id: string, name: string, day: number, desc: string): Achievement => ({
@@ -378,9 +383,13 @@ export const ACHIEVEMENTS: readonly Achievement[] = [
   { id: "first-weather",   name: "Outside Awareness",  category: "intro",
     description: "See the weather change.",
     predicate: (g) => g.playerCounters.weathersSeen.size >= 2 },
+  // Actual ingredient purchases only — NOT "any expense", which fired the
+  // instant the player first spent on furniture or a hire (and mislabelled it
+  // as buying ingredients). Now it means what it says, and lines up with the
+  // tutorial: hire an errand helper + turn on Auto-shop → first trip → this.
   { id: "first-shopping",  name: "Stocking Up",        category: "intro",
-    description: "Buy at least one ingredient set.",
-    predicate: (g) => g.economy.getDailyExpenses() > 0 || g.history.recent().some((d) => d.expenses > 0) },
+    description: "Restock ingredients for the first time.",
+    predicate: (g) => g.playerCounters.ingredientsPurchased >= 1 },
 
   // ─── CASH (12) ─── from spare change to empire. Steep geometric ramp
   // (~2.5x/step): income compounds, so a flat ladder unlocks in one

@@ -147,7 +147,7 @@ export class ErrandRouter {
    * (they're outside the playable grid). */
   private readonly pathfind?: Pathfinding;
 
-  constructor(helperChar: AnimatedCharacter, helperMemberId: string, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
+  constructor(helperChar: AnimatedCharacter, helperMemberId: string | null, doorPos: THREE.Vector2, counterPos: THREE.Vector2, pathfind?: Pathfinding) {
     // Interior anchor sits 1 tile INSIDE the door (−Z) rather than right at
     // the threshold. The helper lines up here first, then walks a straight run
     // along the door normal through the opening — mirroring doorExteriorPos on
@@ -162,7 +162,9 @@ export class ErrandRouter {
     this.doorExteriorPos = new THREE.Vector2(doorPos.x, doorPos.y + 1);
     this.counterPos = counterPos.clone();
     this.pathfind = pathfind;
-    this.addHelper(helperChar, helperMemberId);
+    // null id = no base helper yet (empty roster). The first errand hire spawns
+    // one via handleStaffHired; the base body stays hidden until then.
+    if (helperMemberId) this.addHelper(helperChar, helperMemberId);
   }
 
   /** Plan the helper's path from current position to target. Falls

@@ -4945,21 +4945,33 @@ export class WorldScene {
   }
 
   /**
-   * Show/hide the three PRIMARY staff bodies to match who's actually hired.
+   * Whether each primary staff body is "owned" — i.e. it's attached to the
+   * router as roster member #0 of its role. True for a loaded save that has
+   * that role; FALSE for a brand-new restaurant whose roster is empty. Engine
+   * sets these once the roster is known (staffReady). Default true so nothing
+   * regresses before they're set.
+   */
+  chefBodyOwned = true;
+  waiterBodyOwned = true;
+  errandBodyOwned = true;
+
+  /**
+   * Keep an UNOWNED primary staff body hidden.
    *
    * populateCharacters builds chef/waiter/errand unconditionally — they're
-   * singletons the router and the server-position lerp hold references to, so
-   * they can't simply not exist. But a brand-new restaurant has nobody on
-   * payroll, and three strangers loitering in an empty room rather undercuts
-   * "you're starting from nothing". Hiding is cosmetic and safe: with no staff
-   * hired there are no server actors to drive them anyway.
+   * singletons the seat-count gate and the server lerp reference, so they can't
+   * simply not exist. For a loaded save each base body IS member #0 and renders
+   * normally (this method leaves it alone). For a brand-new restaurant the
+   * roster is empty, the base body is nobody, and the first hire spawns its own
+   * body — so the base one must stay hidden. Called every frame because the
+   * animator can re-show a model; three boolean checks, negligible.
    *
-   * Extra staff (2nd chef onward) are spawned/removed for real by
-   * spawnExtraStaff, so they're not our problem here.
+   * Only ever force-hides; never shows. That way it never fights the existing
+   * benched/despawn visibility logic on owned bodies.
    */
-  syncPrimaryStaffVisibility(counts: { chef: number; waiter: number; errand: number }): void {
-    if (this.chefChar) this.chefChar.root.visible = counts.chef > 0;
-    if (this.waiterChar) this.waiterChar.root.visible = counts.waiter > 0;
-    if (this.errandChar) this.errandChar.root.visible = counts.errand > 0;
+  syncPrimaryStaffVisibility(): void {
+    if (!this.chefBodyOwned && this.chefChar) this.chefChar.root.visible = false;
+    if (!this.waiterBodyOwned && this.waiterChar) this.waiterChar.root.visible = false;
+    if (!this.errandBodyOwned && this.errandChar) this.errandChar.root.visible = false;
   }
 }

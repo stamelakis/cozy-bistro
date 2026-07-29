@@ -332,6 +332,10 @@ export interface SaveGameState {
     chatsSent?: number;
     /** Times the player tapped the boost button. */
     boostsUsed?: number;
+    /** Ingredient-restock purchases (auto-shop trips + manual pantry buys).
+     * Gates the "Stocking Up" award so it means what it says, instead of
+     * firing on the first furniture/staff spend. */
+    ingredientsPurchased?: number;
     /** Distinct weather ids the player has seen during play. */
     weathersSeen?: string[];
     /** Distinct customers served — derived from a session counter
