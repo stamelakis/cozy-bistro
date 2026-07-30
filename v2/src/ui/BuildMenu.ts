@@ -611,6 +611,10 @@ export class BuildMenu {
     return root;
   }
 
+  /** The def id currently being placed (ghost active), or null. The tutorial
+   * reads this to switch from "pick this item" to "place it HERE". */
+  getPlacingDefId(): string | null { return this.placingDef?.id ?? null; }
+
   /** Toggle the build menu open/closed and refresh the title chevron. */
   private toggleCollapsed(): void {
     this.collapsed = !this.collapsed;

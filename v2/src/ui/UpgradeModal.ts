@@ -217,11 +217,16 @@ export class UpgradeModal {
     this.refresh();
   }
 
+  /** Which section is showing — the tutorial reads this to know whether the
+   * player has clicked over to the Staff tab yet. */
+  getCurrentSection(): Section { return this.selectedSection; }
+
   private renderSectionTabs(): void {
     this.sectionTabs.innerHTML = "";
     const mk = (key: Section, label: string): HTMLButtonElement => {
       const active = key === this.selectedSection;
       const btn = document.createElement("button");
+      btn.dataset.section = key;   // tutorial spotlights the Staff tab
       btn.textContent = label;
       Object.assign(btn.style, {
         flex: "1",

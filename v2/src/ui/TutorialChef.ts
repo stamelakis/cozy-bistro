@@ -11,7 +11,9 @@ import { sharedRiggedLoader, riggedStaffModel } from "../scene/RiggedCharacter";
  * caller's fallback if WebGL or the GLB isn't available.
  */
 
-const SIZE = 320;
+// Matches the tutorial chef canvas backing store so the blit is 1:1 (no
+// upscale blur) — the desktop chef displays at 220px, downscaled from this.
+const SIZE = 420;
 /** The idle clip is a slow breathe; 20fps is plenty and stays well clear of the
  * main renderer's budget. */
 const FPS = 20;

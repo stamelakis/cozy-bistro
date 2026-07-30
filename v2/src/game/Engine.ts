@@ -1013,6 +1013,17 @@ export class Engine {
     // moment they dismiss it. Progress is persisted per step so closing the tab
     // mid-run resumes where they left off rather than starting over.
     this.tutorial = new Tutorial(container);
+    // Let the tutorial point a floor marker at real 3-D spots ("place it HERE").
+    this.tutorial.worldToScreen = (x, z) => {
+      const cam = this.camera.threeCamera;
+      const v = new THREE.Vector3(x, 0.12, z).project(cam);
+      if (v.z > 1) return null; // behind the camera
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      return {
+        x: rect.left + (v.x * 0.5 + 0.5) * rect.width,
+        y: rect.top + (-v.y * 0.5 + 0.5) * rect.height,
+      };
+    };
     this.tutorial.setScript(this.buildTutorialScript());
     this.tutorial.onStepChanged = (id) => {
       this.game.tutorialStepId = id;
@@ -2859,12 +2870,38 @@ export class Engine {
       // claims a plot (doEnter(true)); the `entered` latch then stops the poll.
       let pickModal: BuildingPickModal | null = null;
       let entered = false;
+      let autoClaimTried = false;
       const doEnter = (didClaim: boolean): void => {
         if (entered) return;
         entered = true;
         pickModal?.destroy();
         pickModal = null;
         enterGame(didClaim);
+      };
+      // Plot choice isn't meaningful anymore (the tutorial hands everyone the
+      // same $10k), so a brand-new player skips the picker entirely: auto-claim
+      // an open plot and go straight in, veil still up. Only if the whole street
+      // is taken do we fall back to the picker so they at least see why.
+      const autoClaimOrPick = (): void => {
+        if (entered || autoClaimTried) return;
+        autoClaimTried = true;
+        const unowned = this.cloud.listBuildings().filter((b) => b.isUnowned);
+        if (unowned.length === 0) {
+          this.liftAuthVeil();
+          if (!pickModal) pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
+          return;
+        }
+        const rank = (k: string): number => (k === "medium" ? 0 : k === "small" ? 1 : 2);
+        unowned.sort((a, b) => rank(a.kind) - rank(b.kind) || Number(a.id - b.id));
+        // Keep the veil up through the claim → enterGame handles the wait for the
+        // Restaurant row to echo back, then setAuthGated(false) lifts it.
+        this.cloud.claimBuilding(unowned[0].id)
+          .then(() => doEnter(true))
+          .catch((e) => {
+            console.warn("[Engine] auto-claim failed, showing picker:", e);
+            this.liftAuthVeil();
+            if (!pickModal) pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
+          });
       };
       if (ready()) { doEnter(false); return; }
       let waited = 0;
@@ -2873,13 +2910,9 @@ export class Engine {
         if (entered) return;
         waited += 250;
         if (ready()) { doEnter(false); return; }
-        if (waited >= GRACE_MS && !pickModal) {
-          // claim_building auto-creates the Restaurant atomically (H.96), so
-          // the modal's completion means both rows now exist. enterGame(true)
-          // triggers the starter cash bonus.
-          this.liftAuthVeil();
-          pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
-        }
+        // After the grace (returning player's rows should have landed by now),
+        // treat it as a genuinely new player and auto-claim.
+        if (waited >= GRACE_MS) autoClaimOrPick();
         window.setTimeout(wait, 250);
       };
       window.setTimeout(wait, 250);
@@ -3124,6 +3157,39 @@ export class Engine {
      */
     const ownsCount = (cat: string, n: number): boolean =>
       this.registry.snapshotItems().filter((i) => getFurnitureDef(i.defId)?.category === cat).length >= n;
+    const catCount = (cat: string): number =>
+      this.registry.snapshotItems().filter((i) => getFurnitureDef(i.defId)?.category === cat).length;
+    const placedPos = (cat: string): { x: number; z: number } | null => {
+      const it = this.registry.snapshotItems().find((i) => getFurnitureDef(i.defId)?.category === cat);
+      return it ? { x: it.x, z: it.z } : null;
+    };
+    /** Is the build menu currently placing this exact item (ghost active)? Used
+     * to flip a build step from "pick this" (highlight the tile) to "place it
+     * HERE" (drop a floor marker). */
+    const placing = (defId: string): boolean => this.buildMenu.getPlacingDefId() === defId;
+    // A rough starter layout to point at: table on the left, kitchen along the
+    // right. Spots sit near where the staff spawn (z≈-1), safely inside the
+    // interior (x ∈ [-4.2, 5.2]). Chairs + the counter-top appliance are placed
+    // RELATIVE to what's already down, so they track the real furniture.
+    const SPOT = {
+      table: { x: -2.2, z: -1 },
+      stove: { x: 3.2, z: -1.3 },
+      counter: { x: 1.9, z: -1.3 },
+      fridge: { x: 3.4, z: -2.4 },
+      sink: { x: 3.4, z: 0.2 },
+    };
+    const CHAIR_OFFS = [{ x: -1.15, z: 0 }, { x: 1.15, z: 0 }, { x: 0, z: -1.15 }, { x: 0, z: 1.15 }];
+    const chairSpot = (): { x: number; z: number } => {
+      const t = placedPos("table") ?? SPOT.table;
+      const o = CHAIR_OFFS[Math.min(catCount("chair"), CHAIR_OFFS.length - 1)];
+      return { x: t.x + o.x, z: t.z + o.z };
+    };
+    /** Build a target/mapTarget pair: highlight the item tile until the player
+     * picks it up, then point a floor marker at `spot`. */
+    const placeAt = (defId: string, spot: () => { x: number; z: number } | null) => ({
+      target: (): HTMLElement | null => (placing(defId) ? null : buildItem(defId)()),
+      mapTarget: (): { x: number; z: number } | null => (placing(defId) ? spot() : null),
+    });
     /**
      * Guide the player to ONE specific item when a category has several. Walks
      * them all the way in: Build button → the right category tile → the exact
@@ -3185,6 +3251,12 @@ export class Engine {
     const staffTrainBtn = (): HTMLElement | null => {
       const root = rootOf(this.upgradeModal);
       if (!visible(root)) return opener("⚡ Upgrades")();
+      // Guide the player to CLICK the Staff tab themselves first (it used to
+      // auto-switch, which made "switch to Staff" nonsense — it was already
+      // there). Once they're on it, point at a Train button.
+      if (this.upgradeModal.getCurrentSection() !== "staff") {
+        return root!.querySelector<HTMLElement>('[data-section="staff"]');
+      }
       return root!.querySelector<HTMLElement>('[data-staff-train]:not([disabled])');
     };
     /** Find a live button by its label — used for the staff hire chips. */
@@ -3254,17 +3326,19 @@ export class Engine {
       // Each step points at ONE specific item, and buildItem walks the player
       // in (Build → category → item) and back OUT again if they're lost in the
       // wrong category.
-      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nBUILD → Tables → grab the SMALL TABLE and click the floor. Go go go!", target: buildItem("small-table"), until: () => owns("table") },
+      { id: "build-table", say: "Somewhere to SIT. That's step one.\n\nBUILD → Tables → grab the SMALL TABLE, then drop it where I'm pointing.", ...placeAt("small-table", () => SPOT.table), until: () => owns("table") },
       // Advance on the claim — OR when there's simply nothing pending, so a
       // player whose award didn't fire (or who already had it) is never parked
       // waiting to claim a prize that doesn't exist.
       { id: "award-first", say: "DING! That's an award — you get those for doing things, and I love doing things.\n\nHit Claim and the cash is yours. They don't collect themselves!", until: () => this.game.achievements.isClaimed("first-furniture") || this.game.achievements.unclaimedCount() === 0 },
-      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs → WOODEN CHAIR. Give me FOUR, snug around the table — a chair only counts as a seat when it's AT one.", target: buildItem("wooden-chair"), until: () => ownsCount("chair", 4) },
-      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking → Gas Stove. No stove, no food. Non-negotiable.", target: buildItem("stove"), until: () => owns("stove") },
-      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nDo you know how rare that is in this industry? BUILD → Counters → Counter.", target: buildItem("counter"), until: () => owns("counter") },
-      { id: "build-appliance", say: "An appliance next. Grab the TOASTER — BUILD → Appliances → Toaster.\n\nEach appliance unlocks recipes that need it. Toast is a great start.", target: buildItem("toaster"), until: () => owns("appliance") },
-      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", target: buildItem("fridge-small"), until: () => owns("storage") },
-      { id: "build-sink", say: "And a SINK. Dirty plates in, clean plates out — it's basically alchemy.\n\nRun out of clean plates and service just... stops. BUILD → Dishwashing → Sink.", target: buildItem("sink"), until: () => owns("wash") },
+      { id: "build-chairs", say: "A table with no chairs is just a very sad shelf.\n\nBUILD → Chairs → WOODEN CHAIR. Place FOUR, one at each spot I point to — a chair only counts as a seat when it's AT the table.", ...placeAt("wooden-chair", chairSpot), until: () => ownsCount("chair", 4) },
+      { id: "build-stove", say: "THE STOVE! This is where the magic burn— cooks. Where the magic COOKS.\n\nBUILD → Cooking → Gas Stove, over on the right. No stove, no food.", ...placeAt("stove", () => SPOT.stove), until: () => owns("stove") },
+      { id: "build-counter", say: "A counter! Somewhere to PUT THINGS DOWN!\n\nBUILD → Counters → Counter. Pop it next to the stove.", ...placeAt("counter", () => SPOT.counter), until: () => owns("counter") },
+      { id: "build-appliance", say: "An appliance next. Grab the TOASTER — BUILD → Appliances → Toaster.\n\nIt sits ON TOP of the counter — aim for the counter you just placed.", ...placeAt("toaster", () => placedPos("counter") ?? SPOT.counter), until: () => owns("appliance") },
+      { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", ...placeAt("fridge-small", () => SPOT.fridge), until: () => owns("storage") },
+      { id: "build-sink", say: "And a SINK. Dirty plates in, clean plates out — it's basically alchemy.\n\nBUILD → Dishwashing → Sink.", ...placeAt("sink", () => SPOT.sink), until: () => owns("wash") },
+      // Teach how to STOP placing — Esc on desktop, the ✕ touch button on mobile.
+      { id: "build-escape", say: "Handy to know: when you're placing something and change your mind, press ESC to stop.\n\nOn a phone, the floating buttons do it: ⟳ rotates, ✓ confirms, ✕ cancels." },
 
       // ── HIRE THE CREW ────────────────────────────────────────
       // Guide them to OPEN the staff panel themselves (it used to just appear),
@@ -3301,7 +3375,7 @@ export class Engine {
       { id: "tour-upgrades-find", say: "See ⚡ UPGRADES in there? Tap it.\n\nI'm not going to open these for you — you'll never find them again if I do.", target: opener("⚡ Upgrades"), until: () => isOpen(this.upgradeModal) },
       { id: "tour-upgrades", say: "UPGRADES! Two kinds: better RECIPES and better STAFF. Let's actually do one of each.", target: modalEl(this.upgradeModal) },
       { id: "tour-upgrade-recipe", say: "Pick one of your ACTIVE dishes and hit Upgrade. A few dollars and some real time — then it sells for more and scores higher, forever.", onEnter: () => { onlyShow(() => this.upgradeModal.show())(); this.upgradeModal.showSection("recipes"); }, target: recipeUpgradeBtn, until: anyRecipeUpgrading },
-      { id: "tour-upgrade-staff", say: "Now your CREW. Switch to STAFF and train someone — faster cooking, faster service. It compounds.", onEnter: () => { this.upgradeModal.show(); this.upgradeModal.showSection("staff"); }, target: staffTrainBtn, until: anyStaffUpgrading },
+      { id: "tour-upgrade-staff", say: "Now your CREW. Tap the STAFF tab up top, then train someone — faster cooking, faster service. It compounds.", onEnter: () => { this.upgradeModal.show(); }, target: staffTrainBtn, until: anyStaffUpgrading },
       { id: "tour-pantry-find", say: "Close that and find 🧺 PANTRY. Same place.", onEnter: onlyShow(), target: opener("🧺 Pantry"), until: () => isOpen(this.pantryModal) },
       { id: "tour-pantry", say: "The PANTRY. Ingredients live here. Cooking eats them.\n\nRight now every restock is a manual chore. Let's fix that.", target: modalEl(this.pantryModal) },
       { id: "tour-autoshop", say: "See AUTO-SHOP: OFF at the bottom? Tap it ON.\n\nNow your errand helper does the shopping FOR you — the pantry stays topped up forever.", target: () => isOpen(this.pantryModal) ? el('[data-autoshop-toggle="1"]')() : opener("🧺 Pantry")(), until: () => this.game.autoShopEnabled === true },

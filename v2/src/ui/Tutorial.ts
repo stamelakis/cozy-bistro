@@ -28,6 +28,11 @@ export interface TutorialStep {
   /** Element to spotlight, resolved live each tick (may return null while a
    * panel is closed — the step just dims without a hole until it appears). */
   target?: () => HTMLElement | null;
+  /** A spot ON THE 3-D FLOOR to point at (world x/z), for "place it HERE" during
+   * build steps. Used only when `target` returns null (e.g. once the item is
+   * picked and the player is looking for where to drop it). Projected to the
+   * screen each tick via the worldToScreen hook. */
+  mapTarget?: () => { x: number; z: number } | null;
   /** Side effect when the step opens — e.g. open the panel it's about. */
   onEnter?: () => void;
   /** When present the step auto-advances the moment this returns true (polled),
@@ -52,6 +57,7 @@ export class Tutorial {
   private readonly root: HTMLElement;
   private readonly spot: HTMLElement;
   private readonly arrow: HTMLElement;
+  private readonly mapRing: HTMLElement;
   private readonly panel: HTMLElement;
   private readonly bubble: HTMLElement;
   private readonly says: HTMLElement;
@@ -74,6 +80,10 @@ export class Tutorial {
   onStepChanged?: (stepId: string) => void;
   /** Fired once when the run ends. `completed` false = the player skipped. */
   onFinish?: (completed: boolean) => void;
+  /** Project a 3-D floor point (world x/z) to a screen pixel, or null if it's
+   * behind the camera / off-screen. Engine wires this to the game camera so the
+   * "place it HERE" marker can sit on the actual floor. */
+  worldToScreen?: (x: number, z: number) => { x: number; y: number } | null;
 
   get active(): boolean { return this.idx >= 0; }
   get currentStepId(): string | null { return this.steps[this.idx]?.id ?? null; }
@@ -113,6 +123,17 @@ export class Tutorial {
     } as Partial<CSSStyleDeclaration>);
     this.root.appendChild(this.arrow);
 
+    // Floor marker — a pulsing ring dropped on the 3-D spot where the player
+    // should place the current item. Shown only on build steps (mapTarget).
+    this.mapRing = document.createElement("div");
+    Object.assign(this.mapRing.style, {
+      position: "absolute", display: "none", pointerEvents: "none",
+      width: "46px", height: "46px", marginLeft: "-23px", marginTop: "-23px",
+      borderRadius: "50%", border: "3px solid rgba(255,217,134,0.95)",
+      boxShadow: "0 0 0 2px rgba(0,0,0,0.35), 0 0 18px rgba(255,217,134,0.5)",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.mapRing);
+
     // Chef + speech bubble.
     this.panel = document.createElement("div");
     Object.assign(this.panel.style, {
@@ -124,9 +145,12 @@ export class Tutorial {
     this.root.appendChild(this.panel);
 
     this.chefCanvas = document.createElement("canvas");
-    this.chefCanvas.width = 320; this.chefCanvas.height = 320;
+    // Render at high resolution (crisp); DISPLAY bigger on desktop where there's
+    // room — the chef is the tutorial's face and 150px felt tiny on a monitor.
+    this.chefCanvas.width = 420; this.chefCanvas.height = 420;
+    const chefPx = window.innerWidth > 820 ? 220 : 150;
     Object.assign(this.chefCanvas.style, {
-      width: "150px", height: "150px", flex: "0 0 auto",
+      width: `${chefPx}px`, height: `${chefPx}px`, flex: "0 0 auto",
       filter: "drop-shadow(0 6px 16px rgba(0,0,0,0.55))",
     } as Partial<CSSStyleDeclaration>);
     this.panel.appendChild(this.chefCanvas);
@@ -273,19 +297,37 @@ export class Tutorial {
       if (b.width <= 0 || b.height <= 0) el = null;
     }
     if (!el || !el.isConnected) {
-      // No target: show NO dim at all. Parking the hole off-screen would dim
-      // the entire view — including, on the tour steps, the very panel the chef
-      // just opened and is asking the player to look at.
+      // No DOM target. Maybe there's a FLOOR spot to point at (place-it-here).
+      const mp = step?.mapTarget?.() ?? null;
+      const scr = mp && this.worldToScreen ? this.worldToScreen(mp.x, mp.z) : null;
+      // No dim in either case — the player needs to see the room to place.
       Object.assign(this.spot.style, { left: "-100px", top: "-100px", width: "0", height: "0" });
       this.spot.style.outline = "none";
       this.spot.style.boxShadow = "none";
-      this.arrow.style.display = "none";
+      if (scr) {
+        // Drop the ring on the floor spot and bounce the arrow above it.
+        this.mapRing.style.display = "block";
+        this.mapRing.style.left = `${Math.round(scr.x)}px`;
+        this.mapRing.style.top = `${Math.round(scr.y)}px`;
+        this.arrow.textContent = "▼";
+        this.arrow.style.display = "block";
+        this.arrow.style.left = `${Math.round(scr.x - 9)}px`;
+        this.arrow.style.top = `${Math.round(scr.y - 52)}px`;
+        this.arrow.animate(
+          [{ transform: "translateY(-5px)" }, { transform: "translateY(3px)" }, { transform: "translateY(-5px)" }],
+          { duration: 900, iterations: 1, easing: "ease-in-out" },
+        );
+      } else {
+        this.mapRing.style.display = "none";
+        this.arrow.style.display = "none";
+      }
       // Nothing to dodge — send him home, or he'd keep whatever corner the last
       // target chased him into for the rest of the tutorial.
       this.panel.style.top = "auto"; this.panel.style.bottom = "18px";
       this.panel.style.right = "auto"; this.panel.style.left = `${this.homeLeft()}px`;
       return;
     }
+    this.mapRing.style.display = "none";  // DOM target wins; hide the floor ring
     // Scroll it into view first — a target below the fold (the Expand button in
     // a long sidebar) would otherwise get a spotlight the player never sees,
     // leaving the chef pointing at nothing. Only when it's actually out of
