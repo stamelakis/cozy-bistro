@@ -1484,14 +1484,16 @@ export class BuildMenu {
       b = document.createElement("button");
       b.className = `cb-touch-btn cb-touch-${kind}`;
       b.textContent = kind === "rotate" ? "⟳" : kind === "confirm" ? "✓" : "✕";
-      b.title = kind === "rotate" ? "Rotate" : kind === "confirm" ? "Place" : "Done";
+      b.title = kind === "rotate" ? "Rotate" : kind === "confirm" ? "Done" : "Cancel";
       b.addEventListener("click", (e) => {
         // Keep the tap on the button — don't let it fall through to the canvas
         // (which would place / pick up whatever sits under the button).
         e.preventDefault();
         e.stopPropagation();
+        // Tapping the FLOOR already commits the item on mobile, so the green ✓
+        // isn't a "confirm this placement" — it just means "I'm done placing"
+        // and exits (same as the ✕). One button, no confusing confirm-vs-cancel.
         if (kind === "rotate") this.rotatePlacement();
-        else if (kind === "confirm") this.onClick({ button: 0 } as unknown as MouseEvent);
         else this.exitBuildModes();
       });
       document.body.appendChild(b);
@@ -1508,10 +1510,12 @@ export class BuildMenu {
       ? (this.placingDef!.placement !== "wall" && this.placingDef!.placement !== "wall-shelf")
       : holding;
     this.showTouchBtn("rotate", rotatable);
-    // ✓ commits the ghost — only meaningful while placing NEW furniture.
+    // Placing NEW furniture: a SINGLE green ✓ "Done" (the floor-tap already
+    // committed the item, so there's no separate confirm vs cancel).
     this.showTouchBtn("confirm", placing);
-    // ✕ exits whatever build interaction is active (the mobile Esc).
-    this.showTouchBtn("cancel", placing || holding || this.moveMode || this.sellMode || this.storeMode);
+    // The red ✕ handles the OTHER build modes' exit (move / sell / store /
+    // mid-carry) — those have no floor-tap-commit, so "cancel" still fits.
+    this.showTouchBtn("cancel", !placing && (holding || this.moveMode || this.sellMode || this.storeMode));
   }
 
   /** Cancel whatever build / move / sell / store interaction is active — the

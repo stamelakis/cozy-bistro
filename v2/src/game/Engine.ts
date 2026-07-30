@@ -3338,7 +3338,7 @@ export class Engine {
       { id: "build-fridge", say: "A FRIDGE. Cold storage! More room for ingredients means fewer panicked shopping trips.\n\nBUILD → Storage → Mini Fridge.", ...placeAt("fridge-small", () => SPOT.fridge), until: () => owns("storage") },
       { id: "build-sink", say: "And a SINK. Dirty plates in, clean plates out — it's basically alchemy.\n\nBUILD → Dishwashing → Sink.", ...placeAt("sink", () => SPOT.sink), until: () => owns("wash") },
       // Teach how to STOP placing — Esc on desktop, the ✕ touch button on mobile.
-      { id: "build-escape", say: "Handy to know: when you're placing something and change your mind, press ESC to stop.\n\nOn a phone, the floating buttons do it: ⟳ rotates, ✓ confirms, ✕ cancels." },
+      { id: "build-escape", say: "Handy to know: on a keyboard, press ESC to stop placing.\n\nOn a phone you just tap the floor to drop each item — then ⟳ rotates, and the green ✓ means \"done\" when you're finished." },
 
       // ── HIRE THE CREW ────────────────────────────────────────
       // Guide them to OPEN the staff panel themselves (it used to just appear),
