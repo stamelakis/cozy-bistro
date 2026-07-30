@@ -210,6 +210,16 @@ export class SaveSystem {
     try { localStorage.removeItem(slotKey(slot)); } catch (e) { console.warn(e); }
   }
 
+  /** Erase EVERY save slot + the active-slot pointer. Used by the season reset,
+   * where clearing only the "active" slot let another slot's save survive and
+   * restore/backfill the old restaurant. */
+  static deleteAllSlots(): void {
+    try {
+      for (let s = 1; s <= MAX_SLOTS; s += 1) localStorage.removeItem(slotKey(s));
+      localStorage.removeItem(ACTIVE_SLOT_KEY);
+    } catch (e) { console.warn(e); }
+  }
+
   /** Manually trigger a save right now. Async path — the stringify runs
    * on a worker so the main thread keeps rendering. Use {@link saveNowSync}
    * for `beforeunload` / `pagehide` where the page may close before the

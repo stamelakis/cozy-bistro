@@ -2546,29 +2546,22 @@ export class Engine {
     // is actually seen (missing it would skip the wipe). `sawRestaurant` is
     // sticky so a transient sync still counts.
     let serverGen = 0;
-    let sawRestaurant = false;
     for (let i = 0; i < 18; i++) {                 // up to ~2.7s
       serverGen = this.cloud.getResetGeneration();
-      if (this.cloud.getMyRestaurantId() != null) sawRestaurant = true;
-      // Stop as soon as the picture is clear: gen known AND (restaurant seen, or
-      // we've given a genuinely-new player ~1s to prove they have none).
-      if (serverGen > 0 && (sawRestaurant || i >= 6)) break;
-      if (serverGen === 0 && i >= 12) break;       // no reset pending — don't dawdle
+      if (serverGen > 0) break;                    // gen landed — decide now
+      if (i >= 12) break;                          // no reset pending — don't dawdle
       await sleep(150);
     }
     const localGen = parseInt(localStorage.getItem(KEY) ?? "0", 10) || 0;
-    console.info(`[Engine] season-reset check — server:${serverGen} local:${localGen} hasRestaurant:${sawRestaurant} freshStart:${this.wasFreshStart}`);
+    console.info(`[Engine] season-reset check — server:${serverGen} local:${localGen} freshStart:${this.wasFreshStart}`);
     if (serverGen <= localGen) return false;                 // already current
-    // Skip the wipe ONLY for a genuinely brand-new player: no cloud restaurant
-    // AND no local save. A returning player on a fresh browser DOES have a cloud
-    // restaurant and must be wiped — the old wasFreshStart-only check skipped
-    // them, which is why the first wipe didn't stick.
-    if (!sawRestaurant && this.wasFreshStart) {
-      try { localStorage.setItem(KEY, String(serverGen)); } catch { /* ignore */ }
-      console.info("[Engine] season-reset: brand-new player — recorded generation, nothing to wipe");
-      return false;
-    }
-    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: WIPING restaurant + local save, reloading`);
+    // ALWAYS wipe when a generation is pending — no "is this a new player?"
+    // guess. The old guess checked for a restaurant ROW, but a returning player
+    // whose row was already deleted still has an account_save (keyed by
+    // username) that restores + backfills the whole restaurant; skipping them is
+    // exactly why the wipe didn't stick. wipeMyRestaurant is a harmless no-op for
+    // a genuinely new player (they just eat one extra reload under the veil).
+    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: WIPING (cloud + ALL local slots), reloading`);
     try {
       await this.cloud.wipeMyRestaurant();
     } catch (e) {
@@ -2578,7 +2571,9 @@ export class Engine {
       return false;
     }
     try {
-      SaveSystem.deleteSlot(this.saver.getActiveSlot());
+      // Clear EVERY slot (not just the active one) so no stale slot restores +
+      // backfills the old restaurant, plus the panel-layout keys.
+      SaveSystem.deleteAllSlots();
       for (const k of ["cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat",
         "cozy-bistro.panel.build.v2", "cozy-bistro.panel.menu.v2", "cozy-bistro.panel.chat.v2",
         "cozy-bistro.panel.menu.v3"]) localStorage.removeItem(k);
