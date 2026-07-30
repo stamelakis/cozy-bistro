@@ -2531,24 +2531,44 @@ export class Engine {
 
   /**
    * Season reset. If the server's global reset generation is ahead of the one
-   * this browser last processed, an EXISTING player (has a local save) self-
-   * wipes — cloud restaurant AND local save — once, then reloads into a fresh
-   * restaurant + the tutorial. This is the only way to re-onboard a returning
-   * SAME-DEVICE player, whose local save would otherwise win. Returns true when
-   * it kicked off a reload (caller should stop; the page is going away).
+   * this browser last processed, a player who HAS a restaurant (cloud OR local)
+   * self-wipes — cloud restaurant AND local save — once, then reloads into a
+   * fresh restaurant + the tutorial. This is the only way to re-onboard a
+   * returning player whose local save would otherwise win (and even restore the
+   * old restaurant). Returns true when it kicked off a reload (caller stops).
    */
   private async maybeSeasonReset(): Promise<boolean> {
     const KEY = "cb-reset-gen";
-    const serverGen = this.cloud.getResetGeneration();
+    const sleep = (ms: number): Promise<void> => new Promise((r) => window.setTimeout(r, ms));
+    // The game_reset row + our own restaurant row ride the subscription snapshot,
+    // which can land a beat after auth is detected. Poll briefly so a pending
+    // wipe isn't read as 0 on a cold load, and so a returning player's restaurant
+    // is actually seen (missing it would skip the wipe). `sawRestaurant` is
+    // sticky so a transient sync still counts.
+    let serverGen = 0;
+    let sawRestaurant = false;
+    for (let i = 0; i < 18; i++) {                 // up to ~2.7s
+      serverGen = this.cloud.getResetGeneration();
+      if (this.cloud.getMyRestaurantId() != null) sawRestaurant = true;
+      // Stop as soon as the picture is clear: gen known AND (restaurant seen, or
+      // we've given a genuinely-new player ~1s to prove they have none).
+      if (serverGen > 0 && (sawRestaurant || i >= 6)) break;
+      if (serverGen === 0 && i >= 12) break;       // no reset pending — don't dawdle
+      await sleep(150);
+    }
     const localGen = parseInt(localStorage.getItem(KEY) ?? "0", 10) || 0;
+    console.info(`[Engine] season-reset check — server:${serverGen} local:${localGen} hasRestaurant:${sawRestaurant} freshStart:${this.wasFreshStart}`);
     if (serverGen <= localGen) return false;                 // already current
-    if (this.wasFreshStart) {
-      // Nothing to wipe — a new player is already fresh. Just record the gen so
-      // they don't get needlessly reset on their next login.
+    // Skip the wipe ONLY for a genuinely brand-new player: no cloud restaurant
+    // AND no local save. A returning player on a fresh browser DOES have a cloud
+    // restaurant and must be wiped — the old wasFreshStart-only check skipped
+    // them, which is why the first wipe didn't stick.
+    if (!sawRestaurant && this.wasFreshStart) {
       try { localStorage.setItem(KEY, String(serverGen)); } catch { /* ignore */ }
+      console.info("[Engine] season-reset: brand-new player — recorded generation, nothing to wipe");
       return false;
     }
-    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: wiping restaurant + local save, reloading`);
+    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: WIPING restaurant + local save, reloading`);
     try {
       await this.cloud.wipeMyRestaurant();
     } catch (e) {
