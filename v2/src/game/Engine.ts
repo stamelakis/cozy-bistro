@@ -2882,26 +2882,35 @@ export class Engine {
       // same $10k), so a brand-new player skips the picker entirely: auto-claim
       // an open plot and go straight in, veil still up. Only if the whole street
       // is taken do we fall back to the picker so they at least see why.
-      const autoClaimOrPick = (): void => {
+      const showPicker = (): void => {
+        this.liftAuthVeil();
+        if (!pickModal) pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
+      };
+      // A brand-new player auto-claims a RANDOM open plot and skips the picker
+      // entirely (location/size choice isn't meaningful anymore). Polled, so it
+      // waits for the building list to actually land instead of mistaking an
+      // empty (not-yet-loaded) cache for "all taken".
+      const autoClaimOrPick = (elapsed: number): void => {
         if (entered || autoClaimTried) return;
-        autoClaimTried = true;
-        const unowned = this.cloud.listBuildings().filter((b) => b.isUnowned);
-        if (unowned.length === 0) {
-          this.liftAuthVeil();
-          if (!pickModal) pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
+        // Returning player whose building row is still landing — NEVER claim a
+        // new plot over their existing one; just keep waiting for ready().
+        if (this.cloud.getMyBuilding() !== null) return;
+        const all = this.cloud.listBuildings();
+        const unowned = all.filter((b) => b.isUnowned);
+        if (unowned.length > 0) {
+          autoClaimTried = true;
+          // Random so players spread across the street instead of stacking on #1.
+          const pick = unowned[Math.floor(Math.random() * unowned.length)];
+          // Veil stays up through the claim → enterGame waits for the Restaurant
+          // row, then setAuthGated(false) lifts it. No picker, no flash.
+          this.cloud.claimBuilding(pick.id)
+            .then(() => doEnter(true))
+            .catch((e) => { console.warn("[Engine] auto-claim failed, showing picker:", e); autoClaimTried = false; showPicker(); });
           return;
         }
-        const rank = (k: string): number => (k === "medium" ? 0 : k === "small" ? 1 : 2);
-        unowned.sort((a, b) => rank(a.kind) - rank(b.kind) || Number(a.id - b.id));
-        // Keep the veil up through the claim → enterGame handles the wait for the
-        // Restaurant row to echo back, then setAuthGated(false) lifts it.
-        this.cloud.claimBuilding(unowned[0].id)
-          .then(() => doEnter(true))
-          .catch((e) => {
-            console.warn("[Engine] auto-claim failed, showing picker:", e);
-            this.liftAuthVeil();
-            if (!pickModal) pickModal = new BuildingPickModal(container, this.cloud, () => doEnter(true));
-          });
+        // The list is loaded and every plot is taken — OR it never loaded and
+        // we've waited long enough: fall back to the picker so nobody's stranded.
+        if (all.length > 0 || elapsed >= 16000) showPicker();
       };
       if (ready()) { doEnter(false); return; }
       let waited = 0;
@@ -2910,9 +2919,9 @@ export class Engine {
         if (entered) return;
         waited += 250;
         if (ready()) { doEnter(false); return; }
-        // After the grace (returning player's rows should have landed by now),
-        // treat it as a genuinely new player and auto-claim.
-        if (waited >= GRACE_MS) autoClaimOrPick();
+        // After the grace (a returning player's rows should have landed by now),
+        // treat it as a genuinely new player and auto-claim a random plot.
+        if (waited >= GRACE_MS) autoClaimOrPick(waited);
         window.setTimeout(wait, 250);
       };
       window.setTimeout(wait, 250);
