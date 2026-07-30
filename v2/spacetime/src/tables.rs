@@ -1875,6 +1875,19 @@ pub struct MoneyCutover {
     pub active: bool,
 }
 
+/// Global "season reset" counter. Admin bumps `generation`; every client
+/// compares it to the generation it last processed (kept in localStorage) and,
+/// when the server is ahead, self-wipes (cloud restaurant + LOCAL save) exactly
+/// once and reloads into a brand-new restaurant + the tutorial. This is the only
+/// way to reliably re-onboard a returning SAME-DEVICE player, whose local save
+/// would otherwise win and even restore their old restaurant. Singleton: id=1.
+#[table(name = game_reset, public)]
+pub struct GameReset {
+    #[primary_key]
+    pub id: u32,
+    pub generation: u64,
+}
+
 /// Server-authoritative itemized money ledger. Every write to a
 /// restaurant's cloud_money_cents also appends one row here with a short
 /// label (`kind`) + signed amount + the resulting balance, so the client

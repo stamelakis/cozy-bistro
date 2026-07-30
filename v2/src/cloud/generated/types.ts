@@ -265,6 +265,12 @@ export const FurnitureMeta = __t.object("FurnitureMeta", {
 });
 export type FurnitureMeta = __Infer<typeof FurnitureMeta>;
 
+export const GameReset = __t.object("GameReset", {
+  id: __t.u32(),
+  generation: __t.u64(),
+});
+export type GameReset = __Infer<typeof GameReset>;
+
 export const GuestbookEntry = __t.object("GuestbookEntry", {
   id: __t.u64(),
   targetOwner: __t.identity(),

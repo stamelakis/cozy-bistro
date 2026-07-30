@@ -38,6 +38,7 @@ import AddDirtyPileReducer from "./add_dirty_pile_reducer";
 import AddFavoriteReducer from "./add_favorite_reducer";
 import AdminAdjustMoneyReducer from "./admin_adjust_money_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
+import AdminBumpResetGenerationReducer from "./admin_bump_reset_generation_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
@@ -182,6 +183,7 @@ import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
 import FurnitureInventoryRow from "./furniture_inventory_table";
 import FurnitureMetaRow from "./furniture_meta_table";
+import GameResetRow from "./game_reset_table";
 import GuestbookEntryRow from "./guestbook_entry_table";
 import HiredStaffMemberRow from "./hired_staff_member_table";
 import IngredientCostRow from "./ingredient_cost_table";
@@ -505,6 +507,17 @@ const tablesSchema = __schema({
       { name: 'furniture_meta_def_id_key', constraint: 'unique', columns: ['defId'] },
     ],
   }, FurnitureMetaRow),
+  game_reset: __table({
+    name: 'game_reset',
+    indexes: [
+      { accessor: 'id', name: 'game_reset_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'game_reset_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GameResetRow),
   guestbook_entry: __table({
     name: 'guestbook_entry',
     indexes: [
@@ -943,6 +956,7 @@ const reducersSchema = __reducers(
   __reducerSchema("add_favorite", AddFavoriteReducer),
   __reducerSchema("admin_adjust_money", AdminAdjustMoneyReducer),
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
+  __reducerSchema("admin_bump_reset_generation", AdminBumpResetGenerationReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),

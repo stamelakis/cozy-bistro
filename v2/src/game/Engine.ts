@@ -403,6 +403,7 @@ export class Engine {
     // start over with an empty restaurant while their real save sat
     // untouched in the DB.
     const wasFreshStart = !savedState;
+    this.wasFreshStart = wasFreshStart;
     this.game = new Game(savedState);
     this.saver = new SaveSystem(this.game);
     // Cloud sync to SpacetimeDB Maincloud (cozy-bistro-andre). Runs in
@@ -415,6 +416,11 @@ export class Engine {
     // call is rejected. From the browser console: cozyMoneyCutover(true).
     (window as unknown as Record<string, unknown>).cozyMoneyCutover =
       (active: boolean) => this.cloud?.setMoneyCutoverActive(active);
+    // Admin console hook — trigger a full player wipe. Dunnin runs
+    // `cozyReset()` once; every client self-wipes (cloud + local save) and
+    // re-onboards on its next login. Admin-gated server-side.
+    (window as unknown as Record<string, unknown>).cozyReset =
+      () => this.cloud?.bumpResetGeneration();
     // Debug — spawn ONE rigged guest through the REAL skinned-guest path
     // (SkinnedCharacterLoader + SkeletalController + the CharacterAnimator
     // fork) to eyeball "the new face" without waiting for the ~1-in-6 hash
@@ -2519,6 +2525,49 @@ export class Engine {
   private authVeil: { remove: () => void } | null = null;
   private liftAuthVeil(): void { this.authVeil?.remove(); this.authVeil = null; }
 
+  /** No local save on this boot — a genuinely fresh player. Drives the
+   * season-reset (a fresh player is already clean, so we skip the self-wipe). */
+  private wasFreshStart = false;
+
+  /**
+   * Season reset. If the server's global reset generation is ahead of the one
+   * this browser last processed, an EXISTING player (has a local save) self-
+   * wipes — cloud restaurant AND local save — once, then reloads into a fresh
+   * restaurant + the tutorial. This is the only way to re-onboard a returning
+   * SAME-DEVICE player, whose local save would otherwise win. Returns true when
+   * it kicked off a reload (caller should stop; the page is going away).
+   */
+  private async maybeSeasonReset(): Promise<boolean> {
+    const KEY = "cb-reset-gen";
+    const serverGen = this.cloud.getResetGeneration();
+    const localGen = parseInt(localStorage.getItem(KEY) ?? "0", 10) || 0;
+    if (serverGen <= localGen) return false;                 // already current
+    if (this.wasFreshStart) {
+      // Nothing to wipe — a new player is already fresh. Just record the gen so
+      // they don't get needlessly reset on their next login.
+      try { localStorage.setItem(KEY, String(serverGen)); } catch { /* ignore */ }
+      return false;
+    }
+    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: wiping restaurant + local save, reloading`);
+    try {
+      await this.cloud.wipeMyRestaurant();
+    } catch (e) {
+      // Couldn't reach the server — don't clear local (they'd lose their save
+      // AND not be reset). Bail and let them play; next login retries.
+      console.warn("[Engine] season-reset wipe failed, skipping:", e);
+      return false;
+    }
+    try {
+      SaveSystem.deleteSlot(this.saver.getActiveSlot());
+      for (const k of ["cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat",
+        "cozy-bistro.panel.build.v2", "cozy-bistro.panel.menu.v2", "cozy-bistro.panel.chat.v2",
+        "cozy-bistro.panel.menu.v3"]) localStorage.removeItem(k);
+      localStorage.setItem(KEY, String(serverGen));   // record BEFORE reload so we don't loop
+    } catch { /* ignore */ }
+    window.location.reload();
+    return true;
+  }
+
   /** Seamless reload — overlay a loading veil and keep it up until the
    * server snapshot has been applied to staff + guests, then lift it.
    * Without this the player watches everyone start at default positions
@@ -2946,7 +2995,10 @@ export class Engine {
       didAfterAuth = true;
       try { unsub?.(); } catch { /* ignore */ }
       window.clearTimeout(timer);
-      afterAuth();
+      // Season reset FIRST — if a global wipe generation is pending, this
+      // player self-wipes + reloads (under the veil) before we ever enter the
+      // old restaurant. Only proceed into the game if no reset fired.
+      void this.maybeSeasonReset().then((reloading) => { if (!reloading) afterAuth(); });
     };
 
     // Already authenticated synchronously (cache hot, common path

@@ -24,9 +24,9 @@ use rand::RngCore;
 use crate::tables::{
     auth_record, ban_record, building, password_reset_request, player_save,
     restaurant, save_snapshot, co_owner, leaderboard_entry, achievement_unlock,
-    hired_staff_member, placed_furniture,
+    hired_staff_member, placed_furniture, account_save, game_reset,
     AuthRecord, BanRecord, PasswordResetRequest,
-    Building, Restaurant, PlayerSave, AchievementUnlock,
+    Building, Restaurant, PlayerSave, AchievementUnlock, GameReset,
 };
 
 const ADMIN_USERNAME: &str = "dunnin"; // lowercased — usernames are stored lowercased
@@ -560,21 +560,26 @@ pub fn wipe_my_restaurant(ctx: &ReducerContext) -> Result<(), String> {
             ..b
         });
     }
-    // Wipe their player_save.
+    // Wipe their player_save AND account_save. account_save is keyed by
+    // username and is the PREFERRED save blob loaded on login — leaving it (the
+    // old bug) let a fresh-device login reload the old restaurant + tutorialDone,
+    // so the reset never stuck. Delete both.
     if ctx.db.player_save().identity().find(owner_id).is_some() {
         ctx.db.player_save().identity().delete(owner_id);
     }
-    // Cascade legacy restaurant rows.
+    if let Some(a) = ctx.db.auth_record().identity().filter(owner_id).next() {
+        if ctx.db.account_save().username().find(&a.username).is_some() {
+            ctx.db.account_save().username().delete(&a.username);
+        }
+    }
+    // Cascade legacy restaurant rows — full cascade (drops the tick schedule too,
+    // so a deleted restaurant's sim tick stops firing). The remaining per-
+    // restaurant sim rows (furniture/staff/menu/…) orphan harmlessly: the re-
+    // claimed restaurant gets a NEW auto_inc id and never reads them.
     let owned_restaurants: Vec<u64> = ctx.db.restaurant().owner().filter(owner_id)
         .map(|r| r.id).collect();
     for rid in &owned_restaurants {
-        if ctx.db.save_snapshot().restaurant_id().find(*rid).is_some() {
-            ctx.db.save_snapshot().restaurant_id().delete(*rid);
-        }
-        for c in ctx.db.co_owner().restaurant_id().filter(*rid) {
-            ctx.db.co_owner().id().delete(c.id);
-        }
-        ctx.db.restaurant().id().delete(*rid);
+        crate::reducers::restaurants::delete_restaurant_cascade(ctx, *rid);
     }
     // Clear leaderboard + achievement rows.
     let stale_lb: Vec<u64> = ctx.db.leaderboard_entry().player().filter(owner_id)
@@ -584,6 +589,30 @@ pub fn wipe_my_restaurant(ctx: &ReducerContext) -> Result<(), String> {
         .map(|a| a.id).collect();
     for id in stale_ach { ctx.db.achievement_unlock().id().delete(id); }
     log::info!("Self-wipe by identity {}: released {} restaurants", owner_id, owned_restaurants.len());
+    Ok(())
+}
+
+/// ADMIN — bump the global season-reset generation. Every client that logs in
+/// with a lower stored generation self-wipes (cloud + local save) once and
+/// reloads into a fresh restaurant + the tutorial. This is the server-side
+/// trigger for a full player wipe: call it once and everyone re-onboards on
+/// their next login, on any device. Idempotent per generation.
+#[reducer]
+pub fn admin_bump_reset_generation(ctx: &ReducerContext) -> Result<(), String> {
+    let caller_is_admin = ctx.db.auth_record().identity().filter(ctx.sender)
+        .any(|a| a.is_admin);
+    if !caller_is_admin {
+        return Err("Admin only".into());
+    }
+    let cur = ctx.db.game_reset().id().find(1).map(|g| g.generation).unwrap_or(0);
+    let next = cur + 1;
+    let row = GameReset { id: 1, generation: next };
+    if ctx.db.game_reset().id().find(1).is_some() {
+        ctx.db.game_reset().id().update(row);
+    } else {
+        ctx.db.game_reset().insert(row);
+    }
+    log::info!("admin_bump_reset_generation: {} -> {}", cur, next);
     Ok(())
 }
 

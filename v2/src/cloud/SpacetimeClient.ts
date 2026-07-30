@@ -1402,6 +1402,32 @@ export class SpacetimeClient {
     }
   }
 
+  /** The global season-reset generation from the game_reset singleton (0 if the
+   * row isn't in the cache yet). The client compares this to its stored
+   * generation to decide whether to self-wipe on login. */
+  getResetGeneration(): number {
+    if (!this.conn) return 0;
+    try {
+      for (const g of this.conn.db.game_reset.iter()) {
+        return Number(g.generation);
+      }
+    } catch { /* table not wired / not synced yet */ }
+    return 0;
+  }
+
+  /** ADMIN — bump the season-reset generation. Every client self-wipes once on
+   * next login. Gated server-side on is_admin (Dunnin's account); a non-admin
+   * caller just gets "Admin only". Exposed as a console hook (window.cozyReset). */
+  bumpResetGeneration(): void {
+    if (!this.conn) { console.warn("[Cloud] bumpResetGeneration: not connected"); return; }
+    try {
+      this.conn.reducers.adminBumpResetGeneration({});
+      console.info("[Cloud] requested admin_bump_reset_generation");
+    } catch (e) {
+      console.warn("[Cloud] bumpResetGeneration failed:", e);
+    }
+  }
+
   /** Anti-cheat B/C (income 4/5) — recycle reward ($2, 8s-rate-limited). */
   claimRecycle(): void {
     if (!this.conn || this.restaurantId == null) return;
