@@ -4970,8 +4970,17 @@ export class WorldScene {
    * benched/despawn visibility logic on owned bodies.
    */
   syncPrimaryStaffVisibility(): void {
-    if (!this.chefBodyOwned && this.chefChar) this.chefChar.root.visible = false;
-    if (!this.waiterBodyOwned && this.waiterChar) this.waiterChar.root.visible = false;
-    if (!this.errandBodyOwned && this.errandChar) this.errandChar.root.visible = false;
+    // Force-hide via `_keepHidden`, NOT a bare `root.visible = false`. The
+    // CharacterAnimator's per-frame cull re-shows any in-view body (sets
+    // root.visible = true, CharacterAnimator.ts:400) AFTER this runs — so a
+    // plain visibility flag was overwritten every single frame, which is why
+    // the base chef/waiter/errand kept standing in a fresh, empty-roster
+    // restaurant no matter what. `_keepHidden` is the flag the animator honors
+    // (forces show=false, CharacterAnimator.ts:369). Only ever force-HIDES an
+    // unowned body; an owned body is left untouched so the ErrandRouter /
+    // GuestSpawner visibility logic on it is never fought.
+    if (!this.chefBodyOwned && this.chefChar) { this.chefChar._keepHidden = true; this.chefChar.root.visible = false; }
+    if (!this.waiterBodyOwned && this.waiterChar) { this.waiterChar._keepHidden = true; this.waiterChar.root.visible = false; }
+    if (!this.errandBodyOwned && this.errandChar) { this.errandChar._keepHidden = true; this.errandChar.root.visible = false; }
   }
 }
