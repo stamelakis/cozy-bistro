@@ -580,6 +580,19 @@ export class SpacetimeClient {
     console.log(`[SpacetimeDB] applied cloud save in-place (slot ${slot}, day ${this.game.day.getDayNumber()}/tier ${this.game.getLuxuryTier()}) — no reload`);
   }
 
+  /** Called when the player claims a BRAND-NEW plot (Engine.enterGame,
+   * didClaim=true). A fresh restaurant has nothing to restore, so permanently
+   * latch auto-load OFF for the rest of this session. Without it, a late-
+   * arriving stale `account_save` (username-keyed, so it SURVIVES the identity-
+   * keyed season-reset wipe) re-hydrates the OLD roster AFTER the fresh-claim
+   * roster-clear — resurrecting the ghost chef/waiter/errand. Setting
+   * `cloudAutoLoadTriggered` also lets the immediately-following cloudSaveNow
+   * overwrite the stale blob (its regression guard keys off this flag). */
+  suppressAutoLoad(): void {
+    this.cloudAutoLoadTriggered = true;
+    try { sessionStorage.setItem("cozy-bistro.cloud-autoload-latch", "1"); } catch { /* private-mode */ }
+  }
+
   // ============================================================================
   //                            AUTH (P1 multiplayer)
   // ============================================================================

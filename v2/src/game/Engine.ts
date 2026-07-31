@@ -2748,12 +2748,19 @@ export class Engine {
       // is a pure no-op. didClaim=false (returning to an existing restaurant) is
       // deliberately untouched — that roster is legitimate.
       if (didClaim) {
+        // Latch cloud auto-load OFF first: a fresh restaurant has nothing to
+        // restore, and a late-arriving stale account_save would otherwise re-
+        // hydrate the ghost roster AFTER we clear it below (that late re-load is
+        // exactly why the ghosts kept coming back). This also lets the
+        // cloudSaveNow at the end overwrite the stale blob.
+        this.cloud.suppressAutoLoad();
         this.game.staff.hydrate(null);            // members = []
         this.scene.chefBodyOwned = false;
         this.scene.waiterBodyOwned = false;
         this.scene.errandBodyOwned = false;
         this.scene.syncPrimaryStaffVisibility();  // hides any already-loaded base bodies
         this.saver?.saveNow();                    // persist the empty roster locally
+        this.cloud.cloudSaveNow();                // overwrite the stale account_save with the empty roster
       }
       const mine = this.cloud.getMyBuilding();
       if (mine) {
