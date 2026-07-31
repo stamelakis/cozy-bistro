@@ -210,6 +210,14 @@ export class SaveSystem {
     try { localStorage.removeItem(slotKey(slot)); } catch (e) { console.warn(e); }
   }
 
+  /** When true, ALL local persistence is blocked at {@link writeJson}. Set by
+   * the season reset just before it deletes the slots + reloads, so the
+   * `beforeunload` saveNowSync (Engine.ts:2071) — and any in-flight worker
+   * save — can't resurrect the save we just deleted on the way out. This was
+   * THE reason the wipe never stuck: deleteAllSlots + reload → beforeunload
+   * re-wrote slot 1 before the page unloaded. Never unset (the page reloads). */
+  static suspended = false;
+
   /** Erase EVERY save slot + the active-slot pointer. Used by the season reset,
    * where clearing only the "active" slot let another slot's save survive and
    * restore/backfill the old restaurant. */
@@ -279,6 +287,9 @@ export class SaveSystem {
    * serialized string to localStorage + update the stats. Split out so
    * both the async (worker) and sync (beforeunload) paths share it. */
   private writeJson(json: string): void {
+    // Season reset in progress — do NOT resurrect the save we just deleted.
+    // Both the async worker save and the beforeunload saveNowSync land here.
+    if (SaveSystem.suspended) return;
     try {
       localStorage.setItem(slotKey(this.activeSlot), json);
       this.saveCount += 1;

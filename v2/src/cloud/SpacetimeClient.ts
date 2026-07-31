@@ -4931,6 +4931,11 @@ export class SpacetimeClient {
    * future; player_save is the one the visit code reads from. */
   cloudSaveNow(): void {
     if (!this.conn) return;
+    // Season reset in progress — don't re-upload the in-memory (old) restaurant
+    // to the just-wiped cloud. The beforeunload handler (Engine.ts:448) fires
+    // cloudSaveNow on the wipe's reload; without this guard it backfilled the
+    // whole restaurant straight back into the clean cloud.
+    if (this.savesSuspended) return;
     // Snapshot must run on the main thread (touches live Game state),
     // but the heavy stringify goes to the save worker. publishCloud is
     // the tail that runs once the JSON is back — reducer call + per-
@@ -4946,6 +4951,17 @@ export class SpacetimeClient {
       (json) => this.publishCloud(json),
       (e) => console.warn("[SpacetimeDB] cloud serialize failed", e),
     );
+  }
+
+  /** Set true by the season reset (Engine.maybeSeasonReset) just before it
+   * deletes the local slots + reloads. Guards cloudSaveNow so the beforeunload
+   * re-upload can't repopulate the wiped cloud on the way out. Never unset —
+   * the page reloads into a clean session. */
+  private savesSuspended = false;
+
+  /** Block all cloud uploads for the remainder of this page's life. */
+  suspendSaves(): void {
+    this.savesSuspended = true;
   }
 
   /** Tail of {@link cloudSaveNow} — runs once the worker hands the JSON

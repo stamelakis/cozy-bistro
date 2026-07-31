@@ -2570,6 +2570,13 @@ export class Engine {
       console.warn("[Engine] season-reset wipe failed, skipping:", e);
       return false;
     }
+    // CRITICAL: block both save paths BEFORE deleting + reloading. Two
+    // beforeunload handlers (Engine.ts:448 cloudSaveNow, :2071 saveNowSync)
+    // fire on the reload below and otherwise instantly resurrect the local
+    // save + re-upload it to the wiped cloud — the exact reason this wipe
+    // failed four times. Suspended for the rest of the page's life (we reload).
+    SaveSystem.suspended = true;
+    this.cloud.suspendSaves();
     try {
       // Clear EVERY slot (not just the active one) so no stale slot restores +
       // backfills the old restaurant, plus the panel-layout keys.
