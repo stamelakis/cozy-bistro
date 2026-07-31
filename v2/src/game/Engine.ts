@@ -3282,18 +3282,27 @@ export class Engine {
      * to flip a build step from "pick this" (highlight the tile) to "place it
      * HERE" (drop a floor marker). */
     const placing = (defId: string): boolean => this.buildMenu.getPlacingDefId() === defId;
-    // A rough starter layout to point at: table on the left, kitchen along the
-    // right. Spots sit near where the staff spawn (z≈-1), safely inside the
-    // interior (x ∈ [-4.2, 5.2]). Chairs + the counter-top appliance are placed
-    // RELATIVE to what's already down, so they track the real furniture.
+    // Starter layout the markers point at, aligned to the ACTUAL snap grid so
+    // the ▼ lands exactly where the item drops. Placement snaps with Math.round
+    // (BuildMenu), so an INTEGER cell = tile CENTRE. A 2×2 table anchors on the
+    // half-integer CORNER shared by its four cells (catalog: "anchored at
+    // (0.5, 1.5)"), so its spot is half-integer on purpose. The kitchen runs in
+    // a straight line along the back (north) wall — the one OPPOSITE the door at
+    // (0,5) — left→right in build order. The table sits centre-south; chairs +
+    // the counter-top toaster place RELATIVE to what's already down so they
+    // track the real furniture. Interior cells: x,z ∈ [-4,5] (BuildMenu.INTERIOR_CELL_*).
     const SPOT = {
-      table: { x: -2.2, z: -1 },
-      stove: { x: 3.2, z: -1.3 },
-      counter: { x: 1.9, z: -1.3 },
-      fridge: { x: 3.4, z: -2.4 },
-      sink: { x: 3.4, z: 0.2 },
+      table: { x: 0.5, z: 1.5 },   // 2×2 → half-integer anchor (the shared corner of its 4 cells)
+      stove: { x: -2, z: -3 },     // kitchen line, back wall, left→right in build order
+      counter: { x: -1, z: -3 },
+      fridge: { x: 0, z: -3 },
+      sink: { x: 1, z: -3 },
     };
-    const CHAIR_OFFS = [{ x: -1.15, z: 0 }, { x: 1.15, z: 0 }, { x: 0, z: -1.15 }, { x: 0, z: 1.15 }];
+    // Match the table's real seat slots (STANDARD_TABLE_SEAT_SLOTS): 2 per long
+    // side at (±0.5, ±1.5) from the table anchor. Added to the placed table's
+    // anchor these resolve to INTEGER cell centres — exactly the green seat
+    // circles a chair snaps to — so each marker lands on the seat, in order.
+    const CHAIR_OFFS = [{ x: -0.5, z: -1.5 }, { x: 0.5, z: -1.5 }, { x: -0.5, z: 1.5 }, { x: 0.5, z: 1.5 }];
     const chairSpot = (): { x: number; z: number } => {
       const t = placedPos("table") ?? SPOT.table;
       const o = CHAIR_OFFS[Math.min(catCount("chair"), CHAIR_OFFS.length - 1)];
