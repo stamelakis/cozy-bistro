@@ -587,4 +587,16 @@ export class HelpModal {
       return false;
     }
   }
+
+  /** Clear the "seen" flag so the welcome modal auto-shows again on the next
+   * boot — used by the season reset, which turns a returning player back into a
+   * first-time player. Without this the welcome (and the tutorial that rides on
+   * its dismissal) never fires for anyone who has played before. */
+  static resetSeen(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore — quota errors, private browsing, etc.
+    }
+  }
 }

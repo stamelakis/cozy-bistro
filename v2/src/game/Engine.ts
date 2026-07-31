@@ -2584,6 +2584,12 @@ export class Engine {
       for (const k of ["cozy-bistro.panel.build", "cozy-bistro.panel.menu", "cozy-bistro.panel.chat",
         "cozy-bistro.panel.build.v2", "cozy-bistro.panel.menu.v2", "cozy-bistro.panel.chat.v2",
         "cozy-bistro.panel.menu.v3"]) localStorage.removeItem(k);
+      // Turn the returning player back into a first-timer: re-arm the welcome
+      // modal so it auto-shows on the fresh boot, and the tutorial that rides on
+      // its dismissal fires. Without this the wipe leaves them staring at an
+      // empty restaurant with no guidance (the exact "tutorial didn't autostart"
+      // report). tutorialDone itself resets to false via the cleared save.
+      HelpModal.resetSeen();
       localStorage.setItem(KEY, String(serverGen));   // record BEFORE reload so we don't loop
     } catch { /* ignore */ }
     window.location.reload();
@@ -2729,6 +2735,25 @@ export class Engine {
         this.liftAuthVeil();
         new BuildingPickModal(container, this.cloud, () => enterGame(true));
         return;
+      }
+      // GHOST-STAFF GUARD — a freshly-claimed restaurant is empty server-side
+      // (hired_staff_member has no rows). But the season-reset wipe is
+      // identity-keyed while account_save is USERNAME-keyed, so the old save
+      // blob survives the wipe and gets re-hydrated on login — re-seeding the
+      // OLD roster into StaffSystem.members. That's the "phantom chef+waiter+
+      // errand standing in an empty restaurant" bug (only 3 show: extra members
+      // and all barmen render via server staff_actor rows, of which a fresh
+      // restaurant has none). Clear the roster here and force the base bodies
+      // hidden. A real claim is ALWAYS empty, so for a genuinely new player this
+      // is a pure no-op. didClaim=false (returning to an existing restaurant) is
+      // deliberately untouched — that roster is legitimate.
+      if (didClaim) {
+        this.game.staff.hydrate(null);            // members = []
+        this.scene.chefBodyOwned = false;
+        this.scene.waiterBodyOwned = false;
+        this.scene.errandBodyOwned = false;
+        this.scene.syncPrimaryStaffVisibility();  // hides any already-loaded base bodies
+        this.saver?.saveNow();                    // persist the empty roster locally
       }
       const mine = this.cloud.getMyBuilding();
       if (mine) {
