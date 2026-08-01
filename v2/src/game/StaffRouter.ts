@@ -268,6 +268,12 @@ interface StaffActor {
   cloudPrevX?: number;
   cloudPrevZ?: number;
   cloudInterp?: number;
+  /** Corner-fix (staffMove render): a walkable polyline from the segment start
+   * (cloudPrevX/Z) to the latest server pose, recomputed by the client
+   * pathfinder each time a new pose lands. The render glides ALONG this instead
+   * of straight-lerping, so the body hugs walkable tiles around furniture rather
+   * than clipping the corner. null / <2 points → straight-lerp fallback. */
+  renderPath?: { x: number; z: number }[] | null;
   /** Phase M.28 — MEASURED server-update interval (s) + the last update's
    * arrival time (performance.now ms). The render interpolates over this real
    * interval instead of a fixed 0.5s, so when the server tick slows under load
@@ -1909,6 +1915,21 @@ export class StaffRouter {
       actor.cloudPrevX = actor.character?.groundPos.x ?? actor.cloudX ?? row.x;
       actor.cloudPrevZ = actor.character?.groundPos.y ?? actor.cloudZ ?? row.z;
       actor.cloudInterp = actor.cloudX === undefined ? 1 : 0;
+      // Corner-fix: recompute a walkable polyline from where the body actually
+      // is (segment start) to the new server pose, so the render glides AROUND
+      // furniture instead of straight-lerping through it. Non-stair, short
+      // (<2.5m) glides only — the stairwell is a special Y-ramp the straight
+      // lerp handles, and big jumps snap in renderActorFromServer.
+      const pfx = actor.cloudPrevX, pfz = actor.cloudPrevZ;
+      if (this.pathfind && !row.onStair && pfx !== undefined && pfz !== undefined
+          && Math.hypot(row.x - pfx, row.z - pfz) <= 2.5) {
+        const steps = this.pathfind.findPath(pfx, pfz, row.x, row.z, row.floor);
+        actor.renderPath = steps.length > 0
+          ? [{ x: pfx, z: pfz }, ...steps.map((p) => ({ x: p.x, z: p.y }))]
+          : null;
+      } else {
+        actor.renderPath = null;
+      }
     }
     actor.cloudX = row.x;
     actor.cloudZ = row.z;
@@ -2430,14 +2451,23 @@ export class StaffRouter {
     const t = a.cloudInterp;
     const tx = prevX + (a.cloudX - prevX) * t;
     const tz = prevZ + (a.cloudZ - prevZ) * t;
-    // Phase M.23 — PURE linear snapshot interp (see renderGuestFromServer): glide
-    // at constant speed from the segment start (the body's position when this
-    // server update landed, stashed by reconcileCloudStaffActor) to the latest
-    // server pose. The old prev=OLD-TARGET + exponential chase snapped the body
-    // forward each 2 Hz tick and pulsed the speed — the "glitchy" walk. A big
-    // segment jump = a real teleport (floor change / respawn) → snap.
+    // Travel direction used for facing — the straight segment by default, or the
+    // local path tangent when gliding a recomputed route (set in the else-if).
+    let dirX = a.cloudX - prevX;
+    let dirZ = a.cloudZ - prevZ;
+    // Phase M.23 — snapshot interp from the segment start to the latest server
+    // pose. A big segment jump = a real teleport (floor change / respawn) → snap.
+    // Corner-fix: when reconcile stashed a walkable renderPath (the server sends
+    // only sparse 2 Hz points, so a straight lerp cuts furniture corners), glide
+    // ALONG that path by arc-length instead so the body hugs walkable tiles
+    // around the table/chair. Falls back to the straight lerp when there's none.
     if (Math.hypot(a.cloudX - prevX, a.cloudZ - prevZ) > 2.5) {
       pos.set(a.cloudX, a.cloudZ);
+    } else if (a.renderPath && a.renderPath.length >= 2) {
+      const pt = this.pointAlongPath(a.renderPath, t);
+      pos.x = pt.x;
+      pos.y = pt.z;
+      if (pt.dx * pt.dx + pt.dz * pt.dz > 1e-6) { dirX = pt.dx; dirZ = pt.dz; }
     } else {
       pos.x = tx;
       pos.y = tz;
@@ -2472,7 +2502,9 @@ export class StaffRouter {
     const segX = a.cloudX - prevX;
     const segZ = a.cloudZ - prevZ;
     const moving = Math.hypot(segX, segZ) > 0.03 && t < 1;
-    if (moving) a.character.facingY = Math.atan2(-segX, -segZ);
+    // Face the LOCAL travel direction (path tangent around a corner), not the
+    // straight-line segment heading — else the body moonwalks through the bend.
+    if (moving) a.character.facingY = Math.atan2(-dirX, -dirZ);
     // Animate from the server state: working-at-station = the work gesture
     // ("carry"), anything in motion = walk, otherwise idle.
     if (a.cloudState === "working" && !moving) {
@@ -2500,6 +2532,28 @@ export class StaffRouter {
         || a.cloudState === "working" || a.cloudState === "returningHome") {
       a.state = a.cloudState;
     }
+  }
+
+  /** Walk fraction `t` (0..1) along a polyline by ARC LENGTH, returning the
+   * point plus the local segment direction (dx,dz) for facing. Lets the
+   * staffMove render glide the body along a walkable route around furniture
+   * instead of straight-lerping through it. */
+  private pointAlongPath(path: { x: number; z: number }[], t: number): { x: number; z: number; dx: number; dz: number } {
+    let total = 0;
+    for (let i = 1; i < path.length; i += 1) total += Math.hypot(path[i].x - path[i - 1].x, path[i].z - path[i - 1].z);
+    const last = path[path.length - 1];
+    if (total < 1e-6) return { x: last.x, z: last.z, dx: 0, dz: 0 };
+    let want = Math.max(0, Math.min(1, t)) * total;
+    for (let i = 1; i < path.length; i += 1) {
+      const ax = path[i - 1].x, az = path[i - 1].z, bx = path[i].x, bz = path[i].z;
+      const segLen = Math.hypot(bx - ax, bz - az);
+      if (want <= segLen || i === path.length - 1) {
+        const f = segLen > 1e-6 ? want / segLen : 1;
+        return { x: ax + (bx - ax) * f, z: az + (bz - az) * f, dx: bx - ax, dz: bz - az };
+      }
+      want -= segLen;
+    }
+    return { x: last.x, z: last.z, dx: 0, dz: 0 };
   }
 
   private waiterActivityLogTimer = 0;
