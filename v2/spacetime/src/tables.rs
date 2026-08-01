@@ -1948,6 +1948,18 @@ pub struct RecipeLevel {
     pub level: u32,
 }
 
+/// Clue-hunt mini-game progress — one row per hunting player, keyed by identity.
+/// Server-authoritative so the count can't be faked. `found_csv` = the restaurant
+/// ids whose paper clue this player has collected THIS cycle; on the 6th distinct
+/// clue, collect_clue grants a free crate + clears it (bumping `cycles`).
+#[table(name = clue_hunt, public)]
+pub struct ClueHunt {
+    #[primary_key]
+    pub identity: Identity,
+    pub found_csv: String,
+    pub cycles: u32,
+}
+
 /// Phase H.40 — Current "on-menu" recipe set per restaurant. One row
 /// per restaurant; `recipe_ids` is a comma-separated list of the
 /// recipe ids currently turned on in the menu. The client mirrors

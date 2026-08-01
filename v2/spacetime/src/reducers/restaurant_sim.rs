@@ -13,13 +13,13 @@
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 use crate::tables::{
-    active_guest, active_menu, active_ticket, auth_record, building, customer_archetype, dirty_pile,
+    active_guest, active_menu, active_ticket, auth_record, building, clue_hunt, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, furniture_cost, furniture_inventory, furniture_meta, hired_staff_member, ingredient_cost, layout_preset, pantry_stock,
     pantry_target, placed_furniture, player, player_save, prepared_serving,
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, seat_appeal, staff_actor, staff_stat, stat_snapshot, weather_state, money_cutover, money_event,
-    ActiveGuest, ActiveMenu, ActiveTicket, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
+    ActiveGuest, ActiveMenu, ActiveTicket, ClueHunt, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
@@ -4053,12 +4053,32 @@ pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<()
     if r.last_crate_micros != 0 && now - r.last_crate_micros < COOLDOWN_MICROS {
         return Ok(()); // not ready yet — silent no-op
     }
-    // Weighted RANDOM gift — lesser gifts common, better gifts rare. Rolled from
-    // a timestamp+id hash (claims are ≥3h apart, so the low bits are effectively
-    // random); applied + recorded SERVER-side so contents are never client-chosen.
+    // Weighted RANDOM gift (lesser common, better rare) — rolled + applied +
+    // recorded SERVER-side so contents are never client-chosen. Shared with the
+    // clue-hunt free crate (collect_clue).
+    let gift = roll_crate_gift(ctx, restaurant_id);
+    // Stamp the cooldown + record the gift for the client's reveal. Re-fetch the
+    // row since the grant helpers above may have mutated cloud_money_cents.
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_crate_micros: now,
+            last_crate_gift: Some(gift),
+            ..rr
+        });
+    }
+    log::info!("supply crate claimed by restaurant {restaurant_id}");
+    Ok(())
+}
+
+/// Roll ONE weighted crate gift (lesser common, better rare) + apply it to
+/// `restaurant_id`; returns the gift code for the client reveal. Shared by
+/// claim_supply_crate (3h timer) and the clue-hunt free crate (no timer). The
+/// roll comes from a timestamp+id hash so it's server-decided, not client-chosen.
+fn roll_crate_gift(ctx: &ReducerContext, restaurant_id: u64) -> String {
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
     let seed = (now as u64) ^ ((now as u64) >> 17) ^ restaurant_id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let roll = (seed.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) % 100;
-    let gift: String = if roll < 35 {
+    if roll < 35 {
         crate_grant_pantry(ctx, restaurant_id);
         "pantry".into()
     } else if roll < 60 {
@@ -4071,7 +4091,6 @@ pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<()
         crate_grant_cash(ctx, restaurant_id, 20_000); // $200
         "cash:200".into()
     } else if roll < 97 {
-        // Rare: shave time off the longest in-flight upgrade; cash if none.
         if crate_time_warp(ctx, restaurant_id, now) {
             "timewarp".into()
         } else {
@@ -4081,18 +4100,7 @@ pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<()
     } else {
         crate_grant_cash(ctx, restaurant_id, 75_000); // $750, rarest
         "cash:750".into()
-    };
-    // Stamp the cooldown + record the gift for the client's reveal. Re-fetch the
-    // row since the grant helpers above may have mutated cloud_money_cents.
-    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
-        ctx.db.restaurant().id().update(Restaurant {
-            last_crate_micros: now,
-            last_crate_gift: Some(gift),
-            ..rr
-        });
     }
-    log::info!("supply crate claimed by restaurant {restaurant_id}: roll {roll}");
-    Ok(())
 }
 
 /// Supply-crate gift: top up each stocked ingredient to a floor (only raises the
@@ -4173,6 +4181,54 @@ fn crate_time_warp(ctx: &ReducerContext, restaurant_id: u64, now: i64) -> bool {
         }
     }
     true
+}
+
+/// Grant a FREE crate (no cooldown) to `restaurant_id` — the clue-hunt reward.
+/// Rolls + applies a gift and records it for the reveal, but does NOT stamp
+/// last_crate_micros, so it doesn't disturb the 3h timed crate.
+fn grant_free_crate(ctx: &ReducerContext, restaurant_id: u64) {
+    let gift = roll_crate_gift(ctx, restaurant_id);
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        ctx.db.restaurant().id().update(Restaurant { last_crate_gift: Some(gift), ..rr });
+    }
+}
+
+/// Clue-hunt mini-game — the caller (a VISITING player) collects the paper clue
+/// in `visited_restaurant_id`. Rules: you can't collect your OWN restaurant's
+/// clue, and each restaurant counts at most once per cycle. On the 6th DISTINCT
+/// clue the caller's own restaurant gets a free crate + the cycle resets. The
+/// count lives server-side (clue_hunt) so it can't be faked.
+#[reducer]
+pub fn collect_clue(ctx: &ReducerContext, visited_restaurant_id: u64) -> Result<(), String> {
+    let me = ctx.sender;
+    const NEEDED: usize = 6;
+    match ctx.db.restaurant().id().find(visited_restaurant_id) {
+        Some(vr) if vr.owner == me => return Ok(()), // your own place has no clue
+        Some(_) => {}
+        None => return Ok(()),                        // restaurant gone
+    }
+    let existing = ctx.db.clue_hunt().identity().find(me);
+    let mut found: Vec<u64> = existing.as_ref()
+        .map(|h| h.found_csv.split(',').filter_map(|s| s.trim().parse::<u64>().ok()).collect())
+        .unwrap_or_default();
+    let cycles = existing.as_ref().map(|h| h.cycles).unwrap_or(0);
+    if found.contains(&visited_restaurant_id) {
+        return Ok(()); // already collected this one this cycle
+    }
+    found.push(visited_restaurant_id);
+    if found.len() >= NEEDED {
+        // Complete → free crate to the caller's own restaurant, then reset.
+        if let Some(own) = ctx.db.restaurant().owner().filter(me).next() {
+            grant_free_crate(ctx, own.id);
+        }
+        let row = ClueHunt { identity: me, found_csv: String::new(), cycles: cycles + 1 };
+        if existing.is_some() { ctx.db.clue_hunt().identity().update(row); } else { ctx.db.clue_hunt().insert(row); }
+    } else {
+        let csv = found.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let row = ClueHunt { identity: me, found_csv: csv, cycles };
+        if existing.is_some() { ctx.db.clue_hunt().identity().update(row); } else { ctx.db.clue_hunt().insert(row); }
+    }
+    Ok(())
 }
 
 /// Anti-cheat B/C (income flow 5/5) — achievement reward. The unlock

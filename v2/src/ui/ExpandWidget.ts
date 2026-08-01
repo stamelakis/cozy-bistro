@@ -60,7 +60,7 @@ function injectExpandWidgetStyles(): void {
 }
 
 /** Map a server crate-gift code to a friendly reveal line. */
-function describeCrateGift(code: string): string {
+export function describeCrateGift(code: string): string {
   if (code.startsWith("cash:")) return `You won $${code.slice(5)}!`;
   if (code.startsWith("decor:")) return "You won decor — a Small Plant for your storage!";
   switch (code) {

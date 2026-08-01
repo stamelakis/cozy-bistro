@@ -159,6 +159,13 @@ export const ChatMessage = __t.object("ChatMessage", {
 });
 export type ChatMessage = __Infer<typeof ChatMessage>;
 
+export const ClueHunt = __t.object("ClueHunt", {
+  identity: __t.identity(),
+  foundCsv: __t.string(),
+  cycles: __t.u32(),
+});
+export type ClueHunt = __Infer<typeof ClueHunt>;
+
 export const CoOwner = __t.object("CoOwner", {
   id: __t.u64(),
   restaurantId: __t.u64(),

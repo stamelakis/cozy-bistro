@@ -1928,6 +1928,36 @@ export class SpacetimeClient {
     return r ? (r.lastCrateGift ?? "") : "";
   }
 
+  /** Clue-hunt: collect the paper clue in the restaurant currently being
+   * visited. The server enforces one-per-restaurant-per-cycle, the count, and
+   * the 6 → free-crate reward, so nothing here is fakeable. */
+  collectClue(visitedRestaurantId: bigint): void {
+    if (!this.conn) return;
+    try {
+      this.conn.reducers.collectClue({ visitedRestaurantId });
+    } catch (e) {
+      console.warn("[Cloud] collectClue failed:", e);
+    }
+  }
+
+  /** Restaurant-id strings whose clue the player has collected this cycle. */
+  private clueFoundIds(): string[] {
+    if (!this.conn || !this.identity) return [];
+    const row = this.conn.db.clue_hunt.identity.find(this.identity);
+    const csv = row?.foundCsv ?? "";
+    return csv ? csv.split(",").filter((s) => s.length > 0) : [];
+  }
+
+  /** Distinct clues collected this cycle (0..6). */
+  getClueFoundCount(): number {
+    return this.clueFoundIds().length;
+  }
+
+  /** Has the player already collected THIS restaurant's clue this cycle? */
+  hasCollectedClue(restaurantId: bigint): boolean {
+    return this.clueFoundIds().includes(restaurantId.toString());
+  }
+
   /** Phase 6.7 — push the foreground boost expiry to the cloud so
    * try_server_spawn_guest can apply the same 0.5× spawn interval
    * halving while the owner's tab is backgrounded. Without this push,

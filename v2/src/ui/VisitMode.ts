@@ -22,6 +22,8 @@ import { RESTAURANT_THEMES, type RestaurantTheme } from "../data/themes";
 import { customerArchetypes } from "../data/customerArchetypes";
 import { recipes } from "../data/recipes";
 import type { StatusEntry } from "./StatusBubbles";
+import { showEventBanner } from "./uiHints";
+import { describeCrateGift } from "./ExpandWidget";
 
 /** Meters between adjacent floor slabs — mirrors
  * WorldScene.STOREY_HEIGHT (currently 3 m). */
@@ -192,6 +194,18 @@ export class VisitMode {
    * when null, VisitMode falls back to the static "ghost activity"
    * spawn that loads from the save snapshot. */
   cloud?: import("../cloud/SpacetimeClient").SpacetimeClient;
+  /** Clue-hunt mini-game — a clickable floating "paper clue" shown while
+   * visiting another restaurant whose clue this player hasn't collected
+   * yet this cycle. Collect a clue in 6 DIFFERENT restaurants → the server
+   * (collect_clue → grant_free_crate) awards a free supply crate. The clue
+   * mesh is a DOM element parked on document.body and re-projected to screen
+   * every frame in tickLiveMotion (mirrors the TipHearts / StatusBubbles
+   * projection). clueRid = the visited restaurant's id (the collect target);
+   * clueCountEl = the "🔎 N/6" progress pill in the top visit overlay. */
+  private clueEl: HTMLElement | null = null;
+  private clueRid: bigint | null = null;
+  private clueCountEl: HTMLElement | null = null;
+  private readonly clueTmp = new THREE.Vector3();
   /** Live staff actors fetched from the host's staff_actor table
    * (keyed by memberId). Subscription handlers spawn / update / remove
    * entries; exit() disposes them all. Separate from spawnedGhostRoots
@@ -495,6 +509,10 @@ export class VisitMode {
     // P5.8 — let the host's client know they have a visitor. The
     // host then surfaces a toast via its visit_event subscription.
     this.recordVisit?.(plot.ownerHex);
+    // Clue-hunt — drop a collectable paper clue in this restaurant (unless
+    // this player already grabbed its clue this cycle). The "🔎 N/6" pill was
+    // built in showOverlay above.
+    this.setupClue(plot);
     this.onEnter?.(plot);
   }
 
@@ -507,6 +525,7 @@ export class VisitMode {
     this.snapshot = null;
     this.activePlot = null;
     this.hideOverlay();
+    this.teardownClue();
     this.disposeLiveStaff();
     this.disposeVisitorRoot();
     this.restoreVisitedShell();
@@ -818,6 +837,7 @@ export class VisitMode {
       if (!c) continue;
       this.applyOneSnapshot(c, snap, now);
     }
+    this.positionClue();
   }
 
   private applyOneSnapshot(
@@ -1803,6 +1823,138 @@ export class VisitMode {
 
   // ─── Top-center "Visiting X · Exit" overlay ─────────────────────
 
+  // ─── Clue-hunt mini-game ──────────────────────────────────────────────
+  // Visit other restaurants, click the floating paper clue in each. Collect
+  // a clue in 6 DIFFERENT restaurants → the server grants a free supply
+  // crate (collect_clue reducer, keyed by identity, dedup'd by found_csv).
+
+  /** Spawn the collectable clue for this visit — unless this player has
+   * already found this restaurant's clue this cycle, or its id can't be
+   * resolved. The element parks on document.body and is projected to the
+   * in-room anchor each frame by positionClue(). */
+  private setupClue(plot: VisitablePlot): void {
+    this.teardownClue();
+    if (!this.cloud) return;
+    const rid = this.cloud.findRestaurantIdByOwnerHex(plot.ownerHex);
+    if (rid == null) return;
+    if (this.cloud.hasCollectedClue(rid)) return; // already grabbed this cycle
+    this.clueRid = rid;
+    this.ensureClueKeyframes();
+    const el = document.createElement("div");
+    el.textContent = "📜";
+    el.title = "A paper clue! Click to collect.";
+    Object.assign(el.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      width: "44px",
+      height: "44px",
+      display: "none", // revealed once projected on-screen
+      alignItems: "center",
+      justifyContent: "center",
+      fontSize: "30px",
+      cursor: "pointer",
+      filter: "drop-shadow(0 3px 6px rgba(0, 0, 0, 0.6))",
+      animation: "cbClueBob 1.6s ease-in-out infinite",
+      zIndex: "14",
+      pointerEvents: "auto",
+      userSelect: "none",
+    } as Partial<CSSStyleDeclaration>);
+    el.onclick = () => this.collectClue();
+    document.body.appendChild(el);
+    this.clueEl = el;
+  }
+
+  /** Re-project the in-room clue anchor to screen each frame. Anchored to a
+   * fixed ground-floor spot near the room centre so it never depends on the
+   * async furniture load; hidden when an upper storey is focused or the
+   * anchor falls behind the camera. */
+  private positionClue(): void {
+    const el = this.clueEl;
+    const plot = this.activePlot;
+    if (!el || !plot) return;
+    if (this.visitFocusedStorey !== 0) { el.style.display = "none"; return; }
+    const wx = plot.plotX + this.scene.worldRoot.position.x + 1.2;
+    const wz = plot.plotZ + this.scene.worldRoot.position.z + 1.2;
+    this.clueTmp.set(wx, 1.35, wz);
+    this.clueTmp.project(this.camera.threeCamera);
+    if (this.clueTmp.z > 1) { el.style.display = "none"; return; } // behind camera
+    const rect = this.canvas.getBoundingClientRect();
+    const x = rect.left + (this.clueTmp.x * 0.5 + 0.5) * rect.width;
+    const y = rect.top + (-this.clueTmp.y * 0.5 + 0.5) * rect.height;
+    el.style.display = "flex";
+    el.style.transform = `translate(${x - 22}px, ${y - 22}px)`;
+  }
+
+  /** Owner clicks the clue → collect it server-side, then optimistically
+   * remove it + bump the pill. The 6th clue triggers the free crate on the
+   * server (grant_free_crate); the reveal surfaces via the ExpandWidget crate
+   * button on return, so here we just celebrate. */
+  private collectClue(): void {
+    if (!this.cloud || this.clueRid == null) return;
+    const before = this.cloud.getClueFoundCount();
+    this.cloud.collectClue(this.clueRid);
+    this.clueRid = null;
+    if (this.clueEl) {
+      try { this.clueEl.remove(); } catch { /* already gone */ }
+      this.clueEl = null;
+    }
+    const next = before + 1;
+    if (next >= 6) {
+      this.updateCluePill(0); // server resets the tally after a full set
+      showEventBanner("6 clues collected — FREE CRATE! 🎁", {
+        icon: "🎁", accent: "#ffe08a", ms: 3200,
+      });
+      this.revealFreeCrateGift();
+    } else {
+      this.updateCluePill(next);
+      showEventBanner(`Clue found!  ${next}/6`, { icon: "📜", accent: "#ffe08a", ms: 2400 });
+    }
+  }
+
+  /** The 6th clue triggers grant_free_crate server-side, which rolls + APPLIES
+   * a gift and stamps last_crate_gift. Poll for that row to sync back, then
+   * reveal the specific prize (mirrors ExpandWidget's post-claim reveal). */
+  private revealFreeCrateGift(): void {
+    const cloud = this.cloud;
+    if (!cloud) return;
+    const before = cloud.getLastCrateGift();
+    let tries = 0;
+    const poll = (): void => {
+      tries++;
+      const g = cloud.getLastCrateGift();
+      if (g && g !== before) {
+        showEventBanner(describeCrateGift(g), { icon: "🎉", accent: "#ffe08a", ms: 5000 });
+        return;
+      }
+      if (tries < 25) window.setTimeout(poll, 200);
+    };
+    window.setTimeout(poll, 300);
+  }
+
+  private updateCluePill(count: number): void {
+    if (this.clueCountEl) this.clueCountEl.textContent = `🔎 ${count}/6`;
+  }
+
+  private teardownClue(): void {
+    if (this.clueEl) {
+      try { this.clueEl.remove(); } catch { /* already gone */ }
+      this.clueEl = null;
+    }
+    this.clueRid = null;
+    this.clueCountEl = null; // lives inside the overlay wrap; hideOverlay removes it
+  }
+
+  /** Inject the clue's bob keyframes once. */
+  private ensureClueKeyframes(): void {
+    if (document.getElementById("cb-clue-kf")) return;
+    const style = document.createElement("style");
+    style.id = "cb-clue-kf";
+    style.textContent =
+      "@keyframes cbClueBob{0%,100%{translate:0 -3px}50%{translate:0 3px}}";
+    document.head.appendChild(style);
+  }
+
   private showOverlay(plot: VisitablePlot): void {
     this.hideOverlay();
     const wrap = document.createElement("div");
@@ -1841,6 +1993,22 @@ export class VisitMode {
     liveness.textContent = "loading…";
     wrap.appendChild(liveness);
     this.livenessEl = liveness;
+    // 🔎 Clue-hunt progress — grab a paper clue in 6 different restaurants
+    // for a free supply crate. Pill reflects the player's current tally.
+    if (this.cloud) {
+      const clue = document.createElement("span");
+      Object.assign(clue.style, {
+        fontSize: "12px",
+        fontWeight: "600",
+        color: "#ffe08a",
+        borderLeft: "1px solid rgba(255, 220, 150, 0.3)",
+        paddingLeft: "10px",
+      } as Partial<CSSStyleDeclaration>);
+      clue.title = "Find a paper clue in 6 different restaurants for a free crate";
+      this.clueCountEl = clue;
+      this.updateCluePill(this.cloud.getClueFoundCount());
+      wrap.appendChild(clue);
+    }
     // ⭐ Favorite — bookmark this restaurant for the Social hub's quick-visit
     // list, and add to its favorite count (light social proof). Shown only
     // once the restaurant row has primed (so we can resolve its id).

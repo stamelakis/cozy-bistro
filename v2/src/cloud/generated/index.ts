@@ -66,6 +66,7 @@ import ClaimSupplyCrateReducer from "./claim_supply_crate_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
 import ClaimTipBonusReducer from "./claim_tip_bonus_reducer";
 import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
+import CollectClueReducer from "./collect_clue_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
 import ConsumePendingRecipeUpgradesReducer from "./consume_pending_recipe_upgrades_reducer";
 import ConsumePendingRestockCostReducer from "./consume_pending_restock_cost_reducer";
@@ -174,6 +175,7 @@ import AuthRecordRow from "./auth_record_table";
 import BanRecordRow from "./ban_record_table";
 import BuildingRow from "./building_table";
 import ChatMessageRow from "./chat_message_table";
+import ClueHuntRow from "./clue_hunt_table";
 import CoOwnerRow from "./co_owner_table";
 import CustomerArchetypeRow from "./customer_archetype_table";
 import DirtyPileRow from "./dirty_pile_table";
@@ -352,6 +354,17 @@ const tablesSchema = __schema({
       { name: 'chat_message_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ChatMessageRow),
+  clue_hunt: __table({
+    name: 'clue_hunt',
+    indexes: [
+      { accessor: 'identity', name: 'clue_hunt_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'clue_hunt_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, ClueHuntRow),
   co_owner: __table({
     name: 'co_owner',
     indexes: [
@@ -986,6 +999,7 @@ const reducersSchema = __reducers(
   __reducerSchema("claim_ticket", ClaimTicketReducer),
   __reducerSchema("claim_tip_bonus", ClaimTipBonusReducer),
   __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
+  __reducerSchema("collect_clue", CollectClueReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
   __reducerSchema("consume_pending_recipe_upgrades", ConsumePendingRecipeUpgradesReducer),
   __reducerSchema("consume_pending_restock_cost", ConsumePendingRestockCostReducer),
