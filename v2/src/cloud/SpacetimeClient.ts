@@ -1451,6 +1451,18 @@ export class SpacetimeClient {
     }
   }
 
+  /** Retention "tip hearts" — the player tapped a floating heart over a happy
+   * guest. Server grants a small, fixed, rate-limited bonus tip (cheat-safe);
+   * the credit reaches us via the cloud_money delta sync. */
+  claimTipBonus(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimTipBonus({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] claimTipBonus failed:", e);
+    }
+  }
+
   /** Anti-cheat B/C (income 5/5) — achievement reward. Server clamps
    * per-claim + caps lifetime. rewardCents = client cashReward × 100. */
   claimAchievement(rewardCents: number): void {

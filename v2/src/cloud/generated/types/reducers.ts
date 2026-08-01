@@ -35,6 +35,7 @@ import ClaimLowBalanceGrantReducer from "../claim_low_balance_grant_reducer";
 import ClaimRecycleReducer from "../claim_recycle_reducer";
 import ClaimStarterGrantReducer from "../claim_starter_grant_reducer";
 import ClaimTicketReducer from "../claim_ticket_reducer";
+import ClaimTipBonusReducer from "../claim_tip_bonus_reducer";
 import ClearWaiterRestSpotReducer from "../clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "../consume_pending_day_advancement_reducer";
 import ConsumePendingRecipeUpgradesReducer from "../consume_pending_recipe_upgrades_reducer";
@@ -161,6 +162,7 @@ export type ClaimLowBalanceGrantParams = __Infer<typeof ClaimLowBalanceGrantRedu
 export type ClaimRecycleParams = __Infer<typeof ClaimRecycleReducer>;
 export type ClaimStarterGrantParams = __Infer<typeof ClaimStarterGrantReducer>;
 export type ClaimTicketParams = __Infer<typeof ClaimTicketReducer>;
+export type ClaimTipBonusParams = __Infer<typeof ClaimTipBonusReducer>;
 export type ClearWaiterRestSpotParams = __Infer<typeof ClearWaiterRestSpotReducer>;
 export type ConsumePendingDayAdvancementParams = __Infer<typeof ConsumePendingDayAdvancementReducer>;
 export type ConsumePendingRecipeUpgradesParams = __Infer<typeof ConsumePendingRecipeUpgradesReducer>;

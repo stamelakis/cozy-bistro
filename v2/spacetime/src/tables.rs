@@ -557,6 +557,12 @@ pub struct Restaurant {
     /// (backfilled from the legacy 1:1 building claim).
     #[default(0u64)]
     pub home_building_id: u64,
+    /// Tip-hearts rate-limit (Unix micros of the last claim_tip_bonus). Bounds
+    /// tap-spam so the "tap a heart for a bonus tip" retention feature can't be
+    /// hammered into free cash. Appended LAST + #[default] so the migration is
+    /// purely additive (mid-struct insert forces a manual table migration).
+    #[default(0i64)]
+    pub last_tip_bonus_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

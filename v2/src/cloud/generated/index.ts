@@ -63,6 +63,7 @@ import ClaimLowBalanceGrantReducer from "./claim_low_balance_grant_reducer";
 import ClaimRecycleReducer from "./claim_recycle_reducer";
 import ClaimStarterGrantReducer from "./claim_starter_grant_reducer";
 import ClaimTicketReducer from "./claim_ticket_reducer";
+import ClaimTipBonusReducer from "./claim_tip_bonus_reducer";
 import ClearWaiterRestSpotReducer from "./clear_waiter_rest_spot_reducer";
 import ConsumePendingDayAdvancementReducer from "./consume_pending_day_advancement_reducer";
 import ConsumePendingRecipeUpgradesReducer from "./consume_pending_recipe_upgrades_reducer";
@@ -981,6 +982,7 @@ const reducersSchema = __reducers(
   __reducerSchema("claim_recycle", ClaimRecycleReducer),
   __reducerSchema("claim_starter_grant", ClaimStarterGrantReducer),
   __reducerSchema("claim_ticket", ClaimTicketReducer),
+  __reducerSchema("claim_tip_bonus", ClaimTipBonusReducer),
   __reducerSchema("clear_waiter_rest_spot", ClearWaiterRestSpotReducer),
   __reducerSchema("consume_pending_day_advancement", ConsumePendingDayAdvancementReducer),
   __reducerSchema("consume_pending_recipe_upgrades", ConsumePendingRecipeUpgradesReducer),

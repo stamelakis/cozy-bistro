@@ -45,6 +45,7 @@ import { RestaurantSignModal } from "../ui/RestaurantSignModal";
 import { CloudModal } from "../ui/CloudModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
+import { TipHearts } from "../ui/TipHearts";
 import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -144,6 +145,7 @@ export class Engine {
   readonly cloudModal: CloudModal;
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
+  readonly tipHearts: TipHearts;
   readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
   readonly cloud: SpacetimeClient;
@@ -1140,6 +1142,7 @@ export class Engine {
     // for a moment behind the login modal on every fresh load.
     this.floatingText = new FloatingText(container, this.camera.threeCamera, this.renderer.domElement);
     this.statusBubbles = new StatusBubbles(container, this.camera.threeCamera, this.renderer.domElement);
+    this.tipHearts = new TipHearts(container, this.camera.threeCamera, this.renderer.domElement);
     // Phase I (UX) — wire the wall-occluder source so bubbles hide
     // when their character is behind a solid wall the player can't
     // see through.  WorldScene.getSolidWallOccluders() returns only
@@ -1183,6 +1186,14 @@ export class Engine {
     this.seatMarkers.getStoreyHeight = () => WorldScene.getStoreyHeight();
     this.statusBubbles.getFocusedFloor = () => this.scene.getFocusedStorey();
     this.statusBubbles.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    // Tip hearts — same floor gate; on tap, credit the server bonus + pop "+$5".
+    this.tipHearts.getFocusedFloor = () => this.scene.getFocusedStorey();
+    this.tipHearts.getStoreyHeight = () => WorldScene.getStoreyHeight();
+    this.tipHearts.onTap = (gx, gz, floor) => {
+      this.cloud.claimTipBonus();
+      this.floatingText.pop(gx, gz, "+$5", "#ffd966", floor);
+      this.sfx?.ding?.();
+    };
     // Phase 9.37 — gameplay pops (+$N, tips, ratings, cleaning) follow the
     // same focused-floor filter as the bubbles, so other floors' pops
     // don't leak into the view.
@@ -4842,6 +4853,9 @@ export class Engine {
     // responds to input while paused and we don't double-save under fast-forward.
     this.camera.update(rawDt);
     this.floatingText.update(rawDt);
+    // Tip hearts track happy guests each frame (world-anchored DOM, like the
+    // bubbles above). Cheap: snapshotStatus is already built for the bubbles.
+    if (this.spawner) this.tipHearts.update(this.spawner.snapshotStatus());
     this.saver.update(rawDt);
     // Phase 9.42 — health badge (~1 Hz internally), reads the server scan.
     this.updateHealthBadge(rawDt);

@@ -4005,6 +4005,35 @@ pub fn claim_recycle(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), Str
     Ok(())
 }
 
+/// Retention (reward being at the controls) — "tip hearts". The client pops a
+/// tappable heart over a happy guest; tapping it calls this for a small bonus
+/// tip. The amount is SERVER-fixed (not client-supplied) and rate-limited, so a
+/// cheater can't mint cash by spamming the reducer — the same anti-cheat shape
+/// as claim_recycle. Owner-gated.
+#[reducer]
+pub fn claim_tip_bonus(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim a tip".into());
+    }
+    const TIP_BONUS_CENTS: i64 = 500;            // $5 — a small "you're here" reward
+    const MIN_INTERVAL_MICROS: i64 = 2_500_000;  // 2.5 s — bounds tap-spam to ~$2/s
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_tip_bonus_micros != 0 && now - r.last_tip_bonus_micros < MIN_INTERVAL_MICROS {
+        return Ok(()); // too soon — silent no-op
+    }
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(TIP_BONUS_CENTS),
+        last_tip_bonus_micros: now,
+        ..r
+    });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "tip", TIP_BONUS_CENTS, rr.cloud_money_cents);
+    }
+    Ok(())
+}
+
 /// Anti-cheat B/C (income flow 5/5) — achievement reward. The unlock
 /// condition is client-side and can't be verified server-side, so the
 /// reward is client-provided but BOUNDED: clamped per-claim and capped
@@ -7954,15 +7983,39 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     // backgrounded. boost_expires_at_micros == 0 (default) means
     // "never boosted", which naturally fails the now < expiry check.
     let boost_mult_x100: i64 = if now_micros < rest.boost_expires_at_micros { 50 } else { 100 };
-    // Combined multiplier: interval × weather × attraction × boost.
-    // Each is x100 so we divide by 100 three times — saturating to keep
-    // any single big factor from underflowing the cap.
+    // STAR-RATING factor (NEW). Spawn rate previously ignored the restaurant's
+    // actual star rating entirely — a 1★ dump filled up exactly as fast as a 5★
+    // gem. Now the windowed average rating modulates the interval: BELOW 3★ it
+    // grows steeply (word gets out the place is bad) so low stars visibly thin
+    // the crowd even in a small room; ABOVE 3★ it shrinks (reputation pulls a
+    // line out the door). 3★ (= default / unrated) is neutral. Tunable via the
+    // two slopes; resulting traffic ≈ 1/mult → 1★≈24%, 2★≈38%, 3★=100%,
+    // 4★≈125%, 5★≈167%.
+    let rating_x100 = avg_rating_x100(ctx, rid);   // 100..500, 300 when unrated
+    let rating_mult_x100: i64 = if rating_x100 <= 300 {
+        // QUADRATIC penalty below 3★: gentle just under 3★, accelerating hard
+        // toward 1★ so a genuinely bad restaurant sits mostly EMPTY even at
+        // scale (a mild rate cut still saturates when dwell-time ≫ interval).
+        // d = stars-below-3★ ×100; mult = 100 + d²/18, capped ×20.
+        //   2.8★→×1.2, 2.5★→×2.4, 2★→×6.6, 1.6★→×11.9, 1.5★→×13.5, 1★→×20.
+        //   traffic ≈ 1/mult → 2★≈15%, 1.6★≈8%, 1★≈5% of the 3★ rate.
+        let d = 300 - rating_x100;
+        (100 + d * d / 18).min(2000)
+    } else {
+        // Gentle reward above 3★. 4★→×0.8, 5★→×0.6 (traffic 125% / 167%).
+        (100 - (rating_x100 - 300) * 20 / 100).max(60)
+    };
+    // Combined multiplier: interval × weather × attraction × boost × rating.
+    // Each is x100 so we divide by 100 each time — saturating to keep any single
+    // big factor from underflowing the cap.
     let weather_adjusted = SERVER_SPAWN_INTERVAL_MICROS
         .saturating_mul(weather_mult_x100) / 100;
     let attraction_adjusted = weather_adjusted
         .saturating_mul(attraction_mult_x100) / 100;
-    let adjusted_interval = attraction_adjusted
+    let boost_adjusted = attraction_adjusted
         .saturating_mul(boost_mult_x100) / 100;
+    let adjusted_interval = boost_adjusted
+        .saturating_mul(rating_mult_x100) / 100;
     if now_micros - rest.last_guest_spawn_micros < adjusted_interval {
         return;
     }
