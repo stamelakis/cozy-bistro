@@ -563,6 +563,11 @@ pub struct Restaurant {
     /// purely additive (mid-struct insert forces a manual table migration).
     #[default(0i64)]
     pub last_tip_bonus_micros: i64,
+    /// Supply-crate cooldown (Unix micros of the last claim_supply_crate). 3h
+    /// timer. Appended LAST (after last_tip_bonus_micros) for an additive
+    /// migration — never insert a column mid-struct.
+    #[default(0i64)]
+    pub last_crate_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

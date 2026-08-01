@@ -651,7 +651,7 @@ export class Engine {
     // the sidebar (above cash/weather) so the three economy actions
     // are the first thing the eye lands on. Constructed first so
     // its DOM nodes appear above the HUD's stacked sections.
-    this.expandWidget = new ExpandWidget(this.sidebar.body, this.game);
+    this.expandWidget = new ExpandWidget(this.sidebar.body, this.game, this.cloud);
     this.sidebar.addSeparator();
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getGuestsInsideCount() ?? 0,

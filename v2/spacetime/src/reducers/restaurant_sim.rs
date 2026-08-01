@@ -4034,6 +4034,54 @@ pub fn claim_tip_bonus(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), S
     Ok(())
 }
 
+/// Retention — "supply crate", claimable every 3h (same cooldown shape as the
+/// starter grant). Grants ITEMS, not cash, so it can't inflate the economy:
+///   • Ingredients — tops up each stocked ingredient to a modest floor. Never
+///     EXCEEDS normal stock levels, so it can't overflow the pantry cap.
+///   • Decor — one Small Plant into storage (re-placeable for free). Lowest-tier
+///     decor, so the free attraction/rating it adds is negligible.
+/// Owner-gated + server-fixed contents → nothing here is client-supplied.
+#[reducer]
+pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim a supply crate".into());
+    }
+    const COOLDOWN_MICROS: i64 = 3 * 60 * 60 * 1_000_000; // 3h
+    const PANTRY_FLOOR: u32 = 8; // refill depleted ingredients up to this
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_crate_micros != 0 && now - r.last_crate_micros < COOLDOWN_MICROS {
+        return Ok(()); // not ready yet — silent no-op
+    }
+    ctx.db.restaurant().id().update(Restaurant { last_crate_micros: now, ..r });
+    // Ingredients: top up each stocked ingredient to the floor (only raises the
+    // low ones; never lowers a well-stocked one; can't exceed the cap).
+    let rows: Vec<PantryStock> = ctx.db.pantry_stock().restaurant_id().filter(restaurant_id).collect();
+    for row in rows {
+        if row.quantity < PANTRY_FLOOR {
+            ctx.db.pantry_stock().key().update(PantryStock { quantity: PANTRY_FLOOR, ..row });
+        }
+    }
+    // Decor: +1 Small Plant into storage (bank into furniture_inventory).
+    let inv_id = format!("{restaurant_id}:plant-small");
+    if let Some(inv) = ctx.db.furniture_inventory().id().find(inv_id.clone()) {
+        ctx.db.furniture_inventory().id().update(FurnitureInventory {
+            qty: inv.qty.saturating_add(1),
+            ..inv
+        });
+    } else {
+        ctx.db.furniture_inventory().insert(FurnitureInventory {
+            id: inv_id,
+            restaurant_id,
+            def_id: "plant-small".to_string(),
+            qty: 1,
+        });
+    }
+    log::info!("supply crate claimed by restaurant {restaurant_id}");
+    Ok(())
+}
+
 /// Anti-cheat B/C (income flow 5/5) — achievement reward. The unlock
 /// condition is client-side and can't be verified server-side, so the
 /// reward is client-provided but BOUNDED: clamped per-claim and capped

@@ -62,4 +62,5 @@ export default __t.row({
   cumulativeAchievementCents: __t.i64().name("cumulative_achievement_cents"),
   homeBuildingId: __t.u64().name("home_building_id"),
   lastTipBonusMicros: __t.i64().name("last_tip_bonus_micros"),
+  lastCrateMicros: __t.i64().name("last_crate_micros"),
 });

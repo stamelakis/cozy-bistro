@@ -1887,6 +1887,31 @@ export class SpacetimeClient {
     return micros;
   }
 
+  /** Retention — claim the 3h supply crate. Server grants ingredients (pantry
+   * top-up) + a Small Plant into storage; contents + cooldown are all
+   * server-fixed, so this is a plain owner-gated call. */
+  claimSupplyCrate(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      this.conn.reducers.claimSupplyCrate({ restaurantId: this.restaurantId });
+    } catch (e) {
+      console.warn("[Cloud] claimSupplyCrate failed:", e);
+    }
+  }
+
+  /** Seconds until the supply crate is claimable again (0 = ready now). Reads
+   * the synced Restaurant.last_crate_micros against the 3h cooldown. */
+  getCrateReadyInSeconds(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return 0;
+    const last = Number(r.lastCrateMicros ?? 0n);
+    if (last === 0) return 0; // never claimed → ready
+    const COOLDOWN_S = 3 * 60 * 60;
+    const elapsed = (Date.now() * 1000 - last) / 1_000_000; // → seconds
+    return Math.max(0, COOLDOWN_S - elapsed);
+  }
+
   /** Phase 6.7 — push the foreground boost expiry to the cloud so
    * try_server_spawn_guest can apply the same 0.5× spawn interval
    * halving while the owner's tab is backgrounded. Without this push,

@@ -1,6 +1,8 @@
 import type { Game } from "../game/Game";
+import type { SpacetimeClient } from "../cloud/SpacetimeClient";
 import { recipes } from "../data/recipes";
 import { getRecipeLuxuryTier } from "../systems/CookingSystem";
+import { showEventBanner } from "./uiHints";
 
 /**
  * Compact tier + boost widget that sits attached below the HUD. Replaces
@@ -47,6 +49,7 @@ function injectExpandWidgetStyles(): void {
     .cb-xw-expand{ background:linear-gradient(135deg,#54b26c,#3b8d52); }
     .cb-xw-boost{ background:linear-gradient(135deg,#cf63c4,#9a3ba6); }
     .cb-xw-grant{ background:linear-gradient(135deg,#5f8ad6,#3f61ad); }
+    .cb-xw-crate{ background:linear-gradient(135deg,#5fae7a,#3f8a5a); }
     @keyframes cb-xw-pulse{
       0%,100%{ box-shadow:0 2px 6px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.18), 0 0 0 0 rgba(255,238,170,0); }
       50%{ box-shadow:0 2px 9px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.22), 0 0 13px 1px rgba(255,238,170,.5); } }
@@ -63,10 +66,13 @@ export class ExpandWidget {
   private readonly expandBtn: HTMLButtonElement;
   private readonly boostBtn: HTMLButtonElement;
   private readonly grantBtn: HTMLButtonElement;
+  private readonly crateBtn: HTMLButtonElement;
   private readonly unlocksLine: HTMLElement;
+  private readonly cloud: SpacetimeClient;
 
-  constructor(parent: HTMLElement, game: Game) {
+  constructor(parent: HTMLElement, game: Game, cloud: SpacetimeClient) {
     this.game = game;
+    this.cloud = cloud;
     injectExpandWidgetStyles();
     // Inline section — Sidebar handles the position/background/padding.
     this.root = document.createElement("div");
@@ -119,6 +125,18 @@ export class ExpandWidget {
       this.update();
     };
     this.root.appendChild(this.grantBtn);
+
+    // Supply crate — retention. Server-authoritative 3h cooldown (read from the
+    // synced Restaurant row); grants a pantry top-up + a Small Plant into storage.
+    this.crateBtn = document.createElement("button");
+    this.crateBtn.className = "cb-xw-btn cb-xw-crate";
+    this.crateBtn.onclick = () => {
+      if (this.cloud.getCrateReadyInSeconds() > 0) return;
+      this.cloud.claimSupplyCrate();
+      showEventBanner("Supply crate! Pantry topped up + a Small Plant added to your storage.", { icon: "🎁", accent: "#a8e2a8" });
+      this.update();
+    };
+    this.root.appendChild(this.crateBtn);
 
     this.update();
   }
@@ -212,6 +230,25 @@ export class ExpandWidget {
       this.grantBtn.style.opacity = "0.5";
       this.grantBtn.title = `Free grant kicks in when your balance drops below $${STARTER_GRANT_THRESHOLD}. Once per game day.`;
       this.grantBtn.classList.remove("cb-xw-pulse");
+    }
+
+    // Supply crate — server-timed 3h cooldown (read from the synced restaurant
+    // row). Ready → claimable + pulsing; otherwise a live countdown.
+    const crateSecs = this.cloud.getCrateReadyInSeconds();
+    if (crateSecs <= 0) {
+      this.crateBtn.textContent = "🎁 Supply crate — ready!";
+      this.crateBtn.disabled = false;
+      this.crateBtn.style.opacity = "1";
+      this.crateBtn.title = "Free every 3h: tops up your pantry + a Small Plant for your storage.";
+      this.crateBtn.classList.add("cb-xw-pulse");
+    } else {
+      const s = Math.ceil(crateSecs);
+      const label = s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : formatMmSs(s);
+      this.crateBtn.textContent = `🎁 Supply crate — ${label}`;
+      this.crateBtn.disabled = true;
+      this.crateBtn.style.opacity = "0.5";
+      this.crateBtn.title = "Restocks your pantry + adds a decor piece. Ready every 3 hours.";
+      this.crateBtn.classList.remove("cb-xw-pulse");
     }
   }
 }

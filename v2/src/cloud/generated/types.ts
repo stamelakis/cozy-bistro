@@ -516,6 +516,7 @@ export const Restaurant = __t.object("Restaurant", {
   cumulativeAchievementCents: __t.i64(),
   homeBuildingId: __t.u64(),
   lastTipBonusMicros: __t.i64(),
+  lastCrateMicros: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
