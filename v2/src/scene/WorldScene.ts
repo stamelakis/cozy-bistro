@@ -11,7 +11,7 @@ import { fitFurniture, snapToAdjacentWall } from "../assets/fitFurniture";
 import { WeatherEffects, type WeatherKind } from "./WeatherEffects";
 import { TextureService } from "./TextureService";
 import { buildPerimeterWallSegments } from "./wallBuilder";
-import { buildStaircaseFlight, buildSupplyCounterMesh } from "./interiorPieces";
+import { buildStaircaseFlight, buildBrokenStairwell, buildSupplyCounterMesh } from "./interiorPieces";
 
 /** Plaque visual catalogs — each id is a small string the modal exposes
  * as a radio button. Picked to read as warm cosy bistro defaults but
@@ -1924,6 +1924,10 @@ export class WorldScene {
    * gated independently by tier (only show a flight if its destination
    * storey is unlocked). */
   private stairFlights = new Map<number, THREE.Group>();
+  /** Boarded-up placeholder stairwell shown ONLY at tier 1 (before Floor 1
+   * unlocks the real flight-1). Public so Engine can raycast it for the
+   * click-to-Expand affordance. setLuxuryTier toggles its visibility. */
+  brokenStairwell?: THREE.Group;
   /** Roof cap at y = NUM_STOREYS * STOREY_HEIGHT. Visible whenever any
    * upper storey is — gives the building a finished top instead of an
    * open box. Also ghost-able so the iso camera can see down through it
@@ -2154,6 +2158,14 @@ export class WorldScene {
         lowerGroup.add(stairGroup);
       }
     }
+    // Boarded-up placeholder stairwell in the same back-left footprint, at
+    // ground level. Shown ONLY at tier 1 (setLuxuryTier); reserves those tiles
+    // (BuildMenu.isStairwellCell) and, when clicked, opens Expand (Engine).
+    const broken = new THREE.Group();
+    buildBrokenStairwell(broken);
+    broken.visible = false;   // setLuxuryTier sets the real state
+    this.threeScene.add(broken);
+    this.brokenStairwell = broken;
     // Roof at the top of the topmost storey. Replaced in
     // addParisExteriorDecor by a mansard whose Y tracks the player's
     // current luxury tier. This flat plane is kept invisible as a
@@ -4603,6 +4615,9 @@ export class WorldScene {
     for (const [stairIdx, stairGroup] of this.stairFlights) {
       stairGroup.visible = tier >= stairIdx + 1;
     }
+    // Boarded-up placeholder is the INVERSE of real flight-1: shown only while
+    // Floor 1 is still locked (tier 1). At tier≥2 the real flight takes over.
+    if (this.brokenStairwell) this.brokenStairwell.visible = tier < 2;
     // Legacy flat roof — kept hidden; the Paris mansard below takes
     // over the visual role.
     if (this.buildingRoof) {

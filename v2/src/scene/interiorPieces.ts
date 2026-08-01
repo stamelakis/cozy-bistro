@@ -94,6 +94,66 @@ export function buildStaircaseFlight(parent: THREE.Object3D, baseY: number): voi
   }
 }
 
+/** A boarded-up, half-built stairwell that sits at GROUND level in the same
+ * back-left footprint as {@link buildStaircaseFlight} (X∈[-4.4,-3.4],
+ * Z∈[-1.45,-4.45]). Shown ONLY while Floor 1 is still locked (tier 1): it
+ * reserves those tiles (BuildMenu.isStairwellCell blocks placement) and teases
+ * the upstairs. A few dusty bottom steps, a plank barrier across where the
+ * flight "stops", and some tumbled rubble. Clicking it opens Expand (wired in
+ * Engine); on tier 2 it's hidden and the real flight takes over. */
+export function buildBrokenStairwell(parent: THREE.Object3D): void {
+  const X_CENTER = -3.9;
+  const STEP_WIDTH = 1.0;
+  const STEP_DEPTH = 0.3;
+  const STEP_RISE = STOREY_HEIGHT / 10;   // 0.3 — matches the real flight
+  const Z_BOTTOM = -1.45;
+  const BUILT = 4;                          // only the bottom steps exist yet
+  const stepMat = new THREE.MeshStandardMaterial({ color: 0x9a8b78, roughness: 0.96, metalness: 0 });
+  const plankMat = new THREE.MeshStandardMaterial({ color: 0x8a6a48, roughness: 0.85 });
+  const rubbleMat = new THREE.MeshStandardMaterial({ color: 0x8d8680, roughness: 1 });
+
+  // Bottom few (dusty) steps.
+  for (let i = 0; i < BUILT; i += 1) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(STEP_WIDTH, STEP_RISE, STEP_DEPTH), stepMat);
+    step.position.set(X_CENTER, STEP_RISE * (i + 0.5), Z_BOTTOM - STEP_DEPTH * (i + 0.5));
+    step.castShadow = true; step.receiveShadow = true;
+    parent.add(step);
+  }
+
+  // Boarded-up opening just past the last built step — where the flight stops.
+  const zBar = Z_BOTTOM - STEP_DEPTH * BUILT - 0.05;    // ≈ -2.7
+  const barTop = 1.5;
+  for (const dx of [-STEP_WIDTH / 2 + 0.06, STEP_WIDTH / 2 - 0.06]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, barTop, 0.08), plankMat);
+    post.position.set(X_CENTER + dx, barTop / 2, zBar);
+    post.castShadow = true; parent.add(post);
+  }
+  for (const y of [0.45, 0.95, 1.35]) {
+    const board = new THREE.Mesh(new THREE.BoxGeometry(STEP_WIDTH * 0.98, 0.12, 0.045), plankMat);
+    board.position.set(X_CENTER, y, zBar);
+    board.castShadow = true; parent.add(board);
+  }
+  const diag = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.12, 0.045), plankMat);
+  diag.position.set(X_CENTER, 0.9, zBar - 0.02);
+  diag.rotation.z = 0.72;   // hazard "X" board across the boards
+  diag.castShadow = true; parent.add(diag);
+
+  // Rubble tumbling down the built steps.
+  const rubble = [
+    { dx: -0.22, dz: -0.15, y: 0.12, s: 0.22 },
+    { dx: 0.24, dz: -0.55, y: 0.30, s: 0.16 },
+    { dx: -0.10, dz: -0.95, y: 0.55, s: 0.20 },
+    { dx: 0.26, dz: -1.35, y: 0.85, s: 0.14 },
+  ];
+  for (const r of rubble) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(r.s, r.s, r.s), rubbleMat);
+    b.position.set(X_CENTER + r.dx, r.y, Z_BOTTOM + r.dz);
+    b.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
+    b.castShadow = true; b.receiveShadow = true;
+    parent.add(b);
+  }
+}
+
 /** Back-wall supply counter mesh — the errand helper reports here
  * after each shopping trip. Cabinet body + lighter wooden top + two
  * small crates. Position hugs the back wall at the canonical

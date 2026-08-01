@@ -1092,7 +1092,6 @@ export class Engine {
     // those have their own pointer handling and we only trigger when
     // the click hits the plaque specifically.
     this.renderer.domElement.addEventListener("click", (e) => {
-      if (!this.scene.signPlaqueMesh) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -1100,8 +1099,19 @@ export class Engine {
       );
       const ray = new THREE.Raycaster();
       ray.setFromCamera(ndc, this.camera.threeCamera);
-      const hit = ray.intersectObject(this.scene.signPlaqueMesh, false);
-      if (hit.length > 0) this.signModal.show();
+      // Click the boarded-up stairwell (tier 1 only, while it's shown) → open
+      // Expand. Skip while placing so a build click isn't hijacked (those cells
+      // are blocked anyway, so nothing would drop there).
+      const broken = this.scene.brokenStairwell;
+      if (broken && broken.visible && !this.buildMenu.getPlacingDefId()
+          && ray.intersectObject(broken, true).length > 0) {
+        this.expandModal.show();
+        return;
+      }
+      if (this.scene.signPlaqueMesh
+          && ray.intersectObject(this.scene.signPlaqueMesh, false).length > 0) {
+        this.signModal.show();
+      }
     });
     // Pop a toast above the door whenever an achievement unlocks.
     // Phase I (H.100) — also pay the cash reward and surface the amount

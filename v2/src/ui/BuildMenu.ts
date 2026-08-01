@@ -2092,6 +2092,13 @@ export class BuildMenu {
         return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
       }
     }
+    // Reserve the back-left staircase footprint — nothing may sit where the
+    // stairwell lives (boarded-up placeholder now, real flight at tier ≥ 2).
+    for (const cell of previewCells) {
+      if (BuildMenu.isStairwellCell(cell.x, cell.z)) {
+        return { quality: "blocked", x: cellX, z: cellZ, rotY: this.rotationY };
+      }
+    }
     // Flat ground decor (rugs) skips the occupancy check entirely so a
     // rug can land under any furniture or another rug. The reverse
     // direction (other items placing ON a rug) is handled in
@@ -2262,6 +2269,15 @@ export class BuildMenu {
    * outside that range is on the lawn / pavement / street and must
    * never accept furniture placement. Matches Pathfinding.ts's
    * GRID_MIN/MAX so movement and placement share one source of truth. */
+  /** The back-left staircase footprint (x = -4, z ∈ {-4,-3,-2}). Reserved on
+   * the ground floor for the stairwell — the boarded-up placeholder at tier 1,
+   * the real flight at tier ≥ 2. Placement is blocked here so a player never
+   * builds where the stairs will appear. Matches makeSlabWithStairHole's
+   * X∈[-4.4,-3.4], Z∈[-4.4,-1.4] opening. */
+  static isStairwellCell(x: number, z: number): boolean {
+    return x === -4 && z >= -4 && z <= -2;
+  }
+
   private static readonly INTERIOR_CELL_MIN_X = -4;
   private static readonly INTERIOR_CELL_MAX_X =  5;
   private static readonly INTERIOR_CELL_MIN_Z = -4;
