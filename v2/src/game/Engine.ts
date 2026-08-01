@@ -3293,10 +3293,10 @@ export class Engine {
     // track the real furniture. Interior cells: x,z ∈ [-4,5] (BuildMenu.INTERIOR_CELL_*).
     const SPOT = {
       table: { x: 0.5, z: 1.5 },   // 2×2 → half-integer anchor (the shared corner of its 4 cells)
-      stove: { x: -2, z: -3 },     // kitchen line, back wall, left→right in build order
-      counter: { x: -1, z: -3 },
-      fridge: { x: 0, z: -3 },
-      sink: { x: 1, z: -3 },
+      stove: { x: -2, z: -4 },     // kitchen line, hard against the back wall, left→right in build order
+      counter: { x: -1, z: -4 },
+      fridge: { x: 0, z: -4 },
+      sink: { x: 1, z: -4 },
     };
     // Match the table's real seat slots (STANDARD_TABLE_SEAT_SLOTS): 2 per long
     // side at (±0.5, ±1.5) from the table anchor. Added to the placed table's
@@ -3332,6 +3332,15 @@ export class Engine {
       const back = menu!.querySelector<HTMLElement>("[data-build-back]");
       if (visible(back)) return back;                                  // in the WRONG category → go back first
       return btn("Build")();
+    };
+    /** Point at a control INSIDE the build panel (STORE / MOVE / AUTO-ARRANGE /
+     * + SAVE / the STORAGE list). Opens Build first if it's shut so the button
+     * is actually on screen; reposition's scrollIntoView brings it up if it's
+     * below the fold. */
+    const buildBtn = (sel: string) => (): HTMLElement | null => {
+      const menu = document.querySelector<HTMLElement>(".cb-buildmenu");
+      if (!visible(menu)) return btn("Build")();
+      return menu!.querySelector<HTMLElement>(sel);
     };
     /**
      * Menu-carousel step target. If the player isn't on the course we're asking
@@ -3463,6 +3472,16 @@ export class Engine {
       { id: "build-sink", say: "And a SINK. Dirty plates in, clean plates out — it's basically alchemy.\n\nBUILD → Dishwashing → Sink.", ...placeAt("sink", () => SPOT.sink), until: () => owns("wash") },
       // Teach how to STOP placing — Esc on desktop, the ✕ touch button on mobile.
       { id: "build-escape", say: "Handy to know: on a keyboard, press ESC to stop placing.\n\nOn a phone you just tap the floor to drop each item — then ⟳ rotates, and the green ✓ means \"done\" when you're finished." },
+
+      // ── A FEW BUILD TRICKS ───────────────────────────────────
+      // Teach STORE + re-place (via a throwaway plant), MOVE, AUTO-ARRANGE and
+      // SAVE LAYOUT — the tools that aren't obvious but save real time later.
+      { id: "build-plant", say: "Ooh, let's make it PRETTY. BUILD → Plants → grab any plant and plonk it down somewhere.", ...placeAt("plant-small", () => null), until: () => owns("plant") },
+      { id: "teach-store", say: "Now a magic trick. See STORE? Tap it, then tap your plant.\n\nIt slips into your STORAGE — no refund lost, and dropping it back later is FREE.", target: buildBtn('[data-build-store]'), until: () => catCount("plant") === 0 },
+      { id: "teach-replace", say: "There it is, waiting in STORAGE. Click it to set it back down — told you, free.", target: buildBtn('[data-build-storage]'), until: () => owns("plant") },
+      { id: "teach-move", say: "And MOVE, right next to STORE? It picks up anything already placed and lets you slide it somewhere new — no storing needed. ESC bails out of a move mid-slide.", target: buildBtn('[data-build-move]') },
+      { id: "teach-autoarrange", say: "One more gem: AUTO-ARRANGE. Drop chairs ANY old where near a table and this snaps every loose one onto an empty seat. Chef's kiss.", target: buildBtn('[data-build-autoarrange]') },
+      { id: "teach-savelayout", say: "Last trick, promise. + SAVE names and saves your whole floor plan — reload it anytime, or rebuild the room in one click after a big shuffle.", target: buildBtn('[data-build-savelayout]') },
 
       // ── HIRE THE CREW ────────────────────────────────────────
       // Guide them to OPEN the staff panel themselves (it used to just appear),

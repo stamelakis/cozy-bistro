@@ -443,6 +443,7 @@ export class BuildMenu {
 
     const storeBtn = document.createElement("button");
     storeBtn.textContent = "STORE";
+    storeBtn.dataset.buildStore = "1";   // tutorial target
     attachTooltip(storeBtn, "STORE — stash an item into the storage room (no refund) so you can re-place it for free later.\nClick this, then tap the item.");
     Object.assign(storeBtn.style, {
       padding: "6px 4px",
@@ -461,6 +462,7 @@ export class BuildMenu {
 
     const moveBtn = document.createElement("button");
     moveBtn.textContent = "MOVE";
+    moveBtn.dataset.buildMove = "1";   // tutorial target
     attachTooltip(moveBtn, "MOVE — pick up a placed item and set it down elsewhere, free.\nClick this, tap the item, then tap the new spot. R rotates, Esc cancels.");
     Object.assign(moveBtn.style, {
       padding: "6px 4px",
@@ -494,6 +496,7 @@ export class BuildMenu {
     } as Partial<CSSStyleDeclaration>);
     const autoBtn = document.createElement("button");
     autoBtn.textContent = "AUTO-ARRANGE";
+    autoBtn.dataset.buildAutoarrange = "1";   // tutorial target
     attachTooltip(autoBtn, "AUTO-ARRANGE — snap every loose chair to its nearest empty table seat, so guests can actually sit down.");
     Object.assign(autoBtn.style, {
       padding: "6px 4px",
@@ -545,6 +548,7 @@ export class BuildMenu {
       marginTop: "4px", maxHeight: "140px", overflowY: "auto",
     } as Partial<CSSStyleDeclaration>);
     body.appendChild(storageList);
+    storageList.dataset.buildStorage = "1";   // tutorial target
     this.storageListEl = storageList;
     this.refreshStorageList();
     if (!this.storageSubscribed) {
@@ -573,6 +577,7 @@ export class BuildMenu {
     layoutRow.appendChild(layoutHeader);
     const saveLayoutBtn = document.createElement("button");
     saveLayoutBtn.textContent = "+ SAVE";
+    saveLayoutBtn.dataset.buildSavelayout = "1";   // tutorial target
     attachTooltip(saveLayoutBtn, "Save the current furniture layout as a named preset you can reload later.");
     Object.assign(saveLayoutBtn.style, {
       padding: "2px 8px", fontSize: "10px", fontWeight: "700",
