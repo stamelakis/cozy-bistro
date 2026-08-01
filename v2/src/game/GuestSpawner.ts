@@ -1200,7 +1200,16 @@ export class GuestSpawner {
       const attractionMult = Math.max(0.35, 1 - Math.min(0.65, attraction * 0.015));
       // AdminPanel spawn-rate multiplier (1 = default).
       const adminMult = this.game.admin.spawnRateMultiplier;
-      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult;
+      // STAR-RATING factor — MUST mirror the server's try_server_spawn_guest
+      // (restaurant_sim.rs) or the online (client-spawned) experience ignores
+      // the rating entirely and a 1★ dump stays packed. Quadratic below 3★
+      // (gentle just under, steep toward 1★), gentle reward above; 3★ neutral.
+      //   traffic ≈ 1/mult → 2★≈15%, 1.5★≈7%, 1★≈5%; 4★≈125%, 5★≈167%.
+      const rating = this.game.reputation.getAverageRating(); // 1..5, default 3.0
+      const ratingMult = rating <= 3
+        ? Math.min(20, 1 + (3 - rating) * (3 - rating) * (100 / 18))
+        : Math.max(0.6, 1 - (rating - 3) * 0.2);
+      this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult * ratingMult;
     }
 
     // Tick each guest's state machine.
