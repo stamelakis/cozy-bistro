@@ -33,6 +33,7 @@ import { DayEndModal } from "../ui/DayEndModal";
 import { LedgerModal } from "../ui/LedgerModal";
 import { AnalyticsModal } from "../ui/AnalyticsModal";
 import { HelpModal } from "../ui/HelpModal";
+import { showEventBanner } from "../ui/uiHints";
 import { StatsModal } from "../ui/StatsModal";
 import { AchievementsModal } from "../ui/AchievementsModal";
 import { AwardPopup } from "../ui/AwardPopup";
@@ -2831,6 +2832,9 @@ export class Engine {
       // Reveal the mobile bottom bar / camera chrome now that login +
       // plot-pick are behind us (no-op on desktop).
       setMobileInGame(true);
+      // Retention: start the random free "Rush hour!" surge scheduler (guarded
+      // so re-entrant enterGame calls don't stack timers).
+      this.startRushScheduler();
       // Seamless reload — hold a loading veil over the scene until the
       // server snapshot has been applied to staff + guests (see
       // revealWhenHydrated), so they're never seen starting at default
@@ -3226,6 +3230,36 @@ export class Engine {
     if (this.game.tutorialDone || this.tutorial.active) return;
     if (this.game.isAuthGated()) return; // login still owns the screen
     this.tutorial.start(this.game.tutorialStepId);
+  }
+
+  // ── Random "Rush hour!" surge (retention: reward being at the controls) ──
+  private rushScheduled = false;
+  private rushTimer?: number;
+
+  /** Start the recurring random-rush scheduler once. Idempotent — re-entrant
+   * enterGame calls won't stack timers. */
+  private startRushScheduler(): void {
+    if (this.rushScheduled) return;
+    this.rushScheduled = true;
+    this.scheduleNextRush();
+  }
+
+  /** Queue the next rush at a random 8–16 min from now. */
+  private scheduleNextRush(): void {
+    if (this.rushTimer != null) window.clearTimeout(this.rushTimer);
+    const MIN_MS = 8 * 60_000, MAX_MS = 16 * 60_000;
+    const delay = MIN_MS + Math.random() * (MAX_MS - MIN_MS);
+    this.rushTimer = window.setTimeout(() => this.fireRush(), delay);
+  }
+
+  /** Fire a free 60s rush IF the place is open + not already boosting (so the
+   * surge lands somewhere it can actually seat + serve), then reschedule. */
+  private fireRush(): void {
+    if (this.game.restaurantOpen && this.game.triggerFreeRush(60)) {
+      showEventBanner("Rush hour! Word's out — guests are pouring in!", { icon: "🎉", accent: "#ffd966", ms: 5000 });
+      this.sfx?.alert?.();
+    }
+    this.scheduleNextRush();
   }
 
   /** Phase 2 — the full run.

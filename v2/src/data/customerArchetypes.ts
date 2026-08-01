@@ -41,6 +41,12 @@ export const customerArchetypes: readonly CustomerArchetype[] = [
   { id: "grump",       name: "Grumpy Critic", weight:  5, patienceMultiplier: 0.7,  tipMultiplier: 0.4, orderSizeBias:  0, shortLabel: "😠", wcUseChance: 0.40 },
   // Rare: food critic whose rating counts triple but tips huge if pleased.
   { id: "critic",      name: "Food Critic",   weight:  2, patienceMultiplier: 0.9,  tipMultiplier: 3.0, orderSizeBias:  1, shortLabel: "🕵️", wcUseChance: 0.55 },
+  // Very rare VIP: patient, orders big, tips LAVISHLY when pleased (tips only
+  // land at 3★+ per the rating→tip curve, so a VIP rewards a well-run place).
+  // weight sits outside the "sum to 100" note; rollArchetype normalises by the
+  // running total, so this is ~2% of spawns. Wears the "boss" model + gets a
+  // fanfare on arrival and on serve (GuestSpawner).
+  { id: "vip",         name: "VIP",           weight:  2, patienceMultiplier: 1.4,  tipMultiplier: 5.0, orderSizeBias:  1, shortLabel: "⭐", wcUseChance: 0.50 },
 ];
 
 /** Pick one archetype weighted by its `weight` field. */

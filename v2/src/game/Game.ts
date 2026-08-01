@@ -1379,6 +1379,19 @@ export class Game {
     return true;
   }
 
+  /** Fire a FREE marketing rush — same effect as a paid boost (halves the spawn
+   * interval, mirrored to the cloud so the server sim speeds up too) but with no
+   * cost and no cooldown gate. Used by the random "Rush hour!" retention event.
+   * No-op if a boost/rush is already running (never stacks). Returns true if it
+   * started. Deliberately IGNORES the paid-boost cooldown — a free event
+   * shouldn't be blocked by a recent paid boost. */
+  triggerFreeRush(durationSeconds: number): boolean {
+    if (this.boostRemaining > 0) return false;
+    this.boostRemaining = durationSeconds;
+    this.onBoostStarted?.(Date.now() + durationSeconds * 1000);
+    return true;
+  }
+
   // === Staff hire/fire (wraps economy + StaffSystem + fires callback) ===
 
   /** Minimum luxury tier required to hire a given role. Most roles

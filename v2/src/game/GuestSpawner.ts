@@ -16,6 +16,7 @@ import type { RecipeDefinition } from "../data/types";
 import { pick, between, clamp } from "../data/util";
 import { type CustomerArchetype, type CustomerTaste, type DietKind, rollArchetype, rollCustomerTaste, customerArchetypes } from "../data/customerArchetypes";
 import { RESTAURANT_THEMES } from "../data/themes";
+import { showEventBanner } from "../ui/uiHints";
 import type { Pathfinding, MultiFloorPathStep } from "./Pathfinding";
 import { PATH_ARRIVAL_THRESHOLD } from "./Pathfinding";
 
@@ -3010,7 +3011,9 @@ export class GuestSpawner {
     try {
       let model: THREE.Object3D;
       let skeletal: SkeletalDriver | undefined;
-      if (newFace) {
+      // A VIP always wears the distinctive "boss" model so the player spots
+      // them across the room; otherwise ~1/6 guests are the new-face model.
+      if (newFace || archetype.id === "vip") {
         const inst = await this.riggedLoader.createInstance("newface");
         model = inst.root; skeletal = inst.controller;
       } else {
@@ -3043,7 +3046,11 @@ export class GuestSpawner {
 
       // Loud announcement for a food critic so the player knows to ace it.
       // (archetype + taste were rolled before the seat pick above.)
-      if (archetype.id === "critic") {
+      if (archetype.id === "vip") {
+        this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "⭐ VIP GUEST!", "#ffe08a", 0);
+        showEventBanner("A VIP just walked in — impress them for a lavish tip!", { icon: "⭐", accent: "#ffe08a" });
+        this.sfx?.alert();
+      } else if (archetype.id === "critic") {
         this.floatingText?.pop(DOOR_POSITION.x, DOOR_POSITION.y, "🕵️ FOOD CRITIC!", "#ffd966", 0);
         this.sfx?.alert();
       } else {
@@ -4787,6 +4794,15 @@ export class GuestSpawner {
       setTimeout(() => {
         this.floatingText?.pop(g.character.groundPos.x, g.character.groundPos.y, `tip +$${tip}`, "#a8e2a8", g.currentFloor);
       }, 600);
+    }
+    // VIP fanfare on serve. The lavish tip itself is credited server-side via
+    // the archetype tip multiplier (the `tip` above is only the display value);
+    // here we just celebrate. Tips land only at 3★+, so a low-rated place gets
+    // "a VIP dined here" with no payout — a nudge to raise the bar.
+    if (g.archetype.id === "vip") {
+      showEventBanner(tip > 0 ? `A VIP loved it — tipped $${tip}!` : "A VIP dined here — impress the next one!",
+        { icon: "⭐", accent: "#ffe08a" });
+      this.sfx?.ding();
     }
   }
 }

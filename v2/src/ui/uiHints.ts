@@ -123,3 +123,61 @@ function buildToast(): HTMLElement {
   document.body.appendChild(root);
   return root;
 }
+
+// ── Event banner ─────────────────────────────────────────────────────
+// A prominent, transient centre-top banner for one-off "something's
+// happening" moments (Rush hour, a VIP arriving). Bolder than the
+// placement hint, no checkbox, click-through, auto-hides.
+
+let eventBannerEl: HTMLElement | null = null;
+let eventBannerTimer: number | null = null;
+
+export function showEventBanner(msg: string, opts?: { icon?: string; accent?: string; ms?: number }): void {
+  const icon = opts?.icon ?? "🎉";
+  const accent = opts?.accent ?? "#ffd966";
+  const ms = opts?.ms ?? 4200;
+  if (!eventBannerEl) eventBannerEl = buildEventBanner();
+  const iconEl = eventBannerEl.querySelector<HTMLElement>("[data-ev-icon]");
+  const msgEl = eventBannerEl.querySelector<HTMLElement>("[data-ev-msg]");
+  if (iconEl) iconEl.textContent = icon;
+  if (msgEl) { msgEl.textContent = msg; msgEl.style.color = accent; }
+  eventBannerEl.style.borderColor = accent;
+  eventBannerEl.style.display = "flex";
+  eventBannerEl.style.opacity = "0";
+  eventBannerEl.style.transform = "translateX(-50%) translateY(-8px)";
+  requestAnimationFrame(() => {
+    if (!eventBannerEl) return;
+    eventBannerEl.style.opacity = "1";
+    eventBannerEl.style.transform = "translateX(-50%) translateY(0)";
+  });
+  if (eventBannerTimer != null) window.clearTimeout(eventBannerTimer);
+  eventBannerTimer = window.setTimeout(() => {
+    if (!eventBannerEl) return;
+    eventBannerEl.style.opacity = "0";
+    window.setTimeout(() => { if (eventBannerEl) eventBannerEl.style.display = "none"; }, 260);
+  }, ms);
+}
+
+function buildEventBanner(): HTMLElement {
+  const root = document.createElement("div");
+  Object.assign(root.style, {
+    position: "fixed", top: "120px", left: "50%", transform: "translateX(-50%)",
+    zIndex: "2600", display: "none", alignItems: "center", gap: "10px",
+    maxWidth: "min(520px, calc(100vw - 32px))", boxSizing: "border-box",
+    padding: "10px 20px", borderRadius: "12px",
+    background: "rgba(20,14,8,0.92)", border: "2px solid #ffd966",
+    color: "#fff5dc", font: "700 16px/1.3 system-ui, sans-serif",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.55)",
+    transition: "opacity 220ms ease, transform 220ms ease", opacity: "0",
+    pointerEvents: "none", whiteSpace: "nowrap",
+  } as Partial<CSSStyleDeclaration>);
+  const icon = document.createElement("span");
+  icon.dataset.evIcon = "1";
+  icon.style.fontSize = "22px";
+  root.appendChild(icon);
+  const msg = document.createElement("span");
+  msg.dataset.evMsg = "1";
+  root.appendChild(msg);
+  document.body.appendChild(root);
+  return root;
+}
