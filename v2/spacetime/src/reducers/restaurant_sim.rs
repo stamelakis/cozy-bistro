@@ -4250,25 +4250,36 @@ pub fn start_recipe_upgrade(
     if recipe_id.is_empty() || recipe_id.len() > 64 {
         return Err("recipe_id must be 1-64 chars".into());
     }
-    if completes_at_micros <= 0 {
-        return Err("completes_at_micros must be positive".into());
-    }
+    // Anti-cheat: the client-sent deadline is IGNORED — the server computes the
+    // authoritative one below, so a tampered client can't finish early. (Param
+    // kept for binding compatibility; the client still sends its optimistic
+    // value for its own local countdown display.)
+    let _ = completes_at_micros;
     let key = format!("{}:{}", restaurant_id, recipe_id);
-    let existing = ctx.db.recipe_upgrade_in_flight().key().find(key.clone());
-    if let Some(e) = &existing {
-        if e.completes_at_micros == completes_at_micros { return Ok(()); }
+    // Already upgrading → idempotent no-op; never reset a running timer.
+    if ctx.db.recipe_upgrade_in_flight().key().find(key.clone()).is_some() {
+        return Ok(());
     }
-    let row = RecipeUpgradeInFlight {
+    // Server-authoritative duration — mirror the client's
+    // getRecipeUpgradeDurationMinutes = 2^(tier-1) * 2^(level-1) minutes, with
+    // tier from recipe_meta and the current level from recipe_level.
+    const MAX_LEVEL: u32 = 10;
+    let cur_level = ctx.db.recipe_level().key().find(key.clone())
+        .map(|l| l.level).unwrap_or(1).max(1);
+    if cur_level >= MAX_LEVEL {
+        return Err("recipe already at max level".into());
+    }
+    let tier = ctx.db.recipe_meta().recipe_id().find(recipe_id.clone())
+        .map(|m| m.tier).unwrap_or(1).max(1);
+    let minutes: i64 = ((1u64 << (tier - 1)).saturating_mul(1u64 << (cur_level - 1))) as i64;
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let completes_at_micros = now.saturating_add(minutes.saturating_mul(60_000_000));
+    ctx.db.recipe_upgrade_in_flight().insert(RecipeUpgradeInFlight {
         key,
         restaurant_id,
         recipe_id,
         completes_at_micros,
-    };
-    if existing.is_some() {
-        ctx.db.recipe_upgrade_in_flight().key().update(row);
-    } else {
-        ctx.db.recipe_upgrade_in_flight().insert(row);
-    }
+    });
     Ok(())
 }
 
@@ -4389,7 +4400,31 @@ pub fn set_member_training_deadline(
     if completes_at_micros < 0 {
         return Err("completes_at_micros cannot be negative".into());
     }
-    if m.training_completes_at_micros == completes_at_micros { return Ok(()); }
+    // Cancel path — the client passes 0 to stop training.
+    if completes_at_micros == 0 {
+        if m.training_completes_at_micros != 0 {
+            ctx.db.hired_staff_member().member_id().update(HiredStaffMember {
+                training_completes_at_micros: 0,
+                ..m
+            });
+        }
+        return Ok(());
+    }
+    // START — anti-cheat: the client's deadline is IGNORED; the server computes
+    // the authoritative one from the TARGET level, mirroring the client's
+    // TRAINING_HOURS_BY_TARGET_LEVEL {1:3,2:6,3:12,4:24,5:48}. Never reset a run
+    // already in progress.
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if m.training_completes_at_micros > now {
+        return Ok(());
+    }
+    const MAX_LEVEL: u32 = 5;
+    let target = m.upgrade_level.saturating_add(1);
+    if target > MAX_LEVEL {
+        return Err("staff already at max level".into());
+    }
+    let hours: i64 = match target { 1 => 3, 2 => 6, 3 => 12, 4 => 24, _ => 48 };
+    let completes_at_micros = now.saturating_add(hours.saturating_mul(3_600_000_000));
     ctx.db.hired_staff_member().member_id().update(HiredStaffMember {
         training_completes_at_micros: completes_at_micros,
         ..m
