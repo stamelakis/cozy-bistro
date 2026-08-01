@@ -63,4 +63,5 @@ export default __t.row({
   homeBuildingId: __t.u64().name("home_building_id"),
   lastTipBonusMicros: __t.i64().name("last_tip_bonus_micros"),
   lastCrateMicros: __t.i64().name("last_crate_micros"),
+  lastCrateGift: __t.option(__t.string()).name("last_crate_gift"),
 });

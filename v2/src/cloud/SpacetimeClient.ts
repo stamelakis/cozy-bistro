@@ -1912,6 +1912,22 @@ export class SpacetimeClient {
     return Math.max(0, COOLDOWN_S - elapsed);
   }
 
+  /** Unix micros of the last crate claim (0 = never). Used to detect when a
+   * fresh claim has synced back (so the client can reveal the rolled gift). */
+  getLastCrateMicros(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    return r ? Number(r.lastCrateMicros ?? 0n) : 0;
+  }
+
+  /** The gift code the last crate rolled ("pantry" | "cash:200" |
+   * "decor:plant-small" | "timewarp" | …). "" if none yet. */
+  getLastCrateGift(): string {
+    if (!this.conn || this.restaurantId == null) return "";
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    return r ? (r.lastCrateGift ?? "") : "";
+  }
+
   /** Phase 6.7 — push the foreground boost expiry to the cloud so
    * try_server_spawn_guest can apply the same 0.5× spawn interval
    * halving while the owner's tab is backgrounded. Without this push,

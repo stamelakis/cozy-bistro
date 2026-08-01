@@ -568,6 +568,11 @@ pub struct Restaurant {
     /// migration — never insert a column mid-struct.
     #[default(0i64)]
     pub last_crate_micros: i64,
+    /// The gift the last supply crate rolled — a short code the client reveals
+    /// ("pantry" | "cash:200" | "decor:plant-small" | "timewarp" | …). Appended
+    /// LAST for an additive migration.
+    #[default(None::<String>)]
+    pub last_crate_gift: Option<String>,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

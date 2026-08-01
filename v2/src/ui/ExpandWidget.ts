@@ -59,6 +59,17 @@ function injectExpandWidgetStyles(): void {
   document.head.appendChild(style);
 }
 
+/** Map a server crate-gift code to a friendly reveal line. */
+function describeCrateGift(code: string): string {
+  if (code.startsWith("cash:")) return `You won $${code.slice(5)}!`;
+  if (code.startsWith("decor:")) return "You won decor — a Small Plant for your storage!";
+  switch (code) {
+    case "pantry": return "You won a pantry restock!";
+    case "timewarp": return "Rare! A Time Warp — 25% off your longest upgrade!";
+    default: return "You won a supply crate!";
+  }
+}
+
 export class ExpandWidget {
   private readonly game: Game;
   private readonly root: HTMLElement;
@@ -132,9 +143,23 @@ export class ExpandWidget {
     this.crateBtn.className = "cb-xw-btn cb-xw-crate";
     this.crateBtn.onclick = () => {
       if (this.cloud.getCrateReadyInSeconds() > 0) return;
+      const before = this.cloud.getLastCrateMicros();
       this.cloud.claimSupplyCrate();
-      showEventBanner("Supply crate! Pantry topped up + a Small Plant added to your storage.", { icon: "🎁", accent: "#a8e2a8" });
-      this.update();
+      showEventBanner("🎁 Opening your supply crate…", { icon: "🎁", accent: "#a8e2a8", ms: 1600 });
+      // The gift is rolled SERVER-side; poll for the row to sync back, then
+      // reveal exactly what dropped.
+      let tries = 0;
+      const poll = (): void => {
+        tries += 1;
+        if (this.cloud.getLastCrateMicros() !== before) {
+          showEventBanner(describeCrateGift(this.cloud.getLastCrateGift()), { icon: "🎁", accent: "#ffe08a", ms: 5000 });
+          this.update();
+          return;
+        }
+        if (tries < 15) window.setTimeout(poll, 200);
+        else this.update();
+      };
+      window.setTimeout(poll, 250);
     };
     this.root.appendChild(this.crateBtn);
 
@@ -239,7 +264,7 @@ export class ExpandWidget {
       this.crateBtn.textContent = "🎁 Supply crate — ready!";
       this.crateBtn.disabled = false;
       this.crateBtn.style.opacity = "1";
-      this.crateBtn.title = "Free every 3h: tops up your pantry + a Small Plant for your storage.";
+      this.crateBtn.title = "Free every 3h — open for a RANDOM gift: pantry, cash, decor, or a rare Time Warp (25% off an upgrade). Lesser gifts common, big ones rare.";
       this.crateBtn.classList.add("cb-xw-pulse");
     } else {
       const s = Math.ceil(crateSecs);
@@ -247,7 +272,7 @@ export class ExpandWidget {
       this.crateBtn.textContent = `🎁 Supply crate — ${label}`;
       this.crateBtn.disabled = true;
       this.crateBtn.style.opacity = "0.5";
-      this.crateBtn.title = "Restocks your pantry + adds a decor piece. Ready every 3 hours.";
+      this.crateBtn.title = "A random gift every 3 hours — lesser gifts common, big ones (cash, Time Warp) rare.";
       this.crateBtn.classList.remove("cb-xw-pulse");
     }
   }

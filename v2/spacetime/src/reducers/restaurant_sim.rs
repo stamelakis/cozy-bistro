@@ -4049,22 +4049,76 @@ pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<()
         return Err("Only the owner can claim a supply crate".into());
     }
     const COOLDOWN_MICROS: i64 = 3 * 60 * 60 * 1_000_000; // 3h
-    const PANTRY_FLOOR: u32 = 8; // refill depleted ingredients up to this
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     if r.last_crate_micros != 0 && now - r.last_crate_micros < COOLDOWN_MICROS {
         return Ok(()); // not ready yet — silent no-op
     }
-    ctx.db.restaurant().id().update(Restaurant { last_crate_micros: now, ..r });
-    // Ingredients: top up each stocked ingredient to the floor (only raises the
-    // low ones; never lowers a well-stocked one; can't exceed the cap).
+    // Weighted RANDOM gift — lesser gifts common, better gifts rare. Rolled from
+    // a timestamp+id hash (claims are ≥3h apart, so the low bits are effectively
+    // random); applied + recorded SERVER-side so contents are never client-chosen.
+    let seed = (now as u64) ^ ((now as u64) >> 17) ^ restaurant_id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let roll = (seed.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) % 100;
+    let gift: String = if roll < 35 {
+        crate_grant_pantry(ctx, restaurant_id);
+        "pantry".into()
+    } else if roll < 60 {
+        crate_grant_cash(ctx, restaurant_id, 5_000); // $50
+        "cash:50".into()
+    } else if roll < 80 {
+        crate_grant_decor(ctx, restaurant_id, "plant-small");
+        "decor:plant-small".into()
+    } else if roll < 92 {
+        crate_grant_cash(ctx, restaurant_id, 20_000); // $200
+        "cash:200".into()
+    } else if roll < 97 {
+        // Rare: shave time off the longest in-flight upgrade; cash if none.
+        if crate_time_warp(ctx, restaurant_id, now) {
+            "timewarp".into()
+        } else {
+            crate_grant_cash(ctx, restaurant_id, 20_000);
+            "cash:200".into()
+        }
+    } else {
+        crate_grant_cash(ctx, restaurant_id, 75_000); // $750, rarest
+        "cash:750".into()
+    };
+    // Stamp the cooldown + record the gift for the client's reveal. Re-fetch the
+    // row since the grant helpers above may have mutated cloud_money_cents.
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        ctx.db.restaurant().id().update(Restaurant {
+            last_crate_micros: now,
+            last_crate_gift: Some(gift),
+            ..rr
+        });
+    }
+    log::info!("supply crate claimed by restaurant {restaurant_id}: roll {roll}");
+    Ok(())
+}
+
+/// Supply-crate gift: top up each stocked ingredient to a floor (only raises the
+/// low ones; never lowers a well-stocked one; can't exceed the pantry cap).
+fn crate_grant_pantry(ctx: &ReducerContext, restaurant_id: u64) {
+    const FLOOR: u32 = 8;
     let rows: Vec<PantryStock> = ctx.db.pantry_stock().restaurant_id().filter(restaurant_id).collect();
     for row in rows {
-        if row.quantity < PANTRY_FLOOR {
-            ctx.db.pantry_stock().key().update(PantryStock { quantity: PANTRY_FLOOR, ..row });
+        if row.quantity < FLOOR {
+            ctx.db.pantry_stock().key().update(PantryStock { quantity: FLOOR, ..row });
         }
     }
-    // Decor: +1 Small Plant into storage (bank into furniture_inventory).
-    let inv_id = format!("{restaurant_id}:plant-small");
+}
+
+/// Supply-crate gift: credit cash + log a "crate" money event.
+fn crate_grant_cash(ctx: &ReducerContext, restaurant_id: u64, cents: i64) {
+    if let Some(r) = ctx.db.restaurant().id().find(restaurant_id) {
+        let bal = r.cloud_money_cents.saturating_add(cents);
+        ctx.db.restaurant().id().update(Restaurant { cloud_money_cents: bal, ..r });
+        record_money_event(ctx, restaurant_id, "crate", cents, bal);
+    }
+}
+
+/// Supply-crate gift: bank +1 of a decor def into storage (re-placeable free).
+fn crate_grant_decor(ctx: &ReducerContext, restaurant_id: u64, def_id: &str) {
+    let inv_id = format!("{restaurant_id}:{def_id}");
     if let Some(inv) = ctx.db.furniture_inventory().id().find(inv_id.clone()) {
         ctx.db.furniture_inventory().id().update(FurnitureInventory {
             qty: inv.qty.saturating_add(1),
@@ -4074,12 +4128,51 @@ pub fn claim_supply_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<()
         ctx.db.furniture_inventory().insert(FurnitureInventory {
             id: inv_id,
             restaurant_id,
-            def_id: "plant-small".to_string(),
+            def_id: def_id.to_string(),
             qty: 1,
         });
     }
-    log::info!("supply crate claimed by restaurant {restaurant_id}");
-    Ok(())
+}
+
+/// Supply-crate gift (rare): shave 25% (cap 2h) off the LONGEST-remaining
+/// in-flight upgrade — recipe or staff. Clamped so it never instant-completes
+/// (leaves ≥10s for the normal completion tick). Returns false when nothing is
+/// upgrading (the caller falls back to cash).
+fn crate_time_warp(ctx: &ReducerContext, restaurant_id: u64, now: i64) -> bool {
+    const CAP_MICROS: i64 = 2 * 60 * 60 * 1_000_000; // 2h
+    let mut best_recipe: Option<(String, i64)> = None;
+    for u in ctx.db.recipe_upgrade_in_flight().restaurant_id().filter(restaurant_id) {
+        if u.completes_at_micros > now
+            && best_recipe.as_ref().map(|(_, c)| u.completes_at_micros > *c).unwrap_or(true) {
+            best_recipe = Some((u.key.clone(), u.completes_at_micros));
+        }
+    }
+    let mut best_staff: Option<(String, i64)> = None;
+    for m in ctx.db.hired_staff_member().restaurant_id().filter(restaurant_id) {
+        if m.training_completes_at_micros > now
+            && best_staff.as_ref().map(|(_, c)| m.training_completes_at_micros > *c).unwrap_or(true) {
+            best_staff = Some((m.member_id.clone(), m.training_completes_at_micros));
+        }
+    }
+    let recipe_c = best_recipe.as_ref().map(|(_, c)| *c).unwrap_or(0);
+    let staff_c = best_staff.as_ref().map(|(_, c)| *c).unwrap_or(0);
+    if recipe_c == 0 && staff_c == 0 {
+        return false;
+    }
+    if recipe_c >= staff_c {
+        let (key, c) = best_recipe.unwrap();
+        let new_c = (c - ((c - now) / 4).min(CAP_MICROS)).max(now + 10_000_000);
+        if let Some(u) = ctx.db.recipe_upgrade_in_flight().key().find(key) {
+            ctx.db.recipe_upgrade_in_flight().key().update(RecipeUpgradeInFlight { completes_at_micros: new_c, ..u });
+        }
+    } else {
+        let (mid, c) = best_staff.unwrap();
+        let new_c = (c - ((c - now) / 4).min(CAP_MICROS)).max(now + 10_000_000);
+        if let Some(m) = ctx.db.hired_staff_member().member_id().find(mid) {
+            ctx.db.hired_staff_member().member_id().update(HiredStaffMember { training_completes_at_micros: new_c, ..m });
+        }
+    }
+    true
 }
 
 /// Anti-cheat B/C (income flow 5/5) — achievement reward. The unlock
