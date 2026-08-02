@@ -730,6 +730,20 @@ const WC_PATIENCE_SECONDS = 10.0;
 // typical staff levels.
 const SPAWN_INTERVAL_SECONDS = 5.5;
 
+/** Occupancy CEILING as a % of total seats, an S-curve in the star rating —
+ * the REAL rating lever. Spawning stops once this % of seats is present, so a
+ * low rating empties the room regardless of how fast guests would otherwise
+ * arrive (throttling the interval alone can't do it: dwell-time ≫ interval, so
+ * every freed seat just refills). Centered ~2.8★: thin below 2★, fairly full by
+ * 3★, and above ~3.6★ it passes 100 % so a waiting line forms. Applied to TOTAL
+ * seats across all floors, so the FRACTION a rating fills is independent of how
+ * many floors exist. MUST match the server's `target_fill_x100`.
+ *   1★≈14% · 1.5★≈22% · 2★≈35% · 2.5★≈55% · 3★≈78% · 3.5★≈99% · 4★≈113% · 5★≈127% */
+function targetFillPercent(rating: number): number {
+  const s = 1 / (1 + Math.exp(-1.5 * (rating - 2.8)));
+  return (0.06 + s * 1.25) * 100;
+}
+
 /** Phase I (H.99) — Pick the nearest fixture, with STRONG same-floor
  * preference. First partition candidates by `floor === currentFloor`;
  * only consider the cross-floor pool if NO same-floor option exists.
@@ -1181,7 +1195,18 @@ export class GuestSpawner {
     // ownership to the server.
     const serverOwnsGuestSpawn = (isServerSim("guests") || isServerSim("guestMove"))
       && this.cloud?.isConnectionLive() === true;
-    if (this.restaurantOpen && this.spawnCooldown <= 0 && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
+    // OCCUPANCY CAP — a rating-scaled ceiling on how many guests may be present
+    // (mirrors the server's try_server_spawn_guest). THIS is what makes low stars
+    // thin the crowd; the interval factor below only paces arrivals. Ceiling is a
+    // % of total seats across ALL floors, so extra floors don't change the
+    // FRACTION a bad rating fills.
+    const seatTarget = Math.ceil(
+      this.listFunctionalSeats().length
+      * targetFillPercent(this.game.reputation.getAverageRating()) / 100,
+    );
+    const guestsPresent = this.countPresentGuests();
+    if (this.restaurantOpen && this.spawnCooldown <= 0 && guestsPresent < seatTarget
+        && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
       if (!serverOwnsGuestSpawn) {
         void this.spawnGuest();
       }
@@ -1200,14 +1225,13 @@ export class GuestSpawner {
       const attractionMult = Math.max(0.35, 1 - Math.min(0.65, attraction * 0.015));
       // AdminPanel spawn-rate multiplier (1 = default).
       const adminMult = this.game.admin.spawnRateMultiplier;
-      // STAR-RATING factor — MUST mirror the server's try_server_spawn_guest
-      // (restaurant_sim.rs) or the online (client-spawned) experience ignores
-      // the rating entirely and a 1★ dump stays packed. Quadratic below 3★
-      // (gentle just under, steep toward 1★), gentle reward above; 3★ neutral.
-      //   traffic ≈ 1/mult → 2★≈15%, 1.5★≈7%, 1★≈5%; 4★≈125%, 5★≈167%.
+      // STAR-RATING factor — now just GENTLE arrival pacing (mirror the server's
+      // try_server_spawn_guest). The OCCUPANCY CAP above is the real rating lever;
+      // this only sets how fast the rating-thinned crowd trickles up to its
+      // ceiling. 2★→×1.4, 1★→×1.8 slower; 4★→×0.8, 5★→×0.6 faster; 3★ neutral.
       const rating = this.game.reputation.getAverageRating(); // 1..5, default 3.0
       const ratingMult = rating <= 3
-        ? Math.min(20, 1 + (3 - rating) * (3 - rating) * (100 / 18))
+        ? Math.min(3, 1 + (3 - rating) * 0.4)
         : Math.max(0.6, 1 - (rating - 3) * 0.2);
       this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult * ratingMult;
     }
@@ -2596,6 +2620,18 @@ export class GuestSpawner {
       if (score > bestScore) { bestScore = score; best = s; }
     }
     return best;
+  }
+
+  /** Guests currently PRESENT — seated, incoming, or waiting — i.e. everyone
+   * who counts against the rating occupancy cap. Excludes anyone already on
+   * their way out (the door/exit states) so a seat freed by a leaver reopens
+   * the cap immediately. Mirrors the server's `!is_leaving_state` filter. */
+  private countPresentGuests(): number {
+    let n = 0;
+    for (const g of this.guests) {
+      if (g.state !== "walkingToDoor" && g.state !== "exitingDoor" && g.state !== "walkingOut") n += 1;
+    }
+    return n;
   }
 
   /** Count of functional seats not currently occupied + not in the dirty

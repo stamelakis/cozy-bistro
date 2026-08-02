@@ -8225,14 +8225,12 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     // 4★≈125%, 5★≈167%.
     let rating_x100 = avg_rating_x100(ctx, rid);   // 100..500, 300 when unrated
     let rating_mult_x100: i64 = if rating_x100 <= 300 {
-        // QUADRATIC penalty below 3★: gentle just under 3★, accelerating hard
-        // toward 1★ so a genuinely bad restaurant sits mostly EMPTY even at
-        // scale (a mild rate cut still saturates when dwell-time ≫ interval).
-        // d = stars-below-3★ ×100; mult = 100 + d²/18, capped ×20.
-        //   2.8★→×1.2, 2.5★→×2.4, 2★→×6.6, 1.6★→×11.9, 1.5★→×13.5, 1★→×20.
-        //   traffic ≈ 1/mult → 2★≈15%, 1.6★≈8%, 1★≈5% of the 3★ rate.
-        let d = 300 - rating_x100;
-        (100 + d * d / 18).min(2000)
+        // GENTLE arrival slow-down below 3★. The OCCUPANCY CAP (further down) is
+        // now the real rating lever — a rate cut ALONE still saturates the room
+        // when dwell-time ≫ interval, which is exactly why a 1.5★ place used to
+        // fill to the brim. This term now only paces how fast the rating-thinned
+        // crowd trickles up to its ceiling. 2.5★→×1.2, 2★→×1.4, 1★→×1.8.
+        (100 + (300 - rating_x100) * 40 / 100).min(300)
     } else {
         // Gentle reward above 3★. 4★→×0.8, 5★→×0.6 (traffic 125% / 167%).
         (100 - (rating_x100 - 300) * 20 / 100).max(60)
@@ -8261,6 +8259,23 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     let save = ctx.db.player_save().identity().find(rest.owner);
     let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
     if !restaurant_open { return; }
+
+    // ── OCCUPANCY CAP (the real rating lever) ────────────────────────────
+    // Stop spawning once the guests currently PRESENT (seated / ordering /
+    // eating / waiting — everyone who hasn't started leaving) reach a rating-
+    // scaled ceiling. Below 3★ the ceiling is a fraction of the seats, so a bad
+    // restaurant visibly thins out no matter how long it's been open (throttling
+    // arrivals alone can't do this — dwell-time ≫ interval refills every gap).
+    // The ceiling is a fraction of TOTAL seat_slot rows across ALL floors, so
+    // adding a second storey doesn't let a low rating fill more of the place;
+    // above ~3.6★ it exceeds 100 % so a waiting line forms ("out the door").
+    let total_seats = ctx.db.seat_slot().restaurant_id().filter(rid).count() as i64;
+    if total_seats == 0 { return; }
+    let target_present = (total_seats * target_fill_x100(rating_x100) + 99) / 100; // ceil
+    let present = ctx.db.active_guest().restaurant_id().filter(rid)
+        .filter(|g| !is_leaving_state(&g.state))
+        .count() as i64;
+    if present >= target_present { return; }
     // Phase 9.3 — free_seats gate DROPPED. It read player_save.
     // free_seats, a counter only the FOREGROUND client maintains —
     // frozen at whatever it was when the tab closed. Logging off
@@ -8746,6 +8761,20 @@ fn avg_rating_x100(ctx: &ReducerContext, rid: u64) -> i64 {
     let recent = &all[all.len().saturating_sub(RATING_WINDOW)..];
     let sum: i64 = recent.iter().sum();
     (sum * 100) / (recent.len() as i64)
+}
+
+/// Occupancy CEILING as a % of total seats, an S-curve in the star rating.
+/// This — not the arrival interval — is what makes low stars empty the room:
+/// spawning simply stops once this % of seats is present, so dwell-time can't
+/// refill the place. Centered ~2.8★: thin below 2★, fairly full by 3★, and
+/// above ~3.6★ it passes 100 % so a waiting line forms. Applied to TOTAL seats
+/// across all floors, so the FRACTION a rating fills is floor-count-independent.
+/// MUST stay in lockstep with the client's `targetFillPercent` (GuestSpawner).
+///   1★≈14% · 1.5★≈22% · 2★≈35% · 2.5★≈55% · 3★≈78% · 3.5★≈99% · 4★≈113% · 5★≈127%
+fn target_fill_x100(rating_x100: i64) -> i64 {
+    let stars = rating_x100 as f64 / 100.0;
+    let s = 1.0 / (1.0 + (-1.5 * (stars - 2.8)).exp());
+    ((0.06 + s * 1.25) * 100.0).round() as i64
 }
 
 /// Phase 9.6 — seat the longest-waiting "waiting" guest when a chair
