@@ -1,9 +1,10 @@
 name: Deploy to GitHub Pages
 
-# Prod and staging are separate bundles on the SAME Pages site:
-#   main    -> https://stamelakis.github.io/cozy-bistro/            (2D)
-#           -> https://stamelakis.github.io/cozy-bistro/cozy-bistro-3d/   (3D prod)
-#   staging -> https://stamelakis.github.io/cozy-bistro/staging/cozy-bistro-3d/ (3D staging)
+# Prod and staging are separate bundles on the SAME Pages site, served under the
+# custom domain cozy-bistro.com (CNAME file below):
+#   main    -> https://cozy-bistro.com/                     (3D prod — the game, at ROOT)
+#           -> https://cozy-bistro.com/classic/             (old 2D game, parked)
+#   staging -> https://cozy-bistro.com/staging/cozy-bistro-3d/ (3D staging)
 #
 # GitHub Pages allows only one published artifact per repo, so a single
 # workflow builds BOTH branches (checked out by ref into subdirs) and packs
@@ -43,12 +44,14 @@ jobs:
         with:
           node-version: "20"
 
-      # ---- PROD (from main): 2D at root, 3D at /cozy-bistro-3d/ ----
-      - name: Build prod 2D (root)
+      # ---- PROD (from main): 3D at root, old 2D parked at /classic/ ----
+      - name: Build prod 2D (classic)
         working-directory: prod
         run: npm ci && npm run build
       - name: Build prod 3D (v2)
         working-directory: prod
+        env:
+          CB_BASE: /
         run: npm ci --prefix v2 && npm run --prefix v2 build
 
       # ---- STAGING (from staging): 3D only, at /staging/cozy-bistro-3d/ ----
@@ -59,16 +62,20 @@ jobs:
         continue-on-error: true
         working-directory: staging
         env:
-          CB_BASE: /cozy-bistro/staging/cozy-bistro-3d/
+          CB_BASE: /staging/cozy-bistro-3d/
           CB_BUILD_ENV: staging
         run: npm ci --prefix v2 && npm run --prefix v2 build
 
       # ---- Assemble one Pages artifact ----
       - name: Assemble site
         run: |
-          mkdir -p dist/cozy-bistro-3d
-          cp -r prod/dist/* dist/
-          cp -r prod/v2/dist/* dist/cozy-bistro-3d/
+          # 3D game (v2) takes the site ROOT; the old 2D game is parked at /classic/.
+          mkdir -p dist/classic
+          cp -r prod/v2/dist/* dist/
+          cp -r prod/dist/* dist/classic/
+          # Custom domain — a CNAME file in the artifact keeps the domain bound on
+          # every Actions deploy (otherwise it can get cleared).
+          echo cozy-bistro.com > dist/CNAME
           if [ -d staging/v2/dist ]; then
             mkdir -p dist/staging/cozy-bistro-3d
             cp -r staging/v2/dist/* dist/staging/cozy-bistro-3d/
