@@ -7,8 +7,8 @@
  * Rewritten as a TABBED guide after the server-authoritative
  * migration: the world now runs 24/7 on the server (no pause, no
  * fast-forward), and the old single-page cheat sheet was wrong about
- * most of that. Content is hard-coded and grouped into six tabs:
- * Basics / Customers / Staff / Icons / Economy / Multiplayer. The
+ * most of that. Content is hard-coded and grouped into seven tabs:
+ * Basics / Customers / Staff / Icons / Economy / Perks / Multiplayer. The
  * Icons tab quotes the status-bubble strings EXACTLY as the routers
  * render them (StaffRouter chefLabel/waiterLabel/barmanLabel,
  * ErrandRouter errandLabel, GuestSpawner guestLabel, VisitMode
@@ -38,7 +38,7 @@ const TABS: HelpTab[] = [
     blocks: [
       {
         kind: "p",
-        text: "Run a bistro on a busy shared street: build out the floor, put recipes on the menu, hire a crew, and serve whoever walks in. Profits buy furniture, better recipes and tier expansions (1 → 5) — each tier adds recipes, extra seats and a whole new floor.",
+        text: "Run a bistro on a busy shared street: build out the floor, put recipes on the menu, hire a crew, and serve whoever walks in. Profits buy furniture, better recipes and tier expansions (1 → 5) — each tier unlocks new recipes and a whole new floor to fill with tables.",
       },
       { kind: "h", text: "The world never pauses" },
       {
@@ -72,8 +72,10 @@ const TABS: HelpTab[] = [
       {
         kind: "ul",
         items: [
-          "The neighbourhood sends guests on its own schedule. Weather (rain pushes people indoors), your décor's attraction and a paid Boost change the rate — your seat count does not.",
-          "Every guest has a personality (🙂 casual, ⚡ rushed, 🍷 foodie, 📸 tourist, 💕 date night, 😠 grump, 🕵️ critic) plus tastes, and picks a free chair to match: food vs drink table, favourite theme, décor, window, quiet corner, or the bar.",
+          "Your STAR RATING sets how many people want to eat here — a handful at 1★, then roughly doubling with each star, up to a full house with a line out the door at 5★. It's an absolute headcount, not a share of your seats: a small gem pulls a queue, a big struggling place sits half-empty.",
+          "Your seats then decide who sits and who waits — not how many turn up. Earn stars to grow the crowd; add floors and seats to have room for them (a maxed 5-storey at 5★ is packed with a line).",
+          "Weather (rain pushes people indoors), your décor's attraction and a paid Boost nudge how FAST they arrive; a free Rush Hour surge also drops in now and then while you're open. None of these change the rating headcount above — they just fill it quicker.",
+          "Every guest has a personality (🙂 casual, ⚡ rushed, 🍷 foodie, 📸 tourist, 💕 date night, 😠 grump, 🕵️ critic, 🌟 VIP) plus tastes, and picks a free chair to match: food vs drink table, favourite theme, décor, window, quiet corner, or the bar.",
         ],
       },
       { kind: "h", text: "When the house is full" },
@@ -148,6 +150,7 @@ const TABS: HelpTab[] = [
           ["💕", "Date Night"],
           ["😠", "Grumpy Critic — stingy tipper"],
           ["🕵️", "Food Critic — rare; rating counts 3×, tips 3×"],
+          ["🌟", "VIP — rare; a lavish tipper when your service earns it"],
         ],
       },
       { kind: "h", text: "Guests" },
@@ -228,6 +231,7 @@ const TABS: HelpTab[] = [
           ["🛒 → · 🛒 shopping · 🛒 ←", "their errand helper's shopping trip"],
           ["📦 unloading · 🛒 done", "the delivery arriving"],
           ["🔴 LIVE / ❄ STATIC", "overlay badge: real-time feed vs snapshot"],
+          ["📜 clue · 🔎 N/6", "a collectable paper clue → free crate at 6 (Perks tab)"],
         ],
       },
     ],
@@ -268,7 +272,7 @@ const TABS: HelpTab[] = [
         items: [
           "Recipe development (UPGRADES): $30, doubling each level, plus ingredients. It takes REAL time — about 1 min at Tier 1 Level 1, doubling per tier and per level — and the timer keeps running while you're logged off. Each level raises the sell price and satisfaction; one recipe at a time.",
           "Boost: $80 buys 60 s of 2× guest arrivals, then a 15-minute cooldown.",
-          "Expand: Tiers 2–5 cost $30k / $90k / $270k / $810k and unlock new recipes, extra seats (T2–T4) and one more floor each.",
+          "Expand: Tiers 2–5 cost $30k / $90k / $270k / $810k and unlock new recipes plus one more floor each — a whole new storey to fill with tables (each floor is the same size, so you grow by stacking storeys).",
         ],
       },
       { kind: "h", text: "Track your numbers" },
@@ -278,6 +282,51 @@ const TABS: HelpTab[] = [
           "📊 Trends charts your day-by-day revenue, customers and rating; 📈 Analytics graphs live customer and staff activity over time.",
           "📓 Ledger is a running log of every transaction — sales, tips, wages, rent and shopping.",
           "🏆 Awards hands out one-off cash rewards as you hit milestones.",
+        ],
+      },
+    ],
+  },
+  // ────────────────────────────────────────────────────────────────
+  {
+    label: "Perks",
+    blocks: [
+      {
+        kind: "p",
+        text: "Little bonuses for being at the controls — all free and optional. The bistro runs fine without them; they just reward playing actively.",
+      },
+      { kind: "h", text: "Rush Hour 📣" },
+      {
+        kind: "ul",
+        items: [
+          "Every so often while you're open, a free ~60-second surge of extra customers rolls in — no cost, nothing to click. A banner calls it; just keep the kitchen moving to cash in.",
+        ],
+      },
+      { kind: "h", text: "VIP guest 🌟" },
+      {
+        kind: "ul",
+        items: [
+          "A rare, well-heeled guest who tips lavishly — but only when your service earns it (tips need 3★+). Seat and serve them like anyone else; the reward is in the tip.",
+        ],
+      },
+      { kind: "h", text: "Tip hearts 💛" },
+      {
+        kind: "ul",
+        items: [
+          "Now and then a gold heart floats over a happy, eating guest. Tap it for a quick cash tip before it fades.",
+        ],
+      },
+      { kind: "h", text: "Supply crate 🎁" },
+      {
+        kind: "ul",
+        items: [
+          "Claim one free crate every 3 hours (the 🎁 button in the sidebar). Each rolls a random gift — most often a pantry restock or a little cash, sometimes a decor piece, and rarely a Time Warp that trims 25% off your longest-running upgrade.",
+        ],
+      },
+      { kind: "h", text: "Clue hunt 📜" },
+      {
+        kind: "ul",
+        items: [
+          "Out visiting other restaurants? Look for a paper clue hidden in each and click it. Collect a clue from 6 DIFFERENT restaurants to earn a free Supply Crate. A 🔎 counter on the visit bar tracks your progress; each restaurant counts once per set.",
         ],
       },
     ],
@@ -297,6 +346,7 @@ const TABS: HelpTab[] = [
           "You're on display the same way: anyone can visit your place and watch your crew work, even while you're offline.",
           "The plaque by your door shows your restaurant's name and live star rating to everyone — customise it with the sign editor.",
           "Use the chat panel to talk with other owners; the HUD shows how many players are online. The 👋 Social button opens your friends list and the leaderboards.",
+          "Hunt for clues while you visit: click the hidden paper clue (📜) in 6 different restaurants for a free Supply Crate — see the Perks tab.",
         ],
       },
     ],
