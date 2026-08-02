@@ -4331,19 +4331,7 @@ export class SpacetimeClient {
    * display_name (matches what other players see in social UI), then
    * falls back to player.name, then to a shortened hex. */
   displayNameFor(hex: string): string {
-    if (!this.conn) return shortHex(hex);
-    const lc = hex.toLowerCase();
-    try {
-      for (const a of this.conn.db.auth_record.iter()) {
-        if (a.identity.toHexString().toLowerCase() === lc) return a.displayName || a.username;
-      }
-    } catch { /* ignore */ }
-    try {
-      for (const p of this.conn.db.player.iter()) {
-        if (p.identity.toHexString().toLowerCase() === lc) return p.name || shortHex(hex);
-      }
-    } catch { /* ignore */ }
-    return shortHex(hex);
+    return this.resolveDisplayName(hex);
   }
 
   /** Register a callback fired for every new chat_message insert (any
@@ -5183,21 +5171,42 @@ export class SpacetimeClient {
   /** Lookup a player row's display name by Identity hex. Falls back to
    * a shortened hex if the player has no row yet. */
   private nameFor(hex: string): string {
-    if (!this.conn) return shortHex(hex);
-    for (const p of this.conn.db.player.iter()) {
-      if (p.identity.toHexString() === hex) return p.name || shortHex(hex);
-    }
-    return shortHex(hex);
+    return this.resolveDisplayName(hex);
   }
 
-  /** Get the current player's display name (empty string if none set). */
+  /** The one place that turns an identity hex into a human name for the UI.
+   * Priority: (1) a CUSTOM player.name the player picked in the social hub,
+   * (2) their account username/display_name from auth_record — this is what
+   * fixes new players showing as "Chef #ab12cd" instead of the username they
+   * signed up with, (3) the raw player.name default as a last resort, then
+   * (4) a shortened hex. Case-insensitive hex match throughout. */
+  private resolveDisplayName(hex: string): string {
+    if (!this.conn) return shortHex(hex);
+    const lc = hex.toLowerCase();
+    let playerName = "";
+    try {
+      for (const p of this.conn.db.player.iter()) {
+        if (p.identity.toHexString().toLowerCase() === lc) { playerName = p.name ?? ""; break; }
+      }
+    } catch { /* player table not subscribed */ }
+    // A custom display name always wins.
+    if (playerName && !isAutoChefName(playerName)) return playerName;
+    // Otherwise show the signup username.
+    try {
+      for (const a of this.conn.db.auth_record.iter()) {
+        if (a.identity.toHexString().toLowerCase() === lc) return a.displayName || a.username;
+      }
+    } catch { /* auth_record not subscribed */ }
+    return playerName || shortHex(hex);
+  }
+
+  /** The name shown to others for the current player — prefills the social
+   * hub's "Your display name" field. Resolves like everyone else (custom
+   * name, else username) so an untouched player sees their signup username
+   * here rather than the "Chef #<hash>" default. */
   getMyName(): string {
     if (!this.conn || !this.identity) return "";
-    const me = this.identity.toHexString();
-    for (const p of this.conn.db.player.iter()) {
-      if (p.identity.toHexString() === me) return p.name;
-    }
-    return "";
+    return this.resolveDisplayName(this.identity.toHexString());
   }
 
   /** Get my identity hex for UI display. */
@@ -6039,6 +6048,14 @@ function identityEquals(a: Identity, b: Identity): boolean {
 function shortHex(hex: string): string {
   if (!hex) return "(unknown)";
   return hex.length > 12 ? `${hex.slice(0, 6)}…${hex.slice(-4)}` : hex;
+}
+
+/** True when a player.name is still the server-generated default
+ * ("Chef #<6 hex>" from on_client_connected) — i.e. the player never
+ * picked a custom display name, so we should show their account username
+ * instead. Kept loose (4–12 hex) in case the hash-prefix length changes. */
+function isAutoChefName(name: string): boolean {
+  return /^Chef #[0-9a-f]{4,12}$/i.test(name.trim());
 }
 
 /** Parse a 64-char hex string back into an Identity. Returns null on a bad
