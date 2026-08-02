@@ -8224,16 +8224,15 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     // two slopes; resulting traffic ≈ 1/mult → 1★≈24%, 2★≈38%, 3★=100%,
     // 4★≈125%, 5★≈167%.
     let rating_x100 = avg_rating_x100(ctx, rid);   // 100..500, 300 when unrated
-    let rating_mult_x100: i64 = if rating_x100 <= 300 {
-        // GENTLE arrival slow-down below 3★. The OCCUPANCY CAP (further down) is
-        // now the real rating lever — a rate cut ALONE still saturates the room
-        // when dwell-time ≫ interval, which is exactly why a 1.5★ place used to
-        // fill to the brim. This term now only paces how fast the rating-thinned
-        // crowd trickles up to its ceiling. 2.5★→×1.2, 2★→×1.4, 1★→×1.8.
-        (100 + (300 - rating_x100) * 40 / 100).min(300)
-    } else {
-        // Gentle reward above 3★. 4★→×0.8, 5★→×0.6 (traffic 125% / 167%).
+    let rating_mult_x100: i64 = if rating_x100 >= 300 {
+        // Reward above 3★ — arrivals come FASTER so a great restaurant fills its
+        // (large) demand quickly. 4★→×0.8, 5★→×0.6.
         (100 - (rating_x100 - 300) * 20 / 100).max(60)
+    } else {
+        // Below 3★: neutral arrival speed. The DEMAND CAP above — not the
+        // interval — is what thins a low-rated crowd: its small demand fills at
+        // normal pace and then simply stops.
+        100
     };
     // Combined multiplier: interval × weather × attraction × boost × rating.
     // Each is x100 so we divide by 100 each time — saturating to keep any single
@@ -8260,18 +8259,18 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     let restaurant_open = save.as_ref().map(|s| s.restaurant_open).unwrap_or(true);
     if !restaurant_open { return; }
 
-    // ── OCCUPANCY CAP (the real rating lever) ────────────────────────────
-    // Stop spawning once the guests currently PRESENT (seated / ordering /
-    // eating / waiting — everyone who hasn't started leaving) reach a rating-
-    // scaled ceiling. Below 3★ the ceiling is a fraction of the seats, so a bad
-    // restaurant visibly thins out no matter how long it's been open (throttling
-    // arrivals alone can't do this — dwell-time ≫ interval refills every gap).
-    // The ceiling is a fraction of TOTAL seat_slot rows across ALL floors, so
-    // adding a second storey doesn't let a low rating fill more of the place;
-    // above ~3.6★ it exceeds 100 % so a waiting line forms ("out the door").
+    // ── DEMAND CAP (the rating lever) ────────────────────────────────────
+    // Rating decides how many people WANT to come (rating_demand), independent of
+    // your size; your seats decide how many can SIT vs queue. Stop spawning once
+    // the guests PRESENT (seated / ordering / eating / waiting — anyone not yet
+    // leaving) reach min(demand, your seats + a short line). So a 1★ room draws
+    // ~6 whether it has 12 or 18 seats; a bad restaurant stays nearly empty no
+    // matter how long it's been open (throttling arrivals can't do that — dwell-
+    // time ≫ interval refills every gap); and only a well-rated place fills up,
+    // with a line past ~4★. Seats counted across ALL floors (seat_slot rows).
     let total_seats = ctx.db.seat_slot().restaurant_id().filter(rid).count() as i64;
     if total_seats == 0 { return; }
-    let target_present = (total_seats * target_fill_x100(rating_x100) + 99) / 100; // ceil
+    let target_present = rating_demand(rating_x100).min(total_seats + LINE_ALLOWANCE);
     let present = ctx.db.active_guest().restaurant_id().filter(rid)
         .filter(|g| !is_leaving_state(&g.state))
         .count() as i64;
@@ -8763,18 +8762,23 @@ fn avg_rating_x100(ctx: &ReducerContext, rid: u64) -> i64 {
     (sum * 100) / (recent.len() as i64)
 }
 
-/// Occupancy CEILING as a % of total seats, an S-curve in the star rating.
-/// This — not the arrival interval — is what makes low stars empty the room:
-/// spawning simply stops once this % of seats is present, so dwell-time can't
-/// refill the place. Centered ~2.8★: thin below 2★, fairly full by 3★, and
-/// above ~3.6★ it passes 100 % so a waiting line forms. Applied to TOTAL seats
-/// across all floors, so the FRACTION a rating fills is floor-count-independent.
-/// MUST stay in lockstep with the client's `targetFillPercent` (GuestSpawner).
-///   1★≈14% · 1.5★≈22% · 2★≈35% · 2.5★≈55% · 3★≈78% · 3.5★≈99% · 4★≈113% · 5★≈127%
-fn target_fill_x100(rating_x100: i64) -> i64 {
-    let stars = rating_x100 as f64 / 100.0;
-    let s = 1.0 / (1.0 + (-1.5 * (stars - 2.8)).exp());
-    ((0.06 + s * 1.25) * 100.0).round() as i64
+/// Absolute guest DEMAND from the star rating — how many people WANT to eat here,
+/// INDEPENDENT of how many seats you have (a 1★ room draws ~6 whether it seats 12
+/// or 18; the caller clamps to your OWN seats + a short line). Geometric between
+/// the anchors — each extra star ≈ doubles the crowd — so climbing the rating is
+/// visibly rewarding and "progress makes sense". Top anchor ≈ a fully-built
+/// 5-storey restaurant packed WITH a line (a maxed build is ~5 × 24 seats — the
+/// footprint is a fixed 10×10 per floor, tier 5 unlocks all 5 floors); bottom ≈ 6.
+/// MUST stay in lockstep with the client's `demandForRating` (GuestSpawner).
+///   1★=6 · 1.5★≈9 · 2★≈13 · 2.5★≈20 · 3★≈29 · 3.5★≈43 · 4★≈64 · 4.5★≈94 · 5★=140
+const DEMAND_MIN: f64 = 6.0;    // 1★ — the same handful for everyone, any size
+const DEMAND_MAX: f64 = 140.0;  // 5★ — a maxed 5-storey full, plus a line
+/// How many guests may queue BEYOND the seats (the "line outside"). Seats +
+/// this is the hard ceiling on guests present at once.
+const LINE_ALLOWANCE: i64 = 10;
+fn rating_demand(rating_x100: i64) -> i64 {
+    let t = (((rating_x100 as f64 / 100.0) - 1.0) / 4.0).clamp(0.0, 1.0); // 0 at 1★ … 1 at 5★
+    (DEMAND_MIN * (DEMAND_MAX / DEMAND_MIN).powf(t)).round() as i64
 }
 
 /// Phase 9.6 — seat the longest-waiting "waiting" guest when a chair

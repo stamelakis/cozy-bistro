@@ -730,18 +730,20 @@ const WC_PATIENCE_SECONDS = 10.0;
 // typical staff levels.
 const SPAWN_INTERVAL_SECONDS = 5.5;
 
-/** Occupancy CEILING as a % of total seats, an S-curve in the star rating —
- * the REAL rating lever. Spawning stops once this % of seats is present, so a
- * low rating empties the room regardless of how fast guests would otherwise
- * arrive (throttling the interval alone can't do it: dwell-time ≫ interval, so
- * every freed seat just refills). Centered ~2.8★: thin below 2★, fairly full by
- * 3★, and above ~3.6★ it passes 100 % so a waiting line forms. Applied to TOTAL
- * seats across all floors, so the FRACTION a rating fills is independent of how
- * many floors exist. MUST match the server's `target_fill_x100`.
- *   1★≈14% · 1.5★≈22% · 2★≈35% · 2.5★≈55% · 3★≈78% · 3.5★≈99% · 4★≈113% · 5★≈127% */
-function targetFillPercent(rating: number): number {
-  const s = 1 / (1 + Math.exp(-1.5 * (rating - 2.8)));
-  return (0.06 + s * 1.25) * 100;
+/** Absolute guest DEMAND from the star rating — how many people WANT to eat here,
+ * INDEPENDENT of your seat count (a 1★ room draws ~6 whether it seats 12 or 18;
+ * the caller clamps to your OWN seats + a short line). Geometric between the
+ * anchors — each extra star ≈ doubles the crowd — so climbing the rating feels
+ * rewarding. Top ≈ a fully-built 5-storey packed with a line (a maxed build is
+ * ~5 × 24 seats: 10×10 footprint/floor, tier 5 unlocks all 5 floors); bottom ≈ 6.
+ * MUST match the server's `rating_demand` (restaurant_sim.rs).
+ *   1★=6 · 1.5★≈9 · 2★≈13 · 2.5★≈20 · 3★≈29 · 3.5★≈43 · 4★≈64 · 4.5★≈94 · 5★=140 */
+const DEMAND_MIN = 6;      // 1★ — the same handful for everyone, any size
+const DEMAND_MAX = 140;    // 5★ — a maxed 5-storey full, plus a line
+const LINE_ALLOWANCE = 10; // guests that may queue beyond the seats ("line outside")
+function demandForRating(rating: number): number {
+  const t = Math.min(1, Math.max(0, (rating - 1) / 4)); // 0 at 1★ … 1 at 5★
+  return Math.round(DEMAND_MIN * Math.pow(DEMAND_MAX / DEMAND_MIN, t));
 }
 
 /** Phase I (H.99) — Pick the nearest fixture, with STRONG same-floor
@@ -1195,17 +1197,17 @@ export class GuestSpawner {
     // ownership to the server.
     const serverOwnsGuestSpawn = (isServerSim("guests") || isServerSim("guestMove"))
       && this.cloud?.isConnectionLive() === true;
-    // OCCUPANCY CAP — a rating-scaled ceiling on how many guests may be present
-    // (mirrors the server's try_server_spawn_guest). THIS is what makes low stars
-    // thin the crowd; the interval factor below only paces arrivals. Ceiling is a
-    // % of total seats across ALL floors, so extra floors don't change the
-    // FRACTION a bad rating fills.
-    const seatTarget = Math.ceil(
-      this.listFunctionalSeats().length
-      * targetFillPercent(this.game.reputation.getAverageRating()) / 100,
+    // DEMAND CAP — rating decides how many people WANT to come (demandForRating),
+    // independent of size; seats decide sit-vs-queue. Cap present guests at
+    // min(demand, seats across ALL floors + a short line). Mirrors the server's
+    // try_server_spawn_guest. THIS is the rating lever; the interval below only
+    // paces arrivals.
+    const demandTarget = Math.min(
+      demandForRating(this.game.reputation.getAverageRating()),
+      this.listFunctionalSeats().length + LINE_ALLOWANCE,
     );
     const guestsPresent = this.countPresentGuests();
-    if (this.restaurantOpen && this.spawnCooldown <= 0 && guestsPresent < seatTarget
+    if (this.restaurantOpen && this.spawnCooldown <= 0 && guestsPresent < demandTarget
         && (this.countAvailableSeats() > 0 || this.canAcceptWaitingGuest())) {
       if (!serverOwnsGuestSpawn) {
         void this.spawnGuest();
@@ -1225,14 +1227,12 @@ export class GuestSpawner {
       const attractionMult = Math.max(0.35, 1 - Math.min(0.65, attraction * 0.015));
       // AdminPanel spawn-rate multiplier (1 = default).
       const adminMult = this.game.admin.spawnRateMultiplier;
-      // STAR-RATING factor — now just GENTLE arrival pacing (mirror the server's
-      // try_server_spawn_guest). The OCCUPANCY CAP above is the real rating lever;
-      // this only sets how fast the rating-thinned crowd trickles up to its
-      // ceiling. 2★→×1.4, 1★→×1.8 slower; 4★→×0.8, 5★→×0.6 faster; 3★ neutral.
+      // STAR-RATING arrival pacing (mirror the server). The DEMAND CAP above is
+      // the rating lever; this only sets fill SPEED. Above 3★ arrivals come
+      // faster (4★→×0.8, 5★→×0.6); at/below 3★ neutral — a low rating's small
+      // demand fills at normal pace and then stops.
       const rating = this.game.reputation.getAverageRating(); // 1..5, default 3.0
-      const ratingMult = rating <= 3
-        ? Math.min(3, 1 + (3 - rating) * 0.4)
-        : Math.max(0.6, 1 - (rating - 3) * 0.2);
+      const ratingMult = rating >= 3 ? Math.max(0.6, 1 - (rating - 3) * 0.2) : 1;
       this.spawnCooldown = SPAWN_INTERVAL_SECONDS * weatherMult * boostMult * attractionMult * adminMult * ratingMult;
     }
 
