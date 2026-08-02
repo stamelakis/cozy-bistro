@@ -185,12 +185,14 @@ export class ExpandWidget {
       const newRecipes = recipes
         .filter((r) => getRecipeLuxuryTier(r) === nextTier)
         .map((r) => r.name);
-      const seats = nextTier >= 2 && nextTier <= 4 ? " · +4 seats" : "";
+      // Every expansion (tiers 2–5) unlocks one more floor — the footprint per
+      // floor is fixed, so growth is a whole new storey to build on, NOT "+4 seats".
+      const floorBonus = nextTier >= 2 && nextTier <= 5 ? " · +1 floor" : "";
       const preview = newRecipes.length === 0
-        ? `tier ${nextTier} polish${seats}`
-        : `${newRecipes.slice(0, 2).join(", ")}${newRecipes.length > 2 ? ` +${newRecipes.length - 2}` : ""}${seats}`;
+        ? `tier ${nextTier} polish${floorBonus}`
+        : `${newRecipes.slice(0, 2).join(", ")}${newRecipes.length > 2 ? ` +${newRecipes.length - 2}` : ""}${floorBonus}`;
       this.unlocksLine.textContent = `→ ${preview}`;
-      this.unlocksLine.title = newRecipes.join(", ") + seats;
+      this.unlocksLine.title = newRecipes.join(", ") + floorBonus;
       this.expandBtn.textContent = `Expand → Tier ${nextTier}  ($${cost})`;
       const can = this.game.economy.canAfford(cost);
       this.expandBtn.disabled = !can;

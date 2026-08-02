@@ -84,14 +84,16 @@ export class ExpandModal {
       const newRecipes = recipes
         .filter((r) => getRecipeLuxuryTier(r) === nextTier)
         .map((r) => r.name);
-      const seats = nextTier >= 2 && nextTier <= 4 ? " · +4 seats" : "";
+      // Every expansion (tiers 2–5) unlocks one more floor — the footprint per
+      // floor is fixed, so growth is a whole new storey to build on, NOT "+4 seats".
+      const floorBonus = nextTier >= 2 && nextTier <= 5 ? " · +1 floor" : "";
       const recipeText = newRecipes.length === 0
         ? `Tier ${nextTier} polish (no new recipes)`
         : newRecipes.length <= 3
           ? newRecipes.join(", ")
           : `${newRecipes.slice(0, 3).join(", ")} (+${newRecipes.length - 3} more)`;
       const unlocks = document.createElement("div");
-      unlocks.innerHTML = `<b>Next unlock:</b> ${recipeText}${seats}`;
+      unlocks.innerHTML = `<b>Next unlock:</b> ${recipeText}${floorBonus}`;
       Object.assign(unlocks.style, { fontSize: "11px", opacity: "0.85", marginBottom: "10px" } as Partial<CSSStyleDeclaration>);
       this.body.appendChild(unlocks);
 
