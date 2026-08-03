@@ -587,6 +587,15 @@ pub fn restaurant_tick(
     // kitchen, and only the one fastest chef stayed busy while the rest
     // idled. ("waiter sitting idle while customers need orders" + "one chef
     // takes all the work" were the same stall.)
+    // WASH FIRST when clean dishes run low. Reserve up to `wash_demand` idle
+    // waiters for wash trips BEFORE take-order/delivery claim the pool below, so
+    // washing PREEMPTS service exactly when the restaurant is about to run out of
+    // clean dishes (escalates with scarcity; returns 0 while healthy so service
+    // keeps priority, plus one opportunistic washer during a lull). Runs ahead of
+    // idle_waiter_count so reserved washers (wash_target_uid set) are excluded
+    // from the take-order/delivery split. All server-side.
+    try_dispatch_wash_trip(ctx, rid, wash_demand(ctx, rid));
+
     let idle_waiter_count = ctx.db.staff_actor().restaurant_id().filter(rid)
         .filter(|a| a.role == "waiter" && a.state == "idle"
             && a.ticket_id.is_none() && a.take_order_guest_id.is_none()
@@ -632,15 +641,9 @@ pub fn restaurant_tick(
     // waiter buses it here.
     try_dispatch_seat_clean(ctx, rid);
 
-    // Phase H.35 — wash trip dispatch. Cosmetic for the offline case:
-    // walks an idle waiter through a pseudo-pickup (any table) → wash
-    // station (sink or dishwasher) → home cycle when dirty stock + an
-    // available waiter both exist. Doesn't touch dishware_pool itself
-    // (H.21's instantaneous loader still owns inventory motion); the
-    // benefit is a reconnecting player sees waiters in motion rather
-    // than idle staff next to magically-clean dishes. Same offline
-    // guard pattern as H.33/H.34.
-    try_dispatch_wash_trip(ctx, rid);
+    // (Wash-trip dispatch now runs ABOVE, before take-order/delivery, so washing
+    // can PREEMPT service when clean dishes run low — see wash_demand + the
+    // try_dispatch_wash_trip call ahead of idle_waiter_count.)
 
     // Phase 9.42 — Observability. Scan post-dispatch state for anomalies
     // and publish a compact summary the client renders as a health badge.
@@ -5553,31 +5556,57 @@ fn try_dispatch_seat_clean(ctx: &ReducerContext, rid: u64) {
     }
 }
 
-/// Phase H.35 — Cosmetic wash trip dispatch for offline owners. Picks
-/// an idle waiter, a pseudo-pickup at any seat, and a wash station
-/// (dishwasher or sink). Sets wash_target_uid + wash_phase="pickup"
-/// + target=seat coords; tick_wash_trip then runs the multi-leg
-/// state machine.
-///
-/// Does NOT modify dishware_pool — H.21's try_server_wash_load is
-/// the authoritative inventory mover. This dispatcher's only effect
-/// is animating waiters so a reconnecting player sees activity
-/// matching the dirty pile they remember.
-///
-/// Gating: offline owner heuristic (Player.last_seen_at) + the
-/// restaurant must have at least one waiter, one dirty piece, one
-/// wash station, and one seat to use as a pseudo-pickup.
-fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
-    // Phase H Phase 4w — was offline-only. Now always-on; the client's
-    // tryStartWashTrip is gated behind serverOwnsTicketDispatch() so
-    // they don't both pick a waiter for the same dirty piece. The
-    // bridge synthesizes the local WashTrip object (picks dirtyId +
-    // kind from the local dirty pile, reads station defId from the
-    // registry) when the server claims a waiter. tick_wash_trip
-    // animates the trip; the local sim's working-state completion
-    // still fires washOne / loadDishwasher (inventory motion stays
-    // client-side — try_server_wash_load is the offline analog and
-    // is itself gated, so no double-decrement).
+/// How many waiters SHOULD be washing right now, ESCALATING with clean-dish
+/// scarcity. 0 while clean stock is healthy (service keeps priority), ramping up
+/// as the clean pool depletes so a busy restaurant never runs itself dry:
+///   • a kind below ~50% clean →  1 washer
+///   • below ~25% clean        →  2 washers
+///   • nearly out (clean ≤ 2)  →  ALL hands (service is stalling anyway)
+/// Capped by wash-station count, and — except in that emergency — leaves one
+/// waiter for service. The caller dispatches this many BEFORE take-order/delivery
+/// so washing can PREEMPT service exactly when dishes are about to run out.
+/// Server-only: dishware_pool is server-authoritative (isServerSim("dishware")
+/// is default-on, so the client never touches wash inventory).
+fn wash_demand(ctx: &ReducerContext, rid: u64) -> u32 {
+    let (mut pc, mut pd, mut gc, mut gd) = (0u32, 0u32, 0u32, 0u32);
+    for p in ctx.db.dishware_pool().restaurant_id().filter(rid) {
+        match p.kind.as_str() {
+            "plate" => { pc += p.clean; pd += p.dirty; }
+            "glass" => { gc += p.clean; gd += p.dirty; }
+            _ => {}
+        }
+    }
+    // Per-kind scarcity level, only for a kind that actually has dirty pieces to
+    // wash: 0 healthy · 1 <50% clean · 2 <25% clean · 3 nearly out (clean ≤ 2).
+    let level_for = |clean: u32, dirty: u32| -> u32 {
+        if dirty == 0 { return 0; }
+        if clean <= 2 { return 3; }
+        let clean_pct = clean * 100 / (clean + dirty);
+        if clean_pct < 25 { 2 } else if clean_pct < 50 { 1 } else { 0 }
+    };
+    let level = level_for(pc, pd).max(level_for(gc, gd));
+    if level == 0 { return 0; }
+    let waiters = ctx.db.staff_actor().restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter").count() as u32;
+    let stations = ctx.db.placed_furniture().restaurant_id().filter(rid)
+        .filter(|f| f.def_id == "dishwasher" || f.def_id == "dishwasher-pro"
+            || f.def_id == "sink" || f.def_id == "kitchen-sink").count() as u32;
+    if waiters == 0 || stations == 0 { return 0; }
+    let want = match level { 1 => 1, 2 => 2, _ => waiters }; // emergency: all hands
+    let reserve = if level >= 3 { 0 } else { 1 };            // keep 1 for service unless emergency
+    want.min(stations).min(waiters.saturating_sub(reserve))
+}
+
+/// Walk up to `min_washers` idle waiters into wash trips (dirty pile → sink /
+/// dishwasher → home), plus one extra during a service lull so dirt doesn't pile
+/// up between rushes. `min_washers` is the scarcity-forced count from
+/// `wash_demand`, and the caller runs this BEFORE take-order/delivery so those
+/// forced washers claim waiters first — i.e. washing preempts service exactly when
+/// clean dishes are running out. One waiter per wash station; the completed trip
+/// IS the inventory move (dirty→clean, see tick_wash_trip / Phase 9.6). Fully
+/// server-authoritative — the client's local wash is gated off under
+/// isServerSim("dishware").
+fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64, min_washers: u32) {
     let _ = ctx.db.restaurant().id().find(rid); // existence check
 
     // Need at least one dirty piece somewhere in the pool.
@@ -5586,42 +5615,25 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64) {
         .any(|p| p.dirty > 0);
     if !any_dirty { return; }
 
-    // Anti-deadlock (2026-07) — normally SERVICE OUTRANKS WASHING (below), but
-    // if a dish kind's CLEAN stock is critically low AND it has dirty pieces
-    // waiting, washing must NOT keep yielding: with no clean dishes, service
-    // can't proceed anyway, so a busy sink-only restaurant would HARD-STALL
-    // (can't serve → the "ordering"/"ready" that blocks washing never clears →
-    // never washes → permanent lock). Let a waiter reclaim them even mid-
-    // service. Self-limiting: once clean climbs back over the threshold,
-    // service-first resumes. Sums across tiers (dishware_pool is per-tier).
-    const CRITICAL_CLEAN_STOCK: u32 = 2;
-    let (mut plate_clean, mut plate_dirty, mut glass_clean, mut glass_dirty) = (0u32, 0u32, 0u32, 0u32);
-    for p in ctx.db.dishware_pool().restaurant_id().filter(rid) {
-        match p.kind.as_str() {
-            "plate" => { plate_clean += p.clean; plate_dirty += p.dirty; }
-            "glass" => { glass_clean += p.clean; glass_dirty += p.dirty; }
-            _ => {}
-        }
-    }
-    let clean_critical =
-        (plate_clean <= CRITICAL_CLEAN_STOCK && plate_dirty > 0)
-        || (glass_clean <= CRITICAL_CLEAN_STOCK && glass_dirty > 0);
-
-    // Phase 9.8 — SERVICE OUTRANKS WASHING. Under a big dirty
-    // backlog this dispatcher used to claim every idle waiter, trip
-    // after trip, starving take-order + delivery ("waiters aren't
-    // taking orders"). Washing now yields whenever a guest is
-    // waiting to order or a cooked ticket is waiting for a runner,
-    // and at most ONE wash trip runs per restaurant at a time —
-    // UNLESS clean stock is critical (anti-deadlock above).
+    // How many waiters may wash right now = the scarcity-forced count
+    // (`min_washers`, already escalated with clean-stock depletion by wash_demand
+    // and dispatched BEFORE service so it can preempt) PLUS one opportunistic
+    // washer during a service lull (no one waiting to order, no plate ready) so
+    // dirt doesn't pile up between rushes. With min_washers = 0 and service busy,
+    // washing yields entirely — SERVICE keeps priority until dishes run low.
     let service_demand = ctx.db.active_guest().restaurant_id().filter(rid)
         .any(|g| g.state == "ordering")
         || ctx.db.active_ticket().restaurant_id().filter(rid)
             .any(|t| t.state == "ready");
-    if service_demand && !clean_critical { return; }
-    let wash_in_flight = ctx.db.staff_actor().restaurant_id().filter(rid)
-        .any(|a| a.role == "waiter" && !a.wash_target_uid.is_empty());
-    if wash_in_flight { return; }
+    let mut target = min_washers;
+    if !service_demand { target = target.max(1); }
+    if target == 0 { return; }
+    // One dispatch per tick; ramps up to `target` concurrent over successive
+    // ticks as more waiters come free.
+    let wash_active = ctx.db.staff_actor().restaurant_id().filter(rid)
+        .filter(|a| a.role == "waiter" && !a.wash_target_uid.is_empty())
+        .count() as u32;
+    if wash_active >= target { return; }
 
     // Collect wash stations — dishwasher or kitchen sink. We may
     // pair across multiple (e.g. one upstairs, one downstairs) so
