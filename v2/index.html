@@ -30,6 +30,40 @@
          LoginModal to construct + paint its style. Cuts the perceived
          "blank background" gap when the modal first appears. -->
     <link rel="preload" as="image" href="./login-bg.png" />
+    <!-- Boot watchdog. If the app hasn't put a <canvas> on screen a few seconds
+         in — e.g. a WebGL failure on iOS Safari that otherwise just shows a BLACK
+         SCREEN — replace the blank page with the captured error + device string so
+         it can be screenshotted. Registered before the module bundle so it catches
+         early/parse errors too, and ES5 so it runs on any engine. Silent for
+         healthy loads (a <canvas> exists → return). -->
+    <script>
+      (function () {
+        var errs = [];
+        function cap(m) { try { errs.push(String(m)); } catch (e) {} }
+        window.addEventListener("error", function (e) {
+          cap((e && e.message ? e.message : "error") +
+            (e && e.filename ? "  @ " + e.filename + ":" + e.lineno + ":" + e.colno : ""));
+        });
+        window.addEventListener("unhandledrejection", function (e) {
+          var r = e ? e.reason : null;
+          cap("promise: " + (r && (r.stack || r.message) ? (r.stack || r.message) : String(r)));
+        });
+        setTimeout(function () {
+          if (document.querySelector("canvas")) return; // booted fine — stay silent
+          var d = document.createElement("div");
+          d.setAttribute("style", "position:fixed;inset:0;z-index:2147483647;background:#1b1410;" +
+            "color:#ffe0c0;font:13px/1.6 ui-monospace,monospace;padding:20px;overflow:auto;" +
+            "white-space:pre-wrap;-webkit-user-select:text;user-select:text;");
+          d.textContent =
+            "Cozy Bistro couldn't start the 3D view on this device.\n" +
+            "Please screenshot this whole screen and send it over — it shows exactly what went wrong.\n\n" +
+            "Device: " + navigator.userAgent + "\n\n" +
+            (errs.length ? ("Errors:\n" + errs.join("\n\n"))
+                         : "No JavaScript error was captured — most likely a WebGL / graphics limit in this browser.");
+          (document.body || document.documentElement).appendChild(d);
+        }, 15000);
+      })();
+    </script>
     <style>
       html, body {
         margin: 0;
