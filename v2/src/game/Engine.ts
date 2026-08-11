@@ -2651,15 +2651,29 @@ export class Engine {
     const localGen = parseInt(localStorage.getItem(KEY) ?? "0", 10) || 0;
     console.info(`[Engine] season-reset check — server:${serverGen} local:${localGen} freshStart:${this.wasFreshStart}`);
     if (serverGen <= localGen) return false;                 // already current
-    // ALWAYS wipe when a generation is pending — no "is this a new player?"
-    // guess. The old guess checked for a restaurant ROW, but a returning player
-    // whose row was already deleted still has an account_save (keyed by
-    // username) that restores + backfills the whole restaurant; skipping them is
-    // exactly why the wipe didn't stick. wipeMyRestaurant is a harmless no-op for
-    // a genuinely new player (they just eat one extra reload under the veil).
-    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: WIPING (cloud + ALL local slots), reloading`);
+    // 2026-08-11 INCIDENT FIX — the localStorage marker is PER-BROWSER, but
+    // the wipe used to be unconditional. Every never-seen device/browser (and
+    // every player after a domain move — new origin, empty localStorage) saw
+    // "gen pending" and wiped the account's CURRENT restaurant again. The
+    // ACCOUNT-scoped stamp (auth_record.season_gen_done) is now the authority:
+    //   • account already processed this gen → clear THIS browser's stale
+    //     local state only (so it can't backfill a pre-reset save), mark, and
+    //     reload — the live cloud restaurant is untouched.
+    //   • otherwise → process_season_reset wipes AND stamps in one server
+    //     transaction, so a second device / race can never double-wipe.
+    const accountDone = this.cloud.getSeasonGenDone();
+    if (accountDone >= serverGen) {
+      console.info(`[Engine] season gen ${serverGen} already processed by ACCOUNT (done=${accountDone}) — local-only cleanup, no wipe`);
+      SaveSystem.suspended = true;
+      this.cloud.suspendSaves();
+      try { SaveSystem.deleteAllSlots(); } catch { /* best-effort */ }
+      localStorage.setItem(KEY, String(serverGen));
+      window.location.reload();
+      return true;
+    }
+    console.info(`[Engine] season reset gen ${localGen} -> ${serverGen}: processing (server-arbitrated wipe), reloading`);
     try {
-      await this.cloud.wipeMyRestaurant();
+      await this.cloud.processSeasonReset();
     } catch (e) {
       // Couldn't reach the server — don't clear local (they'd lose their save
       // AND not be reset). Bail and let them play; next login retries.

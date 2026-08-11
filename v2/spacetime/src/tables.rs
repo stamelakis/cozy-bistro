@@ -51,6 +51,15 @@ pub struct AuthRecord {
     /// when this is the first ever account with that username.
     pub is_admin: bool,
     pub created_at: Timestamp,
+    /// Season-reset generation this ACCOUNT has already processed. The old
+    /// marker lived in per-browser localStorage, so every never-seen
+    /// device/browser (or a new domain = new origin) re-triggered the
+    /// self-wipe and silently destroyed the player's CURRENT restaurant —
+    /// the 2026-08-09 "reset to 0" incident. Server-side + account-keyed,
+    /// a generation can wipe an account exactly once. Appended LAST +
+    /// #[default] for an additive migration.
+    #[default(0i64)]
+    pub season_gen_done: i64,
 }
 
 /// A ban applied to an account. One row per banned username; presence

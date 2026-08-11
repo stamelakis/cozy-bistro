@@ -125,6 +125,7 @@ export const AuthRecord = __t.object("AuthRecord", {
   passwordHash: __t.string(),
   isAdmin: __t.bool(),
   createdAt: __t.timestamp(),
+  seasonGenDone: __t.i64(),
 });
 export type AuthRecord = __Infer<typeof AuthRecord>;
 

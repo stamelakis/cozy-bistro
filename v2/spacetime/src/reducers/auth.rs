@@ -71,6 +71,10 @@ pub fn sign_up(ctx: &ReducerContext, username: String, password: String) -> Resu
         password_hash: hash,
         is_admin,
         created_at: ctx.timestamp,
+        // A brand-new account starts CURRENT on the season generation —
+        // it has nothing to wipe, and must never inherit a pending one.
+        season_gen_done: ctx.db.game_reset().id().find(1)
+            .map(|g| g.generation as i64).unwrap_or(0),
     });
     if is_admin {
         log::info!("Admin account bootstrapped: {}", username.trim());
@@ -588,8 +592,86 @@ pub fn wipe_my_restaurant(ctx: &ReducerContext) -> Result<(), String> {
     let stale_ach: Vec<u64> = ctx.db.achievement_unlock().player().filter(owner_id)
         .map(|a| a.id).collect();
     for id in stale_ach { ctx.db.achievement_unlock().id().delete(id); }
+    // A manual wipe also satisfies any pending season generation — without
+    // this stamp, a device with a stale local marker would wipe the freshly
+    // re-claimed restaurant AGAIN at its next login.
+    stamp_season_gen_done(ctx, owner_id);
     log::info!("Self-wipe by identity {}: released {} restaurants", owner_id, owned_restaurants.len());
     Ok(())
+}
+
+/// Mark the caller's ACCOUNT as having processed the current season-reset
+/// generation. Account-keyed (auth_record) so it survives device changes,
+/// identity transfers, and new domains — unlike the old per-browser
+/// localStorage marker, which re-triggered the self-wipe from every
+/// never-seen device and silently destroyed the player's CURRENT
+/// restaurant (the 2026-08-09 incident).
+fn stamp_season_gen_done(ctx: &ReducerContext, identity: spacetimedb::Identity) {
+    let gen = ctx.db.game_reset().id().find(1).map(|g| g.generation as i64).unwrap_or(0);
+    if gen == 0 { return; }
+    if let Some(a) = ctx.db.auth_record().identity().filter(identity).next() {
+        if a.season_gen_done < gen {
+            let username = a.username.clone();
+            ctx.db.auth_record().username().update(crate::tables::AuthRecord {
+                season_gen_done: gen,
+                ..a
+            });
+            log::info!("season_gen_done -> {} for @{}", gen, username);
+        }
+    }
+}
+
+/// One-shot migration backfill — stamp EVERY account as having processed the
+/// current generation. Run once right after deploying the account-scoped
+/// season stamp: without it, existing accounts (default stamp 0) would each
+/// eat one more wipe from any stale device. Safe because at deploy time no
+/// pre-generation restaurant exists anymore (every live restaurant was
+/// created after the last bump). Idempotent; gate-free by design (it only
+/// ever marks generations as done — it can never cause a wipe).
+#[reducer]
+pub fn bootstrap_season_stamps(ctx: &ReducerContext) -> Result<(), String> {
+    let gen = ctx.db.game_reset().id().find(1).map(|g| g.generation as i64).unwrap_or(0);
+    if gen == 0 { return Ok(()); }
+    let stale: Vec<crate::tables::AuthRecord> = ctx.db.auth_record().iter()
+        .filter(|a| a.season_gen_done < gen)
+        .collect();
+    let n = stale.len();
+    for a in stale {
+        ctx.db.auth_record().username().update(crate::tables::AuthRecord {
+            season_gen_done: gen,
+            ..a
+        });
+    }
+    log::info!("bootstrap_season_stamps: stamped {} account(s) at gen {}", n, gen);
+    Ok(())
+}
+
+/// Season reset, done right: the SERVER decides whether this ACCOUNT still
+/// owes the pending generation a wipe. Idempotent per account per
+/// generation — the stamp is written in the same transaction as the wipe,
+/// so a second device (or a race) is a guaranteed no-op instead of a
+/// second wipe. Clients call this instead of wipe_my_restaurant when they
+/// detect a pending generation; a client whose ACCOUNT is already stamped
+/// only needs to clear its own stale local state.
+#[reducer]
+pub fn process_season_reset(ctx: &ReducerContext) -> Result<(), String> {
+    let gen = ctx.db.game_reset().id().find(1).map(|g| g.generation as i64).unwrap_or(0);
+    if gen == 0 { return Ok(()); }
+    let Some(acct) = ctx.db.auth_record().identity().filter(ctx.sender).next() else {
+        // Anonymous identity — no account scope; nothing durable to wipe.
+        return Ok(());
+    };
+    if acct.season_gen_done >= gen {
+        return Ok(()); // this account already paid this generation — NO second wipe
+    }
+    // Stamp FIRST (same transaction — atomic with the wipe below).
+    let username = acct.username.clone();
+    ctx.db.auth_record().username().update(crate::tables::AuthRecord {
+        season_gen_done: gen,
+        ..acct
+    });
+    log::info!("process_season_reset: gen {} wipe for @{}", gen, username);
+    wipe_my_restaurant(ctx)
 }
 
 /// ADMIN — bump the global season-reset generation. Every client that logs in

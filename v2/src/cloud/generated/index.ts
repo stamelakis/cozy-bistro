@@ -52,6 +52,7 @@ import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
+import BootstrapSeasonStampsReducer from "./bootstrap_season_stamps_reducer";
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
 import BootstrapWorldEventsReducer from "./bootstrap_world_events_reducer";
@@ -101,6 +102,7 @@ import PingPresenceReducer from "./ping_presence_reducer";
 import PlaceFromInventoryReducer from "./place_from_inventory_reducer";
 import PlaceFurnitureReducer from "./place_furniture_reducer";
 import PlaceOrderReducer from "./place_order_reducer";
+import ProcessSeasonResetReducer from "./process_season_reset_reducer";
 import PublishPlayerSaveReducer from "./publish_player_save_reducer";
 import ReactToRestaurantReducer from "./react_to_restaurant_reducer";
 import RecordVisitReducer from "./record_visit_reducer";
@@ -1049,6 +1051,7 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
+  __reducerSchema("bootstrap_season_stamps", BootstrapSeasonStampsReducer),
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
   __reducerSchema("bootstrap_world_events", BootstrapWorldEventsReducer),
@@ -1098,6 +1101,7 @@ const reducersSchema = __reducers(
   __reducerSchema("place_from_inventory", PlaceFromInventoryReducer),
   __reducerSchema("place_furniture", PlaceFurnitureReducer),
   __reducerSchema("place_order", PlaceOrderReducer),
+  __reducerSchema("process_season_reset", ProcessSeasonResetReducer),
   __reducerSchema("publish_player_save", PublishPlayerSaveReducer),
   __reducerSchema("react_to_restaurant", ReactToRestaurantReducer),
   __reducerSchema("record_visit", RecordVisitReducer),

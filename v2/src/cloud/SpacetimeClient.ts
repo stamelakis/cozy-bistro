@@ -4485,6 +4485,29 @@ export class SpacetimeClient {
       this.conn!.reducers.wipeMyRestaurant({}));
   }
 
+  /** Season reset, server-arbitrated: wipes ONLY if this ACCOUNT hasn't
+   * processed the pending generation yet (stamp + wipe are one
+   * transaction). Safe to call from any number of devices. */
+  processSeasonReset(): Promise<void> {
+    return this.callReducer("processSeasonReset", () =>
+      this.conn!.reducers.processSeasonReset({}));
+  }
+
+  /** The season-reset generation this ACCOUNT has already processed
+   * (auth_record.season_gen_done). 0 when anonymous / pre-sync. */
+  getSeasonGenDone(): number {
+    if (!this.conn || !this.identity) return 0;
+    const me = this.identity.toHexString().toLowerCase();
+    try {
+      for (const a of this.conn.db.auth_record.iter()) {
+        if (a.identity.toHexString().toLowerCase() === me) {
+          return Number(a.seasonGenDone ?? 0n);
+        }
+      }
+    } catch { /* pre-sync */ }
+    return 0;
+  }
+
   // ============================================================================
   //                           P8 — CHAT
   // ============================================================================
