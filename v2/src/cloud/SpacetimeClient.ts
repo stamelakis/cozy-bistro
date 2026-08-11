@@ -217,6 +217,10 @@ export interface HydratableGuestRow {
    * full tier CSV and settled AGAIN → dish double-count (OVER), which the
    * hydrate-trim then paid for by deleting real top-tier pieces. */
   dishesSettled: boolean;
+  /** Patch B — owner already greeted this guest (👋 badge hidden). */
+  greeted: boolean;
+  /** Patch C — non-null = this guest is a named regular (bubble prefix). */
+  regularName: string | null;
   tasteDiet: string;
   tasteDecorPref: number;
   tasteWindowPref: number;
@@ -982,6 +986,8 @@ export class SpacetimeClient {
         ticketId: g.ticketId ?? null,
         reservedDishTiers: g.reservedDishTiers,
         dishesSettled: g.dishesSettled ?? false,
+        greeted: g.greeted ?? false,
+        regularName: g.regularName ?? null,
         tasteDiet: g.tasteDiet,
         tasteDecorPref: g.tasteDecorPref,
         tasteWindowPref: g.tasteWindowPref,
@@ -1025,6 +1031,8 @@ export class SpacetimeClient {
           ticketId: g.ticketId ?? null,
           reservedDishTiers: g.reservedDishTiers,
           dishesSettled: g.dishesSettled ?? false,
+          greeted: g.greeted ?? false,
+          regularName: g.regularName ?? null,
           tasteDiet: g.tasteDiet,
           tasteDecorPref: g.tasteDecorPref,
           tasteWindowPref: g.tasteWindowPref,
@@ -1493,6 +1501,161 @@ export class SpacetimeClient {
     } catch (e) {
       console.warn("[Cloud] claimAchievement failed:", e);
     }
+  }
+
+  // ─── Patch B — hands-on service taps (all server-validated) ────────
+
+  /** Greet a seated guest (👋 badge). Server: once per guest, patience
+   * refill + small satisfaction bump. */
+  greetGuest(guestId: bigint): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.greetGuest({ guestId }); }
+    catch (e) { console.warn("[Cloud] greetGuest failed:", e); }
+  }
+
+  /** Hand-bus one dirty table (🧽 badge). Server: 12 s cooldown. */
+  busSeat(seatUid: string): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try { this.conn.reducers.busSeat({ restaurantId: this.restaurantId, seatUid }); }
+    catch (e) { console.warn("[Cloud] busSeat failed:", e); }
+  }
+
+  /** Stir the pot on a cooking ticket (🍳 badge). Server: once per ticket. */
+  stirTicket(ticketId: bigint): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.stirTicket({ ticketId }); }
+    catch (e) { console.warn("[Cloud] stirTicket failed:", e); }
+  }
+
+  /** Cooking, not-yet-stirred tickets with their chef's live position —
+   * the 🥄 badge anchors. Joined here so the render loop stays dumb. */
+  listCookingUnstirredTickets(): Array<{ ticketId: bigint; x: number; z: number; floor: number }> {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: Array<{ ticketId: bigint; x: number; z: number; floor: number }> = [];
+    try {
+      for (const t of this.conn.db.active_ticket.iter()) {
+        if (t.restaurantId !== this.restaurantId) continue;
+        if (t.state !== "cooking" || (t.stirred ?? false)) continue;
+        if (!t.assignedChefId) continue;
+        const chef = this.conn.db.staff_actor.member_id.find(t.assignedChefId);
+        if (!chef) continue;
+        out.push({ ticketId: t.id, x: chef.x, z: chef.z, floor: chef.floor });
+      }
+    } catch { /* pre-sync */ }
+    return out;
+  }
+
+  // ─── Patch C — daily goals ──────────────────────────────────────────
+
+  claimDailyGoal(slot: number): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try { this.conn.reducers.claimDailyGoal({ restaurantId: this.restaurantId, slot }); }
+    catch (e) { console.warn("[Cloud] claimDailyGoal failed:", e); }
+  }
+
+  /** Claim state for today's goals (mask bit N = slot N claimed). */
+  getDailyGoalState(): { dayNumber: number; claimedMask: number; streak: number } | null {
+    if (!this.conn || this.restaurantId == null) return null;
+    try {
+      const g = this.conn.db.daily_goal_state.restaurant_id.find(this.restaurantId);
+      if (!g) return { dayNumber: -1, claimedMask: 0, streak: 0 };
+      return { dayNumber: Number(g.dayNumber), claimedMask: g.claimedMask, streak: g.streak };
+    } catch { return null; }
+  }
+
+  /** Live per-day counters off the restaurant row (server-authoritative). */
+  getDailyCounters(): { served: number; revenueCents: number; tipsCents: number } {
+    if (!this.conn || this.restaurantId == null) return { served: 0, revenueCents: 0, tipsCents: 0 };
+    const r = this.conn.db.restaurant.id.find(this.restaurantId);
+    if (!r) return { served: 0, revenueCents: 0, tipsCents: 0 };
+    return {
+      served: r.cloudDailyServed ?? 0,
+      revenueCents: Number(r.cloudDailyRevenueCents ?? 0n),
+      tipsCents: Number(r.cloudDailyTipsCents ?? 0n),
+    };
+  }
+
+  /** Today's three goals with live progress + claim state. EXACT mirror of
+   * the server's daily_goals_for (restaurant_sim.rs) — same splitmix64
+   * seed, same integer truncation — so what the widget promises is what
+   * claim_daily_goal pays. MUST stay in lockstep with the server. */
+  getDailyGoals(dayNumber: number): Array<{
+    slot: number; icon: string; label: string; target: number; progress: number;
+    claimed: boolean; claimable: boolean; rewardCents: number;
+  }> {
+    const M = 0xFFFFFFFFFFFFFFFFn;
+    const rid = this.restaurantId != null ? BigInt(this.restaurantId) & M : 0n;
+    const seats = BigInt(Math.max(8, this.getSeatSlotCount()));
+    const rotl = (v: bigint, n: bigint): bigint => (((v << n) & M) | (v >> (64n - n))) & M;
+    let h = ((BigInt(dayNumber) * 0x9E3779B97F4A7C15n) & M) ^ rotl(rid, 17n);
+    h ^= h >> 30n; h = (h * 0xBF58476D1CE4E5B9n) & M;
+    h ^= h >> 27n; h = (h * 0x94D049BB133111EBn) & M;
+    h ^= h >> 31n;
+    const jitter = (x: bigint, salt: bigint): number => {
+      const j = (((h ^ salt) * 0x2545F4914F6CDD1Dn & M) >> 33n) % 41n;
+      return Number((x * (80n + j)) / 100n);
+    };
+    const base = (seats * 3n) / 4n;
+    const servedT = Math.max(6, jitter(base, 0xA1n));
+    const revenueT = Math.max(5_000, jitter(base * 1500n, 0xB2n));
+    const tipsT = Math.max(500, jitter(base * 180n, 0xC3n));
+    const counters = this.getDailyCounters();
+    const state = this.getDailyGoalState();
+    const mask = state && state.dayNumber === dayNumber ? state.claimedMask : 0;
+    const defs = [
+      { slot: 0, icon: "🍽", label: "Serve guests", target: servedT, progress: counters.served, rewardCents: 4000 },
+      { slot: 1, icon: "💰", label: "Earn revenue", target: revenueT, progress: counters.revenueCents, rewardCents: 6000 },
+      { slot: 2, icon: "💵", label: "Collect tips", target: tipsT, progress: counters.tipsCents, rewardCents: 10000 },
+    ];
+    return defs.map((d) => ({
+      ...d,
+      claimed: (mask & (1 << d.slot)) !== 0,
+      claimable: (mask & (1 << d.slot)) === 0 && d.progress >= d.target,
+    }));
+  }
+
+  /** Seat-slot count — the SAME capacity source the server's
+   * daily_goals_for uses, so the mirrored target formula agrees. */
+  getSeatSlotCount(): number {
+    if (!this.conn || this.restaurantId == null) return 0;
+    try {
+      let n = 0;
+      for (const s of this.conn.db.seat_slot.iter()) {
+        if (s.restaurantId === this.restaurantId) n += 1;
+      }
+      return n;
+    } catch { return 0; }
+  }
+
+  /** Roster of this restaurant's named regulars (loyalty hearts UI). */
+  listRegulars(): Array<{ id: bigint; name: string; archetype: string; loyalty: number; visits: number }> {
+    if (!this.conn || this.restaurantId == null) return [];
+    const out: Array<{ id: bigint; name: string; archetype: string; loyalty: number; visits: number }> = [];
+    try {
+      for (const r of this.conn.db.regular_customer.iter()) {
+        if (r.restaurantId !== this.restaurantId) continue;
+        out.push({ id: r.id, name: r.name, archetype: r.archetype, loyalty: r.loyalty, visits: r.visits });
+      }
+    } catch { /* table not wired yet */ }
+    return out;
+  }
+
+  // ─── Patch D — world events (critic sweep) ─────────────────────────
+
+  /** The street-wide world-event singleton, null before first sync. */
+  getWorldEvent(): { kind: string; state: string; announceAtMicros: number; firesAtMicros: number; lastFiredMicros: number } | null {
+    if (!this.conn) return null;
+    try {
+      const ev = this.conn.db.world_event.id.find(1);
+      if (!ev) return null;
+      return {
+        kind: ev.kind,
+        state: ev.state,
+        announceAtMicros: Number(ev.announceAtMicros),
+        firesAtMicros: Number(ev.firesAtMicros),
+        lastFiredMicros: Number(ev.lastFiredMicros),
+      };
+    } catch { return null; }
   }
 
   /** H.60 — Push the full rating-history snapshot (the rolling 1-5

@@ -63,4 +63,7 @@ export default __t.row({
   washedHands: __t.bool().name("washed_hands"),
   wcCompleted: __t.bool().name("wc_completed"),
   onStair: __t.bool().name("on_stair"),
+  greeted: __t.bool(),
+  regularId: __t.u64().name("regular_id"),
+  regularName: __t.option(__t.string()).name("regular_name"),
 });

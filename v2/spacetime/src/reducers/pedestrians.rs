@@ -159,6 +159,7 @@ fn try_arrival_handoff(ctx: &ReducerContext, p: &Pedestrian, now_micros: i64) {
         &p.variant,
         0.0,
         5.45,
+        None, // normal weighted archetype roll
     );
 }
 

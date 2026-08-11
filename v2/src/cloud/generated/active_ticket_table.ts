@@ -30,4 +30,5 @@ export default __t.row({
   pickupZ: __t.f32().name("pickup_z"),
   pickupFloor: __t.u32().name("pickup_floor"),
   createdAt: __t.timestamp().name("created_at"),
+  stirred: __t.bool(),
 });

@@ -64,4 +64,5 @@ export default __t.row({
   lastTipBonusMicros: __t.i64().name("last_tip_bonus_micros"),
   lastCrateMicros: __t.i64().name("last_crate_micros"),
   lastCrateGift: __t.option(__t.string()).name("last_crate_gift"),
+  lastBusSeatMicros: __t.i64().name("last_bus_seat_micros"),
 });

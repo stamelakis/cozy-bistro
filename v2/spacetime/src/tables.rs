@@ -573,6 +573,11 @@ pub struct Restaurant {
     /// LAST for an additive migration.
     #[default(None::<String>)]
     pub last_crate_gift: Option<String>,
+    /// Patch B — tap-to-bus rate limit (Unix micros of the last bus_seat).
+    /// Bounds hand-bussing so it complements waiters instead of replacing
+    /// them. Appended LAST for an additive migration.
+    #[default(0i64)]
+    pub last_bus_seat_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`
@@ -906,6 +911,77 @@ pub struct WeatherSchedule {
     #[auto_inc]
     pub id: u64,
     pub scheduled_at: ScheduleAt,
+}
+
+/// Patch D — street-wide world event singleton (exactly one row, id = 1;
+/// weather_state pattern). Today's only kind is "critic_sweep": the tick
+/// ANNOUNCES it ~10 real minutes ahead (state="announced", clients banner
+/// "the critic is on the street"), then at fires_at spawns a critic-
+/// archetype guest at every open restaurant and returns to "idle".
+#[table(name = world_event, public)]
+pub struct WorldEvent {
+    #[primary_key]
+    pub id: u32,
+    /// Event kind — "critic_sweep" (more kinds later).
+    pub kind: String,
+    /// "idle" | "announced".
+    pub state: String,
+    /// When the current announcement was made (micros; 0 when idle).
+    pub announce_at_micros: i64,
+    /// When the announced event fires (micros; 0 when idle).
+    pub fires_at_micros: i64,
+    /// When an event last fired (micros; diagnostic + client cooldown hint).
+    pub last_fired_micros: i64,
+}
+
+/// Scheduled-tick row driving world_event_tick (~60 s cadence — cheap:
+/// one row read + a rare announce/fire).
+#[table(name = world_event_schedule, scheduled(crate::reducers::world_event_tick))]
+pub struct WorldEventSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+/// Patch C — per-restaurant daily-goal claim state. Goal DEFINITIONS are
+/// derived deterministically from (restaurant_id, day_number, tier) by
+/// daily_goals_for — server and client mirror the same formula, so only
+/// the claim state needs a row. Claims on a NEWER day lazily reset the
+/// mask (no tick hook required).
+#[table(name = daily_goal_state, public)]
+pub struct DailyGoalState {
+    #[primary_key]
+    pub restaurant_id: u64,
+    /// Game-day the claimed_mask belongs to.
+    pub day_number: i64,
+    /// Bitmask of claimed goal slots (bits 0..2).
+    pub claimed_mask: u32,
+    /// Consecutive days on which ALL THREE goals were claimed.
+    pub streak: u32,
+    /// Last day_number on which all three were claimed (streak anchor).
+    pub last_completed_day: i64,
+}
+
+/// Patch C — a named regular customer of one restaurant. Spawn rolls a
+/// small chance to send a regular (guest carries regular_id/name); a
+/// COMPLETED visit bumps loyalty at the rollup choke point. At 5 hearts
+/// they "bring friends" (a short free rush) and settle back to 2.
+#[table(name = regular_customer, public)]
+pub struct RegularCustomer {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub restaurant_id: u64,
+    pub name: String,
+    /// Archetype id rolled at mint (stable personality across visits).
+    pub archetype: String,
+    /// 0..5 hearts.
+    pub loyalty: u32,
+    /// Lifetime completed visits.
+    pub visits: u32,
+    pub created_at: Timestamp,
 }
 
 /// Periodic schedule row that triggers the pedestrian_tick reducer.
@@ -1301,6 +1377,23 @@ pub struct ActiveGuest {
     /// end-of-struct add.
     #[default(false)]
     pub on_stair: bool,
+
+    /// Patch B — the owner personally greeted this guest (once per guest;
+    /// greet_guest refills some patience + a small satisfaction bump).
+    /// Default false; primitive bool — migration-safe end-of-struct add.
+    #[default(false)]
+    pub greeted: bool,
+
+    /// Patch C — regulars. Non-zero = this guest IS a regular customer
+    /// (foreign key into regular_customer.id); loyalty ticks up when their
+    /// completed visit passes accumulate_pending_visit_rollup. Appended
+    /// LAST for an additive migration.
+    #[default(0u64)]
+    pub regular_id: u64,
+    /// Display name shown in the guest's bubble when regular_id != 0
+    /// (denormalized so the client needn't join). Appended LAST.
+    #[default(None::<String>)]
+    pub regular_name: Option<String>,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per
@@ -1368,6 +1461,12 @@ pub struct ActiveTicket {
     pub pickup_floor: u32,
 
     pub created_at: Timestamp,
+
+    /// Patch B — the owner "stirred the pot" on this ticket (once per
+    /// ticket; stir_ticket jumps the cook clock forward a bit). Default
+    /// false; primitive bool — migration-safe end-of-struct add.
+    #[default(false)]
+    pub stirred: bool,
 }
 
 /// Phase D — server-authoritative staff actor. One row per hired

@@ -72,6 +72,7 @@ fn insert_restaurant_for(ctx: &ReducerContext, owner: Identity, name: String, pu
         last_tip_bonus_micros: 0,
         last_crate_micros: 0,
         last_crate_gift: None,
+        last_bus_seat_micros: 0,
         cumulative_achievement_cents: 0,
         // H.28 — cached aggregate stats start empty; the client fires
         // update_restaurant_aggregates after the first furniture mutation.

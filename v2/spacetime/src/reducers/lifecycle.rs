@@ -45,6 +45,12 @@ pub fn init(ctx: &ReducerContext) {
     if let Err(e) = crate::reducers::weather::bootstrap_weather(ctx) {
         log::warn!("bootstrap_weather failed during init: {}", e);
     }
+    // Patch D — world-event schedule (critic sweeps) + singleton row.
+    // Idempotent like bootstrap_weather; existing DBs get it via a manual
+    // `spacetime call ... bootstrap_world_events` after deploy.
+    if let Err(e) = crate::reducers::world_events::bootstrap_world_events(ctx) {
+        log::warn!("bootstrap_world_events failed during init: {}", e);
+    }
     // Phase A4 — backfill: every existing restaurant gets a sim tick
     // schedule. New restaurants get one automatically via
     // create_restaurant; this loop catches the ones that existed

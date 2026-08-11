@@ -19,11 +19,13 @@ use crate::tables::{
     recipe_ingredients, recipe_level, recipe_meta,
     recipe_upgrade_in_flight, restaurant, restaurant_tick_schedule,
     restaurant_tick_state, seat_slot, seat_appeal, staff_actor, staff_stat, stat_snapshot, weather_state, money_cutover, money_event,
+    daily_goal_state, regular_customer,
     ActiveGuest, ActiveMenu, ActiveTicket, ClueHunt, CustomerArchetypeDef, DirtyPile, DishwarePool, FurnitureCost, FurnitureInventory, FurnitureMeta, LayoutPreset,
     DishwasherBatch, HiredStaffMember, IngredientCost, PantryStock, PantryTarget,
     PlacedFurniture, PreparedServing, RecipeIngredients, RecipeLevel, RecipeMeta,
     RecipeUpgradeInFlight, Restaurant, RestaurantTickSchedule, RestaurantTickState,
     SeatSlot, SeatAppeal, StaffActor, StaffStat, StatSnapshot, MoneyCutover, MoneyEvent,
+    DailyGoalState, RegularCustomer,
 };
 
 /// Manual backfill — install a tick schedule for every existing
@@ -4037,6 +4039,245 @@ pub fn claim_tip_bonus(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), S
     Ok(())
 }
 
+/// Patch B — the owner personally GREETS a seated guest (tap the 👋 badge).
+/// Effect is hospitality, not cash: a patience refill (+45 s, capped at the
+/// serve-patience base so it can't stack to infinity) and a small
+/// satisfaction bump (+0.4 avg-star-input per course ≈ a nudge, not a star).
+/// Once per guest (greeted flag), owner-gated, guest must still be in a
+/// patience-active pre-food/food state. Silent no-ops on every reject so a
+/// stale tap never spams the client console.
+#[reducer]
+pub fn greet_guest(ctx: &ReducerContext, guest_id: u64) -> Result<(), String> {
+    const PATIENCE_REFILL_MS: i64 = 45_000;
+    const PATIENCE_CAP_MS: i64 = 180_000; // SERVE_PATIENCE_BASE_MS
+    const SATISFACTION_BUMP_X100: i32 = 40;
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return Ok(()); };
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can greet guests".into());
+    }
+    if g.greeted { return Ok(()); }
+    if !matches!(g.state.as_str(), "seated" | "ordering" | "waitingForFood" | "eating") {
+        return Ok(()); // not at the table (walking / WC / leaving) — stale tap
+    }
+    let new_patience = (g.patience_ms + PATIENCE_REFILL_MS).min(PATIENCE_CAP_MS.max(g.patience_ms));
+    ctx.db.active_guest().id().update(ActiveGuest {
+        patience_ms: new_patience,
+        total_satisfaction_x100: g.total_satisfaction_x100.saturating_add(SATISFACTION_BUMP_X100),
+        greeted: true,
+        ..g
+    });
+    Ok(())
+}
+
+/// Patch B — the owner personally BUSES one dirty table (tap the 🧽 badge).
+/// Deletes that seat's dirty_pile rows — the dishes were already counted
+/// into the wash pool at settle time, so the piles are purely the visual
+/// "seat is unservable" marker; clearing them re-opens the seat exactly
+/// like a waiter's seat-clean trip (tick_seat_clean deletes the same rows
+/// and touches nothing else). Cooldown keeps it a helping hand, not a
+/// waiter replacement.
+#[reducer]
+pub fn bus_seat(ctx: &ReducerContext, restaurant_id: u64, seat_uid: String) -> Result<(), String> {
+    const MIN_INTERVAL_MICROS: i64 = 12_000_000; // 12 s between hand-bussed tables
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can bus tables".into());
+    }
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    if r.last_bus_seat_micros != 0 && now - r.last_bus_seat_micros < MIN_INTERVAL_MICROS {
+        return Ok(()); // too soon — silent no-op
+    }
+    let pile_ids: Vec<u64> = ctx.db.dirty_pile().restaurant_id().filter(restaurant_id)
+        .filter(|d| d.seat_uid == seat_uid)
+        .map(|d| d.id)
+        .collect();
+    if pile_ids.is_empty() { return Ok(()); } // already bussed (waiter beat the tap)
+    for id in pile_ids { ctx.db.dirty_pile().id().delete(id); }
+    ctx.db.restaurant().id().update(Restaurant {
+        last_bus_seat_micros: now,
+        ..r
+    });
+    Ok(())
+}
+
+/// Patch B — the owner STIRS THE POT on a cooking ticket (tap the 🍳 badge):
+/// jumps the cook clock forward by min(15 s, 20% of the cook time). Once per
+/// ticket (stirred flag). The clock advance rides the same state_clock_ms
+/// the tick already checks, so completion flows through the normal path.
+#[reducer]
+pub fn stir_ticket(ctx: &ReducerContext, ticket_id: u64) -> Result<(), String> {
+    const MAX_SHAVE_MS: i64 = 15_000;
+    let Some(t) = ctx.db.active_ticket().id().find(ticket_id) else { return Ok(()); };
+    let r = ctx.db.restaurant().id().find(t.restaurant_id)
+        .ok_or_else(|| "Ticket's restaurant not found".to_string())?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can stir".into());
+    }
+    if t.stirred || t.state != "cooking" { return Ok(()); }
+    let shave = MAX_SHAVE_MS.min(t.cook_seconds_ms / 5).max(0);
+    ctx.db.active_ticket().id().update(ActiveTicket {
+        state_clock_ms: t.state_clock_ms.saturating_add(shave),
+        stirred: true,
+        ..t
+    });
+    Ok(())
+}
+
+// ─── Patch C — daily goals ──────────────────────────────────────────────
+// Three goals per game day over counters the server ALREADY tracks
+// (cloud_daily_served / _revenue_cents / _tips_cents). Definitions are a
+// pure function of (restaurant_id, day, seat count) — the client mirrors
+// the same formula for display, only the CLAIM state needs a row.
+// MUST stay in lockstep with the client's dailyGoalsFor (DailyGoals.ts).
+
+/// (served_target, revenue_target_cents, tips_target_cents) for the day.
+/// Scales with seating capacity so goals stay meaningful from a starter
+/// diner to a 5-storey — roughly "fill ¾ of your seats over the day".
+/// ±20% deterministic jitter so days feel different.
+fn daily_goals_for(ctx: &ReducerContext, restaurant_id: u64, day: i64) -> (u32, i64, i64) {
+    let seats = ctx.db.seat_slot().restaurant_id().filter(restaurant_id).count().max(8) as i64;
+    let seed = (day as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ restaurant_id.rotate_left(17);
+    let mut h = seed;
+    h ^= h >> 30; h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 27; h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 31;
+    let jitter = |x: i64, salt: u64| -> i64 {
+        let j = ((h ^ salt).wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) % 41; // 0..40
+        x * (80 + j as i64) / 100 // 80%..120%
+    };
+    let served = jitter(seats * 3 / 4, 0xA1).max(6) as u32;
+    let revenue = jitter(seats * 3 / 4 * 1_500, 0xB2).max(5_000);   // ≈$15/served guest
+    let tips = jitter(seats * 3 / 4 * 180, 0xC3).max(500);          // ≈12% of revenue
+    (served, revenue, tips)
+}
+
+/// Claim one completed daily goal (slot 0=served, 1=revenue, 2=tips).
+/// Pays a server-fixed reward; completing ALL THREE in a day bumps the
+/// streak and lands a bonus supply-crate roll. Claim state resets lazily
+/// when a claim arrives on a newer day — no tick hook needed.
+#[reducer]
+pub fn claim_daily_goal(ctx: &ReducerContext, restaurant_id: u64, slot: u32) -> Result<(), String> {
+    const REWARD_CENTS: [i64; 3] = [4_000, 6_000, 10_000]; // $40 / $60 / $100
+    if slot > 2 { return Err("Bad goal slot".into()); }
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can claim goals".into());
+    }
+    // Today = the owner's current game day (same source tick_day_clock uses).
+    let today = ctx.db.player_save().identity().find(r.owner)
+        .map(|s| s.day_number as i64).unwrap_or(0);
+    let existing = ctx.db.daily_goal_state().restaurant_id().find(restaurant_id);
+    let (mut mask, mut streak, mut last_done) = match existing.as_ref() {
+        Some(g) if g.day_number == today => (g.claimed_mask, g.streak, g.last_completed_day),
+        Some(g) => (0u32, g.streak, g.last_completed_day), // stale day → lazy reset
+        None => (0u32, 0u32, 0i64),
+    };
+    if mask & (1 << slot) != 0 { return Ok(()); } // already claimed — silent
+    let (served_t, revenue_t, tips_t) = daily_goals_for(ctx, restaurant_id, today);
+    let met = match slot {
+        0 => (r.cloud_daily_served as i64) >= served_t as i64,
+        1 => r.cloud_daily_revenue_cents >= revenue_t,
+        _ => r.cloud_daily_tips_cents >= tips_t,
+    };
+    if !met { return Ok(()); } // not there yet — silent (client greys the button)
+    mask |= 1 << slot;
+    let reward = REWARD_CENTS[slot as usize];
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: r.cloud_money_cents.saturating_add(reward),
+        ..r
+    });
+    if let Some(rr) = ctx.db.restaurant().id().find(restaurant_id) {
+        record_money_event(ctx, restaurant_id, "goal", reward, rr.cloud_money_cents);
+    }
+    if mask == 0b111 {
+        streak = if last_done == today - 1 { streak.saturating_add(1) } else { 1 };
+        last_done = today;
+        // All three in one day → a bonus crate roll on the house.
+        grant_free_crate(ctx, restaurant_id);
+    }
+    let row = DailyGoalState {
+        restaurant_id, day_number: today, claimed_mask: mask, streak, last_completed_day: last_done,
+    };
+    if existing.is_some() {
+        ctx.db.daily_goal_state().restaurant_id().update(row);
+    } else {
+        ctx.db.daily_goal_state().insert(row);
+    }
+    Ok(())
+}
+
+// ─── Patch C — regulars ─────────────────────────────────────────────────
+
+/// Name pool for minted regulars — long enough that a 6-regular roster
+/// rarely collides; picks are hash-seeded (no rng in the sim tick).
+const REGULAR_NAMES: &[&str] = &[
+    "Mrs. Eleni", "Old Petros", "Nikos the Tailor", "Aunt Fofo", "Captain Vassilis",
+    "Maria from Upstairs", "Dr. Anna", "Yiannis the Postman", "Grandma Kiki", "Stavros",
+    "Sofia the Florist", "Uncle Takis", "Katerina", "Baker Manolis", "Miss Despina",
+];
+const MAX_REGULARS: usize = 6;
+
+/// Roll whether THIS spawn is a regular (~16%), minting up to MAX_REGULARS
+/// per restaurant. Returns (regular_id, name, stored archetype) — the
+/// archetype override keeps a regular's personality stable across visits.
+fn maybe_pick_regular(ctx: &ReducerContext, restaurant_id: u64, hash: u64) -> Option<(u64, String, String)> {
+    let roll = (hash.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) % 100;
+    if roll >= 16 { return None; }
+    let existing: Vec<RegularCustomer> = ctx.db.regular_customer()
+        .restaurant_id().filter(restaurant_id).collect();
+    // Mint while the roster is short (and on a sub-roll), else revisit.
+    if existing.len() < MAX_REGULARS && (existing.is_empty() || roll < 8) {
+        let taken: Vec<&str> = existing.iter().map(|r| r.name.as_str()).collect();
+        let start = (hash >> 7) as usize % REGULAR_NAMES.len();
+        let name = (0..REGULAR_NAMES.len())
+            .map(|i| REGULAR_NAMES[(start + i) % REGULAR_NAMES.len()])
+            .find(|n| !taken.contains(n))?;
+        let (arch, _, _, _) = pick_archetype(ctx, hash.rotate_left(23));
+        let inserted = ctx.db.regular_customer().insert(RegularCustomer {
+            id: 0,
+            restaurant_id,
+            name: name.to_string(),
+            archetype: arch.clone(),
+            loyalty: 0,
+            visits: 0,
+            created_at: ctx.timestamp,
+        });
+        return Some((inserted.id, name.to_string(), arch));
+    }
+    if existing.is_empty() { return None; }
+    let pick = &existing[(hash >> 11) as usize % existing.len()];
+    Some((pick.id, pick.name.clone(), pick.archetype.clone()))
+}
+
+/// Rollup hook — a regular's COMPLETED visit bumps loyalty. At 5 hearts
+/// they "bring friends": a free 45 s spawn surge (rides the boost field the
+/// spawner already honors), then settle back to 2 hearts so the loop keeps
+/// paying out without being farmable every visit.
+fn touch_regular_on_visit(ctx: &ReducerContext, g: &ActiveGuest) {
+    if g.regular_id == 0 { return; }
+    let Some(reg) = ctx.db.regular_customer().id().find(g.regular_id) else { return; };
+    let mut loyalty = (reg.loyalty + 1).min(5);
+    if loyalty >= 5 {
+        let now = ctx.timestamp.to_micros_since_unix_epoch();
+        if let Some(r) = ctx.db.restaurant().id().find(g.restaurant_id) {
+            ctx.db.restaurant().id().update(Restaurant {
+                boost_expires_at_micros: r.boost_expires_at_micros.max(now + 45_000_000),
+                ..r
+            });
+        }
+        loyalty = 2;
+    }
+    ctx.db.regular_customer().id().update(RegularCustomer {
+        loyalty,
+        visits: reg.visits.saturating_add(1),
+        ..reg
+    });
+}
+
 /// Retention — "supply crate", claimable every 3h (same cooldown shape as the
 /// starter grant). Grants ITEMS, not cash, so it can't inflate the economy:
 ///   • Ingredients — tops up each stocked ingredient to a modest floor. Never
@@ -7222,6 +7463,11 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
             // the host's local economy adopts via the Phase 7.7
             // delta subscription handler.
             accumulate_pending_visit_rollup(ctx, &g);
+            // Patch C — regulars: a completed visit bumps this regular's
+            // loyalty (and at 5 hearts fires the "brings friends" surge).
+            // Runs at THE despawn choke point so online + offline visits
+            // both count, right before the row disappears.
+            touch_regular_on_visit(ctx, &g);
             ctx.db.active_guest().id().delete(g.id);
             return;
         }
@@ -7924,6 +8170,9 @@ pub(crate) fn try_spawn_arrival_guest(
     variant: &str,
     door_x: f32,
     door_z: f32,
+    // Patch D — Some("critic") forces the archetype (critic sweep); None =
+    // the normal weighted roll. Forced spawns also skip the regulars roll.
+    forced_archetype: Option<&str>,
 ) -> bool {
     // Phase I (H.89) — RE-ENABLED with seat pre-assignment.
     //
@@ -7976,8 +8225,32 @@ pub(crate) fn try_spawn_arrival_guest(
     h ^= h >> 31;
     // H.38 — pick an archetype from the seeded catalog. Patience
     // multiplier + WC-use chance come from the archetype.
-    let (archetype_id, archetype_patience_mult, wc_chance_x100, _order_bias)
-        = pick_archetype(ctx, h);
+    // Patch D — a forced archetype (critic sweep) bypasses the weighted
+    // roll; its stats come from the catalog row, with the picker's own
+    // fallback stats if the catalog hasn't seeded yet.
+    // Patch C — otherwise, a small roll may make this spawn a REGULAR:
+    // a named repeat customer whose stored archetype overrides the roll
+    // (stable personality across visits).
+    let (mut archetype_id, mut archetype_patience_mult, mut wc_chance_x100, _order_bias) =
+        match forced_archetype {
+            Some(forced) => ctx.db.customer_archetype().archetype_id().find(forced.to_string())
+                .map(|a| (a.archetype_id, a.patience_mult_x100, a.wc_use_chance_x100, a.order_size_bias))
+                .unwrap_or_else(|| (forced.to_string(), 90, 55, 1)),
+            None => pick_archetype(ctx, h),
+        };
+    let mut regular_id: u64 = 0;
+    let mut regular_name: Option<String> = None;
+    if forced_archetype.is_none() {
+        if let Some((rid_reg, name, arch)) = maybe_pick_regular(ctx, restaurant_id, h.rotate_left(41)) {
+            regular_id = rid_reg;
+            regular_name = Some(name);
+            if let Some(a) = ctx.db.customer_archetype().archetype_id().find(arch.clone()) {
+                archetype_patience_mult = a.patience_mult_x100;
+                wc_chance_x100 = a.wc_use_chance_x100;
+            }
+            archetype_id = arch;
+        }
+    }
     let wc_roll = ((h >> 24) % 100) as i32;
     let will_use_toilet = wc_roll < wc_chance_x100 / 5; // ~20% of wc-prone
     let will_wash_only = !will_use_toilet && wc_roll < wc_chance_x100 * 4 / 5;
@@ -8185,6 +8458,9 @@ pub(crate) fn try_spawn_arrival_guest(
         washed_hands: false,
         wc_completed: false,
         on_stair: false,
+        greeted: false,
+        regular_id,
+        regular_name,
     });
     log::info!(
         "try_spawn_arrival_guest: spawned guest at seat {} in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
@@ -8353,7 +8629,7 @@ fn try_server_spawn_guest(ctx: &ReducerContext, rid: u64, now: Timestamp) {
     // Restaurant-local door anchor — NOT (0,0) (that's the room centre, which
     // popped offline walk-ins in mid-room). The door is the southern wall at
     // local (0, ~5.45), matching ERRAND_DOOR_INTERIOR_Z + the door_z default.
-    let spawned = try_spawn_arrival_guest(ctx, rid, variant, 0.0, 5.45);
+    let spawned = try_spawn_arrival_guest(ctx, rid, variant, 0.0, 5.45, None);
     if spawned {
         ctx.db.restaurant().id().update(Restaurant {
             last_guest_spawn_micros: now_micros,
@@ -9554,6 +9830,9 @@ pub fn spawn_guest(
         wc_completed: false,
         // Phase M.17 — not mid-stair at spawn.
         on_stair: false,
+        greeted: false,
+        regular_id: 0,
+        regular_name: None,
     });
     Ok(())
 }
@@ -10088,6 +10367,7 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
         pickup_z: 0.0,
         pickup_floor: 0,
         created_at: ctx.timestamp,
+        stirred: false,
     });
     log::info!(
         "auto_place_next_course: guest {} course {} → ticket {} ({}@{})",
@@ -10268,6 +10548,7 @@ pub fn place_order(
         pickup_z: 0.0,
         pickup_floor: 0,
         created_at: ctx.timestamp,
+        stirred: false,
     });
     Ok(())
 }

@@ -329,6 +329,41 @@ const TABS: HelpTab[] = [
           "Out visiting other restaurants? Look for a paper clue hidden in each and click it. Collect a clue from 6 DIFFERENT restaurants to earn a free Supply Crate. A 🔎 counter on the visit bar tracks your progress; each restaurant counts once per set.",
         ],
       },
+      { kind: "h", text: "Hands-on service 👋🧽🥄" },
+      {
+        kind: "ul",
+        items: [
+          "Small tap badges appear over your restaurant while you play: 👋 greet a seated guest (a warm welcome buys them extra patience), 🧽 bus a dirty table yourself (frees the seat without waiting for a waiter — one table every few seconds), and 🥄 stir the pot on a cooking dish (shaves a few seconds, once per dish). All optional — the crew handles everything if you don't.",
+        ],
+      },
+      { kind: "h", text: "Daily goals 📋" },
+      {
+        kind: "ul",
+        items: [
+          "Three goals each game day (serve guests, earn revenue, collect tips) sized to your restaurant, in the sidebar card. Claim each for cash; finish ALL THREE for a bonus Supply Crate roll and a day streak 🔥.",
+        ],
+      },
+      { kind: "h", text: "Regulars ❤️" },
+      {
+        kind: "ul",
+        items: [
+          "Serve people well and some become named regulars — you'll see \"Mrs. Eleni 🙂\" in their bubble when they're back. Every completed visit earns them a loyalty heart; at 5 hearts they bring their friends (a free mini-rush) and stay loyal.",
+        ],
+      },
+      { kind: "h", text: "Critic sweep 🕵️" },
+      {
+        kind: "ul",
+        items: [
+          "Every so often a food critic tours the WHOLE street — announced about 10 minutes ahead, so everyone gets a banner and time to tidy up (bus tables, restock, wash up). The critic's review counts 3× on your rating, and they tip 3× when impressed.",
+        ],
+      },
+      { kind: "h", text: "Timers & the bell ⏱🔔" },
+      {
+        kind: "ul",
+        items: [
+          "Active timers (recipe upgrade, staff training, crate cooldown) float top-center — click a chip to jump to its panel. The 🔔 bell (bottom-right) collects everything that happened: finished upgrades, crate ready, VIPs, critic warnings, claimable goals. Click a notification to jump to the thing.",
+        ],
+      },
     ],
   },
   // ────────────────────────────────────────────────────────────────

@@ -311,6 +311,11 @@ interface ActiveGuest {
    * guest's reservations would leak silently — the panel showed
    * dishes "disappearing" as the inventory drifted down. */
   dishesSettled?: boolean;
+  /** Patch B — owner already greeted this guest (👋 badge shown until
+   * true). Set optimistically on tap; round-trips via the server row. */
+  greeted?: boolean;
+  /** Patch C — non-null = a named regular; shown as a bubble prefix. */
+  regularName?: string | null;
   // Personality archetype rolled on spawn. Affects patience, order size,
   // and tip multiplier.
   archetype: CustomerArchetype;
@@ -798,7 +803,9 @@ const SEAT_CLEAN_SECONDS = 4.0;
  * a drink-only table — that way the player can see at a glance which
  * customers are using the lounge / coffee corner. */
 function guestLabel(g: ActiveGuest, drinkTable: boolean): string {
-  const prefix = g.archetype.shortLabel;
+  // Patch C — regulars carry their NAME in the bubble ("Mrs. Eleni 🙂 …")
+  // so familiar faces read as familiar.
+  const prefix = g.regularName ? `${g.regularName} ${g.archetype.shortLabel}` : g.archetype.shortLabel;
   switch (g.state) {
     case "walkingIn":      return "";
     case "walkingToWait":  return ""; // walking to the outdoor line — no bubble
@@ -2380,6 +2387,8 @@ export class GuestSpawner {
       // top-tier pieces to pay for the phantoms). Server also clears the
       // CSV at settle now — this flag is the belt to that suspender.
       dishesSettled: row.dishesSettled,
+      greeted: row.greeted,
+      regularName: row.regularName,
       serverMirrorId: row.id,
       // Phase M.16 — seed the guest-cutover cloud pose/state from THIS row so
       // renderGuestFromServer (update()'s guestMove branch) anchors the body to
@@ -2473,7 +2482,11 @@ export class GuestSpawner {
    * guest with a label + a panic flag so the bubble can flash red.
    * Looks up the seated table's surface so drink-table guests render
    * with the 🥤 icon instead of 🍴 / 📋. */
-  snapshotStatus(): { id: string; character: AnimatedCharacter; label: string; panic: boolean; eating: boolean }[] {
+  snapshotStatus(): {
+    id: string; character: AnimatedCharacter; label: string; panic: boolean; eating: boolean;
+    state: GuestState; serverId: bigint | undefined; greeted: boolean; archetypeId: string;
+    regularName: string | null;
+  }[] {
     return this.guests.map((g) => ({
       id: g.id,
       character: g.character,
@@ -2483,7 +2496,21 @@ export class GuestSpawner {
       // green reliably (the old `label.startsWith("🍴")` check never matched —
       // the archetype prefix comes first).
       eating: g.state === "eating",
+      // Patch A/B — extra fields for the greet badges + notification feed
+      // (purely additive; TipHearts' GuestStatusEntry is a structural subset).
+      state: g.state,
+      serverId: g.serverMirrorId,
+      greeted: g.greeted === true,
+      archetypeId: g.archetype.id,
+      regularName: g.regularName ?? null,
     }));
+  }
+
+  /** Patch B — optimistic greet latch: hides the 👋 badge immediately on
+   * tap (the server's greeted flag round-trips only at the next import). */
+  markGreetedLocal(localGuestId: string): void {
+    const g = this.guests.find((x) => x.id === localGuestId);
+    if (g) g.greeted = true;
   }
 
   /** Snapshot for the PersonalSpace pass. Guests are pinned while seated;

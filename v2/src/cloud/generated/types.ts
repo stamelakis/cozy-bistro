@@ -82,6 +82,9 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   washedHands: __t.bool(),
   wcCompleted: __t.bool(),
   onStair: __t.bool(),
+  greeted: __t.bool(),
+  regularId: __t.u64(),
+  regularName: __t.option(__t.string()),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
@@ -111,6 +114,7 @@ export const ActiveTicket = __t.object("ActiveTicket", {
   pickupZ: __t.f32(),
   pickupFloor: __t.u32(),
   createdAt: __t.timestamp(),
+  stirred: __t.bool(),
 });
 export type ActiveTicket = __Infer<typeof ActiveTicket>;
 
@@ -185,6 +189,15 @@ export const CustomerArchetypeDef = __t.object("CustomerArchetypeDef", {
   wcUseChanceX100: __t.i32(),
 });
 export type CustomerArchetypeDef = __Infer<typeof CustomerArchetypeDef>;
+
+export const DailyGoalState = __t.object("DailyGoalState", {
+  restaurantId: __t.u64(),
+  dayNumber: __t.i64(),
+  claimedMask: __t.u32(),
+  streak: __t.u32(),
+  lastCompletedDay: __t.i64(),
+});
+export type DailyGoalState = __Infer<typeof DailyGoalState>;
 
 export const DirtyPile = __t.object("DirtyPile", {
   id: __t.u64(),
@@ -473,6 +486,17 @@ export const RecipeUpgradeInFlight = __t.object("RecipeUpgradeInFlight", {
 });
 export type RecipeUpgradeInFlight = __Infer<typeof RecipeUpgradeInFlight>;
 
+export const RegularCustomer = __t.object("RegularCustomer", {
+  id: __t.u64(),
+  restaurantId: __t.u64(),
+  name: __t.string(),
+  archetype: __t.string(),
+  loyalty: __t.u32(),
+  visits: __t.u32(),
+  createdAt: __t.timestamp(),
+});
+export type RegularCustomer = __Infer<typeof RegularCustomer>;
+
 export const Restaurant = __t.object("Restaurant", {
   id: __t.u64(),
   owner: __t.identity(),
@@ -527,6 +551,7 @@ export const Restaurant = __t.object("Restaurant", {
   lastTipBonusMicros: __t.i64(),
   lastCrateMicros: __t.i64(),
   lastCrateGift: __t.option(__t.string()),
+  lastBusSeatMicros: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 
@@ -670,4 +695,20 @@ export const WeatherState = __t.object("WeatherState", {
   since: __t.timestamp(),
 });
 export type WeatherState = __Infer<typeof WeatherState>;
+
+export const WorldEvent = __t.object("WorldEvent", {
+  id: __t.u32(),
+  kind: __t.string(),
+  state: __t.string(),
+  announceAtMicros: __t.i64(),
+  firesAtMicros: __t.i64(),
+  lastFiredMicros: __t.i64(),
+});
+export type WorldEvent = __Infer<typeof WorldEvent>;
+
+export const WorldEventSchedule = __t.object("WorldEventSchedule", {
+  id: __t.u64(),
+  scheduledAt: __t.scheduleAt(),
+});
+export type WorldEventSchedule = __Infer<typeof WorldEventSchedule>;
 

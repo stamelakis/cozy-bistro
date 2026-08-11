@@ -50,14 +50,17 @@ import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
 import BootstrapSimSchedulesReducer from "./bootstrap_sim_schedules_reducer";
 import BootstrapWeatherReducer from "./bootstrap_weather_reducer";
+import BootstrapWorldEventsReducer from "./bootstrap_world_events_reducer";
 import BumpCloudMoneyReducer from "./bump_cloud_money_reducer";
 import BumpDishwarePoolReducer from "./bump_dishware_pool_reducer";
 import BumpPantryStockReducer from "./bump_pantry_stock_reducer";
+import BusSeatReducer from "./bus_seat_reducer";
 import CancelRecipeUpgradeReducer from "./cancel_recipe_upgrade_reducer";
 import CancelTicketReducer from "./cancel_ticket_reducer";
 import ChargeRentReducer from "./charge_rent_reducer";
 import ClaimAchievementReducer from "./claim_achievement_reducer";
 import ClaimBuildingReducer from "./claim_building_reducer";
+import ClaimDailyGoalReducer from "./claim_daily_goal_reducer";
 import ClaimDirtyPileReducer from "./claim_dirty_pile_reducer";
 import ClaimLowBalanceGrantReducer from "./claim_low_balance_grant_reducer";
 import ClaimRecycleReducer from "./claim_recycle_reducer";
@@ -80,6 +83,7 @@ import DeleteLayoutPresetReducer from "./delete_layout_preset_reducer";
 import DeleteRestaurantReducer from "./delete_restaurant_reducer";
 import DeliverTicketReducer from "./deliver_ticket_reducer";
 import FinishCookingReducer from "./finish_cooking_reducer";
+import GreetGuestReducer from "./greet_guest_reducer";
 import InviteCoOwnerReducer from "./invite_co_owner_reducer";
 import LoginReducer from "./login_reducer";
 import LogoutReducer from "./logout_reducer";
@@ -149,6 +153,7 @@ import SignGuestbookReducer from "./sign_guestbook_reducer";
 import SignUpReducer from "./sign_up_reducer";
 import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
+import StirTicketReducer from "./stir_ticket_reducer";
 import StoreFurnitureReducer from "./store_furniture_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import SyncCloudDailyTotalsReducer from "./sync_cloud_daily_totals_reducer";
@@ -178,6 +183,7 @@ import ChatMessageRow from "./chat_message_table";
 import ClueHuntRow from "./clue_hunt_table";
 import CoOwnerRow from "./co_owner_table";
 import CustomerArchetypeRow from "./customer_archetype_table";
+import DailyGoalStateRow from "./daily_goal_state_table";
 import DirtyPileRow from "./dirty_pile_table";
 import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
@@ -208,6 +214,7 @@ import RecipeIngredientsRow from "./recipe_ingredients_table";
 import RecipeLevelRow from "./recipe_level_table";
 import RecipeMetaRow from "./recipe_meta_table";
 import RecipeUpgradeInFlightRow from "./recipe_upgrade_in_flight_table";
+import RegularCustomerRow from "./regular_customer_table";
 import RestaurantRow from "./restaurant_table";
 import RestaurantReviewRow from "./restaurant_review_table";
 import RestaurantTickStateRow from "./restaurant_tick_state_table";
@@ -220,6 +227,7 @@ import StatSnapshotRow from "./stat_snapshot_table";
 import VisitEventRow from "./visit_event_table";
 import VisitReactionRow from "./visit_reaction_table";
 import WeatherStateRow from "./weather_state_table";
+import WorldEventRow from "./world_event_table";
 
 /** Type-only namespace exports for generated type groups. */
 
@@ -393,6 +401,17 @@ const tablesSchema = __schema({
       { name: 'customer_archetype_archetype_id_key', constraint: 'unique', columns: ['archetypeId'] },
     ],
   }, CustomerArchetypeRow),
+  daily_goal_state: __table({
+    name: 'daily_goal_state',
+    indexes: [
+      { accessor: 'restaurant_id', name: 'daily_goal_state_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'daily_goal_state_restaurant_id_key', constraint: 'unique', columns: ['restaurantId'] },
+    ],
+  }, DailyGoalStateRow),
   dirty_pile: __table({
     name: 'dirty_pile',
     indexes: [
@@ -795,6 +814,20 @@ const tablesSchema = __schema({
       { name: 'recipe_upgrade_in_flight_key_key', constraint: 'unique', columns: ['key'] },
     ],
   }, RecipeUpgradeInFlightRow),
+  regular_customer: __table({
+    name: 'regular_customer',
+    indexes: [
+      { accessor: 'id', name: 'regular_customer_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'restaurant_id', name: 'regular_customer_restaurant_id_idx_btree', algorithm: 'btree', columns: [
+        'restaurantId',
+      ] },
+    ],
+    constraints: [
+      { name: 'regular_customer_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, RegularCustomerRow),
   restaurant: __table({
     name: 'restaurant',
     indexes: [
@@ -963,6 +996,17 @@ const tablesSchema = __schema({
       { name: 'weather_state_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, WeatherStateRow),
+  world_event: __table({
+    name: 'world_event',
+    indexes: [
+      { accessor: 'id', name: 'world_event_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'world_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, WorldEventRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
@@ -983,14 +1027,17 @@ const reducersSchema = __reducers(
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),
   __reducerSchema("bootstrap_sim_schedules", BootstrapSimSchedulesReducer),
   __reducerSchema("bootstrap_weather", BootstrapWeatherReducer),
+  __reducerSchema("bootstrap_world_events", BootstrapWorldEventsReducer),
   __reducerSchema("bump_cloud_money", BumpCloudMoneyReducer),
   __reducerSchema("bump_dishware_pool", BumpDishwarePoolReducer),
   __reducerSchema("bump_pantry_stock", BumpPantryStockReducer),
+  __reducerSchema("bus_seat", BusSeatReducer),
   __reducerSchema("cancel_recipe_upgrade", CancelRecipeUpgradeReducer),
   __reducerSchema("cancel_ticket", CancelTicketReducer),
   __reducerSchema("charge_rent", ChargeRentReducer),
   __reducerSchema("claim_achievement", ClaimAchievementReducer),
   __reducerSchema("claim_building", ClaimBuildingReducer),
+  __reducerSchema("claim_daily_goal", ClaimDailyGoalReducer),
   __reducerSchema("claim_dirty_pile", ClaimDirtyPileReducer),
   __reducerSchema("claim_low_balance_grant", ClaimLowBalanceGrantReducer),
   __reducerSchema("claim_recycle", ClaimRecycleReducer),
@@ -1013,6 +1060,7 @@ const reducersSchema = __reducers(
   __reducerSchema("delete_restaurant", DeleteRestaurantReducer),
   __reducerSchema("deliver_ticket", DeliverTicketReducer),
   __reducerSchema("finish_cooking", FinishCookingReducer),
+  __reducerSchema("greet_guest", GreetGuestReducer),
   __reducerSchema("invite_co_owner", InviteCoOwnerReducer),
   __reducerSchema("login", LoginReducer),
   __reducerSchema("logout", LogoutReducer),
@@ -1082,6 +1130,7 @@ const reducersSchema = __reducers(
   __reducerSchema("sign_up", SignUpReducer),
   __reducerSchema("spawn_guest", SpawnGuestReducer),
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),
+  __reducerSchema("stir_ticket", StirTicketReducer),
   __reducerSchema("store_furniture", StoreFurnitureReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("sync_cloud_daily_totals", SyncCloudDailyTotalsReducer),

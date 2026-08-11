@@ -46,6 +46,11 @@ import { CloudModal } from "../ui/CloudModal";
 import { FloatingText } from "../ui/FloatingText";
 import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { TipHearts } from "../ui/TipHearts";
+import { NotificationFeed } from "../ui/NotificationFeed";
+import { TimerTray, type TimerItem } from "../ui/TimerTray";
+import { TapBadges } from "../ui/TapBadges";
+import { GoalsWidget } from "../ui/GoalsWidget";
+import { recipes as recipeCatalog } from "../data/recipes";
 import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
 import { ErrandRouter } from "./ErrandRouter";
@@ -146,6 +151,26 @@ export class Engine {
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly tipHearts: TipHearts;
+  // Patch A — timer tray + notification feed. Patch B — tap badges.
+  // Patch C — daily goals card.
+  readonly notifFeed: NotificationFeed;
+  readonly timerTray: TimerTray;
+  readonly greetBadges: TapBadges;
+  readonly busBadges: TapBadges;
+  readonly stirBadges: TapBadges;
+  private goalsWidget?: GoalsWidget;
+  /** Edge-trigger state for the 1 Hz notification detections. */
+  private readonly feedSeen = {
+    upgradeId: null as string | null,
+    trainingId: null as string | null,
+    crateWasReady: false,
+    dirtyOverwhelming: false,
+    worldEventState: "idle",
+    vipIds: new Set<string>(),
+    regularIds: new Set<string>(),
+    goalSlotsNotified: new Set<string>(),
+  };
+  private rushPreTimer: number | null = null;
   readonly sfx: SfxPlayer;
   readonly saver: SaveSystem;
   readonly cloud: SpacetimeClient;
@@ -626,6 +651,10 @@ export class Engine {
           (serverId) => this.spawner?.findLocalGuestIdByServerId(serverId),
         );
       }
+      // Patch A — 1 Hz edge-triggered notification detections (upgrade /
+      // training done, crate ready, dirty pile, VIP, regulars, critic
+      // sweep, claimable goals). Cheap: a handful of cache reads.
+      this.updateNotificationFeed();
     }, 1000);
     // SfxPlayer is constructed early — before the HUD — because the
     // HUD's volume slider reads its initial value from
@@ -652,6 +681,9 @@ export class Engine {
     // are the first thing the eye lands on. Constructed first so
     // its DOM nodes appear above the HUD's stacked sections.
     this.expandWidget = new ExpandWidget(this.sidebar.body, this.game, this.cloud);
+    // Patch C — daily goals card (targets mirrored from the server formula,
+    // claims validated server-side).
+    this.goalsWidget = new GoalsWidget(this.sidebar.body, this.cloud, () => this.game.day.getDayNumber());
     this.sidebar.addSeparator();
     this.hud = new Hud(this.sidebar.body, this.game, {
       getCount: () => this.spawner?.getGuestsInsideCount() ?? 0,
@@ -1194,6 +1226,40 @@ export class Engine {
       this.floatingText.pop(gx, gz, "+$5", "#ffd966", floor);
       this.sfx?.ding?.();
     };
+    // Patch A — notification feed (bell + toasts) and the timer tray.
+    this.notifFeed = new NotificationFeed(container);
+    this.timerTray = new TimerTray(container, () => this.buildTimerItems());
+    // Patch B — the three hands-on tap badges. Every tap's effect is a
+    // server reducer (once-per-guest / cooldown / once-per-ticket).
+    this.greetBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
+      icon: "👋",
+      title: "Greet this guest — a warm welcome buys patience",
+      onTap: (localId) => {
+        const sid = this.spawner?.lookupGuestServerId(localId);
+        if (sid != null) this.cloud.greetGuest(sid);
+        this.spawner?.markGreetedLocal(localId);
+        this.sfx?.ding?.();
+      },
+    });
+    this.busBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
+      icon: "🧽",
+      title: "Bus this table yourself",
+      onTap: (seatUid) => {
+        this.cloud.busSeat(seatUid);
+        this.sfx?.ding?.();
+      },
+    });
+    this.stirBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
+      icon: "🥄",
+      title: "Stir the pot — shave a few seconds off this dish",
+      onTap: (ticketId) => {
+        try { this.cloud.stirTicket(BigInt(ticketId)); } catch { /* bad id */ }
+        this.sfx?.ding?.();
+      },
+    });
+    for (const b of [this.greetBadges, this.busBadges, this.stirBadges]) {
+      b.getFocusedFloor = () => this.scene.getFocusedStorey();
+    }
     // Phase 9.37 — gameplay pops (+$N, tips, ratings, cleaning) follow the
     // same focused-floor filter as the bubbles, so other floors' pops
     // don't leak into the view.
@@ -3249,18 +3315,158 @@ export class Engine {
 
   /** Start the recurring random-rush scheduler once. Idempotent — re-entrant
    * enterGame calls won't stack timers. */
+  /** Patch A — the timer tray's data provider (~5 Hz). Reads the SERVER-
+   * authoritative timers: the in-flight recipe upgrade, the training staff
+   * member, and the supply-crate cooldown. Chips click through to the
+   * owning panel. */
+  private buildTimerItems(): TimerItem[] {
+    const items: TimerItem[] = [];
+    const upgId = this.game.getCurrentlyTrainingRecipeId();
+    if (upgId) {
+      const recipe = recipeCatalog.find((r) => r.id === upgId);
+      if (recipe) {
+        items.push({
+          icon: "⚡",
+          label: `${recipe.name} → L${this.game.cooking.getRecipeUpgradeLevel(recipe) + 1}`,
+          remainingS: this.game.getRecipeTrainingRemainingSeconds(recipe) ?? 0,
+          onClick: () => this.upgradeModal.show(),
+        });
+      }
+    }
+    const memberId = this.game.getCurrentlyTrainingMemberId();
+    if (memberId) {
+      const m = this.game.staff.getMember(memberId);
+      if (m) {
+        items.push({
+          icon: "🎓",
+          label: `${m.name} → L${(m.upgradeLevel ?? 0) + 1}`,
+          remainingS: this.game.getMemberTrainingRemainingSeconds(memberId) ?? 0,
+          onClick: () => this.staffModal.show(),
+        });
+      }
+    }
+    if (this.cloud.hasRestaurantContext()) {
+      const crateS = this.cloud.getCrateReadyInSeconds();
+      if (crateS > 0 && crateS < 3 * 3600) {
+        items.push({ icon: "🎁", label: "Supply crate", remainingS: crateS });
+      }
+    }
+    return items;
+  }
+
+  /** Patch A — 1 Hz edge-triggered event detection feeding the 🔔. Every
+   * push is an EDGE (state transition), never a level, so the feed stays
+   * quiet unless something actually happened. */
+  private updateNotificationFeed(): void {
+    const seen = this.feedSeen;
+    // Recipe upgrade finished (in-flight id disappeared).
+    const curUpg = this.game.getCurrentlyTrainingRecipeId();
+    if (seen.upgradeId && !curUpg) {
+      const r = recipeCatalog.find((x) => x.id === seen.upgradeId);
+      this.notifFeed.push({
+        icon: "⚡",
+        text: `${r?.name ?? "Recipe"} upgrade finished!`,
+        action: () => this.upgradeModal.show(),
+        dedupeKey: `upg-done-${seen.upgradeId}`,
+      });
+    }
+    seen.upgradeId = curUpg;
+    // Staff training finished.
+    const curTrain = this.game.getCurrentlyTrainingMemberId();
+    if (seen.trainingId && !curTrain) {
+      const m = this.game.staff.getMember(seen.trainingId);
+      this.notifFeed.push({
+        icon: "🎓",
+        text: `${m?.name ?? "Your staff member"} finished training!`,
+        action: () => this.staffModal.show(),
+        dedupeKey: `train-done-${seen.trainingId}`,
+      });
+    }
+    seen.trainingId = curTrain;
+    // Supply crate came off cooldown.
+    if (this.cloud.hasRestaurantContext()) {
+      const ready = this.cloud.getCrateReadyInSeconds() <= 0;
+      if (ready && !seen.crateWasReady) {
+        this.notifFeed.push({ icon: "🎁", text: "Supply crate is ready — open it!", dedupeKey: "crate-ready", dedupeMs: 60_000 });
+      }
+      seen.crateWasReady = ready;
+    }
+    // Dirty-dish pile crossed the "overwhelming" line.
+    const over = this.game.isDishPileOverwhelming();
+    if (over && !seen.dirtyOverwhelming) {
+      this.notifFeed.push({
+        icon: "🍽",
+        text: "Dirty dishes are piling up — ratings are suffering!",
+        action: () => this.pantryModal.show(),
+        dedupeKey: "dirty-over",
+      });
+    }
+    seen.dirtyOverwhelming = over;
+    // VIPs + regulars walking in (scan the live snapshot; dedupe by id).
+    if (this.spawner) {
+      for (const e of this.spawner.snapshotStatus()) {
+        if (e.archetypeId === "vip" && !seen.vipIds.has(e.id)) {
+          seen.vipIds.add(e.id);
+          this.notifFeed.push({ icon: "🌟", text: "A VIP just walked in — treat them well!", dedupeKey: `vip-${e.id}` });
+        }
+        if (e.regularName && !seen.regularIds.has(e.id)) {
+          seen.regularIds.add(e.id);
+          this.notifFeed.push({ icon: "❤️", text: `${e.regularName} is back!`, dedupeKey: `reg-${e.id}` });
+        }
+      }
+      if (seen.vipIds.size > 300) seen.vipIds.clear();
+      if (seen.regularIds.size > 300) seen.regularIds.clear();
+    }
+    // Patch D — critic sweep world event (street-wide).
+    const ev = this.cloud.getWorldEvent();
+    if (ev && ev.kind === "critic_sweep") {
+      if (ev.state === "announced" && seen.worldEventState !== "announced") {
+        const minutes = Math.max(1, Math.round((ev.firesAtMicros / 1000 - Date.now()) / 60_000));
+        showEventBanner(`A food critic is touring the street — arrives in ~${minutes} min!`, { icon: "🕵️", accent: "#ffd0d0", ms: 6000 });
+        this.notifFeed.push({
+          icon: "🕵️",
+          text: `Critic sweep announced — ~${minutes} min to tidy up (bus tables, restock)!`,
+          dedupeKey: `critic-${ev.firesAtMicros}`,
+        });
+      } else if (ev.state === "idle" && seen.worldEventState === "announced") {
+        this.notifFeed.push({ icon: "🕵️", text: "The critic has arrived. Best behavior!", dedupeKey: `critic-fired-${ev.lastFiredMicros}` });
+      }
+      seen.worldEventState = ev.state;
+    }
+    // Patch C — a daily goal just became claimable (once per day+slot).
+    if (this.cloud.hasRestaurantContext()) {
+      const day = this.game.day.getDayNumber();
+      for (const g of this.cloud.getDailyGoals(day)) {
+        const key = `${day}:${g.slot}`;
+        if (g.claimable && !seen.goalSlotsNotified.has(key)) {
+          seen.goalSlotsNotified.add(key);
+          this.notifFeed.push({ icon: "📋", text: `Daily goal ready to claim: ${g.label} (+$${g.rewardCents / 100})`, dedupeKey: `goal-${key}` });
+        }
+      }
+      if (seen.goalSlotsNotified.size > 60) seen.goalSlotsNotified.clear();
+    }
+  }
+
   private startRushScheduler(): void {
     if (this.rushScheduled) return;
     this.rushScheduled = true;
     this.scheduleNextRush();
   }
 
-  /** Queue the next rush at a random 8–16 min from now. */
+  /** Queue the next rush at a random 8–16 min from now. Patch A — also
+   * arm a 30-second HEADS-UP so the player can staff up / restock before
+   * the surge lands (appointment beats surprise). */
   private scheduleNextRush(): void {
     if (this.rushTimer != null) window.clearTimeout(this.rushTimer);
+    if (this.rushPreTimer != null) window.clearTimeout(this.rushPreTimer);
     const MIN_MS = 8 * 60_000, MAX_MS = 16 * 60_000;
     const delay = MIN_MS + Math.random() * (MAX_MS - MIN_MS);
     this.rushTimer = window.setTimeout(() => this.fireRush(), delay);
+    this.rushPreTimer = window.setTimeout(() => {
+      if (!this.game.restaurantOpen) return;
+      showEventBanner("Rush hour in 30 seconds — battle stations!", { icon: "📣", accent: "#ffd966", ms: 4000 });
+      this.notifFeed.push({ icon: "📣", text: "Rush hour in 30 seconds!", dedupeKey: "rush-pre", dedupeMs: 60_000 });
+    }, Math.max(1_000, delay - 30_000));
   }
 
   /** Fire a free 60s rush IF the place is open + not already boosting (so the
@@ -4860,7 +5066,47 @@ export class Engine {
     // through the visit camera — a glitchy floating heart over the neighbor's
     // roof. Empty update despawns any live heart.
     if (this.spawner) {
-      this.tipHearts.update(this.visitMode.isVisiting() ? [] : this.spawner.snapshotStatus());
+      const visiting = this.visitMode.isVisiting();
+      const snap = visiting ? [] : this.spawner.snapshotStatus();
+      this.tipHearts.update(snap);
+      // Patch B — the three tap-badge layers ride the same snapshot/gate.
+      const storeyH = WorldScene.getStoreyHeight();
+      this.greetBadges.update(snap
+        .filter((e) => !e.greeted && e.serverId != null
+          && (e.state === "seated" || e.state === "waitingForFood" || e.state === "eating"))
+        .map((e) => ({
+          key: e.id,
+          x: e.character.groundPos.x,
+          y: e.character.root.position.y + 2.15, // above the status bubble
+          z: e.character.groundPos.y,
+          floor: Math.round(e.character.root.position.y / storeyH),
+        })));
+      if (visiting) {
+        this.busBadges.update([]);
+        this.stirBadges.update([]);
+      } else {
+        // One 🧽 per dirty SEAT (piles grouped), anchored at the pile spot.
+        const bySeat = new Map<string, { x: number; z: number; floor: number }>();
+        for (const p of this.cloud.listDirtyPiles()) {
+          if (!p.seatUid || bySeat.has(p.seatUid)) continue;
+          bySeat.set(p.seatUid, { x: p.x, z: p.z, floor: p.floor });
+        }
+        this.busBadges.update(Array.from(bySeat, ([seatUid, pos]) => ({
+          key: seatUid,
+          x: pos.x,
+          y: 1.15 + pos.floor * storeyH, // just above the table top
+          z: pos.z,
+          floor: pos.floor,
+        })));
+        // One 🥄 per cooking, unstirred ticket — anchored on its chef.
+        this.stirBadges.update(this.cloud.listCookingUnstirredTickets().map((t) => ({
+          key: String(t.ticketId),
+          x: t.x,
+          y: 2.1 + t.floor * storeyH, // above the chef's head
+          z: t.z,
+          floor: t.floor,
+        })));
+      }
     }
     this.saver.update(rawDt);
     // Phase 9.42 — health badge (~1 Hz internally), reads the server scan.
@@ -4903,6 +5149,9 @@ export class Engine {
       this.expandWidget.update();
       this.stockWidget.update();
       this.cameraControls.update();
+      // Patch A/C — timer chips + daily-goals card ride the same ~5 Hz tick.
+      this.timerTray.update();
+      this.goalsWidget?.update();
       // Rating sign mounted on the door lintel — keeps the visible star
       // count in sync with the actual restaurant rating.
       this.scene.updateRatingSign(this.game.reputation.getAverageRating());
