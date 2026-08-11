@@ -3214,8 +3214,10 @@ export class WorldScene {
     // both NS edges without running out of slots. Each scenery
     // house is ~15 meshes; 300 * 15 = ~4500 draw calls — within
     // the GPU budget on mid-range machines (was 320 originally,
-    // 180 was a perf-reaction overshoot).
-    const HARD_CAP = 300;
+    // 180 was a perf-reaction overshoot). 2026-08: trimmed to 255
+    // (−15%, paired with the skip-roll bump below) as a gentle
+    // first step toward a lighter map — revisit after profiling.
+    const HARD_CAP = 255;
 
     // PHASE 1 — collect every house's PLAN as data (no geometry yet).
     // The merge pass at the end ingests the final, post-shop-conversion
@@ -3263,9 +3265,10 @@ export class WorldScene {
         const rotY = side > 0 ? Math.PI : 0;
         for (let x = -STREET_EXTENT; x <= STREET_EXTENT; x += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
-          // Light random skip so the row isn't a perfectly uniform
-          // wall (~10 % gaps).
-          if (rng() < 0.10) continue;
+          // Random skip so the row isn't a perfectly uniform wall.
+          // 2026-08: bumped ~10% → ~22% gaps (with HARD_CAP 300→255)
+          // to lighten the decorative-building load a notch.
+          if (rng() < 0.22) continue;
           const size = 4 + Math.floor(rng() * 3); // 4..6 tiles wide
           const storeys = 1 + Math.floor(rng() * 2); // 1..2
           // Size-aware perpendicular offset: house's street-facing
@@ -3293,7 +3296,7 @@ export class WorldScene {
         const rotY = side > 0 ? -Math.PI / 2 : Math.PI / 2;
         for (let z = -STREET_EXTENT; z <= STREET_EXTENT; z += HOUSE_STEP) {
           if (placed >= HARD_CAP) break;
-          if (rng() < 0.10) continue;
+          if (rng() < 0.22) continue; // matches the EW loop's lighter density
           const size = 4 + Math.floor(rng() * 3);
           const storeys = 1 + Math.floor(rng() * 2);
           // Same size-aware perpendicular offset as the EW loop —
