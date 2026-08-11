@@ -50,6 +50,7 @@ import { NotificationFeed } from "../ui/NotificationFeed";
 import { TimerTray, type TimerItem } from "../ui/TimerTray";
 import { TapBadges } from "../ui/TapBadges";
 import { GoalsWidget } from "../ui/GoalsWidget";
+import { FeedbackModal } from "../ui/FeedbackModal";
 import { recipes as recipeCatalog } from "../data/recipes";
 import { SfxPlayer } from "../ui/SfxPlayer";
 import { StaffRouter } from "./StaffRouter";
@@ -151,6 +152,7 @@ export class Engine {
   readonly floatingText: FloatingText;
   readonly statusBubbles: StatusBubbles;
   readonly tipHearts: TipHearts;
+  private feedbackModal!: FeedbackModal;
   // Patch A — timer tray + notification feed. Patch B — tap badges.
   // Patch C — daily goals card.
   readonly notifFeed: NotificationFeed;
@@ -716,6 +718,7 @@ export class Engine {
       openLedger: () => this.ledgerModal.show(),
       openAnalytics: () => this.analyticsModal.show(),
       openHelp: () => this.helpModal.show(),
+      openFeedback: () => this.feedbackModal.show(),
       openStats: () => this.statsModal.show(),
       openAchievements: () => this.achievementsModal.show(),
       // P1.7 — multi-slot picker is a DEV-only convenience now.
@@ -1090,6 +1093,9 @@ export class Engine {
       getTimeScale: () => this.timeScale,
       setTimeScale: (s) => this.setTimeScale(s),
     });
+    // Event-test button — the rush is client-scheduled, so the AdminModal
+    // fires it through this hook rather than a reducer.
+    this.adminModal.onTriggerRush = () => this.fireRush();
     this.cloudModal = new CloudModal(container, this.cloud);
     // Social-hub Visit buttons enter visit mode for a favorited restaurant.
     // Favorites are pinned into the neighborhood so their plot is always
@@ -1226,6 +1232,8 @@ export class Engine {
       this.floatingText.pop(gx, gz, "+$5", "#ffd966", floor);
       this.sfx?.ding?.();
     };
+    // Beta feedback — the 💬 modal (Hud button opens it).
+    this.feedbackModal = new FeedbackModal(container, this.cloud);
     // Patch A — notification feed (bell + toasts) and the timer tray.
     this.notifFeed = new NotificationFeed(container);
     this.timerTray = new TimerTray(container, () => this.buildTimerItems());
@@ -3444,6 +3452,11 @@ export class Engine {
         }
       }
       if (seen.goalSlotsNotified.size > 60) seen.goalSlotsNotified.clear();
+    }
+    // 🏆 Champion plaque — keep the own sign's badge in sync with the
+    // weekly-challenge tally (setChampionCount repaints only on change).
+    if (this.cloud.hasRestaurantContext()) {
+      this.scene.setChampionCount(this.cloud.getChampionCount(this.cloud.getMyHex()));
     }
   }
 

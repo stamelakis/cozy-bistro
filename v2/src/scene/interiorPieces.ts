@@ -271,6 +271,8 @@ export function buildRatingSign(
   restaurantName: string,
   style: RatingSignStyle = { font: "serif", textColor: "cream", plaqueStyle: "dark" },
   rating = 0,
+  /** Weekly-challenge champion tally — >0 paints a 🏆 badge on the plaque. */
+  championCount = 0,
 ): void {
   const frameHex = SIGN_FRAME_HEX[style.plaqueStyle] ?? SIGN_FRAME_HEX.dark;
   const bgHex = SIGN_BG_HEX[style.plaqueStyle] ?? SIGN_BG_HEX.dark;
@@ -307,6 +309,14 @@ export function buildRatingSign(
       size -= 6;
     } while (size > 40);
     ctx.fillText(restaurantName, canvas.width / 2, canvas.height / 2 + 8);
+    // 🏆 Weekly-champion badge — mirrors the host's own-plaque painter.
+    if (championCount > 0) {
+      ctx.font = "700 64px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      const label = championCount > 1 ? `🏆×${championCount}` : "🏆";
+      ctx.fillText(label, canvas.width - 36, 76);
+      ctx.textAlign = "center";
+    }
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;

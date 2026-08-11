@@ -37,13 +37,17 @@ import {
 import AddDirtyPileReducer from "./add_dirty_pile_reducer";
 import AddFavoriteReducer from "./add_favorite_reducer";
 import AdminAdjustMoneyReducer from "./admin_adjust_money_reducer";
+import AdminAnnounceCriticReducer from "./admin_announce_critic_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminBumpResetGenerationReducer from "./admin_bump_reset_generation_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
+import AdminResetCrateReducer from "./admin_reset_crate_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
+import AdminResolveFeedbackReducer from "./admin_resolve_feedback_reducer";
 import AdminSetMoneyReducer from "./admin_set_money_reducer";
 import AdminSetWeatherReducer from "./admin_set_weather_reducer";
+import AdminSpawnVipReducer from "./admin_spawn_vip_reducer";
 import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
@@ -155,6 +159,7 @@ import SpawnGuestReducer from "./spawn_guest_reducer";
 import StartRecipeUpgradeReducer from "./start_recipe_upgrade_reducer";
 import StirTicketReducer from "./stir_ticket_reducer";
 import StoreFurnitureReducer from "./store_furniture_reducer";
+import SubmitFeedbackReducer from "./submit_feedback_reducer";
 import SubmitLeaderboardReducer from "./submit_leaderboard_reducer";
 import SyncCloudDailyTotalsReducer from "./sync_cloud_daily_totals_reducer";
 import SyncDayClockReducer from "./sync_day_clock_reducer";
@@ -188,6 +193,7 @@ import DirtyPileRow from "./dirty_pile_table";
 import DishwarePoolRow from "./dishware_pool_table";
 import DishwasherBatchRow from "./dishwasher_batch_table";
 import FavoriteRow from "./favorite_table";
+import FeedbackRow from "./feedback_table";
 import FriendRequestRow from "./friend_request_table";
 import FriendshipRow from "./friendship_table";
 import FurnitureCostRow from "./furniture_cost_table";
@@ -471,6 +477,20 @@ const tablesSchema = __schema({
       { name: 'favorite_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, FavoriteRow),
+  feedback: __table({
+    name: 'feedback',
+    indexes: [
+      { accessor: 'id', name: 'feedback_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'identity', name: 'feedback_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'feedback_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, FeedbackRow),
   friend_request: __table({
     name: 'friend_request',
     indexes: [
@@ -1014,13 +1034,17 @@ const reducersSchema = __reducers(
   __reducerSchema("add_dirty_pile", AddDirtyPileReducer),
   __reducerSchema("add_favorite", AddFavoriteReducer),
   __reducerSchema("admin_adjust_money", AdminAdjustMoneyReducer),
+  __reducerSchema("admin_announce_critic", AdminAnnounceCriticReducer),
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
   __reducerSchema("admin_bump_reset_generation", AdminBumpResetGenerationReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
+  __reducerSchema("admin_reset_crate", AdminResetCrateReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
+  __reducerSchema("admin_resolve_feedback", AdminResolveFeedbackReducer),
   __reducerSchema("admin_set_money", AdminSetMoneyReducer),
   __reducerSchema("admin_set_weather", AdminSetWeatherReducer),
+  __reducerSchema("admin_spawn_vip", AdminSpawnVipReducer),
   __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
@@ -1132,6 +1156,7 @@ const reducersSchema = __reducers(
   __reducerSchema("start_recipe_upgrade", StartRecipeUpgradeReducer),
   __reducerSchema("stir_ticket", StirTicketReducer),
   __reducerSchema("store_furniture", StoreFurnitureReducer),
+  __reducerSchema("submit_feedback", SubmitFeedbackReducer),
   __reducerSchema("submit_leaderboard", SubmitLeaderboardReducer),
   __reducerSchema("sync_cloud_daily_totals", SyncCloudDailyTotalsReducer),
   __reducerSchema("sync_day_clock", SyncDayClockReducer),

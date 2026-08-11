@@ -109,6 +109,58 @@ fn seed_idle_row(ctx: &ReducerContext) {
     });
 }
 
+// ─── Admin test triggers (rare events on demand) ────────────────────────
+
+fn require_admin(ctx: &ReducerContext) -> Result<(), String> {
+    use crate::tables::auth_record;
+    let is_admin = ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin);
+    if !is_admin { return Err("Admin only".into()); }
+    Ok(())
+}
+
+/// Announce a critic sweep NOW, firing in `fires_in_seconds` (1..=1200).
+/// Lets the admin demo/verify the whole flow without waiting an hour.
+#[reducer]
+pub fn admin_announce_critic(ctx: &ReducerContext, fires_in_seconds: u32) -> Result<(), String> {
+    require_admin(ctx)?;
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let fuse = (fires_in_seconds.clamp(1, 1200) as i64) * 1_000_000;
+    let Some(ev) = ctx.db.world_event().id().find(1u32) else {
+        seed_idle_row(ctx);
+        return Err("world_event row was missing — seeded; call again".into());
+    };
+    ctx.db.world_event().id().update(WorldEvent {
+        kind: "critic_sweep".to_string(),
+        state: "announced".to_string(),
+        announce_at_micros: now,
+        fires_at_micros: now + fuse,
+        ..ev
+    });
+    log::info!("admin_announce_critic: sweep fires in {}s", fires_in_seconds.clamp(1, 1200));
+    Ok(())
+}
+
+/// Spawn one VIP-archetype guest at the admin's own restaurant right now.
+#[reducer]
+pub fn admin_spawn_vip(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    require_admin(ctx)?;
+    let ok = crate::reducers::restaurant_sim::try_spawn_arrival_guest(
+        ctx, restaurant_id, "guest-v3", 0.0, 5.45, Some("vip"),
+    );
+    if !ok { return Err("No free seat — VIP couldn't get a table".into()); }
+    Ok(())
+}
+
+/// Zero the supply-crate cooldown so the next claim is instantly ready.
+#[reducer]
+pub fn admin_reset_crate(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), String> {
+    require_admin(ctx)?;
+    use crate::tables::{restaurant, Restaurant};
+    let Some(r) = ctx.db.restaurant().id().find(restaurant_id) else { return Ok(()); };
+    ctx.db.restaurant().id().update(Restaurant { last_crate_micros: 0, ..r });
+    Ok(())
+}
+
 /// Idempotent bootstrap — installs the 60 s schedule + the singleton row.
 /// Callable manually (existing databases never re-run init) and from
 /// lifecycle::init for fresh ones. Mirrors bootstrap_weather.

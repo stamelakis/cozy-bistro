@@ -184,6 +184,10 @@ export interface ActiveGuestRow {
    * parses this into local g.order so creditCourse can read the
    * matching recipe + compute price/satisfaction. */
   orderRecipes: string;
+  /** Dishware endgame — the SERVER-owned reservation CSV
+   * (reserve_course_dish writes it at ticket creation). The client
+   * adopts it in reconcileCloudGuest under isServerSim("dishware"). */
+  reservedDishTiers: string;
 }
 
 /** Phase I.1 (H.47) — Full row shape returned by listActiveGuests.
@@ -1640,6 +1644,59 @@ export class SpacetimeClient {
     return out;
   }
 
+  // ─── Beta feedback ──────────────────────────────────────────────────
+
+  submitFeedback(category: string, message: string): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.submitFeedback({ category, message }); }
+    catch (e) { console.warn("[Cloud] submitFeedback failed:", e); }
+  }
+
+  listFeedback(): Array<{ id: bigint; username: string; category: string; message: string; createdAtMs: number; resolved: boolean }> {
+    if (!this.conn) return [];
+    const out: Array<{ id: bigint; username: string; category: string; message: string; createdAtMs: number; resolved: boolean }> = [];
+    try {
+      for (const f of this.conn.db.feedback.iter()) {
+        out.push({
+          id: f.id,
+          username: f.username,
+          category: f.category,
+          message: f.message,
+          createdAtMs: Number(f.createdAt.microsSinceUnixEpoch / 1000n),
+          resolved: f.resolved,
+        });
+      }
+    } catch { /* pre-sync */ }
+    out.sort((a, b) => b.createdAtMs - a.createdAtMs);
+    return out;
+  }
+
+  adminResolveFeedback(id: bigint, deleteRow: boolean): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.adminResolveFeedback({ id, delete: deleteRow }); }
+    catch (e) { console.warn("[Cloud] adminResolveFeedback failed:", e); }
+  }
+
+  // ─── Admin test triggers ────────────────────────────────────────────
+
+  adminAnnounceCritic(firesInSeconds: number): void {
+    if (!this.conn) return;
+    try { this.conn.reducers.adminAnnounceCritic({ firesInSeconds }); }
+    catch (e) { console.warn("[Cloud] adminAnnounceCritic failed:", e); }
+  }
+
+  adminSpawnVip(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try { this.conn.reducers.adminSpawnVip({ restaurantId: this.restaurantId }); }
+    catch (e) { console.warn("[Cloud] adminSpawnVip failed:", e); }
+  }
+
+  adminResetCrate(): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try { this.conn.reducers.adminResetCrate({ restaurantId: this.restaurantId }); }
+    catch (e) { console.warn("[Cloud] adminResetCrate failed:", e); }
+  }
+
   // ─── Patch D — world events (critic sweep) ─────────────────────────
 
   /** The street-wide world-event singleton, null before first sync. */
@@ -2580,6 +2637,7 @@ export class SpacetimeClient {
       plateX: number; plateZ: number;
       orderIndex: number;
       orderRecipes: string;
+      reservedDishTiers: string;
     };
     const toClientRow = (r: ServerRow): ActiveGuestRow => ({
       id: r.id, state: r.state, variant: r.variant, archetype: r.archetype,
@@ -2593,6 +2651,7 @@ export class SpacetimeClient {
       plateX: r.plateX, plateZ: r.plateZ,
       orderIndex: r.orderIndex,
       orderRecipes: r.orderRecipes,
+      reservedDishTiers: r.reservedDishTiers,
     });
     try {
       if (handlers.onInsert) {
@@ -5803,6 +5862,7 @@ export class SpacetimeClient {
             plateX: g.plateX, plateZ: g.plateZ,
             orderIndex: g.orderIndex,
             orderRecipes: g.orderRecipes,
+            reservedDishTiers: g.reservedDishTiers,
           },
         });
       }

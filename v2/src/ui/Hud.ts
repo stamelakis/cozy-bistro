@@ -21,6 +21,8 @@ export interface TimeControl {
 
 /** Modal openers + the audio + reset hooks Engine wires in. */
 export interface HudActions {
+  /** Beta feedback modal (💬). */
+  openFeedback: () => void;
   openLedger: () => void;
   openAnalytics: () => void;
   openHelp: () => void;
@@ -462,6 +464,10 @@ export class Hud {
           "Quick reference for the build menu, customer loop, staff roles, save system, and " +
           "keyboard shortcuts.",
         click: this.actions.openHelp,       tint: "rgba(180, 200, 220, 0.22)" },
+      { icon: "💬 Feedback",   title:
+          "FEEDBACK — found a bug? Have an idea?\n" +
+          "Send a quick note straight to the developer. Every message is read.",
+        click: this.actions.openFeedback,   tint: "rgba(220, 180, 140, 0.22)" },
     ];
     const row3 = document.createElement("div");
     Object.assign(row3.style, {

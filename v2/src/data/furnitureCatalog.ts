@@ -466,6 +466,13 @@ export const furnitureCatalog: readonly FurnitureDef[] = [
   { id: "counter",        name: "Counter",         category: "counter",
     modelPath: "assets/kenney/kitchenCabinet.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 90,
     tier: 1, dishCapacity: 4, surfaceSlots: [{ dx: 0, dz: 0 }], provides: "counter" },
+  // Kitchen throughput — prep counters speed the WHOLE kitchen: −8% cook
+  // time each, at most two counted (server-enforced at chef claim time,
+  // prep_station_factor_x100). Deliberately NO `provides`: nothing cooks
+  // ON it, so the chef-assignment pass never claims it as a station.
+  { id: "prep-counter",   name: "Prep Counter",    category: "counter",
+    modelPath: "assets/kenney/kitchenCabinetDrawer.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 600,
+    tier: 2 },
   { id: "coffee-machine", name: "Coffee Machine",  category: "appliance",
     modelPath: "assets/kenney/kitchenCoffeeMachine.glb", scale: S_KITCHEN, size: { width: 1, depth: 1 }, cost: 250,
     tier: 1, placement: "surface", provides: "coffee" },

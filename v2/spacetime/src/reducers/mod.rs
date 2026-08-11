@@ -16,6 +16,7 @@ mod pedestrians;
 mod chat;
 mod weather;
 mod world_events;
+mod feedback;
 mod restaurant_sim;
 // Pass 1 (additive): server-side nav-grid + A* pathfinder port. Self-
 // contained and unwired — exposes no reducers, so it's a plain `mod`
@@ -34,4 +35,5 @@ pub use pedestrians::*;
 pub use chat::*;
 pub use weather::*;
 pub use world_events::*;
+pub use feedback::*;
 pub use restaurant_sim::*;

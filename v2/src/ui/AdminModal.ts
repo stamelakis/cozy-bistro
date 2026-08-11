@@ -886,9 +886,106 @@ export class AdminModal {
     this.cloudAdminBody.innerHTML = "";
     const account = this.cloud.getCurrentAccount();
     if (!account || !account.isAdmin) return;
+    this.cloudAdminBody.appendChild(this.buildEventTestSection());
+    this.cloudAdminBody.appendChild(this.buildFeedbackSection());
     this.cloudAdminBody.appendChild(this.buildResetRequestsSection());
     this.cloudAdminBody.appendChild(this.buildBansSection());
     this.cloudAdminBody.appendChild(this.buildPlayerActionsSection());
+  }
+
+  /** Engine wires this so the "Rush now" test button can fire the
+   * (client-scheduled) rush without AdminModal knowing about Engine. */
+  onTriggerRush?: () => void;
+
+  /** Admin-only — fire the rare events on demand for demo/verification:
+   * critic sweep (60 s fuse), a VIP at the admin's own restaurant, a rush,
+   * and a crate-cooldown reset. All server-gated except the rush. */
+  private buildEventTestSection(): HTMLElement {
+    const section = this.sectionShell("🧪 EVENT TESTS");
+    const row = document.createElement("div");
+    Object.assign(row.style, {
+      display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px",
+    } as Partial<CSSStyleDeclaration>);
+    const mk = (label: string, title: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = title;
+      Object.assign(b.style, {
+        background: "rgba(160, 140, 220, 0.22)", color: "#fff5dc",
+        border: "1px solid rgba(200, 180, 255, 0.4)", borderRadius: "5px",
+        padding: "6px 8px", cursor: "pointer", font: "inherit", fontSize: "11px",
+      } as Partial<CSSStyleDeclaration>);
+      b.onclick = () => { onClick(); flashMsg(section, `${label} ✓`, "good"); };
+      return b;
+    };
+    row.appendChild(mk("🕵️ Critic in 60s", "Announce a street-wide critic sweep firing in 60 seconds",
+      () => this.cloud?.adminAnnounceCritic(60)));
+    row.appendChild(mk("🌟 Spawn VIP", "Spawn a VIP guest at your restaurant right now",
+      () => this.cloud?.adminSpawnVip()));
+    row.appendChild(mk("📣 Rush now", "Fire the free rush-hour surge immediately",
+      () => this.onTriggerRush?.()));
+    row.appendChild(mk("🎁 Reset crate", "Zero the supply-crate cooldown (next claim instantly ready)",
+      () => this.cloud?.adminResetCrate()));
+    section.appendChild(row);
+    return section;
+  }
+
+  /** Admin-only — the beta feedback inbox (submit_feedback rows). */
+  private buildFeedbackSection(): HTMLElement {
+    const section = this.sectionShell("💬 FEEDBACK INBOX");
+    if (!this.cloud) return section;
+    const rows = this.cloud.listFeedback();
+    const open = rows.filter((f) => !f.resolved);
+    if (open.length === 0) {
+      const empty = document.createElement("div");
+      empty.textContent = `Inbox zero — ${rows.length} handled total.`;
+      Object.assign(empty.style, { opacity: "0.55", fontSize: "11px", padding: "4px 0" } as Partial<CSSStyleDeclaration>);
+      section.appendChild(empty);
+      return section;
+    }
+    const catIcon: Record<string, string> = { bug: "🐛", idea: "💡", other: "💬" };
+    for (const f of open.slice(0, 25)) {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex", alignItems: "flex-start", gap: "6px",
+        padding: "5px 0", borderTop: "1px solid rgba(255,245,220,0.08)",
+        fontSize: "11px",
+      } as Partial<CSSStyleDeclaration>);
+      const meta = document.createElement("div");
+      meta.innerHTML = `<b style="color:#ffd986">${catIcon[f.category] ?? "💬"} @${escapeHtml(f.username)}</b>` +
+        `<span style="opacity:0.5"> · ${new Date(f.createdAtMs).toLocaleString()}</span>` +
+        `<div style="margin-top:2px;white-space:pre-wrap">${escapeHtml(f.message)}</div>`;
+      meta.style.flex = "1";
+      const done = document.createElement("button");
+      done.textContent = "✓";
+      done.title = "Mark handled";
+      Object.assign(done.style, {
+        background: "rgba(120,200,120,0.25)", color: "#d8ffd8",
+        border: "1px solid rgba(120,200,120,0.5)", borderRadius: "4px",
+        padding: "2px 8px", cursor: "pointer", font: "inherit",
+      } as Partial<CSSStyleDeclaration>);
+      done.onclick = () => { this.cloud?.adminResolveFeedback(f.id, false); row.style.opacity = "0.35"; done.disabled = true; };
+      const del = document.createElement("button");
+      del.textContent = "🗑";
+      del.title = "Delete";
+      Object.assign(del.style, {
+        background: "rgba(220,120,120,0.2)", color: "#ffd8d8",
+        border: "1px solid rgba(220,120,120,0.45)", borderRadius: "4px",
+        padding: "2px 6px", cursor: "pointer", font: "inherit",
+      } as Partial<CSSStyleDeclaration>);
+      del.onclick = () => { this.cloud?.adminResolveFeedback(f.id, true); row.remove(); };
+      row.appendChild(meta);
+      row.appendChild(done);
+      row.appendChild(del);
+      section.appendChild(row);
+    }
+    if (open.length > 25) {
+      const more = document.createElement("div");
+      more.textContent = `…and ${open.length - 25} more.`;
+      Object.assign(more.style, { opacity: "0.5", fontSize: "10px" } as Partial<CSSStyleDeclaration>);
+      section.appendChild(more);
+    }
+    return section;
   }
 
   private buildResetRequestsSection(): HTMLElement {

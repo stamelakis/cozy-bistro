@@ -243,6 +243,17 @@ export const Favorite = __t.object("Favorite", {
 });
 export type Favorite = __Infer<typeof Favorite>;
 
+export const Feedback = __t.object("Feedback", {
+  id: __t.u64(),
+  identity: __t.identity(),
+  username: __t.string(),
+  category: __t.string(),
+  message: __t.string(),
+  createdAt: __t.timestamp(),
+  resolved: __t.bool(),
+});
+export type Feedback = __Infer<typeof Feedback>;
+
 export const FriendRequest = __t.object("FriendRequest", {
   id: __t.u64(),
   fromPlayer: __t.identity(),

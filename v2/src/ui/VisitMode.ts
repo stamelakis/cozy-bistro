@@ -1510,9 +1510,12 @@ export class VisitMode {
     const signStyle = this.cloud?.getRestaurantSignStyleByOwnerHex(plot.ownerHex)
       ?? { font: "serif", textColor: "cream", plaqueStyle: "dark" };
     const rating = this.cloud?.getRestaurantRatingByOwnerHex(plot.ownerHex) ?? 0;
+    // 🏆 Weekly-challenge champion tally — painted on the visited plaque so
+    // the street's winners wear the medal where every visitor sees it.
+    const championCount = this.cloud?.getChampionCount(plot.ownerHex) ?? 0;
     this.buildInteriorShell(
       root, expansionLevel, wallSourcePlacements, themesByFloor,
-      restaurantName, signStyle, rating,
+      restaurantName, signStyle, rating, championCount,
     );
 
     // H.A — Wire visualizers that need a scene-mount and/or
@@ -2186,6 +2189,7 @@ export class VisitMode {
     restaurantName: string,
     signStyle: { font: string; textColor: string; plaqueStyle: string },
     rating: number,
+    championCount = 0,
   ): void {
     const W = 10;
     // Per-storey materials cloned from the picked theme. Themes carry
@@ -2330,7 +2334,7 @@ export class VisitMode {
     // rating from cloud_rating_history_csv (foreground client pushes
     // via setCloudRatingHistory on every recordRating). Visit mode
     // renders the same plaque the host sees on their own door.
-    buildRatingSign(root, restaurantName, signStyle, rating);
+    buildRatingSign(root, restaurantName, signStyle, rating, championCount);
 
     // Flat roof skipped — the Paris mansard added by
     // buildParisExteriorDecor sits at the same Y and covers the same

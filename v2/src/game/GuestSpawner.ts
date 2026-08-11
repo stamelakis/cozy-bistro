@@ -1453,6 +1453,12 @@ export class GuestSpawner {
     if (g.dishesSettled) return;
     g.dishesSettled = true;
     this.dishwareLogger?.(`settleGuestDishes(g${g.id}, state=${g.state}, orderIndex=${g.orderIndex}, reservations=${g.reservedDishTiers.length})`);
+    // Dishware endgame — under the server-authoritative pool the SERVER is
+    // the sole settler (settle_guest_dishes at despawn): the client neither
+    // claims the settle nor touches the pool. The local flag above only
+    // stops this visual path re-entering. Pool truth arrives via the
+    // dishware_pool subscription.
+    if (isServerSim("dishware")) return;
     // H.20 — claim the settle on the cloud row BEFORE the local
     // mutations so the server's despawn-time settle path becomes a
     // no-op when its turn arrives. Without this the client's pool
@@ -1768,6 +1774,16 @@ export class GuestSpawner {
       }
     }
     g.cloudLastMs = nowMs;
+    // Dishware endgame — the SERVER writes the reservation CSV now
+    // (reserve_course_dish); adopt it so the local visuals (leftover
+    // meshes, dish-satisfaction bonus, in-flight counters) track the
+    // authority. Cheap string compare gates the parse.
+    if (isServerSim("dishware")) {
+      const localCsv = g.reservedDishTiers.join(",");
+      if (row.reservedDishTiers !== localCsv) {
+        g.reservedDishTiers = parseTiersCsv(row.reservedDishTiers);
+      }
+    }
     if (g.cloudX === undefined
         || Math.hypot(row.x - g.cloudX, row.z - (g.cloudZ ?? row.z)) > 1e-4) {
       // Phase M.23 — anchor the new interp segment to where the BODY ACTUALLY
@@ -1974,7 +1990,10 @@ export class GuestSpawner {
       g.orderIndex = Math.min(g.order.length, row.orderIndex);
       g.patience = SERVE_PATIENCE_BASE_SECONDS * g.archetype.patienceMultiplier;
       const recipe = g.order[g.orderIndex];
-      if (recipe) {
+      // Dishware endgame — under the server-authoritative pool the SERVER
+      // reserves at ticket creation (reserve_course_dish) and owns the CSV;
+      // the client only renders. reconcileCloudGuest pulls the row's CSV.
+      if (recipe && !isServerSim("dishware")) {
         const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
         const reservedTier = this.game.dishware.reserveOne(kind);
         // 2026-08 audit — reservedDishTiers is consumed POSITIONALLY against
@@ -3434,6 +3453,10 @@ export class GuestSpawner {
    * has stabilized at end-of-meal. */
   private mirrorGuestReservedTiers(g: ActiveGuest): void {
     if (!isServerSim("guests") || !this.cloud) return;
+    // Dishware endgame — when the server owns the pool it also owns the
+    // reservation CSV (reserve_course_dish writes it); a client push here
+    // would fight the authority with stale local data.
+    if (isServerSim("dishware")) return;
     if (g.reservedDishTiers.length === 0) return;
     // Settled guests are DONE — the server clears the row CSV at settle, so
     // re-pushing the local copy would resurrect already-settled reservations.
@@ -4652,18 +4675,25 @@ export class GuestSpawner {
     // washes one — the guest stays in seated / eating with patience
     // ticking and we'll retry on the next tick. The recipe's category
     // picks plate vs glass; "drink" is the only glass case in v1.
-    const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
-    const reservedTier = this.game.dishware.reserveOne(kind);
-    if (reservedTier === null) {
-      return false;
+    //
+    // Dishware endgame — under isServerSim("dishware") the SERVER is the
+    // sole reserver (reserve_course_dish at ticket creation): skip the
+    // local reserve + CSV push entirely; reconcileCloudGuest pulls the
+    // authoritative CSV from the row.
+    if (!isServerSim("dishware")) {
+      const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
+      const reservedTier = this.game.dishware.reserveOne(kind);
+      if (reservedTier === null) {
+        return false;
+      }
+      g.reservedDishTiers.push(reservedTier);
+      // H.20 — mirror the new reservation CSV to the server right away
+      // so settle_guest_dishes on a future despawn has the data. The
+      // mirror is idempotent + retries on the periodic stream below
+      // if serverMirrorId hasn't resolved yet.
+      g.lastMirroredReservedTiers = undefined;
+      this.mirrorGuestReservedTiers(g);
     }
-    g.reservedDishTiers.push(reservedTier);
-    // H.20 — mirror the new reservation CSV to the server right away
-    // so settle_guest_dishes on a future despawn has the data. The
-    // mirror is idempotent + retries on the periodic stream below
-    // if serverMirrorId hasn't resolved yet.
-    g.lastMirroredReservedTiers = undefined;
-    this.mirrorGuestReservedTiers(g);
     this.game.cooking.consumeIngredients(recipe);
     // Enqueue with the BASE cook-seconds. The actual chef applies
     // their own training multiplier on pickup (StaffRouter does

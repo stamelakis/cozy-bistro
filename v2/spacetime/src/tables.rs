@@ -963,6 +963,25 @@ pub struct DailyGoalState {
     pub last_completed_day: i64,
 }
 
+/// Beta feedback — one row per in-game "💬 Report / suggest" submission.
+/// Written by submit_feedback (rate-limited), read by the AdminModal's
+/// feedback inbox, resolved/deleted by admin reducers.
+#[table(name = feedback, public)]
+pub struct Feedback {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[index(btree)]
+    pub identity: Identity,
+    /// Denormalized at submit time so the admin inbox needn't join.
+    pub username: String,
+    /// "bug" | "idea" | "other".
+    pub category: String,
+    pub message: String,
+    pub created_at: Timestamp,
+    pub resolved: bool,
+}
+
 /// Patch C — a named regular customer of one restaurant. Spawn rolls a
 /// small chance to send a regular (guest carries regular_id/name); a
 /// COMPLETED visit bumps loyalty at the rollup choke point. At 5 hearts

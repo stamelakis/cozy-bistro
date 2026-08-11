@@ -2084,6 +2084,11 @@ fn auto_claim_queued_tickets(ctx: &ReducerContext, rid: u64) {
         };
         let mult_x100 = chef_cook_multiplier_x100(ctx, &actor.member_id);
         let cook_seconds_ms = apply_chef_speed(base_ms, mult_x100);
+        // Kitchen throughput — prep counters shave cook time kitchen-wide
+        // (8% each, two counted). Applied at claim so it composes with the
+        // chef's own training multiplier.
+        let cook_seconds_ms = cook_seconds_ms
+            .saturating_mul(prep_station_factor_x100(ctx, ticket.restaurant_id)) / 100;
 
         let actor_member_id = actor.member_id.clone();
         let station_uid = station.uid.clone();
@@ -10032,6 +10037,60 @@ pub fn mark_guest_dishes_settled(
 /// the despawn path deletes the row (so re-entry is impossible). The
 /// dishes_settled flag flip is therefore optional — included as a
 /// defense-in-depth marker in case future code reuses the row.
+/// Kitchen throughput — prep counters ("prep-counter" def) speed the whole
+/// kitchen: 8% off cook time each, at most two counted (max −16%). Read at
+/// claim time so it composes with chef training.
+fn prep_station_factor_x100(ctx: &ReducerContext, rid: u64) -> i64 {
+    let n = ctx.db.placed_furniture().restaurant_id().filter(rid)
+        .filter(|f| f.def_id == "prep-counter")
+        .count()
+        .min(2) as i64;
+    100 - n * 8
+}
+
+/// SERVER-SIDE DISH RESERVATION (the dishware endgame). Called at ticket
+/// creation for course `idx`: picks the highest-tier clean dish of the
+/// right kind, decrements the pool, and appends the tier to the guest's
+/// reserved_dish_tiers CSV — all in one place, on one authority. No clean
+/// stock → appends the tier-0 sentinel (course still proceeds, nothing to
+/// settle later), exactly the semantics the client used to implement.
+///
+/// IDEMPOTENT by CSV length: if the guest's CSV already covers `idx`
+/// (retry, replay, or the auto_place/place_order race), it's a no-op —
+/// which is also what makes it safe to call from BOTH creation paths.
+/// Under isServerSim("dishware") the client no longer reserves or mirrors;
+/// this is the sole writer.
+fn reserve_course_dish(ctx: &ReducerContext, guest_id: u64, idx: usize, appliance: &str) {
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return; };
+    if g.dishes_settled { return; } // settled rows are closed books
+    let mut tiers: Vec<u32> = if g.reserved_dish_tiers.is_empty() {
+        Vec::new()
+    } else {
+        g.reserved_dish_tiers.split(',')
+            .map(|s| s.trim().parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    if tiers.len() > idx { return; } // this course already has its slot
+    while tiers.len() < idx { tiers.push(0); } // pad skipped slots positionally
+    let kind = if appliance == "bar" { "glass" } else { "plate" };
+    let picked = ctx.db.dishware_pool().restaurant_id().filter(g.restaurant_id)
+        .filter(|p| p.kind == kind && p.clean > 0)
+        .max_by_key(|p| p.tier)
+        .map(|p| p.tier)
+        .unwrap_or(0);
+    if picked > 0 {
+        apply_pool_delta(ctx, g.restaurant_id, kind, picked, -1, 0, "reserve");
+    }
+    tiers.push(picked);
+    let csv = tiers.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(",");
+    if let Some(fresh) = ctx.db.active_guest().id().find(guest_id) {
+        ctx.db.active_guest().id().update(ActiveGuest {
+            reserved_dish_tiers: csv,
+            ..fresh
+        });
+    }
+}
+
 fn settle_guest_dishes(ctx: &ReducerContext, g: &ActiveGuest) {
     if g.dishes_settled { return; }
     let tiers: Vec<u32> = g.reserved_dish_tiers
@@ -10308,6 +10367,7 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
             "auto_place_next_course: guest {} course {} → REUSED pooled {} dish {} ({})",
             g.id, idx, from_state, pid, recipe_id,
         );
+        reserve_course_dish(ctx, g.id, idx, &appliance);
         return Some(pid);
     }
 
@@ -10373,6 +10433,7 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
         "auto_place_next_course: guest {} course {} → ticket {} ({}@{})",
         g.id, idx, inserted.id, inserted.recipe_id, inserted.appliance,
     );
+    reserve_course_dish(ctx, g.id, idx, &inserted.appliance);
     Some(inserted.id)
 }
 
@@ -10530,6 +10591,8 @@ pub fn place_order(
     }
     pantry_consume(ctx, g.restaurant_id, &needed);
 
+    let appliance_for_reserve = appliance.clone();
+    let course_idx = g.order_index as usize;
     ctx.db.active_ticket().insert(ActiveTicket {
         id: 0, // auto_inc
         restaurant_id: g.restaurant_id,
@@ -10550,6 +10613,9 @@ pub fn place_order(
         created_at: ctx.timestamp,
         stirred: false,
     });
+    // Dishware endgame — the SERVER reserves this course's dish (idempotent
+    // by CSV length, so the auto_place path racing this one is safe).
+    reserve_course_dish(ctx, guest_id, course_idx, &appliance_for_reserve);
     Ok(())
 }
 

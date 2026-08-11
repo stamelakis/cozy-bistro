@@ -4136,6 +4136,16 @@ export class WorldScene {
     this.applyPlaqueFrameStyle();
   }
 
+  /** Weekly-challenge champion badge on the plaque ("🏆×N" corner mark).
+   * Engine pushes the count (from the leaderboard-derived champion tally)
+   * at ~1 Hz; repaints only when it actually changes. */
+  private championCount = 0;
+  setChampionCount(n: number): void {
+    if (n === this.championCount) return;
+    this.championCount = n;
+    this.repaintSignCanvas();
+  }
+
   /** Re-draw the plaque's canvas with the current name + style and
    * push it to the texture. Cheap — runs only on save, not per frame. */
   private repaintSignCanvas(): void {
@@ -4168,6 +4178,15 @@ export class WorldScene {
       size -= 6;
     } while (size > 40);
     ctx.fillText(this.currentSignName, w / 2, h / 2 + 8);
+    // 🏆 Weekly-champion badge — top-right corner, small enough to read
+    // as a medal rather than shouting over the name.
+    if (this.championCount > 0) {
+      ctx.font = "700 64px system-ui, sans-serif";
+      ctx.textAlign = "right";
+      const label = this.championCount > 1 ? `🏆×${this.championCount}` : "🏆";
+      ctx.fillText(label, w - 36, 76);
+      ctx.textAlign = "center";
+    }
     this.signTexture.needsUpdate = true;
   }
 
