@@ -163,6 +163,8 @@ export const ClueHunt = __t.object("ClueHunt", {
   identity: __t.identity(),
   foundCsv: __t.string(),
   cycles: __t.u32(),
+  lastCollectMicros: __t.i64(),
+  lockedUntilMicros: __t.i64(),
 });
 export type ClueHunt = __Infer<typeof ClueHunt>;
 

@@ -211,6 +211,12 @@ export interface HydratableGuestRow {
   orderIndex: number;
   ticketId: bigint | null;
   reservedDishTiers: string;
+  /** 2026-08 audit — MUST round-trip. The client claims the settle on the row
+   * (mark_guest_dishes_settled) but this shape used to drop the flag, so a
+   * reload during the guest's walk-out re-imported them "unsettled" with the
+   * full tier CSV and settled AGAIN → dish double-count (OVER), which the
+   * hydrate-trim then paid for by deleting real top-tier pieces. */
+  dishesSettled: boolean;
   tasteDiet: string;
   tasteDecorPref: number;
   tasteWindowPref: number;
@@ -975,6 +981,7 @@ export class SpacetimeClient {
         orderIndex: g.orderIndex,
         ticketId: g.ticketId ?? null,
         reservedDishTiers: g.reservedDishTiers,
+        dishesSettled: g.dishesSettled ?? false,
         tasteDiet: g.tasteDiet,
         tasteDecorPref: g.tasteDecorPref,
         tasteWindowPref: g.tasteWindowPref,
@@ -1017,6 +1024,7 @@ export class SpacetimeClient {
           orderIndex: g.orderIndex,
           ticketId: g.ticketId ?? null,
           reservedDishTiers: g.reservedDishTiers,
+          dishesSettled: g.dishesSettled ?? false,
           tasteDiet: g.tasteDiet,
           tasteDecorPref: g.tasteDecorPref,
           tasteWindowPref: g.tasteWindowPref,
@@ -1150,6 +1158,19 @@ export class SpacetimeClient {
       this.conn.reducers.setGuestReservedTiers({ guestId, tiersCsv });
     } catch (e) {
       console.warn("[Cloud] setGuestReservedTiers failed:", e);
+    }
+  }
+
+  /** 2026-08 audit — read back the row's reservation CSV so the mirror can
+   * VERIFY its push landed (self-healing re-send) instead of trusting an
+   * optimistic latch. Returns null when the row isn't in the local cache. */
+  getGuestReservedTiers(guestId: bigint): string | null {
+    if (!this.conn) return null;
+    try {
+      const g = this.conn.db.active_guest.id.find(guestId);
+      return g ? g.reservedDishTiers : null;
+    } catch {
+      return null;
     }
   }
 
@@ -1902,12 +1923,16 @@ export class SpacetimeClient {
   /** Seconds until the supply crate is claimable again (0 = ready now). Reads
    * the synced Restaurant.last_crate_micros against the 3h cooldown. */
   getCrateReadyInSeconds(): number {
-    if (!this.conn || this.restaurantId == null) return 0;
+    // 2026-08 audit — unknown state must NOT read as "ready". While
+    // disconnected / pre-sync, returning 0 made the crate button pulse
+    // "ready!" and every click dead-ended (claim no-ops without a conn).
+    // Report a full cooldown instead; the real value takes over on sync.
+    const COOLDOWN_S = 3 * 60 * 60;
+    if (!this.conn || this.restaurantId == null) return COOLDOWN_S;
     const r = this.conn.db.restaurant.id.find(this.restaurantId);
-    if (!r) return 0;
+    if (!r) return COOLDOWN_S;
     const last = Number(r.lastCrateMicros ?? 0n);
     if (last === 0) return 0; // never claimed → ready
-    const COOLDOWN_S = 3 * 60 * 60;
     const elapsed = (Date.now() * 1000 - last) / 1_000_000; // → seconds
     return Math.max(0, COOLDOWN_S - elapsed);
   }

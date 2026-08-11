@@ -14,4 +14,6 @@ export default __t.row({
   identity: __t.identity().primaryKey(),
   foundCsv: __t.string().name("found_csv"),
   cycles: __t.u32(),
+  lastCollectMicros: __t.i64().name("last_collect_micros"),
+  lockedUntilMicros: __t.i64().name("locked_until_micros"),
 });

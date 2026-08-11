@@ -4205,12 +4205,27 @@ fn grant_free_crate(ctx: &ReducerContext, restaurant_id: u64) {
 pub fn collect_clue(ctx: &ReducerContext, visited_restaurant_id: u64) -> Result<(), String> {
     let me = ctx.sender;
     const NEEDED: usize = 6;
+    // Anti-farm pacing (2026-08 audit — this reducer was an UNBOUNDED cash mint:
+    // a modded client looping 6 ids re-completed the set as fast as the server
+    // processed calls, and crate cash bypasses the money-cutover lock). Two
+    // server-side brakes, both invisible to honest play:
+    //   • MIN_COLLECT_GAP between accepted collects — a real player needs far
+    //     longer than 45 s to hop restaurants and find the paper.
+    //   • CYCLE_LOCKOUT after a completed set — the free crate can't come
+    //     faster than the regular supply crate's own 3 h cadence.
+    const MIN_COLLECT_GAP_MICROS: i64 = 45_000_000;          // 45 s
+    const CYCLE_LOCKOUT_MICROS: i64 = 3 * 3600 * 1_000_000;  // 3 h
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
     match ctx.db.restaurant().id().find(visited_restaurant_id) {
         Some(vr) if vr.owner == me => return Ok(()), // your own place has no clue
         Some(_) => {}
         None => return Ok(()),                        // restaurant gone
     }
     let existing = ctx.db.clue_hunt().identity().find(me);
+    if let Some(h) = existing.as_ref() {
+        if now < h.locked_until_micros { return Ok(()); }               // set cooling down
+        if now - h.last_collect_micros < MIN_COLLECT_GAP_MICROS { return Ok(()); }
+    }
     let mut found: Vec<u64> = existing.as_ref()
         .map(|h| h.found_csv.split(',').filter_map(|s| s.trim().parse::<u64>().ok()).collect())
         .unwrap_or_default();
@@ -4220,15 +4235,22 @@ pub fn collect_clue(ctx: &ReducerContext, visited_restaurant_id: u64) -> Result<
     }
     found.push(visited_restaurant_id);
     if found.len() >= NEEDED {
-        // Complete → free crate to the caller's own restaurant, then reset.
+        // Complete → free crate to the caller's own restaurant, then reset +
+        // lock the next cycle behind the 3 h cooldown.
         if let Some(own) = ctx.db.restaurant().owner().filter(me).next() {
             grant_free_crate(ctx, own.id);
         }
-        let row = ClueHunt { identity: me, found_csv: String::new(), cycles: cycles + 1 };
+        let row = ClueHunt {
+            identity: me, found_csv: String::new(), cycles: cycles + 1,
+            last_collect_micros: now, locked_until_micros: now + CYCLE_LOCKOUT_MICROS,
+        };
         if existing.is_some() { ctx.db.clue_hunt().identity().update(row); } else { ctx.db.clue_hunt().insert(row); }
     } else {
         let csv = found.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        let row = ClueHunt { identity: me, found_csv: csv, cycles };
+        let row = ClueHunt {
+            identity: me, found_csv: csv, cycles,
+            last_collect_micros: now, locked_until_micros: 0,
+        };
         if existing.is_some() { ctx.db.clue_hunt().identity().update(row); } else { ctx.db.clue_hunt().insert(row); }
     }
     Ok(())
@@ -5621,8 +5643,12 @@ fn try_dispatch_wash_trip(ctx: &ReducerContext, rid: u64, min_washers: u32) {
     // washer during a service lull (no one waiting to order, no plate ready) so
     // dirt doesn't pile up between rushes. With min_washers = 0 and service busy,
     // washing yields entirely — SERVICE keeps priority until dishes run low.
+    // 2026-08 audit — bar-seat ordering guests are the BARMAN's job (take-order
+    // dispatch skips them), so they must not suppress the lull washer either:
+    // a bar-heavy room kept waiters idle-but-"busy" while dirt piled up, then
+    // washed reactively mid-rush — exactly what the lull washer exists to avoid.
     let service_demand = ctx.db.active_guest().restaurant_id().filter(rid)
-        .any(|g| g.state == "ordering")
+        .any(|g| g.state == "ordering" && !g.seat_at_bar)
         || ctx.db.active_ticket().restaurant_id().filter(rid)
             .any(|t| t.state == "ready");
     let mut target = min_washers;
@@ -9649,6 +9675,12 @@ pub fn set_guest_reserved_tiers(
     if tiers_csv.is_empty() || g.reserved_dish_tiers == tiers_csv {
         return Ok(()); // idempotent
     }
+    // 2026-08 audit — a SETTLED row's CSV was just cleared by the settle
+    // (mark_guest_dishes_settled). A straggling client mirror must not
+    // resurrect it, or the reservations would be settled a second time.
+    if g.dishes_settled {
+        return Ok(());
+    }
     ctx.db.active_guest().id().update(ActiveGuest {
         reserved_dish_tiers: tiers_csv,
         ..g
@@ -9688,8 +9720,16 @@ pub fn mark_guest_dishes_settled(
     if g.dishes_settled {
         return Ok(()); // idempotent
     }
+    // 2026-08 audit — ALSO clear the reservation CSV. The client never
+    // round-tripped dishes_settled into its hydrate shape, so a reload during
+    // the guest's walk-out re-imported the full tier CSV with the flag lost and
+    // re-settled it (double-counted dishes → OVER, which the next hydrate-trim
+    // paid for by deleting real top-tier pieces). With the CSV cleared at the
+    // moment the settle is claimed, ANY later re-settle — client or server —
+    // walks an empty list and no-ops. The flag alone remains as the marker.
     ctx.db.active_guest().id().update(ActiveGuest {
         dishes_settled: true,
+        reserved_dish_tiers: String::new(),
         ..g
     });
     Ok(())
@@ -9724,6 +9764,12 @@ fn settle_guest_dishes(ctx: &ReducerContext, g: &ActiveGuest) {
     let appliances: Vec<&str> = appliance_csv.split(',').collect();
     let order_index = g.order_index as usize;
     for (i, &tier) in tiers.iter().enumerate() {
+        // 2026-08 audit — tier 0 is the POSITIONAL SENTINEL the client writes
+        // when a course's reserveOne failed (no clean stock). It holds the
+        // course's slot so later reservations stay index-aligned with
+        // order_appliances, but there is no physical dish to settle. Skipping
+        // (not filtering at parse!) preserves the i ↔ course alignment.
+        if tier == 0 { continue; }
         let appliance = appliances.get(i).copied().unwrap_or("stove");
         let kind = if appliance == "bar" { "glass" } else { "plate" };
         let (clean_delta, dirty_delta) = if i < order_index {

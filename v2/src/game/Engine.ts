@@ -4855,7 +4855,13 @@ export class Engine {
     this.floatingText.update(rawDt);
     // Tip hearts track happy guests each frame (world-anchored DOM, like the
     // bubbles above). Cheap: snapshotStatus is already built for the bubbles.
-    if (this.spawner) this.tipHearts.update(this.spawner.snapshotStatus());
+    // 2026-08 audit — not while VISITING: the own-restaurant sim keeps running,
+    // so hearts kept popping over the player's own (distant) guests projected
+    // through the visit camera — a glitchy floating heart over the neighbor's
+    // roof. Empty update despawns any live heart.
+    if (this.spawner) {
+      this.tipHearts.update(this.visitMode.isVisiting() ? [] : this.spawner.snapshotStatus());
+    }
     this.saver.update(rawDt);
     // Phase 9.42 — health badge (~1 Hz internally), reads the server scan.
     this.updateHealthBadge(rawDt);

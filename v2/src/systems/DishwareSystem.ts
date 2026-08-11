@@ -728,34 +728,56 @@ export class DishwareSystem {
    *
    * Only trims if owned strictly > lifetime.  Trim order: highest-
    * tier clean → highest-tier dirty → walk down. */
-  private reconcilePoolToLifetime(kind: DishKind, inFlightForKind: number): void {
+  private reconcilePoolToLifetime(
+    kind: DishKind,
+    inFlightForKind: number,
+    inFlightByTier?: Map<number, number>,
+  ): void {
     const target = kind === "plate" ? this.lifetimeAddedPlate : this.lifetimeAddedGlass;
     const inWash = this.getDishwasherInFlight(kind);
     const owned = this.getOwned(kind) + inWash + inFlightForKind;
     if (owned <= target) return; // nothing to do — DO NOT restore
     const map = kind === "plate" ? this.plates : this.glasses;
     let excess = owned - target;
-    const tiersDesc = Array.from(map.keys()).sort((a, b) => b - a);
-    for (const tier of tiersDesc) {
+    // 2026-08 audit — the old trim was TIER-BLIND and walked DOWN from the
+    // top tier, so phantom excess minted at T1 (double-settles etc.) was paid
+    // for by deleting real T5 pieces: the player's prestige stock eroded while
+    // the phantoms survived ("T5 slowly replaced by T1"). Now:
+    //   Pass 1 — trim each tier only down to ITS canonical count (starter +
+    //     purchaseLog @tier, minus what's legitimately out at that tier), so
+    //     the excess is removed exactly where it was minted.
+    //   Pass 2 — only if the kind total is somehow still over (tier data
+    //     unknown / legacy log), trim LOWEST tier first to protect prestige.
+    const canonical = this.canonicalByTier(kind);
+    const wash = this.washByTier(kind);
+    const trimAtTier = (tier: number, want: number): number => {
+      let left = want;
+      const e = map.get(tier);
+      if (!e) return 0;
+      const trimClean = Math.min(left, e.clean);
+      if (trimClean > 0) { this.applyPoolDelta(kind, tier, -trimClean, 0, "hydrate-trim"); left -= trimClean; }
+      const e2 = map.get(tier);
+      if (left > 0 && e2) {
+        const trimDirty = Math.min(left, e2.dirty);
+        if (trimDirty > 0) { this.applyPoolDelta(kind, tier, 0, -trimDirty, "hydrate-trim"); left -= trimDirty; }
+      }
+      return want - left;
+    };
+    for (const tier of Array.from(map.keys()).sort((a, b) => b - a)) {
       if (excess <= 0) break;
       const e = map.get(tier);
       if (!e) continue;
-      const trimClean = Math.min(excess, e.clean);
-      if (trimClean > 0) {
-        this.applyPoolDelta(kind, tier, -trimClean, 0, "hydrate-trim");
-        excess -= trimClean;
-      }
-      if (excess <= 0) break;
-      // Re-fetch after first delta in case the entry was deleted.
-      const e2 = map.get(tier);
-      if (!e2) continue;
-      const trimDirty = Math.min(excess, e2.dirty);
-      if (trimDirty > 0) {
-        this.applyPoolDelta(kind, tier, 0, -trimDirty, "hydrate-trim");
-        excess -= trimDirty;
-      }
+      const out = (wash.get(tier) ?? 0) + (inFlightByTier?.get(tier) ?? 0);
+      const desiredPool = Math.max(0, (canonical.get(tier) ?? 0) - out);
+      const surplus = e.clean + e.dirty - desiredPool;
+      if (surplus > 0) excess -= trimAtTier(tier, Math.min(surplus, excess));
     }
-    this.log(`hydrate: trimmed ${owned - target} excess ${kind}(s) → canonical ${target} (was ${owned}: pool+wash+inFlight)`);
+    // Pass 2 — lowest tier first, never the prestige stock.
+    for (const tier of Array.from(map.keys()).sort((a, b) => a - b)) {
+      if (excess <= 0) break;
+      excess -= trimAtTier(tier, excess);
+    }
+    this.log(`hydrate: trimmed ${owned - target - excess} excess ${kind}(s) → canonical ${target} (was ${owned}: pool+wash+inFlight)`);
   }
 
   /** Admin: reset both pool and lifetime counters to STARTER +
@@ -1212,21 +1234,46 @@ export class DishwareSystem {
     // customer hands or mid-wash — that's normal flow, not a leak.
     let inFlightPlates = 0;
     let inFlightGlasses = 0;
+    const inFlightPlateTiers = new Map<number, number>();
+    const inFlightGlassTiers = new Map<number, number>();
     if (Array.isArray(inFlight)) {
       for (const e of inFlight) {
-        if (e.kind === "plate") inFlightPlates += e.count;
-        else if (e.kind === "glass") inFlightGlasses += e.count;
+        if (e.kind === "plate") {
+          inFlightPlates += e.count;
+          inFlightPlateTiers.set(e.tier, (inFlightPlateTiers.get(e.tier) ?? 0) + e.count);
+        } else if (e.kind === "glass") {
+          inFlightGlasses += e.count;
+          inFlightGlassTiers.set(e.tier, (inFlightGlassTiers.get(e.tier) ?? 0) + e.count);
+        }
       }
     }
-    this.reconcilePoolToLifetime("plate", inFlightPlates);
-    this.reconcilePoolToLifetime("glass", inFlightGlasses);
+    // 2026-08 audit — when the CLOUD already has dishware rows, the server is
+    // the pool's truth and this hydrate is just seeding a local snapshot that
+    // restoreFromCloud/applyPoolRow will overwrite moments later. The old code
+    // still pushed the save blob's counts up ABSOLUTELY (mirrorAllPools) and
+    // mirrored the trim deltas — on a cross-device login that rewrote the live
+    // server pool with hours-stale numbers, wiping every refund the server made
+    // since the other device's last save (then "LEAK N" appeared). Suppress ALL
+    // mirroring for this hydrate when cloud rows exist; the one legit absolute
+    // push left is the FIRST-EVER backfill (no cloud rows yet).
+    const cloudHasPools =
+      isServerSim("dishware") && !!this.cloud && this.cloud.listDishwarePools().length > 0;
+    const prevSuppress = this.suppressMirrorForReload;
+    if (cloudHasPools) this.suppressMirrorForReload = true;
+    try {
+      this.reconcilePoolToLifetime("plate", inFlightPlates, inFlightPlateTiers);
+      this.reconcilePoolToLifetime("glass", inFlightGlasses, inFlightGlassTiers);
+    } finally {
+      this.suppressMirrorForReload = prevSuppress;
+    }
 
     void lifetime; // save's lifetime field is ignored — canonical is from log
-    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass} (canonical), log entries: ${this.purchaseLog.length}`);
+    this.log(`hydrate → clean p${this.getClean("plate")}/g${this.getClean("glass")}, dirty p${this.getDirty("plate")}/g${this.getDirty("glass")}, lifetime p${this.lifetimeAddedPlate}/g${this.lifetimeAddedGlass} (canonical), log entries: ${this.purchaseLog.length}${cloudHasPools ? " · cloud has rows — hydrate mirror suppressed" : ""}`);
     // Phase E — push the post-hydrate pool snapshot to the cloud so
-    // subscribers see the loaded restaurant's dish inventory without
-    // waiting for the first per-action mutation.
-    this.mirrorAllPools();
+    // subscribers see the loaded restaurant's dish inventory without waiting
+    // for the first per-action mutation. FIRST-EVER backfill only — when the
+    // cloud already has rows they are the truth (see above).
+    if (!cloudHasPools) this.mirrorAllPools();
   }
 
   // === Rating bonus ===

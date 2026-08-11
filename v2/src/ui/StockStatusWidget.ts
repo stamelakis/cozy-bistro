@@ -363,8 +363,14 @@ export class StockStatusWidget {
         //   OVER: trims excess from highest-tier clean → dirty.
         // Lifetime stays unchanged either way — purchaseLog is
         // never rewritten.
+        // 2026-08 audit — while DISCONNECTED the restore only mutated the
+        // LOCAL pool (the cloud push silently no-ops), and the next sync
+        // stomped it right back — "the restore button didn't stick". Gate it
+        // on a live restaurant context, like the sell buttons.
         (anyLeak
-          ? `<div style="margin-top:6px"><button id="dish-recalibrate-btn" style="background:rgba(120,180,200,0.25);color:#fff5dc;border:1px solid rgba(120,180,200,0.5);border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:10px;font-weight:600">${plateLeak > 0 || glassLeak > 0 ? "Restore missing dishes" : "Trim excess dishes"}</button></div>`
+          ? (mainSellReady
+            ? `<div style="margin-top:6px"><button id="dish-recalibrate-btn" style="background:rgba(120,180,200,0.25);color:#fff5dc;border:1px solid rgba(120,180,200,0.5);border-radius:4px;padding:3px 8px;cursor:pointer;font:inherit;font-size:10px;font-weight:600">${plateLeak > 0 || glassLeak > 0 ? "Restore missing dishes" : "Trim excess dishes"}</button></div>`
+            : `<div style="margin-top:6px;color:#ffcf9a;font-size:10px">Reconnect to restore missing dishes (offline changes wouldn't stick).</div>`)
           : ""),
       `</div>`,
     );

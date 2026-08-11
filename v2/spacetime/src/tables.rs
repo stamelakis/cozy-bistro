@@ -1958,6 +1958,16 @@ pub struct ClueHunt {
     pub identity: Identity,
     pub found_csv: String,
     pub cycles: u32,
+    /// Anti-farm pacing (2026-08 audit): micros of the last accepted collect —
+    /// collect_clue rejects calls within its min-interval of this. Appended
+    /// LAST (schema rule).
+    #[default(0i64)]
+    pub last_collect_micros: i64,
+    /// Anti-farm pacing: after a completed 6-clue set, no clue can be
+    /// collected until this stamp — bounds the free-crate rate to the same
+    /// cadence as the regular supply crate. Appended LAST.
+    #[default(0i64)]
+    pub locked_until_micros: i64,
 }
 
 /// Phase H.40 — Current "on-menu" recipe set per restaurant. One row

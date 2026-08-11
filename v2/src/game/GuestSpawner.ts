@@ -661,7 +661,10 @@ function parseTiersCsv(csv: string): number[] {
   const out: number[] = [];
   for (const raw of csv.split(",")) {
     const n = parseInt(raw.trim(), 10);
-    out.push(Number.isFinite(n) && n > 0 ? n : 1);
+    // 0 is the POSITIONAL SENTINEL for "course had no clean dish to reserve"
+    // — it must survive the round-trip as 0 (coercing it to 1 minted a
+    // phantom T1 on every re-import). Only garbage falls back to 1.
+    out.push(Number.isFinite(n) && n >= 0 ? n : 1);
   }
   return out;
 }
@@ -1453,10 +1456,18 @@ export class GuestSpawner {
       this.cloud.markGuestDishesSettled(g.serverMirrorId);
     }
     // Eaten courses become dirty.
+    // 2026-08 audit — two rules for BOTH loops here:
+    //   • tier 0 = positional sentinel for a course whose reserveOne failed
+    //     (no physical dish) — skip it, but never filter it out of the array.
+    //   • missing recipe (order CSV shorter than the tiers CSV after an
+    //     import race, or a renamed recipe id) must NOT skip: the settle was
+    //     already claimed on the cloud row above, so nobody else will settle
+    //     this piece. Default kind to plate (same fallback the server uses)
+    //     so the COUNT is always preserved even if the kind is a guess.
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      if (g.reservedDishTiers[i] <= 0) continue; // sentinel — nothing reserved
       const recipe = g.order[i];
-      if (!recipe) continue;
-      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      const kind: DishKind = recipe?.category === "drink" ? "glass" : "plate";
       this.game.dishware.markDirty(kind, g.reservedDishTiers[i]);
     }
     // In-flight (not-yet-eaten) reservations return to the clean pool.
@@ -1468,9 +1479,9 @@ export class GuestSpawner {
     // dishware tooltip.  See DishwareSystem.addClean for the cap
     // rationale.
     for (let i = g.orderIndex; i < g.reservedDishTiers.length; i += 1) {
+      if (g.reservedDishTiers[i] <= 0) continue; // sentinel — nothing reserved
       const recipe = g.order[i];
-      if (!recipe) continue;
-      const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
+      const kind: DishKind = recipe?.category === "drink" ? "glass" : "plate";
       this.game.dishware.addClean(kind, g.reservedDishTiers[i], 1, true);
     }
   }
@@ -1495,7 +1506,9 @@ export class GuestSpawner {
     let n = 0;
     for (const g of this.guests) {
       if (g.dishesSettled) continue;
-      n += g.reservedDishTiers.length;
+      // Tier-0 sentinels hold a course's SLOT but reserve no physical dish —
+      // counting them would inflate the leak-watcher denominator.
+      for (const t of g.reservedDishTiers) if (t > 0) n += 1;
     }
     return n;
   }
@@ -1515,10 +1528,14 @@ export class GuestSpawner {
       // would dupe them in the save's recovery path.
       if (g.dishesSettled) continue;
       for (let i = 0; i < g.reservedDishTiers.length; i += 1) {
-        const recipe = g.order[i];
-        if (!recipe) continue;
-        const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
         const tier = g.reservedDishTiers[i];
+        if (tier <= 0) continue; // sentinel — no physical dish out
+        // Missing recipe → same plate fallback as settle, so the restore
+        // math's "out" term matches what settle will actually return —
+        // previously these were counted by the HUD denominator but omitted
+        // here, so pressing Restore mid-meal minted a duplicate.
+        const recipe = g.order[i];
+        const kind: DishKind = recipe?.category === "drink" ? "glass" : "plate";
         const key = `${kind}-${tier}`;
         byKey.set(key, (byKey.get(key) ?? 0) + 1);
       }
@@ -1953,11 +1970,19 @@ export class GuestSpawner {
       if (recipe) {
         const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";
         const reservedTier = this.game.dishware.reserveOne(kind);
-        if (reservedTier !== null) {
-          g.reservedDishTiers.push(reservedTier);
-          g.lastMirroredReservedTiers = undefined;
-          this.mirrorGuestReservedTiers(g);
-        }
+        // 2026-08 audit — reservedDishTiers is consumed POSITIONALLY against
+        // g.order (client + server settle both index tiers[i] ↔ order[i]).
+        // The server advances the course whether or not a clean dish existed,
+        // so a failed reserveOne must still hold this course's SLOT: push the
+        // tier-0 sentinel instead of pushing nothing. Pushing nothing shifted
+        // every later reservation one slot left — settling a plate's tier as
+        // a phantom GLASS and leaking the final reserved dish entirely (the
+        // recurring "LEAK/OVER → restore button" the user kept hitting).
+        // Every consumer (settle loops, in-flight counters, leftover meshes,
+        // server settle_guest_dishes) skips tier 0 in place.
+        g.reservedDishTiers.push(reservedTier !== null ? reservedTier : 0);
+        g.lastMirroredReservedTiers = undefined;
+        this.mirrorGuestReservedTiers(g);
       }
       g.state = "waitingForFood";
       g.stateClock = 0;
@@ -2348,6 +2373,13 @@ export class GuestSpawner {
       // off — the sim re-derives them as the guest advances.
       usedToilet: false,
       reservedDishTiers,
+      // 2026-08 audit — round-trip the settle claim. Without this, a reload
+      // during the guest's walk-out re-imported them "unsettled" with the
+      // full tier CSV and the despawn safety-net settled their dishes a
+      // SECOND time (OVER on both pools; the hydrate-trim then deleted real
+      // top-tier pieces to pay for the phantoms). Server also clears the
+      // CSV at settle now — this flag is the belt to that suspender.
+      dishesSettled: row.dishesSettled,
       serverMirrorId: row.id,
       // Phase M.16 — seed the guest-cutover cloud pose/state from THIS row so
       // renderGuestFromServer (update()'s guestMove branch) anchors the body to
@@ -3376,12 +3408,25 @@ export class GuestSpawner {
   private mirrorGuestReservedTiers(g: ActiveGuest): void {
     if (!isServerSim("guests") || !this.cloud) return;
     if (g.reservedDishTiers.length === 0) return;
+    // Settled guests are DONE — the server clears the row CSV at settle, so
+    // re-pushing the local copy would resurrect already-settled reservations.
+    if (g.dishesSettled) return;
     if (g.serverMirrorId == null) {
       g.serverMirrorId = this.cloud.findActiveGuestIdByClientTempId(g.id) ?? undefined;
     }
     if (g.serverMirrorId == null) return;
     const csv = g.reservedDishTiers.join(",");
-    if (g.lastMirroredReservedTiers === csv) return;
+    // 2026-08 audit — VERIFY against the actual server row instead of the
+    // old optimistic latch. The latch was set at SEND time with no ack, so a
+    // dropped send (socket blip, tab close race) was never retried: the
+    // server settled a short CSV on despawn and the un-recorded reservation
+    // became a permanent leak — the routine "sometimes I still need the
+    // restore button" generator. Now the row is read back from the
+    // subscription cache; until it echoes the local CSV, the (idempotent)
+    // push re-fires on each event/periodic tick — self-healing.
+    const rowCsv = this.cloud.getGuestReservedTiers(g.serverMirrorId);
+    if (rowCsv !== null && rowCsv === csv) { g.lastMirroredReservedTiers = csv; return; }
+    if (rowCsv === null && g.lastMirroredReservedTiers === csv) return; // row not readable — assume sent
     this.cloud.setGuestReservedTiers(g.serverMirrorId, csv);
     g.lastMirroredReservedTiers = csv;
   }
@@ -3574,6 +3619,7 @@ export class GuestSpawner {
       : 0;
 
     for (let i = 0; i < g.orderIndex && i < g.reservedDishTiers.length; i += 1) {
+      if (g.reservedDishTiers[i] <= 0) continue; // sentinel — no dish to leave behind
       const recipe = g.order[i];
       if (!recipe) continue;
       const kind: DishKind = recipe.category === "drink" ? "glass" : "plate";
@@ -4688,6 +4734,7 @@ export class GuestSpawner {
     let dishSatBonus = 0;
     for (let i = 0; i < g.reservedDishTiers.length; i += 1) {
       const tier = g.reservedDishTiers[i];
+      if (tier <= 0) continue; // sentinel — course served with no real dish
       const recipe = g.order[i];
       if (!recipe) continue;
       const kind: "plate" | "glass" = recipe.category === "drink" ? "glass" : "plate";

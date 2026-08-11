@@ -345,10 +345,18 @@ fn pick_target_plot(ctx: &ReducerContext, rng: &mut impl Rng, _from_x: f32, _fro
         // player hasn't autosaved yet. Use a neutral baseline so
         // fresh accounts still receive some traffic.
         let save = ctx.db.player_save().identity().find(b.owner_identity);
-        // Hard filters first — closed or full plots are out.
+        // Hard filters first — closed plots are out. restaurant_open is an
+        // explicit player toggle (eagerly pushed on change), so it's safe.
+        //
+        // 2026-08 audit — the free_seats == 0 gate is GONE. free_seats is
+        // written only by the foreground client's autosave, so it froze at
+        // whatever it was when the tab closed: log off at a full moment and
+        // the plot silently received ZERO pedestrian walk-ins for the entire
+        // offline stretch (same staleness class Phase 9.3 removed from
+        // try_server_spawn_guest). Real capacity is enforced downstream by
+        // the server's seat pre-assignment + demand cap at spawn time.
         if let Some(s) = &save {
             if !s.restaurant_open { continue; }
-            if s.free_seats == 0 { continue; }
         }
         let rating = save.as_ref().map(|s| s.rating_avg.max(0.0)).unwrap_or(3.0);
         // Weight = rating² + 1 so even a 0★ restaurant gets a small
