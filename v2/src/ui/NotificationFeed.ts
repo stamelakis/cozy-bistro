@@ -101,9 +101,9 @@ export class NotificationFeed {
     this.toastStack.id = "cb-notif-toasts";
     Object.assign(this.toastStack.style, {
       position: "fixed",
-      // Below the bell + below the timer tray's strip (top ~74–104) so
+      // Below the bell + below the timer tray's strip (top ~96–126) so
       // chips and toasts never stack on each other.
-      top: "112px",
+      top: "136px",
       left: "444px",
       display: "flex",
       flexDirection: "column-reverse", // newest (last appended) renders topmost
