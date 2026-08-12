@@ -95,7 +95,10 @@ export class Hud {
   private readonly game: Game;
   private readonly spawner: SpawnerAccessor;
   private readonly time: TimeControl;
-  private readonly actions: HudActions;
+  /** Public so the TopStrip's CommandDock reuses the exact same typed
+   * action map — one wiring, two surfaces (sidebar grid on mobile, dock
+   * tiles on desktop). */
+  readonly actions: HudActions;
   private readonly fields: Record<string, HTMLElement> = {};
   private readonly speedBtns: Record<string, HTMLButtonElement> = {};
   private openCloseBtn?: HTMLButtonElement;
@@ -385,7 +388,10 @@ export class Hud {
   /** Single icon row for opening all the modals. Tooltips on hover. */
   private buildModalIconRow(): void {
     // Two rows of 2 large labeled buttons + their secondary row.
+    // `cb-hud-buttons` — hidden on DESKTOP (the TopStrip CommandDock is the
+    // button surface there); still shown on mobile, whose drawer needs them.
     const row = document.createElement("div");
+    row.classList.add("cb-hud-buttons");
     Object.assign(row.style, {
       display: "grid", gridTemplateColumns: "repeat(2, 1fr)",
       gap: "5px", marginTop: "6px",
@@ -424,6 +430,7 @@ export class Hud {
         click: this.actions.openChat,        tint: "rgba(150, 200, 230, 0.22)" },
     ];
     const row2 = document.createElement("div");
+    row2.classList.add("cb-hud-buttons");
     Object.assign(row2.style, {
       display: "grid", gridTemplateColumns: "repeat(2, 1fr)",
       gap: "5px", marginTop: "5px",
@@ -484,6 +491,7 @@ export class Hud {
         click: this.actions.openFeedback,   tint: "rgba(220, 180, 140, 0.22)" },
     ];
     const row3 = document.createElement("div");
+    row3.classList.add("cb-hud-buttons");
     Object.assign(row3.style, {
       display: "grid", gridTemplateColumns: "1fr",
       marginTop: "4px",

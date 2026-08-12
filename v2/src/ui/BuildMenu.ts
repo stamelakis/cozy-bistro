@@ -621,7 +621,8 @@ export class BuildMenu {
   getPlacingDefId(): string | null { return this.placingDef?.id ?? null; }
 
   /** Toggle the build menu open/closed and refresh the title chevron. */
-  private toggleCollapsed(): void {
+  /** Public — the TopStrip's Build tile toggles the palette open/closed. */
+  toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
     if (this.bodyEl) this.bodyEl.style.display = this.collapsed ? "none" : "block";
     this.refreshTitle();

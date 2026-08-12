@@ -49,6 +49,7 @@ import { TipHearts } from "../ui/TipHearts";
 import { NotificationFeed } from "../ui/NotificationFeed";
 import { TimerTray, type TimerItem } from "../ui/TimerTray";
 import { TopStrip } from "../ui/TopStrip";
+import { CommandDock } from "../ui/CommandDock";
 import { TapBadges } from "../ui/TapBadges";
 import { GoalsWidget } from "../ui/GoalsWidget";
 import { FeedbackModal } from "../ui/FeedbackModal";
@@ -888,7 +889,12 @@ export class Engine {
     // exactly one place. MobileUI CSS pops the floor selector + camera
     // controls back out to their phone positions (position:fixed override).
     this.topStrip = new TopStrip(container);
-    this.floorSelector = new FloorSelector(this.topStrip.root, this.scene, this.camera, { hosted: true });
+    // Command dock — EVERY panel opener as a tile in the strip's second
+    // row (desktop; mobile keeps the sidebar grid). Reuses the Hud's typed
+    // action map so both surfaces share one wiring; the Build tile toggles
+    // the build palette (constructed later — the lambda is lazy).
+    new CommandDock(this.topStrip.rowDock, this.hud.actions, () => this.buildMenu?.toggleCollapsed());
+    this.floorSelector = new FloorSelector(this.topStrip.rowMain, this.scene, this.camera, { hosted: true });
     // Tapping a locked floor button offers to expand to the tier that unlocks
     // it (shared gate — same as the build/recipe/decor/pantry/staff locks).
     this.floorSelector.onLockedFloorClick = (tier) => showTierGate(this.game, tier, () => {
@@ -902,7 +908,7 @@ export class Engine {
     // The Home button reads the player's plot anchor from the scene so
     // it always snaps back to the current claimed building, even if the
     // player later moves to a different plot.
-    this.cameraControls = new CameraControls(this.topStrip.root, this.camera,
+    this.cameraControls = new CameraControls(this.topStrip.rowMain, this.camera,
       () => ({
         // The actual playable restaurant is hardcoded at world origin
         // — the multiplayer plot anchor only affects the PLACEHOLDER
@@ -1245,8 +1251,8 @@ export class Engine {
     // Beta feedback — the 💬 modal (Hud button opens it).
     this.feedbackModal = new FeedbackModal(container, this.cloud);
     // Patch A — notification feed (bell + toasts) and the timer tray.
-    this.timerTray = new TimerTray(this.topStrip.root, () => this.buildTimerItems(), { hosted: true });
-    this.notifFeed = new NotificationFeed(this.topStrip.root, { hosted: true });
+    this.timerTray = new TimerTray(this.topStrip.rowMain, () => this.buildTimerItems(), { hosted: true });
+    this.notifFeed = new NotificationFeed(this.topStrip.rowMain, { hosted: true });
     // Patch B — the three hands-on tap badges. Every tap's effect is a
     // server reducer (once-per-guest / cooldown / once-per-ticket).
     this.greetBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
