@@ -45,7 +45,7 @@ export class CommandDock {
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
-      gap: "5px",
+      gap: "4px",
       maxWidth: "100%",
     } as Partial<CSSStyleDeclaration>);
     const mkRow = (): HTMLDivElement => {
@@ -56,7 +56,7 @@ export class CommandDock {
         flexWrap: "wrap",
         justifyContent: "center",
         alignItems: "center",
-        gap: "5px",
+        gap: "4px",
       } as Partial<CSSStyleDeclaration>);
       wrap.appendChild(row);
       return row;
@@ -97,34 +97,34 @@ export class CommandDock {
 function makeTile(t: Tile): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.title = `${t.label.toUpperCase()} — ${t.tooltip}`;
+  // Every tile is labeled now ("make the small buttons wide — we have
+  // space"); the two rows differ by height + type scale, so the wide row
+  // still reads as the primary one.
   Object.assign(btn.style, {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    gap: "6px",
-    height: t.wide ? "34px" : "30px",
-    padding: t.wide ? "0 12px" : "0",
-    width: t.wide ? "auto" : "30px",
-    minWidth: t.wide ? "96px" : "30px",
+    gap: "5px",
+    height: t.wide ? "30px" : "26px",
+    padding: t.wide ? "0 12px" : "0 9px",
+    minWidth: t.wide ? "96px" : "0",
     background: t.tint,
     color: "#fff5dc",
     border: "1px solid rgba(255, 245, 220, 0.20)",
     borderRadius: "7px",
     cursor: "pointer",
-    font: "12px/1 system-ui, sans-serif",
+    font: t.wide ? "12px/1 system-ui, sans-serif" : "11px/1 system-ui, sans-serif",
     fontWeight: "700",
     letterSpacing: "0.02em",
     flexShrink: "0",
   } as Partial<CSSStyleDeclaration>);
   const icon = document.createElement("span");
   icon.textContent = t.icon;
-  icon.style.fontSize = t.wide ? "15px" : "16px";
+  icon.style.fontSize = t.wide ? "15px" : "13px";
   btn.appendChild(icon);
-  if (t.wide) {
-    const label = document.createElement("span");
-    label.textContent = t.label;
-    btn.appendChild(label);
-  }
+  const label = document.createElement("span");
+  label.textContent = t.label;
+  btn.appendChild(label);
   // One-time "look here" pulse for panels new players kept missing —
   // rides the tile now that the panels themselves start hidden.
   if (t.attnKey && !localStorage.getItem(t.attnKey)) {

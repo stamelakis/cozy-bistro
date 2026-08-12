@@ -1258,9 +1258,9 @@ export class Engine {
     // Beta feedback — the 💬 modal (Hud button opens it).
     this.feedbackModal = new FeedbackModal(container, this.cloud);
     // Patch A — notification feed (bell + toasts) and the timer tray.
-    // Right zone: 🔔 bell on top, timer chips stacked beneath it.
-    this.notifFeed = new NotificationFeed(this.topStrip.zoneRight, { hosted: true });
+    // Right zone: timer chips stack to the LEFT of the 🔔 bell.
     this.timerTray = new TimerTray(this.topStrip.zoneRight, () => this.buildTimerItems(), { hosted: true });
+    this.notifFeed = new NotificationFeed(this.topStrip.zoneRight, { hosted: true });
     // Patch B — the three hands-on tap badges. Every tap's effect is a
     // server reducer (once-per-guest / cooldown / once-per-ticket).
     this.greetBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {

@@ -84,6 +84,21 @@ export class CameraControls {
       } as Partial<CSSStyleDeclaration>);
     parent.appendChild(root);
 
+    // Hosted (TopStrip): the zoom cluster and rotation cluster stack as
+    // TWO ROWS (zoom above rotation) to halve the nav zone's width; the
+    // 🏠 home button sits to their right spanning both rows.
+    let clusterHost: HTMLElement = root;
+    if (this.hosted) {
+      const wrap = document.createElement("div");
+      Object.assign(wrap.style, {
+        display: "flex",
+        flexDirection: "column",
+        gap: "3px",
+      } as Partial<CSSStyleDeclaration>);
+      root.appendChild(wrap);
+      clusterHost = wrap;
+    }
+
     // ── Zoom column ────────────────────────────────────────────────
     const zoomCol = this.makeColumn();
     const zoomIn = this.makeBtn("+", "Zoom in",
@@ -97,7 +112,7 @@ export class CameraControls {
     zoomCol.appendChild(zoomPct);
     zoomCol.appendChild(zoomOut);
     zoomCol.appendChild(zoomReset);
-    root.appendChild(zoomCol);
+    clusterHost.appendChild(zoomCol);
     this.zoomPct = zoomPct;
 
     // ── Rotation column ────────────────────────────────────────────
@@ -130,7 +145,7 @@ export class CameraControls {
     rotCol.appendChild(dirHolder);
     rotCol.appendChild(rotRight);
     rotCol.appendChild(rotReset);
-    root.appendChild(rotCol);
+    clusterHost.appendChild(rotCol);
     this.dirLabel = dirHolder;
     this.dirArrow = dirArrow;
 
@@ -144,8 +159,9 @@ export class CameraControls {
     homeBtn.textContent = "🏠";
     homeBtn.title = "Recenter on my restaurant (default zoom + rotation, keep current floor)";
     Object.assign(homeBtn.style, {
-      height: this.hosted ? "34px" : "100%",
-      minHeight: this.hosted ? "34px" : "98px",
+      // Hosted: spans both stacked nav rows (zoom + rotation ≈ 26+26+3).
+      height: this.hosted ? "55px" : "100%",
+      minHeight: this.hosted ? "55px" : "98px",
       padding: "0 8px",
       background: "rgba(220, 180, 130, 0.22)",
       color: "#fff5dc",

@@ -60,10 +60,10 @@ export class NotificationFeed {
     this.bell.textContent = "🔔";
     this.bell.title = "Notifications";
     Object.assign(this.bell.style, hosted
-      ? { // TopStrip mode — top of the strip's right zone (timers stack below)
+      ? { // TopStrip mode — right end of the strip (timers stack to its left)
         position: "relative", // containing block for the unread badge
-        width: "36px",
-        height: "36px",
+        width: "32px",
+        height: "32px",
         borderRadius: "50%",
         background: "rgba(255, 245, 220, 0.08)",
         color: "#fff5dc",

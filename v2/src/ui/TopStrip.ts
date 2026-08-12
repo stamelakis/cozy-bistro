@@ -53,8 +53,8 @@ export class TopStrip {
       display: "flex",
       flexDirection: "row",
       alignItems: "center",
-      gap: "18px",
-      padding: "8px 14px",
+      gap: "16px",
+      padding: "5px 12px", // thin — every spare vertical pixel is play area
       background: "rgba(20, 14, 10, 0.86)",
       borderRadius: "12px",
       boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
@@ -76,17 +76,20 @@ export class TopStrip {
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
-      gap: "5px",
+      gap: "4px",
       minWidth: "0",
     } as Partial<CSSStyleDeclaration>);
     barMain.appendChild(this.zoneMiddle);
 
+    // Right zone is a ROW: timer chips (stacked column) to the LEFT of the
+    // bell, so any number of timers can pile downward without pushing the
+    // bell around.
     this.zoneRight = document.createElement("div");
     Object.assign(this.zoneRight.style, {
       display: "flex",
-      flexDirection: "column",
-      alignItems: "flex-end",
-      gap: "5px",
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: "8px",
       flexShrink: "0",
       alignSelf: "flex-start",
     } as Partial<CSSStyleDeclaration>);
