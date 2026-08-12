@@ -132,6 +132,22 @@ function buildToast(): HTMLElement {
 let eventBannerEl: HTMLElement | null = null;
 let eventBannerTimer: number | null = null;
 
+/** One-time "look here!" pulse for panels new players kept missing (the
+ * bottom RECIPE MENU + CHAT bars). Gold glow until first opened; respects
+ * prefers-reduced-motion with a static glow instead. Style injected once. */
+export function ensureAttnPulseStyle(): void {
+  if (document.getElementById("cb-attn-style")) return;
+  const s = document.createElement("style");
+  s.id = "cb-attn-style";
+  s.textContent =
+    "@keyframes cbAttnPulse{0%,100%{box-shadow:0 4px 18px rgba(0,0,0,0.4)}" +
+    "50%{box-shadow:0 4px 18px rgba(0,0,0,0.4),0 0 16px 3px rgba(255,217,134,0.55)}}" +
+    ".cb-attn-pulse{animation:cbAttnPulse 2.2s ease-in-out infinite}" +
+    "@media (prefers-reduced-motion:reduce){.cb-attn-pulse{animation:none;" +
+    "box-shadow:0 0 14px 2px rgba(255,217,134,0.5)}}";
+  document.head.appendChild(s);
+}
+
 export function showEventBanner(msg: string, opts?: { icon?: string; accent?: string; ms?: number }): void {
   const icon = opts?.icon ?? "🎉";
   const accent = opts?.accent ?? "#ffd966";

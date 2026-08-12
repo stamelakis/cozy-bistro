@@ -720,6 +720,8 @@ export class Engine {
       openAnalytics: () => this.analyticsModal.show(),
       openHelp: () => this.helpModal.show(),
       openFeedback: () => this.feedbackModal.show(),
+      openRecipes: () => this.menuPanel.expand(),
+      openChat: () => this.chatPanel?.setMinimized(false),
       openStats: () => this.statsModal.show(),
       openAchievements: () => this.achievementsModal.show(),
       // P1.7 — multi-slot picker is a DEV-only convenience now.

@@ -36,7 +36,7 @@ export class TimerTray {
     // so the ServiceAlertBanner (top:96, usually hidden) stays clear.
     Object.assign(this.root.style, {
       position: "fixed",
-      top: "60px",
+      top: "74px", // fully below the floor selector (top:12 + ~52px tall)
       left: "50%",
       transform: "translateX(-50%)",
       display: "none",

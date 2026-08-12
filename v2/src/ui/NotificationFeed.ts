@@ -60,8 +60,11 @@ export class NotificationFeed {
     this.bell.title = "Notifications";
     Object.assign(this.bell.style, {
       position: "fixed",
-      right: "14px",
-      bottom: "64px", // clear of the bottom MENU bar
+      // Top band, just right of the camera controls (top:12 left:280,
+      // ~150px wide) — high where eyes actually go. Top-right proper is
+      // owned by the BuildMenu, bottom-right proved invisible to testers.
+      top: "18px",
+      left: "444px",
       width: "40px",
       height: "40px",
       borderRadius: "50%",
@@ -98,12 +101,14 @@ export class NotificationFeed {
     this.toastStack.id = "cb-notif-toasts";
     Object.assign(this.toastStack.style, {
       position: "fixed",
-      right: "14px",
-      bottom: "112px",
+      // Below the bell + below the timer tray's strip (top ~74–104) so
+      // chips and toasts never stack on each other.
+      top: "112px",
+      left: "444px",
       display: "flex",
-      flexDirection: "column-reverse", // newest nearest the bell
+      flexDirection: "column-reverse", // newest (last appended) renders topmost
       gap: "6px",
-      alignItems: "flex-end",
+      alignItems: "flex-start",
       zIndex: "16",
       pointerEvents: "none", // individual toasts re-enable
     } as Partial<CSSStyleDeclaration>);
@@ -114,8 +119,8 @@ export class NotificationFeed {
     this.logPanel.id = "cb-notif-log";
     Object.assign(this.logPanel.style, {
       position: "fixed",
-      right: "14px",
-      bottom: "112px",
+      top: "64px",
+      left: "444px",
       width: "min(320px, calc(100vw - 28px))",
       maxHeight: "46vh",
       overflowY: "auto",
@@ -176,7 +181,7 @@ export class NotificationFeed {
       cursor: e.action ? "pointer" : "default",
       pointerEvents: "auto",
       opacity: this.reducedMotion ? "1" : "0",
-      transform: this.reducedMotion ? "none" : "translateX(14px)",
+      transform: this.reducedMotion ? "none" : "translateX(-14px)", // slide in from the left edge
       transition: this.reducedMotion ? "none" : "opacity 0.22s ease, transform 0.22s ease",
     } as Partial<CSSStyleDeclaration>);
     const icon = document.createElement("span");
@@ -207,7 +212,7 @@ export class NotificationFeed {
       gone = true;
       if (this.reducedMotion) { t.remove(); return; }
       t.style.opacity = "0";
-      t.style.transform = "translateX(14px)";
+      t.style.transform = "translateX(-14px)";
       window.setTimeout(() => t.remove(), 240);
     };
     window.setTimeout(dismiss, TOAST_LIFE_MS);

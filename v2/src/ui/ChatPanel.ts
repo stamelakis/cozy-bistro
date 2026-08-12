@@ -1,4 +1,5 @@
 import { SpacetimeClient } from "../cloud/SpacetimeClient";
+import { ensureAttnPulseStyle } from "./uiHints";
 
 /**
  * Always-on bottom-left chat panel — sits in the strip between the
@@ -111,6 +112,7 @@ export class ChatPanel {
       display: "flex",
       flexDirection: "column",
       background: "rgba(20, 14, 10, 0.86)",
+      // (one-time attention pulse class added below for new players)
       color: "#fff5dc",
       font: "12px/1.4 system-ui, sans-serif",
       // All four corners rounded so the minimized "title-bar only"
@@ -125,6 +127,12 @@ export class ChatPanel {
       overflow: "hidden",
     } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
+    // One-time attention pulse until first opened — new PC players kept
+    // missing the bottom bars entirely.
+    if (!localStorage.getItem("cb-attn-chat")) {
+      ensureAttnPulseStyle();
+      this.root.classList.add("cb-attn-pulse");
+    }
     console.log("[ChatPanel] mounted at left:280, bottom:12 (root attached to:", parent.tagName, ")");
 
     // === Title bar (always visible — drives minimize toggle) ===
@@ -556,6 +564,11 @@ export class ChatPanel {
   setMinimized(min: boolean): void {
     this.minimized = min;
     this.applyMinimizedStyles();
+    // First open dismisses the new-player attention pulse for good.
+    if (!min && !localStorage.getItem("cb-attn-chat")) {
+      localStorage.setItem("cb-attn-chat", "1");
+      this.root.classList.remove("cb-attn-pulse");
+    }
   }
 
   /** Apply the visual state for `this.minimized`. Split out from

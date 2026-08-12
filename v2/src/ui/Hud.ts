@@ -23,6 +23,11 @@ export interface TimeControl {
 export interface HudActions {
   /** Beta feedback modal (💬). */
   openFeedback: () => void;
+  /** Expand the bottom-center RECIPE MENU carousel (discoverability
+   * shortcut — testers kept missing the bottom bars on PC). */
+  openRecipes: () => void;
+  /** Expand the bottom-left chat panel (same discoverability reason). */
+  openChat: () => void;
   openLedger: () => void;
   openAnalytics: () => void;
   openHelp: () => void;
@@ -408,6 +413,15 @@ export class Hud {
           "See whether the last few days are trending up or down so you know whether your last " +
           "build / upgrade actually helped.",
         click: this.actions.openStats,       tint: "rgba(140, 180, 200, 0.22)" },
+      { icon: "🍽 Recipes",    title:
+          "RECIPE MENU — choose which dishes you serve.\n" +
+          "Opens the dish carousel (the bar at the bottom-center of the screen): browse by course, " +
+          "see price / profit / ingredients, and toggle dishes on or off your menu.",
+        click: this.actions.openRecipes,     tint: "rgba(230, 170, 120, 0.22)" },
+      { icon: "💬 Chat",       title:
+          "CHAT — talk with the other owners on the street.\n" +
+          "Opens the chat panel (bottom-left). Global channel plus private messages.",
+        click: this.actions.openChat,        tint: "rgba(150, 200, 230, 0.22)" },
     ];
     const row2 = document.createElement("div");
     Object.assign(row2.style, {

@@ -4,6 +4,7 @@ import { getRecipeLuxuryTier, maxActiveRecipesPerCategory } from "../systems/Coo
 import { APPLIANCE_LABELS } from "../data/types";
 import type { ApplianceId, RecipeDefinition } from "../data/types";
 import { attachTooltip } from "./tooltip";
+import { ensureAttnPulseStyle } from "./uiHints";
 import { showTierGate } from "./tierUnlock";
 import { recipeIcon, ingredientIcon, recipeImage } from "./foodIcons";
 
@@ -55,6 +56,28 @@ export class MenuPanel {
   private collapsed = true;
   private ci = 0; // course index (0..4)
   private di = 0; // dish index within the course
+
+  /** Programmatic open — the sidebar's 🍽 Recipes shortcut. */
+  expand(): void {
+    this.setCollapsed(false);
+  }
+
+  private setCollapsed(c: boolean): void {
+    this.collapsed = c;
+    this.body.style.display = c ? "none" : "block";
+    this.titleEl.textContent = c
+      ? "🍽 RECIPE MENU ▾  (click to expand)"
+      : "🍽 RECIPE MENU ▴  (click to collapse)";
+    if (!c) {
+      this.lastSig = "";
+      this.render();
+      // First open dismisses the attention pulse for good.
+      if (!localStorage.getItem("cb-attn-recipes")) {
+        localStorage.setItem("cb-attn-recipes", "1");
+        this.root.classList.remove("cb-attn-pulse");
+      }
+    }
+  }
 
   // Persistent element refs — built once, mutated by render(). Keeping
   // the interactive controls (arrows, course buttons, toggle, upgrade)
@@ -130,15 +153,18 @@ export class MenuPanel {
     const header = document.createElement("div");
     header.className = "cbm-header";
     const title = document.createElement("div");
-    title.textContent = "MENU ▾  (click to expand)";
+    // "RECIPE MENU" not "MENU" — testers read the old label as app chrome
+    // and never realized the dish carousel lived here.
+    title.textContent = "🍽 RECIPE MENU ▾  (click to expand)";
     Object.assign(title.style, { fontWeight: "600", fontSize: "13px", cursor: "pointer", flex: "1" } as Partial<CSSStyleDeclaration>);
-    title.onclick = () => {
-      this.collapsed = !this.collapsed;
-      this.body.style.display = this.collapsed ? "none" : "block";
-      title.textContent = this.collapsed ? "MENU ▾  (click to expand)" : "MENU ▴  (click to collapse)";
-      if (!this.collapsed) { this.lastSig = ""; this.render(); }
-    };
+    title.onclick = () => this.setCollapsed(!this.collapsed);
     this.titleEl = title;
+    // One-time attention pulse until the player opens it once — the bottom
+    // bars proved invisible to new PC players.
+    if (!localStorage.getItem("cb-attn-recipes")) {
+      ensureAttnPulseStyle();
+      this.root.classList.add("cb-attn-pulse");
+    }
     header.appendChild(title);
     // "Your menu" — preview the on-menu dishes the way a seated customer reads
     // them. Stops propagation so it doesn't toggle the panel collapse.
