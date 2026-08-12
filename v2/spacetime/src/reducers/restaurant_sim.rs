@@ -3999,7 +3999,10 @@ pub fn claim_recycle(ctx: &ReducerContext, restaurant_id: u64) -> Result<(), Str
         return Err("Only the owner can claim recycle".into());
     }
     const RECYCLE_REWARD_CENTS: i64 = 200; // $2 — matches client RECYCLE_REWARD
-    const MIN_INTERVAL_MICROS: i64 = 8_000_000; // 8 s (< 9 s spawn interval)
+    // 2026-08-12 — litter pickup went MANUAL (player taps each piece), so
+    // claims arrive in bursts; the client drips them out ~2.6 s apart.
+    // Still below the ~9 s spawn rate on average because pieces are finite.
+    const MIN_INTERVAL_MICROS: i64 = 2_500_000; // 2.5 s
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     if r.last_recycle_micros != 0 && now - r.last_recycle_micros < MIN_INTERVAL_MICROS {
         return Ok(()); // too soon — silent no-op
@@ -4576,6 +4579,16 @@ fn try_restock_pantry(
     restaurant_id: u64,
     needed: &[String],
 ) {
+    // 2026-08-12 STAFFING GATE — automatic grocery buying is the ERRAND
+    // HELPERS' job and requires the player's Auto-shop toggle. No active
+    // helper hired, or auto-shop off → no silent purchases; the kitchen
+    // runs on what's in the pantry (or the player restocks manually).
+    let auto_shop_on = ctx.db.restaurant().id().find(restaurant_id)
+        .map(|r| r.auto_shop_enabled)
+        .unwrap_or(true);
+    if !auto_shop_on || !has_active_role(ctx, restaurant_id, "errand") {
+        return;
+    }
     let mut accrued_cents: i64 = 0;
     let mut restocked_count: u32 = 0;
     for ing in needed {
@@ -6335,6 +6348,9 @@ fn try_dispatch_errand_trip(ctx: &ReducerContext, rid: u64) {
     // waiter / take-order dispatchers), so the server is the sole
     // detector in both modes.
     let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
+    // 2026-08-12 — respect the player's Auto-shop toggle: OFF means the
+    // helpers stand down and the player restocks manually from the Pantry.
+    if !r.auto_shop_enabled { return; }
 
     // Find an idle errand helper (state=idle AND no errand_phase set).
     // Also build a set of ingredient_ids ALREADY on the way so we
@@ -7841,7 +7857,17 @@ fn tick_guest_state(ctx: &ReducerContext, guest_id: u64, dt_ms: i64, restaurant_
         // through a take-order trip. ORDERING_FALLBACK_MS is longer
         // than TAKE_ORDER_DWELL_MS so foreground play's real waiter
         // dwell wins when both are firing.
-        "ordering" if new_clock >= ORDERING_FALLBACK_MS =>
+        //
+        // 2026-08-12 STAFFING GATE — the fallback exists to cover BUSY
+        // service staff, not ABSENT ones. With no active waiter (barman for
+        // bar seats) on the roster, nobody can ever take the order: the
+        // guest waits out their order patience and leaves angry — and,
+        // crucially, no ticket is created, so no ingredients are consumed
+        // and no groceries are bought. (This unguarded fallback was the
+        // engine behind "my frozen restaurant kept buying ingredients".)
+        "ordering" if new_clock >= ORDERING_FALLBACK_MS
+            && has_active_role(ctx, g.restaurant_id,
+                if g.seat_at_bar { "barman" } else { "waiter" }) =>
             Some(("waitingForFood".to_string(), 0)),
         // waitingForFood → eating when ANY active_ticket bound to this
         // guest has state "delivered" (H.8 waiter set it on arrival
@@ -10037,6 +10063,30 @@ pub fn mark_guest_dishes_settled(
 /// the despawn path deletes the row (so re-entry is impossible). The
 /// dishes_settled flag flip is therefore optional — included as a
 /// defense-in-depth marker in case future code reuses the row.
+/// STAFFING GATES (2026-08-12) — "no orders without waiters, no cooking
+/// without cooks, no shopping without helpers." True when the roster has at
+/// least one ACTIVE (non-benched) member of the role. Checked at the economy
+/// choke points so a staff-less restaurant consumes and spends NOTHING —
+/// guests still arrive, wait, and leave angry, but the wallet is untouched.
+fn has_active_role(ctx: &ReducerContext, rid: u64, role: &str) -> bool {
+    ctx.db.hired_staff_member().restaurant_id().filter(rid)
+        .any(|m| m.role == role && !m.is_deactivated)
+}
+
+/// Mirror of the client's Pantry "Auto-shop" toggle (owner-pushed).
+#[reducer]
+pub fn set_auto_shop_enabled(ctx: &ReducerContext, restaurant_id: u64, enabled: bool) -> Result<(), String> {
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    if r.owner != ctx.sender {
+        return Err("Only the owner can toggle auto-shop".into());
+    }
+    if r.auto_shop_enabled != enabled {
+        ctx.db.restaurant().id().update(Restaurant { auto_shop_enabled: enabled, ..r });
+    }
+    Ok(())
+}
+
 /// Kitchen throughput — prep counters ("prep-counter" def) speed the whole
 /// kitchen: 8% off cook time each, at most two counted (max −16%). Read at
 /// claim time so it composes with chef training.
@@ -10336,6 +10386,16 @@ fn auto_place_next_course(ctx: &ReducerContext, g: &ActiveGuest, idx_override: O
     let appliance = appliances[idx].to_string();
     let base_cook_seconds_ms = cook_seconds[idx];
 
+    // 2026-08-12 STAFFING GATE — no cooking without a cook. Without an
+    // active chef (barman for bar drinks) on the roster, do NOT create the
+    // ticket: no ingredient consumption, no JIT grocery buy, nothing. The
+    // ticketless watchdog walks the guest out after 120 s ("the kitchen
+    // can't serve them") — the honest outcome for an unstaffed kitchen.
+    let cook_role = if appliance == "bar" { "barman" } else { "chef" };
+    if !has_active_role(ctx, g.restaurant_id, cook_role) {
+        return None;
+    }
+
     // Phase 9.50 — COOKED-FOOD REUSE. Before spending ingredients on a
     // fresh cook, see if the pool already holds a dish of this exact
     // recipe — one a previous customer left behind (guest_id == 0),
@@ -10585,6 +10645,12 @@ pub fn place_order(
     // Unseeded recipes (empty ingredients vec) silently no-op,
     // matching auto_place_next_course's "graceful degradation"
     // semantics.
+    // 2026-08-12 STAFFING GATE — same rule as auto_place_next_course: an
+    // unstaffed kitchen creates no tickets, consumes nothing, buys nothing.
+    let cook_role = if appliance == "bar" { "barman" } else { "chef" };
+    if !has_active_role(ctx, g.restaurant_id, cook_role) {
+        return Ok(()); // silent — the ticketless watchdog handles the guest
+    }
     let needed = lookup_recipe_ingredients(ctx, &recipe_id);
     if !needed.is_empty() && !pantry_has_all(ctx, g.restaurant_id, &needed) {
         try_restock_pantry(ctx, g.restaurant_id, &needed);

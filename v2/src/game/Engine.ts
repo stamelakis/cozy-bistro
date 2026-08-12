@@ -160,6 +160,7 @@ export class Engine {
   readonly greetBadges: TapBadges;
   readonly busBadges: TapBadges;
   readonly stirBadges: TapBadges;
+  readonly litterBadges: TapBadges;
   private goalsWidget?: GoalsWidget;
   /** Edge-trigger state for the 1 Hz notification detections. */
   private readonly feedSeen = {
@@ -1265,7 +1266,16 @@ export class Engine {
         this.sfx?.ding?.();
       },
     });
-    for (const b of [this.greetBadges, this.busBadges, this.stirBadges]) {
+    // 2026-08-12 — litter pickup went MANUAL: a ♻ badge over each dropped
+    // piece; tapping collects it (+$2, dripped through the server claim).
+    this.litterBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
+      icon: "♻",
+      title: "Pick up this litter (+$2)",
+      onTap: (pieceId) => {
+        if (this.trash?.collect(pieceId)) this.sfx?.ding?.();
+      },
+    });
+    for (const b of [this.greetBadges, this.busBadges, this.stirBadges, this.litterBadges]) {
       b.getFocusedFloor = () => this.scene.getFocusedStorey();
     }
     // Phase 9.37 — gameplay pops (+$N, tips, ratings, cleaning) follow the
@@ -3471,8 +3481,16 @@ export class Engine {
     // weekly-challenge tally (setChampionCount repaints only on change).
     if (this.cloud.hasRestaurantContext()) {
       this.scene.setChampionCount(this.cloud.getChampionCount(this.cloud.getMyHex()));
+      // Auto-shop toggle — one-time boot sync (covers hydrate setting the
+      // field before the cloud was ready), then live pushes via the setter.
+      if (!this.autoShopSynced) {
+        this.autoShopSynced = true;
+        this.game.onAutoShopChanged = (v) => this.cloud.setAutoShopEnabled(v);
+        this.cloud.setAutoShopEnabled(this.game.autoShopEnabled);
+      }
     }
   }
+  private autoShopSynced = false;
 
   private startRushScheduler(): void {
     if (this.rushScheduled) return;
@@ -5135,6 +5153,11 @@ export class Engine {
         })));
       }
     }
+    // ♻ one badge per dropped litter piece on the sidewalk (manual pickup).
+    this.litterBadges.update(
+      this.visitMode.isVisiting() || !this.trash
+        ? []
+        : this.trash.listPieces().map((p) => ({ key: p.id, x: p.x, y: 0.55, z: p.z, floor: 0 })));
     this.saver.update(rawDt);
     // Phase 9.42 — health badge (~1 Hz internally), reads the server scan.
     this.updateHealthBadge(rawDt);

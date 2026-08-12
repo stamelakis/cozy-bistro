@@ -1644,6 +1644,14 @@ export class SpacetimeClient {
     return out;
   }
 
+  /** Mirror the Pantry "Auto-shop" toggle to the server — its JIT restock
+   * + errand dispatch are gated on restaurant.auto_shop_enabled. */
+  setAutoShopEnabled(enabled: boolean): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try { this.conn.reducers.setAutoShopEnabled({ restaurantId: this.restaurantId, enabled }); }
+    catch (e) { console.warn("[Cloud] setAutoShopEnabled failed:", e); }
+  }
+
   // ─── Beta feedback ──────────────────────────────────────────────────
 
   submitFeedback(category: string, message: string): void {

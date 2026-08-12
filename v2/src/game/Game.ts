@@ -180,6 +180,17 @@ export class Game {
    * already on. Existing saves keep whatever they had — see hydrate, which
    * treats a missing flag as on so nobody's auto-shop silently switches off. */
   autoShopEnabled = false;
+  /** Engine wires this to push the Auto-shop toggle to the SERVER
+   * (restaurant.auto_shop_enabled) — the server's JIT restock + errand
+   * dispatch are gated on it, so the toggle must not be client-only. */
+  onAutoShopChanged?: (enabled: boolean) => void;
+  /** The one mutation path for the Auto-shop toggle (UI buttons call this,
+   * not the field) so every flip reaches the server mirror. */
+  setAutoShopEnabled(enabled: boolean): void {
+    if (this.autoShopEnabled === enabled) return;
+    this.autoShopEnabled = enabled;
+    this.onAutoShopChanged?.(enabled);
+  }
   /** Whether the restaurant is OPEN for business. When CLOSED, rent + staff
    * wages are PAUSED (and no guests spawn). Persisted in the save blob +
    * mirrored to player_save.restaurant_open so the server's offline rent /

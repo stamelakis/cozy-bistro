@@ -564,6 +564,7 @@ export const Restaurant = __t.object("Restaurant", {
   lastCrateMicros: __t.i64(),
   lastCrateGift: __t.option(__t.string()),
   lastBusSeatMicros: __t.i64(),
+  autoShopEnabled: __t.bool(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

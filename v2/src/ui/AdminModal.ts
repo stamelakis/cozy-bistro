@@ -740,7 +740,7 @@ export class AdminModal {
       this.game.dishware.adminSoilAll();
     }));
     row.appendChild(this.actionButton("Toggle auto-shop", "neutral", () => {
-      this.game.autoShopEnabled = !this.game.autoShopEnabled;
+      this.game.setAutoShopEnabled(!this.game.autoShopEnabled);
     }));
     section.appendChild(row);
     // Dishware reconciliation — undoes drift from the pre-fix

@@ -587,6 +587,12 @@ pub struct Restaurant {
     /// them. Appended LAST for an additive migration.
     #[default(0i64)]
     pub last_bus_seat_micros: i64,
+    /// Mirror of the client's Pantry "Auto-shop" toggle. Server-side
+    /// automatic grocery buying (JIT restock + errand dispatch) is allowed
+    /// ONLY when this is on AND an active errand helper is hired — the
+    /// helpers do the shopping, nothing else does. Appended LAST.
+    #[default(true)]
+    pub auto_shop_enabled: bool,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`

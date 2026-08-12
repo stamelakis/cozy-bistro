@@ -188,7 +188,7 @@ export class PantryModal {
       font: "inherit",
       width: "100%",
     } as Partial<CSSStyleDeclaration>);
-    this.toggle.onclick = () => { this.game.autoShopEnabled = !this.game.autoShopEnabled; this.refresh(); };
+    this.toggle.onclick = () => { this.game.setAutoShopEnabled(!this.game.autoShopEnabled); this.refresh(); };
     this.ingredientsPane.appendChild(this.toggle);
 
     // Per-ingredient stock-target selector (min 3, default 5). The auto-shop

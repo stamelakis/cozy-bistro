@@ -127,6 +127,7 @@ import SendChatGlobalReducer from "./send_chat_global_reducer";
 import SendChatPrivateReducer from "./send_chat_private_reducer";
 import SendFriendRequestReducer from "./send_friend_request_reducer";
 import SetActiveMenuReducer from "./set_active_menu_reducer";
+import SetAutoShopEnabledReducer from "./set_auto_shop_enabled_reducer";
 import SetBoostExpiresAtReducer from "./set_boost_expires_at_reducer";
 import SetCloudDayHistoryReducer from "./set_cloud_day_history_reducer";
 import SetCloudMoneyReducer from "./set_cloud_money_reducer";
@@ -1126,6 +1127,7 @@ const reducersSchema = __reducers(
   __reducerSchema("send_chat_private", SendChatPrivateReducer),
   __reducerSchema("send_friend_request", SendFriendRequestReducer),
   __reducerSchema("set_active_menu", SetActiveMenuReducer),
+  __reducerSchema("set_auto_shop_enabled", SetAutoShopEnabledReducer),
   __reducerSchema("set_boost_expires_at", SetBoostExpiresAtReducer),
   __reducerSchema("set_cloud_day_history", SetCloudDayHistoryReducer),
   __reducerSchema("set_cloud_money", SetCloudMoneyReducer),
