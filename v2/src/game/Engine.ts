@@ -48,6 +48,7 @@ import { StatusBubbles, type StatusEntry } from "../ui/StatusBubbles";
 import { TipHearts } from "../ui/TipHearts";
 import { NotificationFeed } from "../ui/NotificationFeed";
 import { TimerTray, type TimerItem } from "../ui/TimerTray";
+import { TopStrip } from "../ui/TopStrip";
 import { TapBadges } from "../ui/TapBadges";
 import { GoalsWidget } from "../ui/GoalsWidget";
 import { FeedbackModal } from "../ui/FeedbackModal";
@@ -157,6 +158,7 @@ export class Engine {
   // Patch C — daily goals card.
   readonly notifFeed: NotificationFeed;
   readonly timerTray: TimerTray;
+  private topStrip!: TopStrip;
   readonly greetBadges: TapBadges;
   readonly busBadges: TapBadges;
   readonly stirBadges: TapBadges;
@@ -881,7 +883,12 @@ export class Engine {
     // horizontal strip at the top. Constructed AFTER the scene exists
     // so it can read NUM_STOREYS / STOREY_HEIGHT statics. The
     // onFocusChanged callback is wired AFTER BuildMenu exists below.
-    this.floorSelector = new FloorSelector(container, this.scene, this.camera);
+    // Unified TOP STRIP (PC) — one continuous bar hosting floor selector,
+    // camera controls, timer chips, and the 🔔 bell, so "controls" live in
+    // exactly one place. MobileUI CSS pops the floor selector + camera
+    // controls back out to their phone positions (position:fixed override).
+    this.topStrip = new TopStrip(container);
+    this.floorSelector = new FloorSelector(this.topStrip.root, this.scene, this.camera, { hosted: true });
     // Tapping a locked floor button offers to expand to the tier that unlocks
     // it (shared gate — same as the build/recipe/decor/pantry/staff locks).
     this.floorSelector.onLockedFloorClick = (tier) => showTierGate(this.game, tier, () => {
@@ -895,7 +902,7 @@ export class Engine {
     // The Home button reads the player's plot anchor from the scene so
     // it always snaps back to the current claimed building, even if the
     // player later moves to a different plot.
-    this.cameraControls = new CameraControls(container, this.camera,
+    this.cameraControls = new CameraControls(this.topStrip.root, this.camera,
       () => ({
         // The actual playable restaurant is hardcoded at world origin
         // — the multiplayer plot anchor only affects the PLACEHOLDER
@@ -907,7 +914,7 @@ export class Engine {
         // garbage target.y might have collected over a session).
         y: this.scene.getFocusedStorey() * WorldScene.getStoreyHeight(),
         z: 0,
-      }));
+      }), { hosted: true });
     // P4 visit mode — click on another player's shell to fly the
     // camera to that plot and view it. Engine doesn't need to gate
     // anything yet; the build menu's placement raycast targets the
@@ -1238,8 +1245,8 @@ export class Engine {
     // Beta feedback — the 💬 modal (Hud button opens it).
     this.feedbackModal = new FeedbackModal(container, this.cloud);
     // Patch A — notification feed (bell + toasts) and the timer tray.
-    this.notifFeed = new NotificationFeed(container);
-    this.timerTray = new TimerTray(container, () => this.buildTimerItems());
+    this.timerTray = new TimerTray(this.topStrip.root, () => this.buildTimerItems(), { hosted: true });
+    this.notifFeed = new NotificationFeed(this.topStrip.root, { hosted: true });
     // Patch B — the three hands-on tap badges. Every tap's effect is a
     // server reducer (once-per-guest / cooldown / once-per-ticket).
     this.greetBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {

@@ -38,29 +38,43 @@ export class FloorSelector {
    * stay empty. */
   getFloorContent?: (floor: number) => FloorContent;
 
-  constructor(parent: HTMLElement, scene: WorldScene, camera: IsoCamera) {
+  constructor(parent: HTMLElement, scene: WorldScene, camera: IsoCamera, opts?: { hosted?: boolean }) {
     this.scene = scene;
     this.camera = camera;
+    const hosted = opts?.hosted === true;
 
     this.root = document.createElement("div");
     this.root.classList.add("cb-floorsel");
-    Object.assign(this.root.style, {
-      position: "fixed",
-      top: "12px",
-      left: "50%",
-      transform: "translateX(-50%)",
-      display: "flex",
-      flexDirection: "row",
-      gap: "6px",
-      padding: "8px 10px",
-      background: "rgba(20, 14, 10, 0.86)",
-      borderRadius: "12px",
-      boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
-      color: "#fff5dc",
-      font: "14px/1.3 system-ui, sans-serif",
-      pointerEvents: "auto",
-      zIndex: "5",
-    } as Partial<CSSStyleDeclaration>);
+    // Hosted (TopStrip) mode: the strip provides the panel chrome; this is
+    // just an inline row. MobileUI's `.cb-floorsel { … !important }` rules
+    // still re-park it under the notch on phones (position restored fixed
+    // there via MobileUI css).
+    Object.assign(this.root.style, hosted
+      ? {
+        display: "flex",
+        flexDirection: "row",
+        gap: "6px",
+        color: "#fff5dc",
+        font: "14px/1.3 system-ui, sans-serif",
+        pointerEvents: "auto",
+      }
+      : {
+        position: "fixed",
+        top: "12px",
+        left: "50%",
+        transform: "translateX(-50%)",
+        display: "flex",
+        flexDirection: "row",
+        gap: "6px",
+        padding: "8px 10px",
+        background: "rgba(20, 14, 10, 0.86)",
+        borderRadius: "12px",
+        boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
+        color: "#fff5dc",
+        font: "14px/1.3 system-ui, sans-serif",
+        pointerEvents: "auto",
+        zIndex: "5",
+      } as Partial<CSSStyleDeclaration>);
     parent.appendChild(this.root);
 
     // One column per storey. Each column = a button on top and a small

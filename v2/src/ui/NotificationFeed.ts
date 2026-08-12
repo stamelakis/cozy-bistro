@@ -48,35 +48,48 @@ export class NotificationFeed {
   private logOpen = false;
   private reducedMotion = false;
 
-  constructor(host: HTMLElement) {
+  constructor(host: HTMLElement, opts?: { hosted?: boolean }) {
     this.reducedMotion =
       typeof window.matchMedia === "function" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const hosted = opts?.hosted === true;
 
     // ── Bell ──────────────────────────────────────────────────────────
     this.bell = document.createElement("button");
     this.bell.id = "cb-notif-bell";
     this.bell.textContent = "🔔";
     this.bell.title = "Notifications";
-    Object.assign(this.bell.style, {
-      position: "fixed",
-      // Top band, just right of the camera controls (top:12 left:280,
-      // ~150px wide) — high where eyes actually go. Top-right proper is
-      // owned by the BuildMenu, bottom-right proved invisible to testers.
-      top: "18px",
-      left: "444px",
-      width: "40px",
-      height: "40px",
-      borderRadius: "50%",
-      background: "rgba(20, 14, 10, 0.92)",
-      color: "#fff5dc",
-      border: "1px solid rgba(255, 220, 150, 0.5)",
-      boxShadow: "0 4px 14px rgba(0, 0, 0, 0.45)",
-      font: "18px/1 system-ui, sans-serif",
-      cursor: "pointer",
-      zIndex: "16",
-      pointerEvents: "auto",
-    } as Partial<CSSStyleDeclaration>);
+    Object.assign(this.bell.style, hosted
+      ? { // TopStrip mode — inline at the strip's right end
+        position: "relative", // containing block for the unread badge
+        marginLeft: "auto",
+        width: "36px",
+        height: "36px",
+        borderRadius: "50%",
+        background: "rgba(255, 245, 220, 0.08)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255, 220, 150, 0.5)",
+        font: "17px/1 system-ui, sans-serif",
+        cursor: "pointer",
+        pointerEvents: "auto",
+        flexShrink: "0",
+      }
+      : {
+        position: "fixed",
+        top: "18px",
+        left: "444px",
+        width: "40px",
+        height: "40px",
+        borderRadius: "50%",
+        background: "rgba(20, 14, 10, 0.92)",
+        color: "#fff5dc",
+        border: "1px solid rgba(255, 220, 150, 0.5)",
+        boxShadow: "0 4px 14px rgba(0, 0, 0, 0.45)",
+        font: "18px/1 system-ui, sans-serif",
+        cursor: "pointer",
+        zIndex: "16",
+        pointerEvents: "auto",
+      } as Partial<CSSStyleDeclaration>);
     this.badge = document.createElement("span");
     Object.assign(this.badge.style, {
       position: "absolute",
@@ -163,7 +176,22 @@ export class NotificationFeed {
     this.lastByKey.delete(key);
   }
 
+  /** Anchor the toast stack + log panel just under the live bell position
+   * (clamped to the viewport) — the bell now lives inline in the TopStrip,
+   * so its coordinates aren't a compile-time constant anymore. */
+  private anchorPanels(): void {
+    const b = this.bell.getBoundingClientRect();
+    if (b.width === 0) return; // not laid out yet (or hidden on mobile)
+    const left = `${Math.round(Math.min(b.left, window.innerWidth - 340))}px`;
+    const top = `${Math.round(b.bottom + 10)}px`;
+    this.toastStack.style.left = left;
+    this.toastStack.style.top = top;
+    this.logPanel.style.left = left;
+    this.logPanel.style.top = top;
+  }
+
   private spawnToast(e: FeedEntry): void {
+    this.anchorPanels();
     const t = document.createElement("div");
     const accent = e.accent ?? "rgba(255, 220, 150, 0.85)";
     Object.assign(t.style, {
@@ -220,6 +248,7 @@ export class NotificationFeed {
 
   private toggleLog(): void {
     this.logOpen = !this.logOpen;
+    if (this.logOpen) this.anchorPanels();
     this.logPanel.style.display = this.logOpen ? "block" : "none";
     if (this.logOpen) {
       this.unread = 0;

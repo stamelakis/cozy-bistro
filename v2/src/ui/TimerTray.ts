@@ -25,27 +25,33 @@ export class TimerTray {
   private readonly root: HTMLDivElement;
   private readonly provider: () => TimerItem[];
 
-  constructor(host: HTMLElement, provider: () => TimerItem[]) {
+  constructor(host: HTMLElement, provider: () => TimerItem[], opts?: { hosted?: boolean }) {
     this.provider = provider;
     this.root = document.createElement("div");
     this.root.id = "cb-timer-tray";
-    // Top-center, tucked under the FloorSelector (top:12, ~44px tall).
-    // Top-right is owned by the BuildMenu (fixed right:12, width 300), the
-    // top-left band by the sidebar + camera controls — this is the one
-    // reliably free strip. Horizontal row keeps the vertical footprint tiny
-    // so the ServiceAlertBanner (top:96, usually hidden) stays clear.
-    Object.assign(this.root.style, {
-      position: "fixed",
-      top: "96px", // fully below the floor selector (measured live: it ends ~y=91)
-      left: "50%",
-      transform: "translateX(-50%)",
-      display: "none",
-      flexDirection: "row",
-      gap: "6px",
-      alignItems: "center",
-      zIndex: "14",
-      pointerEvents: "none", // chips re-enable
-    } as Partial<CSSStyleDeclaration>);
+    // Hosted (TopStrip) mode: an inline chip row inside the unified top
+    // bar. Standalone mode keeps the old fixed top-center placement.
+    Object.assign(this.root.style, opts?.hosted === true
+      ? {
+        display: "none",
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: "6px",
+        alignItems: "center",
+        pointerEvents: "none", // chips re-enable
+      }
+      : {
+        position: "fixed",
+        top: "96px", // fully below the floor selector (measured live: ends ~y=91)
+        left: "50%",
+        transform: "translateX(-50%)",
+        display: "none",
+        flexDirection: "row",
+        gap: "6px",
+        alignItems: "center",
+        zIndex: "14",
+        pointerEvents: "none", // chips re-enable
+      } as Partial<CSSStyleDeclaration>);
     host.appendChild(this.root);
   }
 

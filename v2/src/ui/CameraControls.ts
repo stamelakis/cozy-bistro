@@ -37,29 +37,51 @@ export class CameraControls {
   /** Rotation step per rotate-button click, in radians (22.5° = π/8). */
   private static readonly ROT_STEP = Math.PI / 8;
 
-  constructor(parent: HTMLElement, camera: IsoCamera, getHomePos: () => { x: number; y: number; z: number }) {
+  /** True when living inside the unified TopStrip: the strip provides the
+   * panel chrome and the controls lay out as ONE ROW instead of columns.
+   * MobileUI's `.cb-cameracontrols { position: fixed !important … }`
+   * overrides still pop it out to the phone's bottom-right unchanged. */
+  private readonly hosted: boolean;
+
+  constructor(
+    parent: HTMLElement,
+    camera: IsoCamera,
+    getHomePos: () => { x: number; y: number; z: number },
+    opts?: { hosted?: boolean },
+  ) {
     this.camera = camera;
     this.getHomePos = getHomePos;
+    this.hosted = opts?.hosted === true;
 
     const root = document.createElement("div");
     root.classList.add("cb-cameracontrols");
-    Object.assign(root.style, {
-      position: "fixed",
-      top: "12px",
-      // Sidebar occupies 12..268 (256px + left:12). 12px gap = 280.
-      left: "280px",
-      display: "flex",
-      flexDirection: "row",
-      gap: "8px",
-      padding: "8px 10px",
-      background: "rgba(20, 14, 10, 0.86)",
-      borderRadius: "12px",
-      boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
-      color: "#fff5dc",
-      font: "12px/1.2 system-ui, sans-serif",
-      pointerEvents: "auto",
-      zIndex: "5",
-    } as Partial<CSSStyleDeclaration>);
+    Object.assign(root.style, this.hosted
+      ? {
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: "10px",
+        color: "#fff5dc",
+        font: "12px/1.2 system-ui, sans-serif",
+        pointerEvents: "auto",
+      }
+      : {
+        position: "fixed",
+        top: "12px",
+        // Sidebar occupies 12..268 (256px + left:12). 12px gap = 280.
+        left: "280px",
+        display: "flex",
+        flexDirection: "row",
+        gap: "8px",
+        padding: "8px 10px",
+        background: "rgba(20, 14, 10, 0.86)",
+        borderRadius: "12px",
+        boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
+        color: "#fff5dc",
+        font: "12px/1.2 system-ui, sans-serif",
+        pointerEvents: "auto",
+        zIndex: "5",
+      } as Partial<CSSStyleDeclaration>);
     parent.appendChild(root);
 
     // ── Zoom column ────────────────────────────────────────────────
@@ -122,8 +144,8 @@ export class CameraControls {
     homeBtn.textContent = "🏠";
     homeBtn.title = "Recenter on my restaurant (default zoom + rotation, keep current floor)";
     Object.assign(homeBtn.style, {
-      height: "100%",
-      minHeight: "98px",
+      height: this.hosted ? "34px" : "100%",
+      minHeight: this.hosted ? "34px" : "98px",
       padding: "0 8px",
       background: "rgba(220, 180, 130, 0.22)",
       color: "#fff5dc",
@@ -155,13 +177,20 @@ export class CameraControls {
 
   private makeColumn(): HTMLDivElement {
     const col = document.createElement("div");
-    Object.assign(col.style, {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "stretch",
-      gap: "3px",
-      minWidth: "44px",
-    } as Partial<CSSStyleDeclaration>);
+    Object.assign(col.style, this.hosted
+      ? { // strip mode — the "column" is a horizontal button cluster
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: "4px",
+      }
+      : {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: "3px",
+        minWidth: "44px",
+      } as Partial<CSSStyleDeclaration>);
     return col;
   }
 
@@ -198,7 +227,6 @@ export class CameraControls {
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
-      padding: "2px 0",
       background: "rgba(255, 220, 150, 0.18)",
       border: "1px solid rgba(255, 220, 150, 0.35)",
       borderRadius: "6px",
@@ -207,6 +235,8 @@ export class CameraControls {
       color: "#fff5dc",
       letterSpacing: "0.04em",
       minHeight: "22px",
+      minWidth: this.hosted ? "42px" : "0",
+      padding: this.hosted ? "2px 4px" : "2px 0",
       pointerEvents: "none",
     } as Partial<CSSStyleDeclaration>);
     return ind;

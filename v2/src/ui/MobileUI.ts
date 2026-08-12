@@ -467,6 +467,8 @@ body.cb-mobile.cb-ingame.cb-hideui .cb-restore {
 }
 body.cb-mobile.cb-hideui .cb-bottombar,
 body.cb-mobile.cb-hideui .cb-floorsel,
+body.cb-mobile.cb-hideui .cb-topstrip,
+body.cb-mobile.cb-hideui #cb-notif-bell,
 body.cb-mobile.cb-hideui .cb-cameracontrols,
 body.cb-mobile.cb-hideui .cb-sidebar,
 body.cb-mobile.cb-hideui .cb-buildmenu,
@@ -476,8 +478,17 @@ body.cb-mobile.cb-hideui .cb-backdrop {
   pointer-events: none !important;
 }
 
-/* --- floor selector: tuck under the notch, allow horizontal scroll --- */
+/* --- floor selector: tuck under the notch, allow horizontal scroll ---
+   position/left/transform/background restated because on DESKTOP these
+   components now live INLINE inside the unified .cb-topstrip (no fixed
+   positioning of their own) — these overrides pop them back out to the
+   exact phone placements they always had. */
 body.cb-mobile .cb-floorsel {
+  position: fixed !important;
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+  background: rgba(20, 14, 10, 0.86) !important;
+  border-radius: 12px !important;
   top: calc(6px + env(safe-area-inset-top, 0px)) !important;
   padding: 5px 7px !important;
   gap: 4px !important;
@@ -488,12 +499,38 @@ body.cb-mobile .cb-floorsel {
 
 /* --- camera controls: park bottom-right, above the bar --- */
 body.cb-mobile .cb-cameracontrols {
+  position: fixed !important;
+  background: rgba(20, 14, 10, 0.86) !important;
+  border-radius: 12px !important;
+  padding: 8px 10px !important;
   top: auto !important;
   left: auto !important;
   right: calc(8px + env(safe-area-inset-right, 0px)) !important;
   bottom: calc(70px + env(safe-area-inset-bottom, 0px)) !important;
   z-index: 700 !important;
 }
+
+/* --- unified top strip (desktop concept): chrome-less on mobile — its
+   two big children pop out via the fixed overrides above; the bell gets
+   its own phone spot and the timer chips are hidden (timers live in
+   their panels there anyway). --- */
+body.cb-mobile .cb-topstrip {
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  pointer-events: none !important;
+}
+body.cb-mobile #cb-notif-bell {
+  position: fixed !important;
+  top: calc(64px + env(safe-area-inset-top, 0px)) !important;
+  right: calc(8px + env(safe-area-inset-right, 0px)) !important;
+  left: auto !important;
+  margin: 0 !important;
+  background: rgba(20, 14, 10, 0.92) !important;
+  pointer-events: auto !important;
+  z-index: 700 !important;
+}
+body.cb-mobile #cb-timer-tray { display: none !important; }
 
 /* --- secondary panels: declutter (reachable in a later pass) --- */
 body.cb-mobile .cb-chat,
