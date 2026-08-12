@@ -37,6 +37,34 @@ interface Tile {
 
 export class CommandDock {
   constructor(host: HTMLElement, actions: HudActions, toggles: DockToggles) {
+    // Two centered rows in the strip's middle zone: SMALL icon tiles on
+    // top, WIDE labeled tiles beneath — the user's spec for the bar.
+    const wrap = document.createElement("div");
+    wrap.classList.add("cb-topstrip-dock");
+    Object.assign(wrap.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      gap: "5px",
+      maxWidth: "100%",
+    } as Partial<CSSStyleDeclaration>);
+    const mkRow = (): HTMLDivElement => {
+      const row = document.createElement("div");
+      Object.assign(row.style, {
+        display: "flex",
+        flexDirection: "row",
+        flexWrap: "wrap",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "5px",
+      } as Partial<CSSStyleDeclaration>);
+      wrap.appendChild(row);
+      return row;
+    };
+    const rowSmall = mkRow();
+    const rowWide = mkRow();
+    host.appendChild(wrap);
+
     const tiles: Tile[] = [
       // ── WIDE — the constant-use actions ─────────────────────────────
       { icon: "🔨", label: "Build", tooltip: "Place furniture — opens the build palette", wide: true, click: toggles.toggleBuild, tint: "rgba(220, 170, 110, 0.25)" },
@@ -62,7 +90,7 @@ export class CommandDock {
         ? [{ icon: "💾", label: "Slots", tooltip: "Local save slots (dev only)", wide: false, click: actions.openSlots, tint: "rgba(160, 180, 140, 0.22)" }]
         : []),
     ];
-    for (const t of tiles) host.appendChild(makeTile(t));
+    for (const t of tiles) (t.wide ? rowWide : rowSmall).appendChild(makeTile(t));
   }
 }
 
@@ -74,10 +102,10 @@ function makeTile(t: Tile): HTMLButtonElement {
     alignItems: "center",
     justifyContent: "center",
     gap: "6px",
-    height: "34px",
+    height: t.wide ? "34px" : "30px",
     padding: t.wide ? "0 12px" : "0",
-    width: t.wide ? "auto" : "34px",
-    minWidth: t.wide ? "96px" : "34px",
+    width: t.wide ? "auto" : "30px",
+    minWidth: t.wide ? "96px" : "30px",
     background: t.tint,
     color: "#fff5dc",
     border: "1px solid rgba(255, 245, 220, 0.20)",

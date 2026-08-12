@@ -1,26 +1,34 @@
 /**
- * Unified top strip (PC) — the game's single command surface. Two rows in
- * one continuous bar:
+ * Unified top strip (PC) — the game's single command surface, laid out as
+ * three zones plus a hanging tab:
  *
- *   row 1 (main): floor selector · camera controls · timer chips · 🔔 bell
- *   row 2 (dock): Metro-style command tiles — EVERY panel opener that used
- *                 to live scattered down the sidebar, plus Build. Important
- *                 actions get WIDE tiles (icon + label), the rest are SMALL
- *                 icon tiles with tooltips.
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │ [camera nav]   [ small icon tiles row  ]        [🔔]       │
+ *   │                [ wide command tiles row ]       [timers ↓] │
+ *   └──────────────────┐ [G][2][3][4][5] ┌───────────────────────┘
+ *                      └────(centered)───┘
  *
- * Mobile stays on its own layout: MobileUI pops the floor selector +
- * camera controls back out to fixed phone spots, and the CSS injected here
- * swaps the two button surfaces — desktop hides the sidebar's legacy
- * button grid (`.cb-hud-buttons`), mobile hides the dock — so both
- * platforms keep exactly one copy of every button.
+ *   • navigation cluster LEFT · command tiles CENTER (small row over
+ *     wide row) · bell + timer chips stacked RIGHT
+ *   • the floor selector hangs below as a small centered extension tab —
+ *     not a full second line.
+ *
+ * Hosted children keep their own classes (cb-cameracontrols, cb-floorsel)
+ * because MobileUI re-parks them with `position: fixed !important`
+ * overrides — phones keep their exact layouts, untouched.
  */
 
 export class TopStrip {
+  /** Transparent full-width wrapper (click-through outside the panels). */
   readonly root: HTMLDivElement;
-  /** Row 1 — hosts the floor selector, camera controls, timers, bell. */
-  readonly rowMain: HTMLDivElement;
-  /** Row 2 — hosts the CommandDock tiles. */
-  readonly rowDock: HTMLDivElement;
+  /** LEFT zone of the main bar — camera/navigation cluster. */
+  readonly zoneNav: HTMLDivElement;
+  /** CENTER zone — the CommandDock builds its two tile rows in here. */
+  readonly zoneMiddle: HTMLDivElement;
+  /** RIGHT zone — 🔔 bell on top, timer chips stacked beneath. */
+  readonly zoneRight: HTMLDivElement;
+  /** The centered floor-selector tab hanging under the bar. */
+  readonly floorTab: HTMLDivElement;
 
   constructor(parent: HTMLElement) {
     this.root = document.createElement("div");
@@ -28,45 +36,77 @@ export class TopStrip {
     Object.assign(this.root.style, {
       position: "fixed",
       top: "12px",
-      // Sidebar occupies x 12..268. The right edge is OURS now — every
-      // panel (build palette included) hangs off this bar as a dropdown
-      // instead of floating on its own.
-      left: "280px",
+      left: "280px", // sidebar occupies x 12..268
       right: "12px",
       display: "flex",
       flexDirection: "column",
-      gap: "6px",
-      padding: "6px 12px 8px",
+      alignItems: "stretch",
+      pointerEvents: "none", // sections re-enable — the wrapper is air
+      zIndex: "5",
+      color: "#fff5dc",
+    } as Partial<CSSStyleDeclaration>);
+
+    // ── Main bar ────────────────────────────────────────────────────
+    const barMain = document.createElement("div");
+    barMain.classList.add("cb-topstrip-main");
+    Object.assign(barMain.style, {
+      display: "flex",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: "18px",
+      padding: "8px 14px",
       background: "rgba(20, 14, 10, 0.86)",
       borderRadius: "12px",
       boxShadow: "0 4px 18px rgba(0,0,0,0.40)",
-      color: "#fff5dc",
       pointerEvents: "auto",
-      zIndex: "5",
     } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(barMain);
 
-    this.rowMain = document.createElement("div");
-    Object.assign(this.rowMain.style, {
+    this.zoneNav = document.createElement("div");
+    Object.assign(this.zoneNav.style, {
       display: "flex",
-      flexDirection: "row",
-      flexWrap: "wrap",
       alignItems: "center",
-      gap: "8px 14px",
+      flexShrink: "0",
     } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.rowMain);
+    barMain.appendChild(this.zoneNav);
 
-    this.rowDock = document.createElement("div");
-    this.rowDock.classList.add("cb-topstrip-dock");
-    Object.assign(this.rowDock.style, {
+    this.zoneMiddle = document.createElement("div");
+    Object.assign(this.zoneMiddle.style, {
+      flex: "1",
       display: "flex",
-      flexDirection: "row",
-      flexWrap: "wrap",
+      flexDirection: "column",
       alignItems: "center",
       gap: "5px",
-      borderTop: "1px solid rgba(255, 245, 220, 0.12)",
-      paddingTop: "6px",
+      minWidth: "0",
     } as Partial<CSSStyleDeclaration>);
-    this.root.appendChild(this.rowDock);
+    barMain.appendChild(this.zoneMiddle);
+
+    this.zoneRight = document.createElement("div");
+    Object.assign(this.zoneRight.style, {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-end",
+      gap: "5px",
+      flexShrink: "0",
+      alignSelf: "flex-start",
+    } as Partial<CSSStyleDeclaration>);
+    barMain.appendChild(this.zoneRight);
+
+    // ── Floor tab — a small centered extension, not a full line ────
+    this.floorTab = document.createElement("div");
+    this.floorTab.classList.add("cb-topstrip-tab");
+    Object.assign(this.floorTab.style, {
+      alignSelf: "center",
+      width: "max-content",
+      display: "flex",
+      alignItems: "center",
+      padding: "5px 12px 7px",
+      background: "rgba(20, 14, 10, 0.86)",
+      borderRadius: "0 0 12px 12px",
+      boxShadow: "0 6px 14px rgba(0,0,0,0.35)",
+      pointerEvents: "auto",
+    } as Partial<CSSStyleDeclaration>);
+    this.root.appendChild(this.floorTab);
 
     parent.appendChild(this.root);
     injectSwapCss();

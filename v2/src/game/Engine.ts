@@ -895,13 +895,13 @@ export class Engine {
     // row (desktop; mobile keeps the sidebar grid). Reuses the Hud's typed
     // action map so both surfaces share one wiring; the Build tile toggles
     // the build palette (constructed later — the lambda is lazy).
-    new CommandDock(this.topStrip.rowDock, this.hud.actions, {
+    new CommandDock(this.topStrip.zoneMiddle, this.hud.actions, {
       toggleBuild: () => { if (this.buildMenu) this.toggleDock(this.buildMenu.getRoot(), "right"); },
       toggleRecipes: () => this.toggleDock(this.menuPanel.root, "center", () => this.menuPanel.expand()),
       toggleChat: () => { if (this.chatPanel) this.toggleDock(this.chatPanel.root, "left", () => this.chatPanel?.setMinimized(false)); },
       togglePlayers: () => { if (this.rosterPanel) this.toggleDock(this.rosterPanel.getRoot(), "left"); },
     });
-    this.floorSelector = new FloorSelector(this.topStrip.rowMain, this.scene, this.camera, { hosted: true });
+    this.floorSelector = new FloorSelector(this.topStrip.floorTab, this.scene, this.camera, { hosted: true });
     // Tapping a locked floor button offers to expand to the tier that unlocks
     // it (shared gate — same as the build/recipe/decor/pantry/staff locks).
     this.floorSelector.onLockedFloorClick = (tier) => showTierGate(this.game, tier, () => {
@@ -915,7 +915,7 @@ export class Engine {
     // The Home button reads the player's plot anchor from the scene so
     // it always snaps back to the current claimed building, even if the
     // player later moves to a different plot.
-    this.cameraControls = new CameraControls(this.topStrip.rowMain, this.camera,
+    this.cameraControls = new CameraControls(this.topStrip.zoneNav, this.camera,
       () => ({
         // The actual playable restaurant is hardcoded at world origin
         // — the multiplayer plot anchor only affects the PLACEHOLDER
@@ -1258,8 +1258,9 @@ export class Engine {
     // Beta feedback — the 💬 modal (Hud button opens it).
     this.feedbackModal = new FeedbackModal(container, this.cloud);
     // Patch A — notification feed (bell + toasts) and the timer tray.
-    this.timerTray = new TimerTray(this.topStrip.rowMain, () => this.buildTimerItems(), { hosted: true });
-    this.notifFeed = new NotificationFeed(this.topStrip.rowMain, { hosted: true });
+    // Right zone: 🔔 bell on top, timer chips stacked beneath it.
+    this.notifFeed = new NotificationFeed(this.topStrip.zoneRight, { hosted: true });
+    this.timerTray = new TimerTray(this.topStrip.zoneRight, () => this.buildTimerItems(), { hosted: true });
     // Patch B — the three hands-on tap badges. Every tap's effect is a
     // server reducer (once-per-guest / cooldown / once-per-ticket).
     this.greetBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {

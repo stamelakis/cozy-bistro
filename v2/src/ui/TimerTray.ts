@@ -33,11 +33,12 @@ export class TimerTray {
     // bar. Standalone mode keeps the old fixed top-center placement.
     Object.assign(this.root.style, opts?.hosted === true
       ? {
+        // Right zone of the TopStrip: chips STACK vertically under the
+        // bell, right-aligned — "timers on top of each other".
         display: "none",
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: "6px",
-        alignItems: "center",
+        flexDirection: "column",
+        gap: "4px",
+        alignItems: "flex-end",
         pointerEvents: "none", // chips re-enable
       }
       : {

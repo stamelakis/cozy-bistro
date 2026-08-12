@@ -531,7 +531,9 @@ body.cb-mobile .cb-cameracontrols {
    two big children pop out via the fixed overrides above; the bell gets
    its own phone spot and the timer chips are hidden (timers live in
    their panels there anyway). --- */
-body.cb-mobile .cb-topstrip {
+body.cb-mobile .cb-topstrip,
+body.cb-mobile .cb-topstrip-main,
+body.cb-mobile .cb-topstrip-tab {
   background: transparent !important;
   box-shadow: none !important;
   padding: 0 !important;
