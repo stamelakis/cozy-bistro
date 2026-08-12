@@ -273,7 +273,13 @@ function labelForKind(kind: string): string {
     case "supplies": return "Supplies & running costs";
     case "grant": return "Starter grant";
     case "achievement": return "Achievement reward";
-    case "recycle": return "Furniture refund";
+    // "recycle" = the TrashSpawner auto-recycling an expired litter piece
+    // (+$2 every ~9s). Was mislabeled "Furniture refund", which made the
+    // passive drip look like phantom furniture sales.
+    case "recycle": return "Recycling ♻";
+    case "goal": return "Daily goal reward";
+    case "crate": return "Supply crate";
+    case "offline": return "Offline earnings";
     case "admin": return "Admin adjustment";
     default: return kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Other";
   }
