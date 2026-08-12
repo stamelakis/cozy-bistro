@@ -23,7 +23,7 @@ import { ExpandModal } from "../ui/ExpandModal";
 import { ExpandWidget } from "../ui/ExpandWidget";
 import { FloorSelector } from "../ui/FloorSelector";
 import { CameraControls } from "../ui/CameraControls";
-import { setMobileInGame } from "../ui/MobileUI";
+import { setMobileInGame, isMobileDevice } from "../ui/MobileUI";
 import { VisitMode } from "../ui/VisitMode";
 import { StockStatusWidget } from "../ui/StockStatusWidget";
 import { ServiceAlertBanner } from "../ui/ServiceAlertBanner";
@@ -3385,7 +3385,10 @@ export class Engine {
   // exempt — its own layout (drawers, sheets, parked panels) stays as-is.
 
   private isMobileUi(): boolean {
-    return document.body.classList.contains("cb-mobile");
+    // The class check alone is NOT enough at construction time —
+    // initMobileUI() runs AFTER the Engine constructor (main.ts), so the
+    // device predicate is consulted directly for the boot-time dockInits.
+    return document.body.classList.contains("cb-mobile") || isMobileDevice();
   }
 
   /** Called once per panel right after construction: remember its natural

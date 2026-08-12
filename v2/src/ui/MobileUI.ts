@@ -139,9 +139,26 @@ function isMobile(): boolean {
   return coarse || window.innerWidth <= 820;
 }
 
+/** Exported so Engine's dockInit can ask "is this a phone?" BEFORE
+ * initMobileUI() has stamped body.cb-mobile (main.ts constructs the Engine
+ * first) — without this, the bar-anchored panels would start display:none
+ * on phones too and the mobile sheets would open blank. */
+export function isMobileDevice(): boolean {
+  return isMobile();
+}
+
 function applyMode(): void {
   const on = isMobile();
   document.body.classList.toggle(MOBILE_CLASS, on);
+  if (on) {
+    // Self-heal: the desktop dock starts panels display:none inline
+    // (Engine.dockInit stamps data-cb-base-display). If any got hidden
+    // before mobile mode applied — or the window shrank into mobile
+    // mid-session — restore them so the mobile sheets aren't blank.
+    document.querySelectorAll<HTMLElement>("[data-cb-base-display]").forEach((el) => {
+      if (el.style.display === "none") el.style.display = el.dataset.cbBaseDisplay ?? "";
+    });
+  }
   if (!on) {
     // Leaving mobile (e.g. rotated a tablet wide / resized the window):
     // don't strand a half-open sheet over the desktop layout.
