@@ -840,6 +840,8 @@ export class Engine {
     // thunk is lazy (upgradeModal is constructed just below), so the
     // forward reference resolves by the time a player clicks it.
     this.menuPanel = new MenuPanel(container, this.game, () => this.upgradeModal.show());
+    // Bar-anchored dropdown — starts hidden on PC; the 🍽 Recipes tile opens it.
+    this.dockInit(this.menuPanel.root);
     // Tapping "Add" on a dish you can't make yet (missing appliance) sends you
     // to BUILD it, rather than silently doing nothing. Find the cheapest item
     // that provides the missing appliance, make sure the build menu is open
@@ -893,7 +895,12 @@ export class Engine {
     // row (desktop; mobile keeps the sidebar grid). Reuses the Hud's typed
     // action map so both surfaces share one wiring; the Build tile toggles
     // the build palette (constructed later — the lambda is lazy).
-    new CommandDock(this.topStrip.rowDock, this.hud.actions, () => this.buildMenu?.toggleCollapsed());
+    new CommandDock(this.topStrip.rowDock, this.hud.actions, {
+      toggleBuild: () => { if (this.buildMenu) this.toggleDock(this.buildMenu.getRoot(), "right"); },
+      toggleRecipes: () => this.toggleDock(this.menuPanel.root, "center", () => this.menuPanel.expand()),
+      toggleChat: () => { if (this.chatPanel) this.toggleDock(this.chatPanel.root, "left", () => this.chatPanel?.setMinimized(false)); },
+      togglePlayers: () => { if (this.rosterPanel) this.toggleDock(this.rosterPanel.getRoot(), "left"); },
+    });
     this.floorSelector = new FloorSelector(this.topStrip.rowMain, this.scene, this.camera, { hosted: true });
     // Tapping a locked floor button offers to expand to the tier that unlocks
     // it (shared gate — same as the build/recipe/decor/pantry/staff locks).
@@ -1468,6 +1475,10 @@ export class Engine {
         minHeight: 60,
       });
     }
+    // Bar-anchored dropdown — starts hidden on PC; the 🔨 Build tile opens
+    // it (after makeDraggableResizable, so the saved-layout restore is
+    // captured as the base and the anchor wins at open time).
+    this.dockInit(buildMenu.getRoot());
     buildMenu.seatMarkers = this.seatMarkers;
     // Multi-storey hooks: BuildMenu uses these to raycast against the
     // focused floor's slab, mount new placements under the right storey
@@ -2597,6 +2608,9 @@ export class Engine {
     }
     try {
       this.chatPanel = new ChatPanel(container, this.cloud);
+      // Bar-anchored dropdown — hidden on PC until the 💬 Chat tile opens
+      // it. Unread badges/PM toasts still fire while hidden.
+      this.dockInit(this.chatPanel.root);
       this.chatPanel.onMessageSent = () => this.game.bumpPlayerCounter("chatsSent");
       this.chatPanel.onPlayerClick = (e, hex, name, isMe) => this.openPlayerMenu(e, hex, name, isMe);
       makeDraggableResizable({
@@ -2627,6 +2641,8 @@ export class Engine {
     try {
       if (!this.rosterPanel) {
         this.rosterPanel = new PlayerRosterPanel(container, this.cloud);
+        // Bar-anchored dropdown — hidden on PC until the 🌐 Players tile.
+        this.dockInit(this.rosterPanel.getRoot());
         this.rosterPanel.onPlayerClick = (e, hex, name, isMe) => this.openPlayerMenu(e, hex, name, isMe);
       }
     } catch (e) {
@@ -3362,6 +3378,55 @@ export class Engine {
 
   /** Start the recurring random-rush scheduler once. Idempotent — re-entrant
    * enterGame calls won't stack timers. */
+  // ─── Bar-anchored dropdown panels (PC) ────────────────────────────────
+  // The four standing panels (Build, Recipe Menu, Chat, Players) no longer
+  // float around the screen edges: they start HIDDEN and their CommandDock
+  // tiles toggle them as dropdowns hanging from the TopStrip. Mobile is
+  // exempt — its own layout (drawers, sheets, parked panels) stays as-is.
+
+  private isMobileUi(): boolean {
+    return document.body.classList.contains("cb-mobile");
+  }
+
+  /** Called once per panel right after construction: remember its natural
+   * display value, then start it hidden (desktop only). */
+  private dockInit(el: HTMLElement): void {
+    if (this.isMobileUi()) return;
+    el.dataset.cbBaseDisplay = el.style.display || "";
+    el.style.display = "none";
+  }
+
+  /** Toggle a panel as a dropdown anchored under the TopStrip. Panels stay
+   * drag/resizable after opening (PanelDragResize); the next toggle
+   * re-anchors them under the bar — "anchored by default, movable at will". */
+  private toggleDock(el: HTMLElement, align: "left" | "center" | "right", onOpen?: () => void): void {
+    if (this.isMobileUi()) { onOpen?.(); return; } // mobile keeps native behavior
+    if (el.style.display !== "none") {
+      el.style.display = "none";
+      return;
+    }
+    const r = this.topStrip.root.getBoundingClientRect();
+    el.style.top = `${Math.round(r.bottom + 8)}px`;
+    el.style.bottom = "auto";
+    el.style.maxHeight = `${Math.max(240, window.innerHeight - r.bottom - 28)}px`;
+    el.style.overflowY = "auto";
+    if (align === "left") {
+      el.style.left = `${Math.round(r.left)}px`;
+      el.style.right = "auto";
+      el.style.transform = "none";
+    } else if (align === "center") {
+      el.style.left = "50%";
+      el.style.right = "auto";
+      el.style.transform = "translateX(-50%)";
+    } else {
+      el.style.right = `${Math.max(12, Math.round(window.innerWidth - r.right))}px`;
+      el.style.left = "auto";
+      el.style.transform = "none";
+    }
+    el.style.display = el.dataset.cbBaseDisplay ?? "";
+    onOpen?.();
+  }
+
   /** Patch A — the timer tray's data provider (~5 Hz). Reads the SERVER-
    * authoritative timers: the in-flight recipe upgrade, the training staff
    * member, and the supply-crate cooldown. Chips click through to the

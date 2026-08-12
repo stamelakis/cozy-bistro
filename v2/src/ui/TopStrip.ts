@@ -28,9 +28,11 @@ export class TopStrip {
     Object.assign(this.root.style, {
       position: "fixed",
       top: "12px",
-      // Sidebar occupies x 12..268; BuildMenu owns right:12 + 300px wide.
+      // Sidebar occupies x 12..268. The right edge is OURS now — every
+      // panel (build palette included) hangs off this bar as a dropdown
+      // instead of floating on its own.
       left: "280px",
-      right: "324px",
+      right: "12px",
       display: "flex",
       flexDirection: "column",
       gap: "6px",

@@ -28,6 +28,9 @@ export class PlayerRosterPanel {
    * profile / visit) for a clicked name. */
   onPlayerClick?: (e: MouseEvent, hex: string, name: string, isMe: boolean) => void;
 
+  /** Engine docks this under the TopStrip (Players tile). */
+  getRoot(): HTMLElement { return this.root; }
+
   constructor(parent: HTMLElement, cloud: SpacetimeClient) {
     this.cloud = cloud;
 

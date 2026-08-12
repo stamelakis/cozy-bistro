@@ -621,6 +621,10 @@ export class BuildMenu {
   getPlacingDefId(): string | null { return this.placingDef?.id ?? null; }
 
   /** Toggle the build menu open/closed and refresh the title chevron. */
+  /** Engine docks the palette under the TopStrip (Build tile). rootEl is
+   * assigned unconditionally in buildPanel() during construction. */
+  getRoot(): HTMLElement { return this.rootEl!; }
+
   /** Public — the TopStrip's Build tile toggles the palette open/closed. */
   toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
