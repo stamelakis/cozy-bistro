@@ -1,15 +1,30 @@
 # STATUS — Cozy Bistro 3D
 
-Updated: 2026-08-12
+Updated: 2026-11-22
 
-**Status:** Soft beta, live at https://cozy-bistro.com (backend `dunnin`).
-Everything from this session is deployed to BOTH prod and staging and the
-working tree is clean. Nothing is broken.
+**Status:** 🚨 GAME DOWN (found 2026-11-22). The website
+https://cozy-bistro.com loads (12 Aug build, matches local `v2/dist`), but the
+backend name `dunnin-spacetime.ownsun.de` no longer exists in DNS (ownsun.de's
+own Cloudflare nameservers answer "does not exist"). Players see "Lost
+connection to the server" and hang on "Setting up your restaurant…". Prod
+(`dunnin`) AND staging (`dunnin-staging`) both live on that box. Unknown:
+whether Jercy's box is off or only the DNS record is gone, whether the data
+survives, and when it went down (last confirmed working 2026-08-12). No backup
+of player data exists in this repo. The old Maincloud module
+`cozy-bistro-andre` still responds (fallback). Note: `cozybistro.gr` does not
+exist — the only live address is cozy-bistro.com.
 
-**In progress / unfinished:** nothing half-done. The last change (daily-goals
-click fix, commit 53850ce) is live but hasn't been felt in-game by Andreas yet.
+**In progress / unfinished:** no code half-done. Items 1–4 below are on hold
+until the backend is back.
 
 **Next:**
+0. [you: ask Jercy] Restore the backend. Options once Jercy answers:
+   A) Jercy re-adds the DNS record (recommended; no code change),
+   B) move back to Maincloud (old/empty data, usage limits return),
+   C) host SpacetimeDB on the shared rented server (needs a data export,
+   a disk/memory check per SERVER.md, and a client rebuild).
+   Whatever the choice, get an export of `dunnin` and set up regular backups.
+   Done when: cozy-bistro.com connects and a restaurant loads.
 1. Post Patch 12 notes to Discord — ready to paste in `docs/patch-notes-12.md`
    (bump the date if posting late). Done when: posted with @Tester ping.
 2. Collect tester reactions to the new command bar + manual litter + staffing
@@ -24,6 +39,9 @@ click fix, commit 53850ce) is live but hasn't been felt in-game by Andreas yet.
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
+- FIRST: message Jercy — is the SpacetimeDB box still running, can they
+  restore the `dunnin-spacetime.ownsun.de` DNS record, and can they send an
+  export of the `dunnin` database? → Paste the answer in the next session.
 - Post the patch notes (see Next 1): open `docs/patch-notes-12.md`, copy the
   code block, paste in Discord. → Reply "posted" or adjust first.
 - In-game sanity pass (5 min): claim a daily goal (should work first click),
@@ -43,6 +61,7 @@ click fix, commit 53850ce) is live but hasn't been felt in-game by Andreas yet.
   verified by Andreas, not me.
 
 ## History
+- 2026-11-22: State check — site up, backend DNS name gone (game down); recorded here, no code changed.
 - 2026-08-12: Daily-goals click fix (persistent DOM, day-keyed claim latch, margin). 53850ce
 - 2026-08-12: Top bar v3 per Andreas's spec (nav left stacked, labeled tile rows center, timers+bell right, floor tab below) + thinner. a31ec86, 57b7e6c
 - 2026-08-12: Nothing floats on PC — Build/Recipes/Chat/Players are bar-anchored dropdowns; CommandDock tiles; mobile-boot race fixed. 3ea2879…a8bcb4c
