@@ -43,9 +43,11 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
 - The browser pane can verify geometry/DOM on the live site via
   javascript_tool, but it registers as MOBILE (zero viewport) — simulate
   desktop by removing body.cb-mobile before measuring; it can't log in.
-- OneDrive path: the repo lives under OneDrive — never create .cmd files here.
 
 ## Decisions (do not undo casually)
+- **Lives at `C:\Users\andre\Restaurant Game`, outside OneDrive, since
+  2026-11-22.** OneDrive couldn't sync code projects (3,607 sync problems on
+  2026-11-19). Backup is git + GitHub. Don't move it back into OneDrive.
 - **Staffing gates (0149af8):** no orders without an active waiter (barman for
   bar seats), no ticket/ingredients/restock without an active chef/barman, no
   auto-shopping without auto_shop_enabled AND an active errand helper. The

@@ -15,7 +15,13 @@ of player data exists in this repo. The old Maincloud module
 exist — the only live address is cozy-bistro.com.
 
 **In progress / unfinished:** no code half-done. Items 1–4 below are on hold
-until the backend is back.
+until the backend is back. The project moved out of OneDrive on 2026-11-22:
+the real copy is now `C:\Users\andre\Restaurant Game` (verified: same files,
+same git HEAD, both builds + `spacetime build` + local start pass). Two things
+from the move wait on Andreas: (a) delete the old copy at
+`C:\Users\andre\OneDrive\Documents\Restaurant Game` — permanently, not to the
+Recycle Bin; (b) push `main` to GitHub — docs-only commits, but any push to
+main re-runs the Pages deploy of the same site.
 
 **Next:**
 0. [you: ask Jercy] Restore the backend. Options once Jercy answers:
