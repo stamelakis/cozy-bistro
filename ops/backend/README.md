@@ -71,15 +71,31 @@ Databases on the server: `dunnin` (live game) and `dunnin-staging`.
 | Data space full | server stops itself; nothing else affected |
 | Recovery from full by enlarging (steps below) | data intact, writes resume |
 
-Not tested yet (needs the real box): the 8 GB cap on the box itself, the
-real Caddy with TLS, the owner mails, growth with real players.
+On the box itself (install day, 2026-11-22):
+
+| Test | Result |
+|---|---|
+| Cap: a throwaway 64 MB loop image filled to 100%, then 200 MB more tried | refused; `df -m /` grew 58 MB (the image) and returned to the start |
+| Real Caddy with TLS: certificate, ping, token exchange | passed |
+| From outside: publish, SQL, logs, schema, call, other databases, 17 path tricks (`..`, `%2e`, `%2f`, `//`, capitals) | all 404; ports 3000/3100 closed |
+| Every other vhost on the box before and after the Caddy reload | same answers (12 addresses) |
+| Nightly job by hand | 2 s of downtime, 1.9 MB encrypted backup, restaurant and login intact |
+
+Not tested yet: the owner mails (no incident so far), growth with real players.
+
+**Who owns the databases.** `dunnin` and `dunnin-staging` were published with
+the SpacetimeDB CLI's normal login on Andreas's PC (`spacetime login`, his
+spacetimedb.com account; `spacetime login show` gives identity `c2008855…`).
+Only that login can publish updates or run SQL. On a new PC: `spacetime login`
+with the same account, never `--anonymous` and never a server-issued login.
 
 ## Everyday tasks
 
-Open the tunnel first (leave the window open while you work):
+Open the tunnel first (leave the window open while you work; the keep-alive
+option stops it from dropping after a few idle minutes):
 
 ```
-ssh -i ~/.ssh/hetzner -N -L 3100:127.0.0.1:3100 root@178.104.158.125
+ssh -i ~/.ssh/hetzner -o ServerAliveInterval=30 -N -L 3100:127.0.0.1:3100 root@178.104.158.125
 ```
 
 One-time on the PC: `spacetime server add cozybox --url http://127.0.0.1:3100 --no-fingerprint`
@@ -95,7 +111,12 @@ One-time on the PC: `spacetime server add cozybox --url http://127.0.0.1:3100 --
 - **Run the nightly job by hand** (on the box, about 10 s of downtime):
   `/opt/cozybistro-nightly.sh`
 
-## First install (one time; every step needs Andreas's OK)
+## First install (done 2026-11-22; kept as the recipe for a new box)
+
+Two traps met on the day: `caddy validate` does not print "Valid
+configuration" as its last line, so check its exit code; and write the
+Caddyfile in place (`cat new > Caddyfile`), because it is mounted into Caddy
+as a single file and a replaced file would not be seen.
 
 1. DNS at Papaki: `A` record `db.cozy-bistro.com` to `178.104.158.125`.
 2. On the PC: `docker build -t cozybistro-stdb:2.3.0 ops/backend` then

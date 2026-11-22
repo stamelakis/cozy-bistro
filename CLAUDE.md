@@ -8,7 +8,7 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
   DNS at Papaki). Backend: SpacetimeDB `dunnin` on OUR Hetzner box,
   wss://db.cozy-bistro.com (host baked in at build time: `CB_HOST`, see
   vite.config.ts). Runbook, design and tests: `ops/backend/README.md`.
-  Whether it is installed yet: STATUS.md. (Jercy's ownsun.de box is gone.)
+  Installed 2026-11-22. (Jercy's ownsun.de box is gone.)
 - STAGING: /staging/cozy-bistro-3d/ + `?env=staging` → DB `dunnin-staging`,
   built from the `staging` BRANCH. Keep it synced: `git push origin main:staging`
   and publish the module to dunnin-staging too — do both on every server change.
