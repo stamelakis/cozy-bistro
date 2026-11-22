@@ -23,8 +23,8 @@ empty) and drops its old lines from `~/.claude/skills/start/groups.txt` and
 
 **Next:**
 0. [you: OK each server step] Install the backend on the box, following
-   "First install" in `ops/backend/README.md`. Needs from Andreas: the DNS
-   record at Papaki, an OK for the server steps and for the two changes in
+   "First install" in `ops/backend/README.md` (step 1, DNS, is done). Needs
+   from Andreas: an OK for the server steps and for the two changes in
    the education project's files (Caddyfile, compose network), the backup
    key into his password manager, and signing up the username `dunnin`
    first (that name is the game's admin). Also run `/security-review`
@@ -46,8 +46,9 @@ empty) and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- FIRST: the Papaki DNS record `db.cozy-bistro.com` → `178.104.158.125`
-  (type A) and a yes to the install steps (Next #0).
+- FIRST: a yes to the install steps (Next #0), one step at a time. The DNS
+  record `db.cozy-bistro.com` → `178.104.158.125` is DONE (added at Papaki
+  2026-11-22, answers on public DNS).
 - After go-live: sign up `dunnin` before anyone else, then the Discord post.
 - Still open from earlier: the friend's iPhone black screen — next failed boot
   shows a real error screen; ask him to retry and screenshot it.
