@@ -15,14 +15,13 @@ of player data exists in this repo. The old Maincloud module
 exist — the only live address is cozy-bistro.com.
 
 **In progress / unfinished:** no code half-done. Items 1–4 below are on hold
-until the backend is back. The project moved out of OneDrive on 2026-11-22:
-the real copy is now `C:\Users\andre\Restaurant Game` (verified: same files,
-same git HEAD, both builds + `spacetime build` + local start pass) and `main`
-is pushed to GitHub. One step left: delete the old copy at
-`C:\Users\andre\OneDrive\Documents\Restaurant Game` — permanently, not to the
-Recycle Bin. Andreas approved it on 2026-11-22; it only waits on a session
-that runs from the new folder. If it still exists: open a session in
-`C:\Users\andre\Restaurant Game` and type "delete the old OneDrive copy".
+until the backend is back. The project lives at
+`C:\Users\andre\Restaurant Game` since 2026-11-22 (see Decisions in CLAUDE.md).
+Leftover from the move: the old folder
+`C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but could not be
+removed because a running program held it open. Its deletion is approved: a
+later session removes the empty folder (only if still empty) and drops its
+old lines from `~/.claude/skills/start/groups.txt` and `~/.codex/config.toml`.
 
 **Next:**
 0. [you: ask Jercy] Restore the backend. Options once Jercy answers:
@@ -32,23 +31,24 @@ that runs from the new folder. If it still exists: open a session in
    a disk/memory check per SERVER.md, and a client rebuild).
    Whatever the choice, get an export of `dunnin` and set up regular backups.
    Done when: cozy-bistro.com connects and a restaurant loads.
-1. Post Patch 12 notes to Discord — ready to paste in `docs/patch-notes-12.md`
+1. [you: post in Discord] (after #0) Post Patch 12 notes to Discord — ready to paste in `docs/patch-notes-12.md`
    (bump the date if posting late). Done when: posted with @Tester ping.
-2. Collect tester reactions to the new command bar + manual litter + staffing
+2. [you: tester feedback] (after #0) Collect tester reactions to the new command bar + manual litter + staffing
    gates (the in-game 💬 Feedback button now feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. Decide the compensation grant (~$10k) for the two bug-eaten restaurants
+3. [you: yes/no] (after #0) Decide the compensation grant (~$10k) for the two bug-eaten restaurants
    (Aug 9 silent reset + overnight bleed-out). One admin money call once
    Andreas says yes.
-4. Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
+4. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
    edge-docked layout long-term (#4), special guest requests (Patch D
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- FIRST: message Jercy — is the SpacetimeDB box still running, can they
-  restore the `dunnin-spacetime.ownsun.de` DNS record, and can they send an
-  export of the `dunnin` database? → Paste the answer in the next session.
+- FIRST: send Jercy this: "Hi, dunnin-spacetime.ownsun.de no longer
+  resolves, so Cozy Bistro can't connect. Is the SpacetimeDB box still
+  running? Can you restore the DNS record, and send me an export of the
+  dunnin database?" → Paste the answer in the next session.
 - Post the patch notes (see Next 1): open `docs/patch-notes-12.md`, copy the
   code block, paste in Discord. → Reply "posted" or adjust first.
 - In-game sanity pass (5 min): claim a daily goal (should work first click),
@@ -68,6 +68,7 @@ that runs from the new folder. If it still exists: open a session in
   verified by Andreas, not me.
 
 ## History
+- 2026-11-22: Moved out of OneDrive to `C:\Users\andre\Restaurant Game` (copy verified, builds + server compile + local start pass, pushed, old copy deleted). 4676c71, 44381f4
 - 2026-11-22: State check — site up, backend DNS name gone (game down); recorded here, no code changed.
 - 2026-08-12: Daily-goals click fix (persistent DOM, day-keyed claim latch, margin). 53850ce
 - 2026-08-12: Top bar v3 per Andreas's spec (nav left stacked, labeled tile rows center, timers+bell right, floor tab below) + thinner. a31ec86, 57b7e6c
