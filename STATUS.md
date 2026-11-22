@@ -7,11 +7,16 @@ https://cozy-bistro.com loads (12 Aug build, matches local `v2/dist`), but the
 backend name `dunnin-spacetime.ownsun.de` no longer exists in DNS (ownsun.de's
 own Cloudflare nameservers answer "does not exist"). Players see "Lost
 connection to the server" and hang on "Setting up your restaurant…". Prod
-(`dunnin`) AND staging (`dunnin-staging`) both live on that box. Unknown:
-whether Jercy's box is off or only the DNS record is gone, whether the data
-survives, and when it went down (last confirmed working 2026-08-12). No backup
-of player data exists in this repo. The old Maincloud module
-`cozy-bistro-andre` still responds (fallback). Note: `cozybistro.gr` does not
+(`dunnin`) AND staging (`dunnin-staging`) both lived on that box. Jercy
+confirmed on 2026-11-22: the database was switched off around 2026-10-24 (at
+Andreas's request) and DELETED because it used too much disk. No backup
+exists anywhere, so all restaurants and accounts are gone: the game restarts
+from zero on a new backend. Open decision (asked 2026-11-22): A) self-host on
+the Hetzner box with a hard disk cap, B) Maincloud Pro about $25/month,
+D) keep the game off with a notice. Facts gathered: the box has 53 GB disk
+and 5.5 GB RAM free; the module makes about 3 scheduled calls a second, far
+over Maincloud's free tier; SpacetimeDB's commit log is append-only and never
+compacted, which is what filled Jercy's disk. Note: `cozybistro.gr` does not
 exist — the only live address is cozy-bistro.com.
 
 **In progress / unfinished:** no code half-done. Items 1–4 below are on hold
@@ -24,13 +29,12 @@ later session removes the empty folder (only if still empty) and drops its
 old lines from `~/.claude/skills/start/groups.txt` and `~/.codex/config.toml`.
 
 **Next:**
-0. [you: ask Jercy] Restore the backend. Options once Jercy answers:
-   A) Jercy re-adds the DNS record (recommended; no code change),
-   B) move back to Maincloud (old/empty data, usage limits return),
-   C) host SpacetimeDB on the shared rented server (needs a data export,
-   a disk/memory check per SERVER.md, and a client rebuild).
-   Whatever the choice, get an export of `dunnin` and set up regular backups.
-   Done when: cozy-bistro.com connects and a restaurant loads.
+0. [you: pick A, B or D] New backend (Jercy's is gone, see Status).
+   Done when (for A): cozy-bistro.com connects, a new restaurant survives a
+   server restart, the data folder has a hard size cap that is proven to stop
+   the game and not the box, a nightly backup restores on a test, and disk
+   growth has been measured for a few days before testers return.
+   The compensation grant (#3) is moot once everyone starts from zero.
 1. [you: post in Discord] (after #0) Post Patch 12 notes to Discord — ready to paste in `docs/patch-notes-12.md`
    (bump the date if posting late). Done when: posted with @Tester ping.
 2. [you: tester feedback] (after #0) Collect tester reactions to the new command bar + manual litter + staffing
@@ -45,10 +49,8 @@ old lines from `~/.claude/skills/start/groups.txt` and `~/.codex/config.toml`.
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- FIRST: send Jercy this: "Hi, dunnin-spacetime.ownsun.de no longer
-  resolves, so Cozy Bistro can't connect. Is the SpacetimeDB box still
-  running? Can you restore the DNS record, and send me an export of the
-  dunnin database?" → Paste the answer in the next session.
+- FIRST: new backend — answer A (own server, capped disk), B (Maincloud Pro,
+  about $25/month) or D (keep it off with a notice). Recommended: A.
 - Post the patch notes (see Next 1): open `docs/patch-notes-12.md`, copy the
   code block, paste in Discord. → Reply "posted" or adjust first.
 - In-game sanity pass (5 min): claim a daily goal (should work first click),
