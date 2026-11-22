@@ -17,11 +17,12 @@ exist — the only live address is cozy-bistro.com.
 **In progress / unfinished:** no code half-done. Items 1–4 below are on hold
 until the backend is back. The project moved out of OneDrive on 2026-11-22:
 the real copy is now `C:\Users\andre\Restaurant Game` (verified: same files,
-same git HEAD, both builds + `spacetime build` + local start pass). Two things
-from the move wait on Andreas: (a) delete the old copy at
+same git HEAD, both builds + `spacetime build` + local start pass) and `main`
+is pushed to GitHub. One step left: delete the old copy at
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` — permanently, not to the
-Recycle Bin; (b) push `main` to GitHub — docs-only commits, but any push to
-main re-runs the Pages deploy of the same site.
+Recycle Bin. Andreas approved it on 2026-11-22; it only waits on a session
+that runs from the new folder. If it still exists: open a session in
+`C:\Users\andre\Restaurant Game` and type "delete the old OneDrive copy".
 
 **Next:**
 0. [you: ask Jercy] Restore the backend. Options once Jercy answers:
