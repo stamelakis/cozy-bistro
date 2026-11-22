@@ -5,14 +5,18 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
 
 ## Where things run
 - LIVE: https://cozy-bistro.com (GitHub Pages, repo stamelakis/cozy-bistro,
-  DNS at Papaki). Backend: SpacetimeDB `dunnin` on wss://dunnin-spacetime.ownsun.de.
+  DNS at Papaki). Backend: SpacetimeDB `dunnin` on OUR Hetzner box,
+  wss://db.cozy-bistro.com (host baked in at build time: `CB_HOST`, see
+  vite.config.ts). Runbook, design and tests: `ops/backend/README.md`.
+  Whether it is installed yet: STATUS.md. (Jercy's ownsun.de box is gone.)
 - STAGING: /staging/cozy-bistro-3d/ + `?env=staging` → DB `dunnin-staging`,
   built from the `staging` BRANCH. Keep it synced: `git push origin main:staging`
   and publish the module to dunnin-staging too — do both on every server change.
 
 ## Deploy pipeline (what actually works)
-1. Server: `spacetime publish --server ownsun -p . dunnin --yes` from
-   `v2/spacetime` (repeat for dunnin-staging). Schema adds → clients reconnect.
+1. Server: open the SSH tunnel (`ops/backend/README.md`), then
+   `spacetime publish --server cozybox -p . dunnin --yes` from `v2/spacetime`
+   (repeat for dunnin-staging). Schema adds → clients reconnect.
 2. After any schema change: `spacetime generate --lang typescript
    --out-dir ../src/cloud/generated --module-path .` then rebuild the client.
 3. Client: `$env:CB_BASE='/'; npm run build` in v2 (tsc must pass), commit,
@@ -48,6 +52,12 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
 - **Lives at `C:\Users\andre\Restaurant Game`, outside OneDrive, since
   2026-11-22.** OneDrive couldn't sync code projects (3,607 sync problems on
   2026-11-19). Backup is git + GitHub. Don't move it back into OneDrive.
+- **Backend is self-hosted with a nightly prune and a hard disk cap
+  (2026-11-22).** SpacetimeDB's log never shrinks by itself; that filled the
+  previous host and the database was deleted without a backup. Rejected:
+  Maincloud (ticks cost ~$25/month), running without pruning, pruning a
+  database that isn't healthy (lost the lab database). Rules that must stay:
+  `ops/backend/README.md` "Why it is built this way".
 - **Staffing gates (0149af8):** no orders without an active waiter (barman for
   bar seats), no ticket/ingredients/restock without an active chef/barman, no
   auto-shopping without auto_shop_enabled AND an active errand helper. The
@@ -76,6 +86,13 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
 - Claim-style reducers: owner gate → `last_*_micros` cooldown with silent
   `Ok(())` → effect + stamp in one update → record_money_event (copy
   claim_tip_bonus).
+
+## Data on this PC
+- Docker image `cozybistro-stdb:<version>` (~300 MB): the server image we
+  ship to the box. Keep only the version that runs on the box; delete the
+  older one after an update. Local test containers, volumes and the 3.5 GB
+  official `clockworklabs/spacetime` image are removed when a test ends.
+- `v2/dist` (build output, gitignored): overwritten by every build.
 
 ## Memory
 Deep per-feature history (dishware audit, resets, retention features, stats)

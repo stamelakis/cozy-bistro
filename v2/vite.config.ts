@@ -17,6 +17,9 @@ export default defineConfig({
     // dedicated staging build points at the staging DB (and isolates its
     // storage + shows the STAGING badge) without needing ?env=staging.
     __CB_ENV__: JSON.stringify(buildEnv),
+    // SpacetimeDB host. Prod and staging share one instance (separate DBs).
+    // Override for local testing: CB_HOST=ws://127.0.0.1:3000.
+    __CB_HOST__: JSON.stringify(process.env.CB_HOST ?? "wss://db.cozy-bistro.com"),
   },
   build: {
     outDir: "dist",

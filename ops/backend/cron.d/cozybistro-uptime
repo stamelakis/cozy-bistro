@@ -1,0 +1,6 @@
+# Cozy Bistro: every-5-min check of https://db.cozy-bistro.com/v1/ping, auto-restart + e-mail alert.
+# Installed as /etc/cron.d/cozybistro-uptime (root:root 0644) only AFTER the Caddy block is live.
+# Script: /opt/cozybistro-uptime.sh (repo: ops/backend/cozybistro-uptime.sh).
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+*/5 * * * * root /opt/cozybistro-uptime.sh >> /var/log/cozybistro-uptime.log 2>&1

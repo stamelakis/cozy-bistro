@@ -1,0 +1,33 @@
+# Cozy Bistro's block for the shared Caddyfile (/opt/edu-admin/Caddyfile on the box; its committed copy is
+# the education repo's Caddyfile).
+#
+# Procedure for ANY Caddyfile change (education's ops/BOX.md), with Andreas's OK:
+#   cp /opt/edu-admin/Caddyfile /opt/edu-admin/Caddyfile.bak-$(date +%Y%m%d-%H%M)
+#   edit, then: docker exec edu-admin-caddy-1 caddy validate --config /etc/caddy/Caddyfile
+#   docker exec edu-admin-caddy-1 caddy reload --config /etc/caddy/Caddyfile
+#   then EVERY vhost on the box answers 200.
+#   NEVER restart the Caddy container: every site on the box goes down with it.
+# Caddy reaches the database as cozybistro-stdb:3000 only after
+#   docker network connect cozybistro_net edu-admin-caddy-1
+# (and cozybistro_net declared external in the education compose, or the next `up` of Caddy drops it).
+# Paste only once DNS of db.cozy-bistro.com points at 178.104.158.125, or the certificate request fails.
+#
+# WHY ONLY FOUR PATHS: SpacetimeDB's full HTTP API lets any stranger publish a NEW database on the server
+# (disk and CPU for free), and offers SQL and log endpoints. The game needs only these: the WebSocket
+# (subscribe), the short-lived token exchange before it, and ping for the uptime check. Publishing the
+# module goes through an SSH tunnel to 127.0.0.1:3100, never through here. Do not widen this to /v1/*.
+
+db.cozy-bistro.com {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+	@game path /v1/ping /v1/identity/websocket-token /v1/database/dunnin/subscribe /v1/database/dunnin-staging/subscribe
+	handle @game {
+		reverse_proxy cozybistro-stdb:3000
+	}
+	handle {
+		respond 404
+	}
+}

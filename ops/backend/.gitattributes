@@ -1,0 +1,2 @@
+# These files run on the Linux server. Windows line endings would break them.
+* text eol=lf

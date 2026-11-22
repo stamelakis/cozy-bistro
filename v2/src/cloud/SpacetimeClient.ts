@@ -292,12 +292,13 @@ function tokenStorageKeyFor(host: string): string {
   return `${TOKEN_KEY_BASE}:${slug}`;
 }
 
-// Self-hosted SpacetimeDB instance (Jercy's box at ownsun.de).
-// Moved off Maincloud to escape the energy-budget metering — the
-// per-tick / per-mirror cadence even after the H.* optimizations
-// was burning more TeV/month than the free tier allowed.  Module
-// name on the new host is "dunnin" (NOT cozy-bistro-andre).
-const DEFAULT_HOST = "wss://dunnin-spacetime.ownsun.de";
+// Self-hosted SpacetimeDB instance on Andreas's own Hetzner box (since
+// Nov 2026; Jercy's ownsun.de box was shut down and its data deleted).
+// Self-hosted, not Maincloud, because the 24/7 tick cadence burns far
+// more than the free tier's energy budget.  Module name is "dunnin".
+// The host is baked in at build time (vite.config.ts, CB_HOST) so a
+// local build can point at a local server: CB_HOST=ws://127.0.0.1:3000.
+const DEFAULT_HOST = __CB_HOST__;
 const DEFAULT_MODULE = "dunnin";
 /** Staging database — SAME SpacetimeDB instance, a separate DB — so a patch can
  * be tested against real infrastructure before it's promoted to prod. */

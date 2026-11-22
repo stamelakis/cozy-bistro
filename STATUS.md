@@ -2,74 +2,70 @@
 
 Updated: 2026-11-22
 
-**Status:** 🚨 GAME DOWN (found 2026-11-22). The website
-https://cozy-bistro.com loads (12 Aug build, matches local `v2/dist`), but the
-backend name `dunnin-spacetime.ownsun.de` no longer exists in DNS (ownsun.de's
-own Cloudflare nameservers answer "does not exist"). Players see "Lost
-connection to the server" and hang on "Setting up your restaurant…". Prod
-(`dunnin`) AND staging (`dunnin-staging`) both lived on that box. Jercy
-confirmed on 2026-11-22: the database was switched off around 2026-10-24 (at
-Andreas's request) and DELETED because it used too much disk. No backup
-exists anywhere, so all restaurants and accounts are gone: the game restarts
-from zero on a new backend. Open decision (asked 2026-11-22): A) self-host on
-the Hetzner box with a hard disk cap, B) Maincloud Pro about $25/month,
-D) keep the game off with a notice. Facts gathered: the box has 53 GB disk
-and 5.5 GB RAM free; the module makes about 3 scheduled calls a second, far
-over Maincloud's free tier; SpacetimeDB's commit log is append-only and never
-compacted, which is what filled Jercy's disk. Note: `cozybistro.gr` does not
-exist — the only live address is cozy-bistro.com.
+**Status:** 🚨 GAME DOWN, new backend PREPARED but not installed. Jercy's box
+is gone and its database was deleted without a backup (confirmed 2026-11-22),
+so the game restarts from zero. Andreas chose option A on 2026-11-22: our own
+SpacetimeDB on the shared Hetzner box. Everything for it is written and
+tested locally in Docker (image, setup script, nightly prune + encrypted
+backup, uptime check, Caddy block, runbook): `ops/backend/README.md` has the
+design, the test table and the install steps. Nothing on the server, DNS or
+GitHub has been changed yet. Note: `cozybistro.gr` does not exist; the only
+live address is cozy-bistro.com.
 
-**In progress / unfinished:** no code half-done. Items 1–4 below are on hold
-until the backend is back. The project lives at
-`C:\Users\andre\Restaurant Game` since 2026-11-22 (see Decisions in CLAUDE.md).
-Leftover from the move: the old folder
-`C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but could not be
-removed because a running program held it open. Its deletion is approved: a
-later session removes the empty folder (only if still empty) and drops its
-old lines from `~/.claude/skills/start/groups.txt` and `~/.codex/config.toml`.
+**In progress / unfinished:** the install itself (Next #0). Local `main` is
+ahead of GitHub and must NOT be pushed before the server answers: the client
+now points at `wss://db.cozy-bistro.com` (`CB_HOST` in `v2/vite.config.ts`),
+and a push redeploys the site. Leftover from the OneDrive move: the old
+folder `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was
+locked. Its deletion is approved: a later session removes it (only if still
+empty) and drops its old lines from `~/.claude/skills/start/groups.txt` and
+`~/.codex/config.toml`.
 
 **Next:**
-0. [you: pick A, B or D] New backend (Jercy's is gone, see Status).
-   Done when (for A): cozy-bistro.com connects, a new restaurant survives a
-   server restart, the data folder has a hard size cap that is proven to stop
-   the game and not the box, a nightly backup restores on a test, and disk
-   growth has been measured for a few days before testers return.
-   The compensation grant (#3) is moot once everyone starts from zero.
-1. [you: post in Discord] (after #0) Post Patch 12 notes to Discord — ready to paste in `docs/patch-notes-12.md`
-   (bump the date if posting late). Done when: posted with @Tester ping.
+0. [you: OK each server step] Install the backend on the box, following
+   "First install" in `ops/backend/README.md`. Needs from Andreas: the DNS
+   record at Papaki, an OK for the server steps and for the two changes in
+   the education project's files (Caddyfile, compose network), the backup
+   key into his password manager, and signing up the username `dunnin`
+   first (that name is the game's admin). Also run `/security-review`
+   before the push.
+   Done when: cozy-bistro.com connects, a new restaurant survives a server
+   restart, the 8 GB cap is proven on the box (a throwaway 64 MB image fills
+   and `df -h /` does not move), the first nightly backup restores on a test,
+   every other site on the box still answers 200, and disk growth has been
+   measured for a few days before testers return.
+1. [you: post in Discord] (after #0) Tell the testers the game is back and
+   starts from zero, then post Patch 12 notes (`docs/patch-notes-12.md`, bump
+   the date). Done when: posted with @Tester ping.
 2. [you: tester feedback] (after #0) Collect tester reactions to the new command bar + manual litter + staffing
-   gates (the in-game 💬 Feedback button now feeds the admin inbox: Dev tools →
+   gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: yes/no] (after #0) Decide the compensation grant (~$10k) for the two bug-eaten restaurants
-   (Aug 9 silent reset + overnight bleed-out). One admin money call once
-   Andreas says yes.
-4. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
+3. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
    edge-docked layout long-term (#4), special guest requests (Patch D
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- FIRST: new backend — answer A (own server, capped disk), B (Maincloud Pro,
-  about $25/month) or D (keep it off with a notice). Recommended: A.
-- Post the patch notes (see Next 1): open `docs/patch-notes-12.md`, copy the
-  code block, paste in Discord. → Reply "posted" or adjust first.
-- In-game sanity pass (5 min): claim a daily goal (should work first click),
-  open/close Build·Recipes·Chat·Players from the top bar, place a Prep
-  Counter, tap some litter ♻. → Report anything that feels off via the game's
-  Feedback button or next session.
-- Say yes/no to the ~$10k refund (Next 3).
+- FIRST: the Papaki DNS record `db.cozy-bistro.com` → `178.104.158.125`
+  (type A) and a yes to the install steps (Next #0).
+- After go-live: sign up `dunnin` before anyone else, then the Discord post.
 - Still open from earlier: the friend's iPhone black screen — next failed boot
   shows a real error screen; ask him to retry and screenshot it.
 
 **Known problems:**
+- The compensation grant for the two bug-eaten restaurants is moot: everyone
+  starts from zero.
+- The game's admin is whoever owns the username `dunnin`; on the fresh
+  database it must be registered before the site is public.
 - Tester-facing: litter no longer pays passively and unstaffed restaurants
   earn/spend nothing — intentional, but expect "is this a bug?" feedback.
 - Minor, by design: greet/stir/bus badges hide while visiting; critic sweep
   averages ~1/hour so it's rarely seen live (admin 🧪 EVENT TESTS can force it).
-- The browser-pane verification trick can't log in, so in-game flows are
-  verified by Andreas, not me.
+- The browser-pane verification trick can't log in on the live site, so
+  in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-22: Andreas chose to self-host the backend (option A). Prepared and tested locally: `ops/backend/` (slim image, 8 GB capped data space, nightly prune + age backup, uptime check, Caddy block with 4 paths). The lab found and fixed two traps: signing keys outside the data folder, and pruning after a full-disk crash destroying the database.
 - 2026-11-22: Moved out of OneDrive to `C:\Users\andre\Restaurant Game` (copy verified, builds + server compile + local start pass, pushed, old copy deleted). 4676c71, 44381f4
 - 2026-11-22: State check — site up, backend DNS name gone (game down); recorded here, no code changed.
 - 2026-08-12: Daily-goals click fix (persistent DOM, day-keyed claim latch, margin). 53850ce

@@ -1,0 +1,33 @@
+# Cozy Bistro's SpacetimeDB on the shared Hetzner box. Lives at
+# /opt/cozy-bistro on the box. Runbook: README.md in this folder.
+name: cozybistro
+services:
+  stdb:
+    image: cozybistro-stdb:2.3.0
+    container_name: cozybistro-stdb
+    restart: unless-stopped
+    # init: without it the server is PID 1, ignores the stop signal, and every
+    # stop (the nightly job has one) waits out the full timeout.
+    init: true
+    stop_grace_period: 10s
+    # /opt/cozy-bistro/data is a fixed-size loop filesystem (setup-box.sh):
+    # if the database ever fills it, the GAME stops, not the box.
+    volumes:
+      - /opt/cozy-bistro/data:/stdb
+    # Loopback only: used for publishing through an SSH tunnel and for the
+    # nightly job. Players come in through the shared Caddy on cozybistro_net.
+    ports:
+      - "127.0.0.1:3100:3000"
+    networks:
+      - cozybistro_net
+    mem_limit: 1536m
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  cozybistro_net:
+    external: true
