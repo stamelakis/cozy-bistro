@@ -1,0 +1,24 @@
+# Automated tests for the server's pure rule files.
+#
+# The game module itself (../Cargo.toml) only builds for WebAssembly: on a
+# PC its tests cannot link, because every database call is a function the
+# SpacetimeDB host provides. So the rules that decide money live in files
+# with NO database in them (../src/wish_rules.rs), and this tiny crate
+# compiles exactly those files for the PC and runs their tests.
+#
+#   cargo test --manifest-path v2/spacetime/rules-tests/Cargo.toml
+#   (or, from v2/:  npm run test:server)
+#
+# No dependencies on purpose: it builds in seconds and needs no download.
+
+[package]
+name = "cozy-bistro-rules-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+# Stand-alone: not part of any workspace.
+[workspace]

@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5180",
     "build": "tsc && vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 5180"
+    "preview": "vite preview --host 127.0.0.1 --port 5180",
+    "test:server": "cargo test --manifest-path spacetime/rules-tests/Cargo.toml"
   },
   "dependencies": {
     "spacetimedb": "^2.3.0",
