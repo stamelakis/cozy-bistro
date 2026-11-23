@@ -5,12 +5,13 @@ Updated: 2026-11-23
 **Status:** ✅ THE GAME IS BACK since 2026-11-23 06:30 UTC, from zero, on our
 own server: SpacetimeDB 2.3.0 on the shared Hetzner box, players' address
 `wss://db.cozy-bistro.com`. cozy-bistro.com was redeployed from `main` and
-connects (seen in a browser). `dunnin` (the admin) is signed up on LIVE.
+connects (seen in a browser). Staging connects too since 23 Nov 11:25 UTC.
+`dunnin` (the admin) is signed up on LIVE and on STAGING.
 Runbook, design and all test results: `ops/backend/README.md`. Testers have
 NOT been told yet. Note: `cozybistro.gr` does not exist; the only live
 address is cozy-bistro.com.
 
-**In progress / unfinished (Next #0, one thing left):**
+**In progress / unfinished (Next #0: only readings on the box are left):**
 - (Done 23 Nov: the nightly job's lock fix is on the server. The first
   scheduled run had skipped itself, see README "What was tested". The job
   now runs at 03:32 UTC; run by hand after the install: 2 s of downtime,
@@ -25,10 +26,12 @@ address is cozy-bistro.com.
   `Cozy Bistro backup key (age)`; his stored copy was compared with the
   original before the PC file was deleted. Leftover on the box:
   `/opt/cozybistro-backup.pub.old`, delete with the fix folder.)
-- **Staging.** `dunnin-staging` is published but has NO `dunnin` account,
-  and the `staging` branch is not pushed: /staging/ still points at the dead
-  old server. Order: Andreas signs up `dunnin` on staging (local build with
-  `?env=staging`), then `git push origin main:staging`.
+- (Done 23 Nov: staging. `dunnin` exists on `dunnin-staging` (checked on the
+  server), `main` and `staging` are both at `e4d8b7e`, and
+  /staging/cozy-bistro-3d/ serves a build for `wss://db.cozy-bistro.com`:
+  STAGING badge and "[SpacetimeDB] connected" seen in a browser. The first
+  staging push changed nothing for 4 hours: Pages deploys a commit only
+  once, see CLAUDE.md "Deploy pipeline" step 5.)
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -46,11 +49,16 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   that `/var/log/cozybistro-nightly.log` says "removed N old log piece(s)".
 
 **Next:**
-0. [you: sign up `dunnin` on staging] Finish the install: staging, and two
-   readings on the box (see "In progress" and "Disk growth").
-   Done when: `dunnin` exists on staging, `main:staging` is pushed and
-   /staging/ connects, the scheduled nightly run of 24 Nov made a backup,
-   and a second growth reading is written above.
+0. [you: yes to read-only checks on the box, then to deleting leftovers]
+   On or after 24 Nov 04:00 UTC: read `/var/log/cozybistro-nightly.log`
+   (did the 03:32 run make a backup?), take the second growth reading
+   ("Disk growth"), then with Andreas's OK delete this install's leftovers
+   on the box: `/root/cozybistro-fix/`, `/opt/cozybistro-backup.pub.old`,
+   `/etc/fstab.bak-20261122-212045`, `/opt/offsite-push.sh.bak-20261122-2153`,
+   and in `/opt/edu-admin` (education project's folder) the two files
+   `Caddyfile.bak-20261122-2130` and `docker-compose.yml.bak-20261122-2130`.
+   Done when: the nightly run of 24 Nov is in the log with a backup, a
+   second growth reading is written above, the leftovers are gone.
 1. [you: post in Discord] (after #0, and after a few days of growth
    readings) Tell the testers the game is back and starts from zero, then
    post Patch 12 notes (`docs/patch-notes-12.md`, bump the date). Done when:
@@ -64,18 +72,24 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- Sign up `dunnin` on staging.
 - Other projects, his call: (a) the live `/opt/offsite-push.sh` is newer than
   its copies in the TakeaSeat repo (`server/offsite-push.sh`) and the
   education repo (`ops/offsite-push.sh`); neither copy has the webstudio and
   cozybistro lines, so installing a repo copy would drop them. (b) The
-  education repo has two unpushed commits from the install (`fd35a37`
-  Caddyfile + compose network, `b6d55e4` BOX.md); the live files already
-  match them.
+  education repo has three unpushed commits from the install (`fd35a37`
+  Caddyfile + compose network, `b6d55e4` and `8c433c6` BOX.md); the live
+  files already match them.
 - Still open from earlier: the friend's iPhone black screen — next failed boot
   shows a real error screen; ask him to retry and screenshot it.
 
 **Known problems:**
+- Staging's furniture price list is empty: a visitor's page tries to fill
+  it and the server refuses ("Furniture cost catalog changes are
+  admin-only", hundreds of console errors on a first visit). The page
+  fills it by itself the next time `dunnin` is logged in on staging while
+  it loads (`Engine.ts`, catalog reseed). Until then buying furniture on
+  staging may fail. LIVE has the furniture list; a first visit there shows
+  4 "Recipe catalog changes are admin-only" errors, not looked into.
 - Not tested: the owner mails of the nightly job and the uptime check (no
   incident so far), and growth with real players.
 - A skipped nightly run sends no mail. After the lock fix that only happens
@@ -91,6 +105,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-23: Staging is on the new server too: `dunnin` signed up there, `main` + `staging` pushed together, /staging/ seen connecting. Found on the way: Pages deploys a commit once, so `main` then `main:staging` at the same commit left staging on the old build (CLAUDE.md deploy step 5). e4d8b7e
 - 2026-11-23: Backend INSTALLED on the shared Hetzner box and the site switched to it (`main` pushed 06:29 UTC, seen connecting in a browser). Image shipped, 8 GB capped data space (cap proven with a 64 MB test image), age backup key, Caddy block with four paths, both databases published, cron jobs, off-site line; the 12 other addresses on the box answered as before; security review found nothing. Found next morning: the scheduled nightly run lost its lock to the uptime check and skipped (fix f301d63, installed the same morning). 90b543b
 - 2026-11-22: Andreas chose to self-host the backend (option A). Prepared and tested locally: `ops/backend/` (slim image, 8 GB capped data space, nightly prune + age backup, uptime check, Caddy block with 4 paths). The lab found and fixed two traps: signing keys outside the data folder, and pruning after a full-disk crash destroying the database.
 - 2026-11-22: Moved out of OneDrive to `C:\Users\andre\Restaurant Game` (copy verified, builds + server compile + local start pass, pushed, old copy deleted). 4676c71, 44381f4
