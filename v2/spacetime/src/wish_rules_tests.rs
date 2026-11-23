@@ -176,7 +176,8 @@ fn hurry_granted_pays_10_dollars_when_the_plate_lands_in_time() {
     assert!(matches!(answer, Tap::Promise(..)));
     assert_eq!(w.wallet_cents, 0);
     assert_eq!(w.g(id).wish_state, STATE_PROMISED);
-    assert_eq!(w.g(id).wish_deadline_micros, T0 + 5 * S + 45 * S);
+    // The time runs from the moment the wish appeared (T0), not from the tap.
+    assert_eq!(w.g(id).wish_deadline_micros, T0 + 60 * S);
 
     // The guest orders and waits; nothing happens to the wish.
     w.g(id).phase = Phase::Ordering;
@@ -186,7 +187,7 @@ fn hurry_granted_pays_10_dollars_when_the_plate_lands_in_time() {
     assert_eq!(w.g(id).wish_state, STATE_PROMISED);
     assert_eq!(w.wallet_cents, 0);
 
-    // The plate lands 40 s after the tap.
+    // The plate lands 45 s after the wish appeared.
     w.g(id).plate_landed = true;
     w.tick(T0 + 45 * S);
     assert_eq!(w.wallet_cents, 1_000);
@@ -207,8 +208,32 @@ fn hurry_is_granted_exactly_at_the_deadline() {
     let (mut w, id) = hurry_offered();
     w.tap(id, true, T0);
     w.g(id).phase = Phase::Eating; // the plate landed and the guest started
-    w.tick(T0 + 45 * S);
+    w.tick(T0 + 60 * S);
     assert_eq!(w.wallet_cents, 1_000);
+}
+
+#[test]
+fn hurry_tapping_late_buys_no_extra_time() {
+    assert_eq!(HURRY_WINDOW_MICROS, 60 * S);
+
+    // Tapped at once or at the last moment: the same deadline.
+    let (mut early, a) = hurry_offered();
+    early.tap(a, true, T0);
+    let (mut late, b) = hurry_offered();
+    assert!(matches!(late.tap(b, true, T0 + 20 * S), Tap::Promise(..)));
+    assert_eq!(early.g(a).wish_deadline_micros, T0 + 60 * S);
+    assert_eq!(late.g(b).wish_deadline_micros, T0 + 60 * S);
+
+    // A plate at 61 s is too late for the late tapper too (under the old
+    // "45 s from the tap" rule it would have been in time until 65 s).
+    late.g(b).phase = Phase::WaitingForFood;
+    late.tick(T0 + 59 * S);
+    assert_eq!(late.g(b).wish_state, STATE_PROMISED);
+    late.g(b).plate_landed = true;
+    late.tick(T0 + 61 * S);
+    assert_eq!(late.g(b).wish_state, STATE_MISSED);
+    assert_eq!(late.wallet_cents, 0);
+    assert!(late.ledger.is_empty());
 }
 
 // ── Second tap, late tap ────────────────────────────────────────────────
@@ -226,7 +251,7 @@ fn second_tap_pays_nothing() {
     w.tap(id, true, T0 + S);
     // A second tap on a promise changes nothing, not even the deadline.
     assert_eq!(w.tap(id, true, T0 + 10 * S), Tap::Ignore);
-    assert_eq!(w.g(id).wish_deadline_micros, T0 + S + 45 * S);
+    assert_eq!(w.g(id).wish_deadline_micros, T0 + 60 * S);
     w.g(id).plate_landed = true;
     w.tick(T0 + 20 * S);
     assert_eq!(w.tap(id, true, T0 + 21 * S), Tap::Ignore);
@@ -265,17 +290,17 @@ fn hurry_plate_too_late_pays_nothing_and_costs_nothing() {
     w.wallet_cents = 5_000;
     w.tap(id, true, T0);
     w.g(id).phase = Phase::WaitingForFood;
-    w.tick(T0 + 44 * S);
+    w.tick(T0 + 59 * S);
     assert_eq!(w.g(id).wish_state, STATE_PROMISED);
 
-    // 45.5 s: the promise is broken the moment the time is up.
-    w.tick(T0 + 45 * S + S / 2);
+    // 60.5 s: the promise is broken the moment the time is up.
+    w.tick(T0 + 60 * S + S / 2);
     assert_eq!(w.g(id).wish_state, STATE_MISSED);
 
     // The plate lands afterwards: still nothing.
     w.g(id).plate_landed = true;
     w.g(id).phase = Phase::Eating;
-    w.tick(T0 + 50 * S);
+    w.tick(T0 + 65 * S);
     assert_eq!(w.wallet_cents, 5_000, "no reward and no penalty");
     assert!(w.ledger.is_empty());
     assert!(w.thanked.is_empty());
@@ -286,7 +311,7 @@ fn hurry_plate_landing_in_the_same_tick_the_time_runs_out_is_too_late() {
     let (mut w, id) = hurry_offered();
     w.tap(id, true, T0);
     w.g(id).plate_landed = true;
-    w.tick(T0 + 45 * S + 1);
+    w.tick(T0 + 60 * S + 1);
     assert_eq!(w.g(id).wish_state, STATE_MISSED);
     assert_eq!(w.wallet_cents, 0);
 }

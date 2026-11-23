@@ -22,7 +22,7 @@ seconds: nothing is lost, the same rule as the critic visit.
 | | ⚡ "I'm in a hurry" | 🎂 "It's my birthday" |
 |---|---|---|
 | Appears | When the guest sits down | While the guest is eating |
-| The player | Taps the badge (a promise), then gets the first plate to the table within **45 seconds**. Stirring the pot (🥄) is the way to speed it up. | Taps the badge within 20 seconds |
+| The player | Taps the badge (a promise), then gets the first plate to the table within **60 seconds of the wish appearing** (first written as 45 seconds after the tap; changed 23 Nov, see "Build log"). Stirring the pot (🥄) is the way to speed it up. | Taps the badge within 20 seconds |
 | Reward | **+$10**, paid when the plate lands | **+$6**, paid at once |
 | Also | That guest rates about a quarter of a star higher; a named regular gets one extra loyalty heart | The same |
 | Missed | Plate too late: no reward, nothing else happens | Badge fades |
@@ -168,9 +168,17 @@ pushed):
 So "45 seconds after the tap" is always made in the small kitchen and
 almost never in the busy one, unless the player waits the full 20
 seconds before tapping: then about 3 in 4. Tapping late buys time, and
-that is not a skill worth rewarding. The question is in `STATUS.md`
-("Waiting on Andreas"). Not measured: how much a stir (🥄) saves; it
-needs a hand on the pot and the test ran by script.
+that is not a skill worth rewarding. Not measured: how much a stir (🥄)
+saves; it needs a hand on the pot and the test ran by script.
+
+**Decided by Andreas, 23 Nov: 60 seconds, counted from the moment the
+wish appears** (choice A). Tapping at once or at the last second gives
+the same deadline. Rejected: 45 s from the tap (rewards tapping late),
+and a time that adapts to each kitchen (fairest, but about one more
+session and new stored data; possible later). It is in `wish_rules.rs`
+(`HURRY_WINDOW_MICROS`, and the deadline in `tap`) with a test of its
+own, 29 tests in all. Checked by the tests only: the next local run
+(with the page) should see one hurry wish granted and one missed.
 
 Also seen: the three wishes that came by themselves were all birthdays.
 A guest starts eating once per course but sits down once, and guests
@@ -184,6 +192,9 @@ often. That keeps a real day well under the $60 ceiling.
   `answerGuestWish({ guestId })`; guest fields `wishKind` (1 hurry, 2
   birthday), `wishState` (1 badge showing, 2 promised, 3 granted, 4
   missed), `wishDeadlineMicros`.
+- `wishDeadlineMicros` while the badge shows = the last moment to tap
+  (offer + 20 s); after a hurry tap = offer + 60 s. A countdown on the
+  badge can read it directly in both states.
 - The generated files are NOT committed on purpose: with them, a push of
   `main` would give the live page bindings the live server does not have.
 - **Go-live order.** The page that is live today cannot read a server

@@ -35,14 +35,16 @@ address is cozy-bistro.com.
   once, see CLAUDE.md "Deploy pipeline" step 5.)
 
 - **Guest wishes (Next #3): server part built, page part not started.**
-  Rules + 28 automated tests (`npm run test:server` in `v2/`), the server
+  Rules + 29 automated tests (`npm run test:server` in `v2/`), the server
   fields, tick step and `answer_guest_wish` are committed (`de040c1`,
   `bfc4f35`, `0177f14`) and were run on a throwaway local server: both
   wishes granted and missed, upgrade of a database with data kept every
-  row. NOT published, NOT pushed. Left: the page (badge, "+$" pop, Ledger
-  line, Help), the hurry-time answer below, then publish with Andreas's
-  OK. Results, measurements and how to continue:
-  `docs/decisions/guest-requests.md` ("Build log").
+  row. Hurry time decided by Andreas on 23 Nov (choice A) and in the
+  rules: 60 s counted from the moment the wish appears, not from the tap
+  (tests only; not yet run on a local server with the new number). NOT
+  published, NOT pushed. Left: the page (badge, "+$" pop, Ledger line,
+  Help), then publish with Andreas's OK. Results, measurements and how
+  to continue: `docs/decisions/guest-requests.md` ("Build log").
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -85,11 +87,12 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    server part done, see "In progress"). Follow "For the next session" in
    `docs/decisions/guest-requests.md`: regenerate the bindings, add the
    wish badge (⚡ / 🎂) as one more `TapBadges` layer hidden while
-   visiting, the "+$" pop, the "wish" line in the Ledger and a Help entry;
-   apply the hurry-time answer if Andreas has given it. Test against a
-   local server. No publish, no push. Done when: `tsc` builds, the rule
-   tests pass, and on a local server both badges show and pay on PC and
-   on phone size (screenshots).
+   visiting, the "+$" pop, the "wish" line in the Ledger and a Help entry
+   (hurry: "first plate within 60 seconds of the wish appearing"). Test
+   against a local server. No publish, no push. Done when: `tsc` builds,
+   the rule tests pass, and on a local server both badges show and pay on
+   PC and on phone size (screenshots), with one hurry wish granted and
+   one missed under the 60-second rule.
 4. [you: OK to publish] (after #3) Guest wishes, part 3: publish the
    server to staging and live and push the page right after (the live
    page cannot read the upgraded server: a few minutes' break, players
@@ -101,15 +104,6 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
-- **Hurry wish, how to count the time: A, B or C?** Measured: a first
-  plate takes about 28 s in a small kitchen and about 58 s in a busy one
-  (table in `docs/decisions/guest-requests.md`, "Build log"). "45 s after
-  the tap" is always made in the first and almost never in the second,
-  unless the player waits before tapping. **A (recommended):** 60 s,
-  counted from the moment the wish appears; tapping late buys nothing.
-  **B:** leave it as written (45 s from the tap). **C:** a time that
-  adapts to each kitchen: fairest, about one more session, better later.
-  Not needed to build the page; needed before publishing.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how

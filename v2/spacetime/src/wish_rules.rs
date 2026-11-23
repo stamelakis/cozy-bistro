@@ -5,8 +5,9 @@
 //! Two wishes:
 //!   ⚡ hurry    — offered when a guest sits down. The owner taps the badge
 //!                (a promise), then the first plate must land within
-//!                HURRY_WINDOW. Pays HURRY_REWARD when the plate lands in
-//!                time. A broken promise costs nothing.
+//!                HURRY_WINDOW of the moment the wish APPEARED (not of the
+//!                tap). Pays HURRY_REWARD when the plate lands in time. A
+//!                broken promise costs nothing.
 //!   🎂 birthday — offered while a guest is eating. The owner taps within
 //!                TAP_WINDOW. Pays BIRTHDAY_REWARD at once.
 //!
@@ -44,9 +45,12 @@ const SECOND: i64 = 1_000_000; // micros
 
 /// How long a badge waits for the tap.
 pub const TAP_WINDOW_MICROS: i64 = 20 * SECOND;
-/// Hurry: tap → first plate on the table. 45 s is the plan's starting
-/// guess; the build measures a normal kitchen on a local server.
-pub const HURRY_WINDOW_MICROS: i64 = 45 * SECOND;
+/// Hurry: wish appears → first plate on the table. Counted from the
+/// OFFER, not from the tap, so tapping late buys no time (Andreas's
+/// choice A, 2026-11-23). 60 s from measurements on a local server: a
+/// first plate takes about 28 s in a small kitchen, about 58 s in a busy
+/// one (docs/decisions/guest-requests.md, "Build log").
+pub const HURRY_WINDOW_MICROS: i64 = 60 * SECOND;
 /// Pause after every wish (offered, answered, missed), 2 to 4 minutes.
 pub const PAUSE_MIN_MICROS: i64 = 120 * SECOND;
 pub const PAUSE_MAX_MICROS: i64 = 240 * SECOND;
@@ -339,11 +343,15 @@ pub fn tap(is_owner: bool, g: &GuestView, now: i64) -> Tap {
             if matches!(g.phase, Phase::Seated | Phase::Ordering | Phase::WaitingForFood)
                 && g.first_course && !g.plate_landed =>
         {
+            // While a wish is offered its deadline is "offer + TAP_WINDOW"
+            // (offer / force_offer above), so the offer time is known
+            // without another column.
+            let offered_at = g.wish_deadline_micros - TAP_WINDOW_MICROS;
             Tap::Promise(WishWrite {
                 guest_id: g.id,
                 kind: KIND_HURRY,
                 state: STATE_PROMISED,
-                deadline_micros: now + HURRY_WINDOW_MICROS,
+                deadline_micros: offered_at + HURRY_WINDOW_MICROS,
             })
         }
         _ => Tap::Ignore,
