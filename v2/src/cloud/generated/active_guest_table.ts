@@ -66,4 +66,7 @@ export default __t.row({
   greeted: __t.bool(),
   regularId: __t.u64().name("regular_id"),
   regularName: __t.option(__t.string()).name("regular_name"),
+  wishKind: __t.u8().name("wish_kind"),
+  wishState: __t.u8().name("wish_state"),
+  wishDeadlineMicros: __t.i64().name("wish_deadline_micros"),
 });

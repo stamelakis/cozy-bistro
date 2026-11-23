@@ -85,6 +85,9 @@ export const ActiveGuest = __t.object("ActiveGuest", {
   greeted: __t.bool(),
   regularId: __t.u64(),
   regularName: __t.option(__t.string()),
+  wishKind: __t.u8(),
+  wishState: __t.u8(),
+  wishDeadlineMicros: __t.i64(),
 });
 export type ActiveGuest = __Infer<typeof ActiveGuest>;
 
@@ -565,6 +568,7 @@ export const Restaurant = __t.object("Restaurant", {
   lastCrateGift: __t.option(__t.string()),
   lastBusSeatMicros: __t.i64(),
   autoShopEnabled: __t.bool(),
+  lastWishMicros: __t.i64(),
 });
 export type Restaurant = __Infer<typeof Restaurant>;
 

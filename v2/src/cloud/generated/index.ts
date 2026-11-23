@@ -41,6 +41,7 @@ import AdminAnnounceCriticReducer from "./admin_announce_critic_reducer";
 import AdminBanPlayerReducer from "./admin_ban_player_reducer";
 import AdminBumpResetGenerationReducer from "./admin_bump_reset_generation_reducer";
 import AdminDeleteRestaurantReducer from "./admin_delete_restaurant_reducer";
+import AdminForceGuestWishReducer from "./admin_force_guest_wish_reducer";
 import AdminReleaseBuildingReducer from "./admin_release_building_reducer";
 import AdminResetCrateReducer from "./admin_reset_crate_reducer";
 import AdminResetPasswordReducer from "./admin_reset_password_reducer";
@@ -49,6 +50,7 @@ import AdminSetMoneyReducer from "./admin_set_money_reducer";
 import AdminSetWeatherReducer from "./admin_set_weather_reducer";
 import AdminSpawnVipReducer from "./admin_spawn_vip_reducer";
 import AdminUnbanPlayerReducer from "./admin_unban_player_reducer";
+import AnswerGuestWishReducer from "./answer_guest_wish_reducer";
 import BootstrapChatScheduleReducer from "./bootstrap_chat_schedule_reducer";
 import BootstrapCityReducer from "./bootstrap_city_reducer";
 import BootstrapPedestrianScheduleReducer from "./bootstrap_pedestrian_schedule_reducer";
@@ -1041,6 +1043,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_ban_player", AdminBanPlayerReducer),
   __reducerSchema("admin_bump_reset_generation", AdminBumpResetGenerationReducer),
   __reducerSchema("admin_delete_restaurant", AdminDeleteRestaurantReducer),
+  __reducerSchema("admin_force_guest_wish", AdminForceGuestWishReducer),
   __reducerSchema("admin_release_building", AdminReleaseBuildingReducer),
   __reducerSchema("admin_reset_crate", AdminResetCrateReducer),
   __reducerSchema("admin_reset_password", AdminResetPasswordReducer),
@@ -1049,6 +1052,7 @@ const reducersSchema = __reducers(
   __reducerSchema("admin_set_weather", AdminSetWeatherReducer),
   __reducerSchema("admin_spawn_vip", AdminSpawnVipReducer),
   __reducerSchema("admin_unban_player", AdminUnbanPlayerReducer),
+  __reducerSchema("answer_guest_wish", AnswerGuestWishReducer),
   __reducerSchema("bootstrap_chat_schedule", BootstrapChatScheduleReducer),
   __reducerSchema("bootstrap_city", BootstrapCityReducer),
   __reducerSchema("bootstrap_pedestrian_schedule", BootstrapPedestrianScheduleReducer),

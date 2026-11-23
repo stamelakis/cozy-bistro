@@ -66,4 +66,5 @@ export default __t.row({
   lastCrateGift: __t.option(__t.string()).name("last_crate_gift"),
   lastBusSeatMicros: __t.i64().name("last_bus_seat_micros"),
   autoShopEnabled: __t.bool().name("auto_shop_enabled"),
+  lastWishMicros: __t.i64().name("last_wish_micros"),
 });
