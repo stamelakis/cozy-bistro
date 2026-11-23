@@ -190,7 +190,8 @@ pub fn offer_roll(guest_id: u64, kind: u8) -> u64 {
     mix(guest_id.wrapping_mul(31).wrapping_add(kind as u64)) % 100
 }
 
-fn is_open(state: u8) -> bool {
+/// A wish that is still running (badge showing, or promise made).
+pub fn is_open(state: u8) -> bool {
     state == STATE_OFFERED || state == STATE_PROMISED
 }
 
@@ -200,9 +201,13 @@ pub fn can_be_served(house: &HouseView, at_bar: bool) -> bool {
     if at_bar { house.has_barman } else { house.has_waiter && house.has_chef }
 }
 
+/// Is the pause after the last wish event over? (Never had one = yes.)
+pub fn pause_is_over(restaurant_id: u64, last_wish_micros: i64, now: i64) -> bool {
+    last_wish_micros == 0 || now - last_wish_micros >= pause_micros(restaurant_id, last_wish_micros)
+}
+
 fn pause_over(house: &HouseView, now: i64) -> bool {
-    house.last_wish_micros == 0
-        || now - house.last_wish_micros >= pause_micros(house.restaurant_id, house.last_wish_micros)
+    pause_is_over(house.restaurant_id, house.last_wish_micros, now)
 }
 
 /// Which wish this guest could get right now, judged by where the guest

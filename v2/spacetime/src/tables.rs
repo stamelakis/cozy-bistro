@@ -593,6 +593,12 @@ pub struct Restaurant {
     /// helpers do the shopping, nothing else does. Appended LAST.
     #[default(true)]
     pub auto_shop_enabled: bool,
+    /// Guest wishes — Unix micros of the last wish event in this restaurant
+    /// (a wish offered, paid or missed); 0 = never. The 2 to 4 minute pause
+    /// before the next wish counts from here, which is also what caps wish
+    /// income at $60 a game day (wish_rules.rs). Appended LAST.
+    #[default(0i64)]
+    pub last_wish_micros: i64,
 }
 
 /// Latest save state for a restaurant. Upserted by the `save_snapshot`
@@ -1428,6 +1434,21 @@ pub struct ActiveGuest {
     /// (denormalized so the client needn't join). Appended LAST.
     #[default(None::<String>)]
     pub regular_name: Option<String>,
+
+    /// Special guest requests ("wishes", docs/decisions/guest-requests.md).
+    /// The values and every rule are in wish_rules.rs.
+    /// wish_kind: 0 none, 1 hurry, 2 birthday. Never reset: one wish per
+    /// guest. Appended LAST for an additive migration.
+    #[default(0u8)]
+    pub wish_kind: u8,
+    /// 0 none, 1 offered (badge showing), 2 promised (hurry: waiting for
+    /// the first plate), 3 granted (paid), 4 missed. Appended LAST.
+    #[default(0u8)]
+    pub wish_state: u8,
+    /// Unix micros. Offered: the tap must come by then. Promised: the
+    /// first plate must land by then. 0 otherwise. Appended LAST.
+    #[default(0i64)]
+    pub wish_deadline_micros: i64,
 }
 
 /// Phase C — server-authoritative cooking ticket. One row per

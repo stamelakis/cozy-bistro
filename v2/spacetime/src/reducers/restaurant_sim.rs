@@ -12,6 +12,7 @@
 //! (backfill for restaurants that existed before this feature shipped).
 
 use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
+use crate::wish_rules;
 use crate::tables::{
     active_guest, active_menu, active_ticket, auth_record, building, clue_hunt, customer_archetype, dirty_pile,
     dishware_pool, dishwasher_batch, furniture_cost, furniture_inventory, furniture_meta, hired_staff_member, ingredient_cost, layout_preset, pantry_stock,
@@ -491,6 +492,11 @@ pub fn restaurant_tick(
     for actor_id in actor_ids {
         tick_staff_actor(ctx, &actor_id, dt_ms);
     }
+
+    // Special guest requests — settle the open wish (hurry: did the first
+    // plate land in time?) or maybe offer a new one. After the guest,
+    // ticket and staff steps so it sees this tick's deliveries.
+    tick_guest_wishes(ctx, rid, now, restaurant_open);
 
     // Phase H.4 — dishwasher batch cycle countdown. Each loaded
     // dishwasher's cycle clock ticks down by dt_ms; when it hits
@@ -4077,6 +4083,201 @@ pub fn greet_guest(ctx: &ReducerContext, guest_id: u64) -> Result<(), String> {
         ..g
     });
     Ok(())
+}
+
+// ─── Special guest requests ("wishes") ──────────────────────────────────
+// Plan: docs/decisions/guest-requests.md. THE RULES ARE IN wish_rules.rs
+// (pure functions, tested on the PC: `npm run test:server` in v2/). The
+// code below only reads rows, asks the rules, and writes the answer back.
+// Change behaviour there, not here — and add a test.
+//
+// What a wish may touch: the guest's three wish columns, its
+// total_satisfaction_x100, a regular's loyalty, and the restaurant's
+// cloud_money_cents (+) and last_wish_micros. It never creates an order,
+// never touches tickets, ingredients or dish reservations, and never
+// subtracts money.
+
+fn wish_guest_view(g: &ActiveGuest, plate_landed: bool) -> wish_rules::GuestView {
+    wish_rules::GuestView {
+        id: g.id,
+        phase: wish_rules::phase_of(&g.state),
+        state_clock_ms: g.state_clock_ms,
+        is_critic: g.archetype == "critic",
+        at_bar: g.seat_at_bar,
+        first_course: g.order_index == 0,
+        wc_trip_pending: (g.will_use_toilet && !g.used_toilet)
+            || (g.will_wash_only && !g.washed_hands),
+        plate_landed,
+        wish_kind: g.wish_kind,
+        wish_state: g.wish_state,
+        wish_deadline_micros: g.wish_deadline_micros,
+    }
+}
+
+fn wish_house_view(ctx: &ReducerContext, r: &Restaurant, now_micros: i64, open: bool) -> wish_rules::HouseView {
+    const OFFLINE_THRESHOLD_MICROS: i64 = 30_000_000; // 30 s, matches elsewhere
+    let owner_online = ctx.db.player().identity().find(r.owner)
+        .map(|pl| now_micros - pl.last_seen_at.to_micros_since_unix_epoch() < OFFLINE_THRESHOLD_MICROS)
+        .unwrap_or(false);
+    wish_rules::HouseView {
+        restaurant_id: r.id,
+        owner_online,
+        open,
+        // The staffing gates: a wish needs somebody who can serve it.
+        has_waiter: has_active_role(ctx, r.id, "waiter"),
+        has_chef: has_active_role(ctx, r.id, "chef"),
+        has_barman: has_active_role(ctx, r.id, "barman"),
+        last_wish_micros: r.last_wish_micros,
+    }
+}
+
+fn apply_wish_write(ctx: &ReducerContext, w: &wish_rules::WishWrite) {
+    let Some(g) = ctx.db.active_guest().id().find(w.guest_id) else { return };
+    ctx.db.active_guest().id().update(ActiveGuest {
+        wish_kind: w.kind,
+        wish_state: w.state,
+        wish_deadline_micros: w.deadline_micros,
+        ..g
+    });
+}
+
+/// Pay a granted wish: money + pause stamp in ONE restaurant update, a
+/// Ledger line, the guest's rating nudge, and a loyalty heart for a regular.
+fn apply_wish_grant(ctx: &ReducerContext, restaurant_id: u64, grant: &wish_rules::Grant, now_micros: i64) {
+    if let Some(g) = ctx.db.active_guest().id().find(grant.guest_id) {
+        let regular_id = g.regular_id;
+        ctx.db.active_guest().id().update(ActiveGuest {
+            total_satisfaction_x100: g.total_satisfaction_x100
+                .saturating_add(wish_rules::SATISFACTION_BONUS_X100),
+            ..g
+        });
+        if regular_id != 0 {
+            if let Some(reg) = ctx.db.regular_customer().id().find(regular_id) {
+                // Stops at 5; the visit hook (touch_regular_on_visit) turns
+                // 5 hearts into the "brings friends" surge as usual.
+                let loyalty = (reg.loyalty + 1).min(5);
+                ctx.db.regular_customer().id().update(RegularCustomer { loyalty, ..reg });
+            }
+        }
+    }
+    let Some(r) = ctx.db.restaurant().id().find(restaurant_id) else { return };
+    let new_balance = r.cloud_money_cents.saturating_add(grant.reward_cents);
+    ctx.db.restaurant().id().update(Restaurant {
+        cloud_money_cents: new_balance,
+        last_wish_micros: now_micros,
+        ..r
+    });
+    record_money_event(ctx, restaurant_id, "wish", grant.reward_cents, new_balance);
+}
+
+fn stamp_last_wish(ctx: &ReducerContext, restaurant_id: u64, at_micros: i64) {
+    let Some(r) = ctx.db.restaurant().id().find(restaurant_id) else { return };
+    if r.last_wish_micros != at_micros {
+        ctx.db.restaurant().id().update(Restaurant { last_wish_micros: at_micros, ..r });
+    }
+}
+
+/// The wish step of restaurant_tick (owner online — the tick is frozen
+/// otherwise). Most ticks leave after the two cheap checks at the top.
+fn tick_guest_wishes(ctx: &ReducerContext, rid: u64, now: Timestamp, restaurant_open: bool) {
+    let Some(r) = ctx.db.restaurant().id().find(rid) else { return };
+    let now_micros = now.to_micros_since_unix_epoch();
+    let guests: Vec<ActiveGuest> = ctx.db.active_guest().restaurant_id().filter(rid).collect();
+    let any_open = guests.iter().any(|g| wish_rules::is_open(g.wish_state));
+    if !any_open {
+        if !wish_rules::pause_is_over(rid, r.last_wish_micros, now_micros) {
+            return; // in the pause: nothing to settle, nothing to offer
+        }
+        let any_candidate = guests.iter().any(|g| g.wish_kind == wish_rules::KIND_NONE
+            && matches!(g.state.as_str(), "seated" | "eating")
+            && g.state_clock_ms <= wish_rules::OFFER_FRESH_MS);
+        if !any_candidate {
+            return; // nobody just sat down or just started eating
+        }
+    }
+    let house = wish_house_view(ctx, &r, now_micros, restaurant_open);
+    let mut views: Vec<wish_rules::GuestView> = guests.iter()
+        .map(|g| {
+            // The ticket scan is only needed for the (at most one) open wish.
+            let plate_landed = wish_rules::is_open(g.wish_state)
+                && has_delivered_ticket_for_guest(ctx, g.id);
+            wish_guest_view(g, plate_landed)
+        })
+        .collect();
+    views.sort_by_key(|v| v.id);
+    let plan = wish_rules::plan_tick(&house, &views, now_micros);
+    for w in &plan.writes {
+        apply_wish_write(ctx, w);
+    }
+    for grant in &plan.grants {
+        apply_wish_grant(ctx, rid, grant, now_micros);
+    }
+    if let Some(at) = plan.stamp_micros {
+        stamp_last_wish(ctx, rid, at);
+    }
+}
+
+/// The owner tapped a guest's wish badge (⚡ hurry or 🎂 birthday). The
+/// client sends ONLY the guest id: whether the tap counts, whether it was
+/// in time and how much it pays is decided here (wish_rules::tap). Claim
+/// pattern: owner gate, silent Ok(()) on every stale case (second tap,
+/// late tap, guest gone), effect + stamp in one update, Ledger line "wish".
+///   birthday → +$6 at once.
+///   hurry    → a promise; +$10 from the tick when the first plate lands
+///              within the time. A broken promise costs nothing.
+#[reducer]
+pub fn answer_guest_wish(ctx: &ReducerContext, guest_id: u64) -> Result<(), String> {
+    let Some(g) = ctx.db.active_guest().id().find(guest_id) else { return Ok(()); };
+    let r = ctx.db.restaurant().id().find(g.restaurant_id)
+        .ok_or_else(|| "Guest's restaurant not found".to_string())?;
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let view = wish_guest_view(&g, has_delivered_ticket_for_guest(ctx, g.id));
+    match wish_rules::tap(r.owner == ctx.sender, &view, now) {
+        wish_rules::Tap::NotOwner => Err("Only the owner can answer a guest's wish".into()),
+        wish_rules::Tap::Ignore => Ok(()), // stale tap — silent no-op
+        wish_rules::Tap::Promise(w) => {
+            apply_wish_write(ctx, &w);
+            Ok(())
+        }
+        wish_rules::Tap::Pay(w, grant) => {
+            apply_wish_write(ctx, &w);
+            apply_wish_grant(ctx, r.id, &grant, now);
+            Ok(())
+        }
+    }
+}
+
+/// Admin test trigger (like admin_spawn_vip): give one guest a wish NOW.
+/// kind: 1 = hurry (a guest seated / ordering / waiting for the first
+/// plate), 2 = birthday (a guest who is eating). Skips the pause, the roll
+/// and the "just sat down" window; keeps every safety rule (one wish at a
+/// time, one per guest, never the critic, staff on duty). The wish then
+/// behaves exactly like a real one, and it starts the normal pause.
+#[reducer]
+pub fn admin_force_guest_wish(ctx: &ReducerContext, restaurant_id: u64, kind: u8) -> Result<(), String> {
+    if !ctx.db.auth_record().identity().filter(ctx.sender).any(|a| a.is_admin) {
+        return Err("Admin only".into());
+    }
+    let r = ctx.db.restaurant().id().find(restaurant_id)
+        .ok_or_else(|| format!("Restaurant {restaurant_id} not found"))?;
+    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let mut guests: Vec<ActiveGuest> = ctx.db.active_guest().restaurant_id().filter(restaurant_id).collect();
+    guests.sort_by_key(|g| g.id);
+    let wish_open = guests.iter().any(|g| wish_rules::is_open(g.wish_state));
+    if wish_open {
+        return Err("A wish is already open in this restaurant".into());
+    }
+    let house = wish_house_view(ctx, &r, now, true);
+    for g in &guests {
+        let view = wish_guest_view(g, has_delivered_ticket_for_guest(ctx, g.id));
+        if let Some(w) = wish_rules::force_offer(&house, wish_open, &view, kind, now) {
+            apply_wish_write(ctx, &w);
+            stamp_last_wish(ctx, restaurant_id, now);
+            log::info!("admin_force_guest_wish: guest {} got wish kind {}", g.id, kind);
+            return Ok(());
+        }
+    }
+    Err("No guest can get that wish right now (1 = hurry: seated or waiting for the first plate; 2 = birthday: eating; staff must be on duty)".into())
 }
 
 /// Patch B — the owner personally BUSES one dirty table (tap the 🧽 badge).
@@ -8492,6 +8693,9 @@ pub(crate) fn try_spawn_arrival_guest(
         greeted: false,
         regular_id,
         regular_name,
+        wish_kind: 0,
+        wish_state: 0,
+        wish_deadline_micros: 0,
     });
     log::info!(
         "try_spawn_arrival_guest: spawned guest at seat {} in restaurant {} (variant={}, toilet={}, wash={}, mult={})",
@@ -9864,6 +10068,9 @@ pub fn spawn_guest(
         greeted: false,
         regular_id: 0,
         regular_name: None,
+        wish_kind: 0,
+        wish_state: 0,
+        wish_deadline_micros: 0,
     });
     Ok(())
 }

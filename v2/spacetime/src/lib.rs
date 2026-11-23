@@ -17,6 +17,9 @@
 
 mod tables;
 mod reducers;
+// Pure rule files (no database in them) — tested on the PC by the
+// rules-tests crate: `npm run test:server` in v2/.
+pub mod wish_rules;
 
 // Re-export everything so SpacetimeDB's macros can find the symbols.
 pub use tables::*;
