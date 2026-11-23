@@ -27,7 +27,7 @@ address is cozy-bistro.com.
   original before the PC file was deleted. Leftover on the box:
   `/opt/cozybistro-backup.pub.old`, delete with the fix folder.)
 - (Done 23 Nov: staging. `dunnin` exists on `dunnin-staging` (checked on the
-  server), `main` and `staging` are both at `e4d8b7e`, and
+  server), `main` and `staging` are at the same commit, and
   /staging/cozy-bistro-3d/ serves a build for `wss://db.cozy-bistro.com`:
   STAGING badge and "[SpacetimeDB] connected" seen in a browser. The first
   staging push changed nothing for 4 hours: Pages deploys a commit only
@@ -59,15 +59,20 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    `Caddyfile.bak-20261122-2130` and `docker-compose.yml.bak-20261122-2130`.
    Done when: the nightly run of 24 Nov is in the log with a backup, a
    second growth reading is written above, the leftovers are gone.
-1. [you: post in Discord] (after #0, and after a few days of growth
+1. [auto] Prep for #2: draft the Discord message (the game is back, on a
+   new server, everyone starts from zero and why) in
+   `docs/decisions/discord-back.md` (the date in `docs/patch-notes-12.md`
+   is bumped on posting day, in #2). Changes no game code, posts nothing. Done when:
+   "Waiting on Andreas" asks "Post this text? yes / change X".
+2. [you: post in Discord] (after #0 and #1, and after a few days of growth
    readings) Tell the testers the game is back and starts from zero, then
    post Patch 12 notes (`docs/patch-notes-12.md`, bump the date). Done when:
    posted with @Tester ping.
-2. [you: tester feedback] (after #1) Collect tester reactions to the new command bar + manual litter + staffing
+3. [you: tester feedback] (after #2) Collect tester reactions to the new command bar + manual litter + staffing
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
+4. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
    edge-docked layout long-term (#4), special guest requests (Patch D
    leftover), first seasonal event (explicitly saved for later).
 
