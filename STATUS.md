@@ -80,7 +80,8 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: OK to publish] Guest wishes, part 3 of 3 (parts 1 and 2 are
+3. [you: OK GIVEN 23 Nov ("Yes, publish"); after it, grant one wish of
+   each kind in the live game] Guest wishes, part 3 of 3 (parts 1 and 2 are
    done, see "In progress"): publish the server to staging and live,
    then regenerate the bindings and push the page right after (the live
    page cannot read the upgraded server: a few minutes' break, players
@@ -93,10 +94,10 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
-- **Guest wishes: publish? yes (and when) / not yet.** Built and tested
-  on this PC only (Next #3). Publishing means a few minutes' break:
-  players online see an empty restaurant until they reload. Undo:
-  wishes can be switched off on the server; the new fields stay.
+- **Guest wishes: after the publish (Next #3, your yes of 23 Nov),**
+  grant one wish of each kind in the live game: log in as `dunnin`,
+  Dev tools → "⚡ Hurry wish" / "🎂 Birthday wish" while a guest is
+  seated / eating, tap the badge, check the Ledger shows "Guest wish".
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
