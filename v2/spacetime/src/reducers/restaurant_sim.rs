@@ -4206,10 +4206,14 @@ fn tick_guest_wishes(ctx: &ReducerContext, rid: u64, now: Timestamp, restaurant_
         .collect();
     views.sort_by_key(|v| v.id);
     let plan = wish_rules::plan_tick(&house, &views, now_micros);
+    // One log line per wish event (a handful per game day): the trail for
+    // "why was I not paid?". States: 1 offered, 2 promised, 3 granted, 4 missed.
     for w in &plan.writes {
+        log::info!("wish: restaurant {} guest {} kind {} → state {}", rid, w.guest_id, w.kind, w.state);
         apply_wish_write(ctx, w);
     }
     for grant in &plan.grants {
+        log::info!("wish: restaurant {} guest {} paid {} cents", rid, grant.guest_id, grant.reward_cents);
         apply_wish_grant(ctx, rid, grant, now_micros);
     }
     if let Some(at) = plan.stamp_micros {
@@ -4236,10 +4240,12 @@ pub fn answer_guest_wish(ctx: &ReducerContext, guest_id: u64) -> Result<(), Stri
         wish_rules::Tap::NotOwner => Err("Only the owner can answer a guest's wish".into()),
         wish_rules::Tap::Ignore => Ok(()), // stale tap — silent no-op
         wish_rules::Tap::Promise(w) => {
+            log::info!("wish: restaurant {} guest {} kind {} → state {} (tap)", r.id, w.guest_id, w.kind, w.state);
             apply_wish_write(ctx, &w);
             Ok(())
         }
         wish_rules::Tap::Pay(w, grant) => {
+            log::info!("wish: restaurant {} guest {} paid {} cents (tap)", r.id, grant.guest_id, grant.reward_cents);
             apply_wish_write(ctx, &w);
             apply_wish_grant(ctx, r.id, &grant, now);
             Ok(())
