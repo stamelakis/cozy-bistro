@@ -8,7 +8,8 @@ own server: SpacetimeDB 2.3.0 on the shared Hetzner box, players' address
 connects (seen in a browser). Staging connects too since 23 Nov 11:25 UTC.
 `dunnin` (the admin) is signed up on LIVE and on STAGING.
 Runbook, design and all test results: `ops/backend/README.md`. Testers have
-NOT been told yet. Note: `cozybistro.gr` does not exist; the only live
+NOT been told yet; the message for them is drafted
+(`docs/decisions/discord-back.md`) and waits for Andreas's yes. Note: `cozybistro.gr` does not exist; the only live
 address is cozy-bistro.com.
 
 **In progress / unfinished (Next #0: only readings on the box are left):**
@@ -59,24 +60,35 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    `Caddyfile.bak-20261122-2130` and `docker-compose.yml.bak-20261122-2130`.
    Done when: the nightly run of 24 Nov is in the log with a backup, a
    second growth reading is written above, the leftovers are gone.
-1. [auto] Prep for #2: draft the Discord message (the game is back, on a
-   new server, everyone starts from zero and why) in
-   `docs/decisions/discord-back.md` (the date in `docs/patch-notes-12.md`
-   is bumped on posting day, in #2). Changes no game code, posts nothing. Done when:
-   "Waiting on Andreas" asks "Post this text? yes / change X".
-2. [you: post in Discord] (after #0 and #1, and after a few days of growth
-   readings) Tell the testers the game is back and starts from zero, then
-   post Patch 12 notes (`docs/patch-notes-12.md`, bump the date). Done when:
-   posted with @Tester ping.
-3. [you: tester feedback] (after #2) Collect tester reactions to the new command bar + manual litter + staffing
+1. [you: post in Discord] (after #0, and after a few days of growth
+   readings) Tell the testers the game is back and starts from zero (text,
+   and the three server checks that must be green first:
+   `docs/decisions/discord-back.md`), then post Patch 12 notes
+   (`docs/patch-notes-12.md`: bump the date, post as two messages, swap the
+   "never reset / refund" line as that file proposes). Done when: posted
+   with @Tester ping.
+2. [you: tester feedback] (after #1) Collect tester reactions to the new command bar + manual litter + staffing
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
+3. [auto] Prep for #4: one page in `docs/decisions/next-feature.md` on the
+   four parked ideas: what each one is for a player, rough effort, risk,
+   and a recommendation. Changes no game code. Done when: "Waiting on
+   Andreas" asks "Next feature: A, B, C or D?".
 4. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
    edge-docked layout long-term (#4), special guest requests (Patch D
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
+- **Post this text? yes / change X.** The Discord message "the game is
+  back, everyone starts from zero and why" is drafted in
+  `docs/decisions/discord-back.md`, with the four choices made in it (how
+  plainly it names the cause, the apology, the promise "we lose a day, not
+  everything", no welcome-back gift) and the three server checks that must
+  be green on posting day. Same file, same yes: post Patch 12 as TWO
+  messages (it is 2,649 characters, Discord's limit is 2,000) and swap its
+  "will never silently reset again / refund" line for the proposed one.
+  Nothing is posted until Next #1.
 - Other projects, his call: (a) the live `/opt/offsite-push.sh` is newer than
   its copies in the TakeaSeat repo (`server/offsite-push.sh`) and the
   education repo (`ops/offsite-push.sh`); neither copy has the webstudio and
@@ -110,6 +122,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-23: Drafted the Discord message "the game is back, from zero, and why" (`docs/decisions/discord-back.md`), nothing posted. Found on the way: the Patch 12 notes are over Discord's 2,000-character limit (post as two messages) and their "never reset / refund" line needs new wording after the restart.
 - 2026-11-23: Staging is on the new server too: `dunnin` signed up there, `main` + `staging` pushed together, /staging/ seen connecting. Found on the way: Pages deploys a commit once, so `main` then `main:staging` at the same commit left staging on the old build (CLAUDE.md deploy step 5). e4d8b7e
 - 2026-11-23: Backend INSTALLED on the shared Hetzner box and the site switched to it (`main` pushed 06:29 UTC, seen connecting in a browser). Image shipped, 8 GB capped data space (cap proven with a 64 MB test image), age backup key, Caddy block with four paths, both databases published, cron jobs, off-site line; the 12 other addresses on the box answered as before; security review found nothing. Found next morning: the scheduled nightly run lost its lock to the uptime check and skipped (fix f301d63, installed the same morning). 90b543b
 - 2026-11-22: Andreas chose to self-host the backend (option A). Prepared and tested locally: `ops/backend/` (slim image, 8 GB capped data space, nightly prune + age backup, uptime check, Caddy block with 4 paths). The lab found and fixed two traps: signing keys outside the data folder, and pruning after a full-disk crash destroying the database.
