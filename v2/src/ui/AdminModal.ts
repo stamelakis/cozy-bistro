@@ -924,6 +924,10 @@ export class AdminModal {
       () => this.cloud?.adminSpawnVip()));
     row.appendChild(mk("📣 Rush now", "Fire the free rush-hour surge immediately",
       () => this.onTriggerRush?.()));
+    row.appendChild(mk("⚡ Hurry wish", "Give one seated guest (still waiting for the first plate) the hurry wish now",
+      () => this.cloud?.adminForceGuestWish(1)));
+    row.appendChild(mk("🎂 Birthday wish", "Give one guest who is eating the birthday wish now",
+      () => this.cloud?.adminForceGuestWish(2)));
     row.appendChild(mk("🎁 Reset crate", "Zero the supply-crate cooldown (next claim instantly ready)",
       () => this.cloud?.adminResetCrate()));
     section.appendChild(row);

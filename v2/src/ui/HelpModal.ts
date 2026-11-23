@@ -336,6 +336,16 @@ const TABS: HelpTab[] = [
           "Small tap badges appear over your restaurant while you play: 👋 greet a seated guest (a warm welcome buys them extra patience), 🧽 bus a dirty table yourself (frees the seat without waiting for a waiter — one table every few seconds), and 🥄 stir the pot on a cooking dish (shaves a few seconds, once per dish). All optional — the crew handles everything if you don't.",
         ],
       },
+      { kind: "h", text: "Guest wishes ⚡🎂" },
+      {
+        kind: "ul",
+        items: [
+          "Every few minutes one guest has a wish: a glowing round badge over their head with a countdown. It only appears while you are in the game, with a waiter and a chef on duty (a barman for a guest at the bar), and only you can answer it.",
+          "🎂 It's my birthday: tap the badge within 20 seconds and you get +$6 at once.",
+          "⚡ I'm in a hurry: tap the badge within 20 seconds to promise, then get the first plate to the table within 60 seconds of the wish appearing — the clock runs from the moment the badge shows, not from your tap. Make it and you get +$10 when the plate lands. Stirring the pot (🥄) is the way to speed the kitchen up. Too late costs nothing.",
+          "A granted wish also makes that guest rate a little higher, and a regular likes you one heart more. A wish you don't answer simply goes away. Every reward is in the 📓 Ledger as \"Guest wish\".",
+        ],
+      },
       { kind: "h", text: "Daily goals 📋" },
       {
         kind: "ul",

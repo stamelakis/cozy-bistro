@@ -185,7 +185,72 @@ A guest starts eating once per course but sits down once, and guests
 with a toilet trip get no hurry, so birthdays come about 2 to 3 times as
 often. That keeps a real day well under the $60 ceiling.
 
-### For the next session (the page)
+## Build log, 23 Nov (later): the page built and run locally
+
+Done (nothing published, nothing pushed):
+
+- **What the player gets.** A gold-rimmed round badge next to the guest's
+  head, ⚡ or 🎂, with the seconds left under it. A tap on 🎂 pays at
+  once ("🎂 +$6" floats up). A tap on ⚡ turns the badge blue and
+  untappable, with the countdown to the 60-second mark; when the plate
+  lands "⚡ +$10" floats up, when it does not "⚡ too late". The badges
+  hide while visiting another restaurant. The Ledger shows the money as
+  "Guest wish ⚡🎂"; Help → Perks has a "Guest wishes" section. Dev tools
+  (admin only) got two buttons, "⚡ Hurry wish" and "🎂 Birthday wish".
+- **Checks.** `npm run build` (with `tsc`) passes, 29 rule tests pass.
+- **Local run** (throwaway server, the page in a browser, every result
+  also read in the server log):
+
+| | PC size (1400×850) | Phone size (375×812) |
+|---|---|---|
+| 🎂 badge shows, tap pays $6 | yes | yes |
+| ⚡ badge shows, tap = promise, plate in time pays $10 | yes, plate 21 s after the wish | yes, 18 s |
+| ⚡ promise not kept: nothing paid, nothing lost | yes: no waiter on purpose, closed 60.5 s after the wish appeared | not repeated |
+
+  Also seen: both rewards in the Ledger window, the Help section, badges
+  gone while visiting and back after. Not tested: a real phone (only the
+  phone-size window), and the page against the live server.
+- **Two silent endings, by design:** a badge nobody taps just disappears,
+  and so does a ⚡ whose plate was already on its way before the tap (the
+  server closes it without a reward). No "too late" message there: the
+  player promised nothing.
+
+### How the page stays safe to commit before go-live
+
+The page reads the three wish fields and the two reducers as "may be
+missing" (`WishColumns` and the two casts in `SpacetimeClient.ts`). So it
+builds with today's committed bindings: every guest simply has no wish
+and the tap does nothing. That is why the page code is on `main` while
+the regenerated files in `v2/src/cloud/generated` are still NOT
+committed. Checked: `npm run build` passes with the old bindings; with
+the new ones `tsc` passes and the page ran the whole local test. Do not
+tidy those optional types away before go-live.
+
+Screenshots of the local run: `docs/decisions/guest-wishes-shots/`
+(1–5 PC, 6–9 phone size).
+
+### Go-live steps (Next #4, needs Andreas's OK)
+
+1. Tunnel, publish the server to `dunnin-staging`, then to `dunnin`.
+2. Right after: `spacetime generate` (see `CLAUDE.md`), `npm run build`,
+   commit the regenerated files, `git push origin main main:staging`.
+3. Health check; Andreas grants one wish of each kind in the live game
+   (Dev tools has the two buttons, so he does not have to wait for one).
+
+### Extra local test setup the page run needed
+
+A fresh local server next to an old browser save leaves the kitchen
+idle. What fixed it: hire a waiter and a chef (`game.hireStaff`); remove
+the browser's `cozy-bistro.last-catalog-seed.v4` entry and reload, so
+the admin login fills the catalogs again; stock the server pantry
+(`cloud.bumpPantryStock(id, qty)` for each item) and the dishes
+(`cloud.updateDishwarePool('plate', 1, 80, 0)`, same for `'glass'`).
+Force a wish with the Dev tools buttons; it picks the guest with the
+lowest id who can have one, so wait for a freshly seated or freshly
+eating guest. The browser pane must be visible: hidden, it draws almost
+no frames and the badges lag.
+
+### For the next session (the page) — done, kept for reference
 
 - `spacetime generate` (see `CLAUDE.md`), then the badge layer, the "+$"
   pop, the Ledger line and the Help entry. The page calls

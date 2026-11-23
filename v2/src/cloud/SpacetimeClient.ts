@@ -131,6 +131,27 @@ export interface StaffActorRow {
   cleanSeatUid: string | null;
 }
 
+/** The guest-wish columns of active_guest, optional so this file builds
+ * against bindings from before the wishes too (see "Guest wishes" below). */
+type WishColumns = { wishKind?: number; wishState?: number; wishDeadlineMicros?: bigint };
+
+/** How long a wish badge waits for the tap. DISPLAY ONLY (the countdown);
+ * mirrors TAP_WINDOW_MICROS in v2/spacetime/src/wish_rules.rs. */
+const WISH_TAP_WINDOW_MS = 20_000;
+
+/** One guest wish as the page sees it (SpacetimeClient.listGuestWishes). */
+export interface GuestWish {
+  guestId: bigint;
+  /** 1 = ⚡ hurry, 2 = 🎂 birthday. */
+  kind: number;
+  /** 1 badge showing, 2 hurry promised, 3 paid, 4 missed. */
+  state: number;
+  /** Deadline on this device's clock, ms. State 1: last moment to tap;
+   * state 2: last moment for the first plate. */
+  deadlineMs: number;
+  x: number; z: number; floor: number;
+}
+
 /** Public shape of one active_guest row — one per live customer in a
  * restaurant. variant is the character model id ("guest-v3" etc.);
  * state is the lifecycle label (walkingIn / seated / ordering /
@@ -1530,6 +1551,93 @@ export class SpacetimeClient {
     if (!this.conn) return;
     try { this.conn.reducers.stirTicket({ ticketId }); }
     catch (e) { console.warn("[Cloud] stirTicket failed:", e); }
+  }
+
+  // ─── Guest wishes (⚡ hurry / 🎂 birthday) ────────────────────────────
+  // Plan: docs/decisions/guest-requests.md. The server decides everything
+  // (who gets a wish, whether the tap was in time, the amount); the page
+  // shows the badge and sends "I tapped this guest".
+  //
+  // The wish columns and the reducer are read through OPTIONAL types on
+  // purpose: this file must also build against bindings generated BEFORE
+  // the server had wishes (then every guest simply has no wish). That is
+  // what lets the page code sit in `main` while the regenerated bindings
+  // wait for the server publish (CLAUDE.md, "A page built before a schema
+  // change…"). After go-live the optional types are merely redundant.
+
+  /** Answer a guest's wish badge. Silent no-op on the server for a second
+   * tap, a late tap or a guest who left. */
+  answerGuestWish(guestId: bigint): void {
+    if (!this.conn) return;
+    try {
+      const reducers = this.conn.reducers as unknown as {
+        answerGuestWish?: (args: { guestId: bigint }) => void;
+      };
+      reducers.answerGuestWish?.({ guestId });
+    } catch (e) { console.warn("[Cloud] answerGuestWish failed:", e); }
+  }
+
+  /** Dev tools: give one guest a wish now (1 = hurry, 2 = birthday). */
+  adminForceGuestWish(kind: 1 | 2): void {
+    if (!this.conn || this.restaurantId == null) return;
+    try {
+      const reducers = this.conn.reducers as unknown as {
+        adminForceGuestWish?: (args: { restaurantId: bigint; kind: number }) => void;
+      };
+      reducers.adminForceGuestWish?.({ restaurantId: this.restaurantId, kind });
+    } catch (e) { console.warn("[Cloud] adminForceGuestWish failed:", e); }
+  }
+
+  /** Every guest of my restaurant that has (or had) a wish. `state`:
+   * 1 badge showing, 2 hurry promised, 3 paid, 4 missed. `deadlineMs` is
+   * the server's deadline moved onto THIS device's clock (see
+   * wishClockSkewMs), so `deadlineMs - Date.now()` is the time left. */
+  listGuestWishes(): GuestWish[] {
+    if (!this.conn || this.restaurantId == null) return [];
+    if (!this.wishClockHooked) this.watchGuestWishClock();
+    const out: GuestWish[] = [];
+    const rid = this.restaurantId;
+    try {
+      for (const row of this.conn.db.active_guest.iter()) {
+        if (row.restaurantId !== rid) continue;
+        const g = row as typeof row & WishColumns;
+        if (!g.wishKind) continue;
+        out.push({
+          guestId: g.id,
+          kind: g.wishKind,
+          state: g.wishState ?? 0,
+          deadlineMs: Number(g.wishDeadlineMicros ?? 0n) / 1000 + this.wishClockSkewMs,
+          x: g.x, z: g.z, floor: g.floor,
+        });
+      }
+    } catch { /* pre-sync */ }
+    return out;
+  }
+
+  /** This device's clock minus the server's, in ms; 0 until measured.
+   * Measured each time a wish APPEARS while we are watching: at that
+   * moment the server's deadline is exactly WISH_TAP_WINDOW_MS away, so
+   * whatever else our clock says is skew (plus well under a second of
+   * network delay). Only the countdown on the badge uses it. */
+  private wishClockSkewMs = 0;
+  private wishClockHooked = false;
+
+  /** Start measuring the clock skew (listGuestWishes calls it once the
+   * connection and the restaurant are known). */
+  private watchGuestWishClock(): void {
+    if (!this.conn || this.restaurantId == null || this.wishClockHooked) return;
+    const rid = this.restaurantId;
+    try {
+      this.conn.db.active_guest.onUpdate((_ctx, oldRow, newRow) => {
+        if (newRow.restaurantId !== rid) return;
+        const before = oldRow as typeof oldRow & WishColumns;
+        const after = newRow as typeof newRow & WishColumns;
+        if ((before.wishState ?? 0) !== 0 || after.wishState !== 1) return;
+        const offeredAtServerMs = Number(after.wishDeadlineMicros ?? 0n) / 1000 - WISH_TAP_WINDOW_MS;
+        this.wishClockSkewMs = Date.now() - offeredAtServerMs;
+      });
+      this.wishClockHooked = true;
+    } catch (e) { console.warn("[Cloud] watchGuestWishClock failed:", e); }
   }
 
   /** Cooking, not-yet-stirred tickets with their chef's live position —

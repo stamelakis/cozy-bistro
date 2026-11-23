@@ -50,7 +50,7 @@ import { NotificationFeed } from "../ui/NotificationFeed";
 import { TimerTray, type TimerItem } from "../ui/TimerTray";
 import { TopStrip } from "../ui/TopStrip";
 import { CommandDock } from "../ui/CommandDock";
-import { TapBadges } from "../ui/TapBadges";
+import { TapBadges, type BadgeTarget } from "../ui/TapBadges";
 import { GoalsWidget } from "../ui/GoalsWidget";
 import { FeedbackModal } from "../ui/FeedbackModal";
 import { recipes as recipeCatalog } from "../data/recipes";
@@ -164,6 +164,10 @@ export class Engine {
   readonly busBadges: TapBadges;
   readonly stirBadges: TapBadges;
   readonly litterBadges: TapBadges;
+  /** Guest wishes: ⚡ hurry / 🎂 birthday badge over one guest at a time. */
+  readonly wishBadges: TapBadges;
+  /** Last wish state seen per guest, to pop "+$" when the server pays. */
+  private readonly wishSeen = new Map<string, number>();
   private goalsWidget?: GoalsWidget;
   /** Edge-trigger state for the 1 Hz notification detections. */
   private readonly feedSeen = {
@@ -1298,7 +1302,19 @@ export class Engine {
         if (this.trash?.collect(pieceId)) this.sfx?.ding?.();
       },
     });
-    for (const b of [this.greetBadges, this.busBadges, this.stirBadges, this.litterBadges]) {
+    // Guest wishes (docs/decisions/guest-requests.md). One layer, the icon
+    // comes per target. The tap only tells the server; the "+$" pops when
+    // the server's row says "paid" (updateGuestWishes).
+    this.wishBadges = new TapBadges(container, this.camera.threeCamera, this.renderer.domElement, {
+      icon: "🎂",
+      title: "A guest's wish",
+      accent: "rgba(255, 196, 60, 0.95)",
+      onTap: (key) => {
+        try { this.cloud.answerGuestWish(BigInt(key.split(":")[0])); } catch { /* bad id */ }
+        this.sfx?.ding?.();
+      },
+    });
+    for (const b of [this.greetBadges, this.busBadges, this.stirBadges, this.litterBadges, this.wishBadges]) {
       b.getFocusedFloor = () => this.scene.getFocusedStorey();
     }
     // Phase 9.37 — gameplay pops (+$N, tips, ratings, cleaning) follow the
@@ -2464,6 +2480,71 @@ export class Engine {
    * In exterior mode (camera zoomed out past 40%) we suppress every
    * bubble — the building reads as a closed exterior, no peeking at
    * the staff/guest status from outside. */
+
+  /** Guest wishes, once per frame: the ⚡ / 🎂 badge with its countdown,
+   * and a pop when the server settles a wish. Reads the server's guest
+   * rows directly (the wish lives only there). Hidden while visiting,
+   * like every other tap badge; the bookkeeping keeps running so nothing
+   * pops late on the way back. */
+  private updateGuestWishes(): void {
+    const visiting = this.visitMode.isVisiting();
+    const wishes = this.cloud.listGuestWishes();
+    if (wishes.length === 0 && this.wishSeen.size === 0) {
+      this.wishBadges.update([]);
+      return;
+    }
+    const storeyH = WorldScene.getStoreyHeight();
+    const nowMs = Date.now();
+    const targets: BadgeTarget[] = [];
+    const live = new Set<string>();
+    for (const w of wishes) {
+      const id = String(w.guestId);
+      live.add(id);
+      const before = this.wishSeen.get(id);
+      this.wishSeen.set(id, w.state);
+      const hurry = w.kind === 1;
+      // Where the guest is drawn (the local character); the server row's
+      // spot is the fallback for a guest whose model is still loading.
+      const ch = this.spawner?.characterByServerId(w.guestId);
+      const gx = ch ? ch.groundPos.x : w.x;
+      const gz = ch ? ch.groundPos.y : w.z;
+      const floor = ch ? Math.round(ch.root.position.y / storeyH) : w.floor;
+      if (before !== undefined && before !== w.state && !visiting) {
+        if (w.state === 3) {
+          this.floatingText.pop(gx, gz, hurry ? "⚡ +$10" : "🎂 +$6", "#ffd966", floor);
+          this.sfx?.ding?.();
+        } else if (w.state === 4 && before === 2) {
+          this.floatingText.pop(gx, gz, "⚡ too late", "#c9c2b4", floor);
+        }
+      }
+      if (visiting || (w.state !== 1 && w.state !== 2)) continue;
+      const secsLeft = Math.max(0, Math.ceil((w.deadlineMs - nowMs) / 1000));
+      const promised = w.state === 2;
+      targets.push({
+        // The promise gets its own key: the tapped badge is gone for good
+        // (TapBadges), the running promise is a new, untappable one.
+        key: promised ? `${id}:p` : `${id}:o`,
+        x: gx,
+        y: (ch ? ch.root.position.y : floor * storeyH) + 2.15,
+        z: gz,
+        floor,
+        offsetX: 34, // beside the 👋 badge, which sits over the same head
+        icon: hurry ? "⚡" : "🎂",
+        caption: `${secsLeft}s`,
+        passive: promised,
+        title: promised
+          ? "You promised: first plate on the table before the time runs out (+$10). Stir the pot 🥄 to speed it up."
+          : hurry
+            ? "I'm in a hurry! Tap to promise the first plate within 60 seconds of this wish appearing (+$10)"
+            : "It's my birthday! Tap to congratulate (+$6)",
+      });
+    }
+    for (const id of this.wishSeen.keys()) {
+      if (!live.has(id)) this.wishSeen.delete(id);
+    }
+    this.wishBadges.update(targets);
+  }
+
   private updateStatusBubbles(): void {
     if (this.scene.isExteriorMode()) {
       this.statusBubbles.update([]);
@@ -5237,6 +5318,7 @@ export class Engine {
         })));
       }
     }
+    this.updateGuestWishes();
     // ♻ one badge per dropped litter piece on the sidewalk (manual pickup).
     this.litterBadges.update(
       this.visitMode.isVisiting() || !this.trash

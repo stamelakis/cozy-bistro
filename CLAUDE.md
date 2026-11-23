@@ -72,6 +72,12 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
   `restaurant.last_wish_micros`; change a number there and a test fails.
   Rejected: rules inline in the reducers (untestable on the PC), a
   per-day counter (a second thing to reset).
+- **The page reads the wish fields as "may be missing" (2026-11-23):**
+  `WishColumns` and the two reducer casts in `SpacetimeClient.ts` let the
+  page build with bindings from before AND after the wish schema, so the
+  page code sits on `main` while the regenerated bindings wait for the
+  server publish. Rejected: committing the bindings early (a push would
+  break the live page). Tidy the optional types only after go-live.
 - **Lives at `C:\Users\andre\Restaurant Game`, outside OneDrive, since
   2026-11-22.** OneDrive couldn't sync code projects (3,607 sync problems on
   2026-11-19). Backup is git + GitHub. Don't move it back into OneDrive.

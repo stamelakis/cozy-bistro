@@ -34,17 +34,14 @@ address is cozy-bistro.com.
   staging push changed nothing for 4 hours: Pages deploys a commit only
   once, see CLAUDE.md "Deploy pipeline" step 5.)
 
-- **Guest wishes (Next #3): server part built, page part not started.**
-  Rules + 29 automated tests (`npm run test:server` in `v2/`), the server
-  fields, tick step and `answer_guest_wish` are committed (`de040c1`,
-  `bfc4f35`, `0177f14`) and were run on a throwaway local server: both
-  wishes granted and missed, upgrade of a database with data kept every
-  row. Hurry time decided by Andreas on 23 Nov (choice A) and in the
-  rules: 60 s counted from the moment the wish appears, not from the tap
-  (tests only; not yet run on a local server with the new number). NOT
-  published, NOT pushed. Left: the page (badge, "+$" pop, Ledger line,
-  Help), then publish with Andreas's OK. Results, measurements and how
-  to continue: `docs/decisions/guest-requests.md` ("Build log").
+- **Guest wishes: server AND page built, run on a local server only.**
+  NOT published, NOT pushed; local `main` is ahead of GitHub and must
+  stay unpushed until Next #3 (a push rebuilds the live page). Seen
+  locally on PC and phone size: both badges show and pay ($6, $10), one
+  hurry promise missed at 60 s paid nothing. The regenerated bindings
+  (`v2/src/cloud/generated`) are NOT committed on purpose; the page
+  builds without them. Results, screenshots and the go-live steps:
+  `docs/decisions/guest-requests.md` ("Build log", both parts).
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -83,27 +80,23 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [auto] Guest wishes, part 2 of 3: the game page (plan approved 23 Nov;
-   server part done, see "In progress"). Follow "For the next session" in
-   `docs/decisions/guest-requests.md`: regenerate the bindings, add the
-   wish badge (⚡ / 🎂) as one more `TapBadges` layer hidden while
-   visiting, the "+$" pop, the "wish" line in the Ledger and a Help entry
-   (hurry: "first plate within 60 seconds of the wish appearing"). Test
-   against a local server. No publish, no push. Done when: `tsc` builds,
-   the rule tests pass, and on a local server both badges show and pay on
-   PC and on phone size (screenshots), with one hurry wish granted and
-   one missed under the 60-second rule.
-4. [you: OK to publish] (after #3) Guest wishes, part 3: publish the
-   server to staging and live and push the page right after (the live
+3. [you: OK to publish] Guest wishes, part 3 of 3 (parts 1 and 2 are
+   done, see "In progress"): publish the server to staging and live,
+   then regenerate the bindings and push the page right after (the live
    page cannot read the upgraded server: a few minutes' break, players
    reload; pick a quiet hour), health check, then Andreas grants one wish
-   of each kind in the live game. Done when: the "Done when" section of
-   the plan page.
-5. [you: pick later] Still parked, compared in
+   of each kind in the live game (Dev tools has a button for each).
+   Steps: "Go-live steps" in `docs/decisions/guest-requests.md`. Done
+   when: the "Done when" section of that page.
+4. [you: pick later] Still parked, compared in
    `docs/decisions/next-feature.md`: A button grouping (cheap; fits the
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
+- **Guest wishes: publish? yes (and when) / not yet.** Built and tested
+  on this PC only (Next #3). Publishing means a few minutes' break:
+  players online see an empty restaurant until they reload. Undo:
+  wishes can be switched off on the server; the new fields stay.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
@@ -131,6 +124,9 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   it loads (`Engine.ts`, catalog reseed). Until then buying furniture on
   staging may fail. LIVE has the furniture list; a first visit there shows
   4 "Recipe catalog changes are admin-only" errors, not looked into.
+- Seen 23 Nov on PC, older than the wishes: the round tap badges (👋, 🥄,
+  ♻, now ⚡/🎂) draw over the top bar when the camera puts a guest under
+  it. Not fixed.
 - Not tested: the owner mails of the nightly job and the uptime check (no
   incident so far), and growth with real players.
 - A skipped nightly run sends no mail. After the lock fix that only happens
@@ -146,6 +142,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-23: Guest wishes, the page: ⚡/🎂 badge with a countdown (one more `TapBadges` layer, hidden while visiting), "+$" pop, Ledger line, Help section, two admin buttons to force a wish. Build and 29 rule tests pass; on a local server both wishes paid on PC and phone size and one hurry promise was missed at 60 s. The page reads the new fields as "may be missing", so it is committed without the regenerated bindings. Not published, not pushed.
 - 2026-11-23: Prep for the guest-requests build: the plan on one page (`docs/decisions/guest-requests.md`), with wishes, reward sizes taken from today's tip and goal numbers, limits, staffing rules and a "done when" line. No game code changed. Found on the way: the project has no automated tests at all; the hurry time limit could not be measured without a running local server. Andreas approved the plan the same day ("yes, as written").
 - 2026-11-23: Prep for the next-feature pick: the four parked ideas compared on one page (`docs/decisions/next-feature.md`), recommendation C. No game code changed. The ideas' original wording was not on file; the page says so. Andreas picked C the same day.
 - 2026-11-23: Drafted the Discord message "the game is back, from zero, and why" (`docs/decisions/discord-back.md`), nothing posted. Found on the way: the Patch 12 notes are over Discord's 2,000-character limit (post as two messages) and their "never reset / refund" line needs new wording after the restart.

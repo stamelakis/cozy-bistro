@@ -278,6 +278,7 @@ function labelForKind(kind: string): string {
     // passive drip look like phantom furniture sales.
     case "recycle": return "Recycling ♻";
     case "goal": return "Daily goal reward";
+    case "wish": return "Guest wish ⚡🎂";
     case "crate": return "Supply crate";
     case "offline": return "Offline earnings";
     case "admin": return "Admin adjustment";

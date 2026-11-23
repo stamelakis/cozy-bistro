@@ -1652,6 +1652,15 @@ export class GuestSpawner {
     return undefined;
   }
 
+  /** The drawn character of the guest with this server id (the anchor
+   * for the wish badge), or undefined while its model is not here yet. */
+  characterByServerId(serverId: bigint): AnimatedCharacter | undefined {
+    for (const g of this.guests) {
+      if (g.serverMirrorId === serverId) return g.character;
+    }
+    return undefined;
+  }
+
   // ======================================================================
   //          Phase H Phase 3 — server-authoritative guest bridge
   // ======================================================================
