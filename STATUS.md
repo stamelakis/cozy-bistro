@@ -10,25 +10,21 @@ Runbook, design and all test results: `ops/backend/README.md`. Testers have
 NOT been told yet. Note: `cozybistro.gr` does not exist; the only live
 address is cozy-bistro.com.
 
-**In progress / unfinished (Next #0, two things left):**
+**In progress / unfinished (Next #0, one thing left):**
 - (Done 23 Nov: the nightly job's lock fix is on the server. The first
   scheduled run had skipped itself, see README "What was tested". The job
   now runs at 03:32 UTC; run by hand after the install: 2 s of downtime,
   backup made. Check once that the run of 24 Nov 03:32 is in
   `/var/log/cozybistro-nightly.log`. The old scripts are in
   `/root/cozybistro-fix/old` on the box; delete that folder after it.)
-- **Backup key: new pair made 23 Nov, restore test PASSED, storing it is
-  open.** The first key was deleted before it was stored anywhere (Andreas
-  has no password manager), so the backups `cozybistro-20261122-215020` and
-  `-20261123-063649` cannot be opened; they rotate out by themselves (7
-  kept). New public half is on the box (old one: `/opt/cozybistro-backup.pub.old`).
-  Backup `-20261123-065155` was restored on the PC: `dunnin`, restaurant 1,
-  same signing keys. The private half is in ONE place:
-  `C:\Users\andre\cozybistro-backup-key.txt` (one line, outside every repo).
-  Andreas chose a password manager and still has to set one up and paste
-  the key in. Do NOT delete the file until his stored copy has been
-  compared with it (he pastes it back into an empty file; compare, then
-  delete both).
+- (Done 23 Nov: backup key. The first key was deleted before it was stored
+  anywhere, so `cozybistro-20261122-215020` and `-20261123-063649` cannot
+  be opened; they rotate out by themselves. New pair made, backup
+  `-20261123-065155` restored on the PC with it (`dunnin`, restaurant 1,
+  same signing keys). The private half is in Andreas's Bitwarden, entry
+  `Cozy Bistro backup key (age)`; his stored copy was compared with the
+  original before the PC file was deleted. Leftover on the box:
+  `/opt/cozybistro-backup.pub.old`, delete with the fix folder.)
 - **Staging.** `dunnin-staging` is published but has NO `dunnin` account,
   and the `staging` branch is not pushed: /staging/ still points at the dead
   old server. Order: Andreas signs up `dunnin` on staging (local build with
@@ -50,11 +46,11 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   that `/var/log/cozybistro-nightly.log` says "removed N old log piece(s)".
 
 **Next:**
-0. [you: store the backup key in a password manager, sign up on staging] Finish the install:
-   the two things under "In progress".
-   Done when: the scheduled nightly run of 24 Nov made a backup,
-   the backup key is stored and checked (the restore test passed 23 Nov), `dunnin` exists on staging and
-   /staging/ connects, and a second growth reading is written above.
+0. [you: sign up `dunnin` on staging] Finish the install: staging, and two
+   readings on the box (see "In progress" and "Disk growth").
+   Done when: `dunnin` exists on staging, `main:staging` is pushed and
+   /staging/ connects, the scheduled nightly run of 24 Nov made a backup,
+   and a second growth reading is written above.
 1. [you: post in Discord] (after #0, and after a few days of growth
    readings) Tell the testers the game is back and starts from zero, then
    post Patch 12 notes (`docs/patch-notes-12.md`, bump the date). Done when:
@@ -68,9 +64,6 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- Set up a password manager and store the backup key from
-  `C:\Users\andre\cozybistro-backup-key.txt`, then paste it back once so the
-  copy can be checked.
 - Sign up `dunnin` on staging.
 - Other projects, his call: (a) the live `/opt/offsite-push.sh` is newer than
   its copies in the TakeaSeat repo (`server/offsite-push.sh`) and the

@@ -16,7 +16,7 @@ and the education repo's `ops/BOX.md`. **Touch only what is listed here.**
 | Nightly job | `/opt/cozybistro-nightly.sh`, `/etc/cron.d/cozybistro-nightly`, 03:32 UTC |
 | Uptime check | `/opt/cozybistro-uptime.sh`, `/etc/cron.d/cozybistro-uptime`, every 5 min |
 | Backups | `/opt/backups/cozybistro-*.tar.gz.age` (7 kept, pushed off-site at 03:40) |
-| Backup key | public half `/opt/cozybistro-backup.pub`; private half only in Andreas's password manager |
+| Backup key | public half `/opt/cozybistro-backup.pub`; private half only in Andreas's Bitwarden, entry `Cozy Bistro backup key (age)`, in its Password field |
 | Logs | `/var/log/cozybistro-nightly.log`, `/var/log/cozybistro-uptime.log` |
 
 Databases on the server: `dunnin` (live game) and `dunnin-staging`.
@@ -96,8 +96,10 @@ Not tested yet: the owner mails (no incident so far), growth with real players.
 **Backups older than `cozybistro-20261123-065155` cannot be opened.** The
 first key pair's private half was deleted before it had been stored
 anywhere. A new pair was made on 2026-11-23 (public half ends in
-`…duqsrcdrzu`). Rule since then: the private key is deleted from a place
-only after a restore, or a comparison of the kept copy, has passed.
+`…duqsrcdrzu`). Its private half restored a backup, was then stored in
+Bitwarden, and the stored copy was pasted back and compared (same key)
+before the file on the PC was deleted. Rule: the private key is deleted
+from a place only after such a check of the kept copy has passed.
 
 **Who owns the databases.** `dunnin` and `dunnin-staging` were published with
 the SpacetimeDB CLI's normal login on Andreas's PC (`spacetime login`, his
