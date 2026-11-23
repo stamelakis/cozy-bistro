@@ -10,17 +10,13 @@ Runbook, design and all test results: `ops/backend/README.md`. Testers have
 NOT been told yet. Note: `cozybistro.gr` does not exist; the only live
 address is cozy-bistro.com.
 
-**In progress / unfinished (Next #0, three things left):**
-- **Lock fix, not on the server yet.** The first scheduled nightly run
-  (03:30 UTC on 23 Nov) skipped itself: it lost its lock to the uptime check,
-  which starts in the same second. No prune, no backup that night, no mail.
-  Fixed and tested locally (commit `f301d63`, 8 cases, old against new).
-  Install needs Andreas's OK: copy `cozybistro-nightly.sh` and
-  `cozybistro-uptime.sh` to `/opt/` (755) and `cron.d/cozybistro-nightly` to
-  `/etc/cron.d/` (root, 644), old files kept as backups outside `/etc/cron.d`,
-  then run `/opt/cozybistro-nightly.sh` once by hand (2 s of downtime). After
-  it: change 03:30 to 03:32 in `C:/Users/andre/servers/SERVER.md` and the
-  education repo's `ops/BOX.md`. Until installed, expect NO nightly backups.
+**In progress / unfinished (Next #0, two things left):**
+- (Done 23 Nov: the nightly job's lock fix is on the server. The first
+  scheduled run had skipped itself, see README "What was tested". The job
+  now runs at 03:32 UTC; run by hand after the install: 2 s of downtime,
+  backup made. Check once that the run of 24 Nov 03:32 is in
+  `/var/log/cozybistro-nightly.log`. The old scripts are in
+  `/root/cozybistro-fix/old` on the box; delete that folder after it.)
 - **Restore test.** The first backup (22 Nov 21:50 UTC, also seen off-site
   in Backblaze) is downloaded but not yet restored: it needs the private key
   from Andreas's password manager in a temporary file, deleted right after.
@@ -30,9 +26,6 @@ address is cozy-bistro.com.
   and the `staging` branch is not pushed: /staging/ still points at the dead
   old server. Order: Andreas signs up `dunnin` on staging (local build with
   `?env=staging`), then `git push origin main:staging`.
-
-Local `main` is ahead of GitHub by the lock fix and this file; pushing them
-redeploys the same site (no client change).
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -50,9 +43,9 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   that `/var/log/cozybistro-nightly.log` says "removed N old log piece(s)".
 
 **Next:**
-0. [you: OK the fix, paste the key, sign up on staging] Finish the install:
-   the three things under "In progress".
-   Done when: the fixed nightly job has run on the box and made a backup,
+0. [you: paste the key, sign up on staging] Finish the install:
+   the two things under "In progress".
+   Done when: the scheduled nightly run of 24 Nov made a backup,
    the first backup restores on a test, `dunnin` exists on staging and
    /staging/ connects, and a second growth reading is written above.
 1. [you: post in Discord] (after #0, and after a few days of growth
@@ -68,8 +61,6 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- A yes to installing the lock fix on the server (three small files, then one
-  nightly run by hand, 2 s of downtime).
 - The private backup key pasted into `C:\Users\andre\cozybistro-restore-key.txt`
   for the restore test (deleted right after).
 - Sign up `dunnin` on staging.
@@ -99,7 +90,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
-- 2026-11-23: Backend INSTALLED on the shared Hetzner box and the site switched to it (`main` pushed 06:29 UTC, seen connecting in a browser). Image shipped, 8 GB capped data space (cap proven with a 64 MB test image), age backup key, Caddy block with four paths, both databases published, cron jobs, off-site line; the 12 other addresses on the box answered as before; security review found nothing. Found next morning: the scheduled nightly run lost its lock to the uptime check and skipped (fix f301d63, waits on install). 90b543b
+- 2026-11-23: Backend INSTALLED on the shared Hetzner box and the site switched to it (`main` pushed 06:29 UTC, seen connecting in a browser). Image shipped, 8 GB capped data space (cap proven with a 64 MB test image), age backup key, Caddy block with four paths, both databases published, cron jobs, off-site line; the 12 other addresses on the box answered as before; security review found nothing. Found next morning: the scheduled nightly run lost its lock to the uptime check and skipped (fix f301d63, installed the same morning). 90b543b
 - 2026-11-22: Andreas chose to self-host the backend (option A). Prepared and tested locally: `ops/backend/` (slim image, 8 GB capped data space, nightly prune + age backup, uptime check, Caddy block with 4 paths). The lab found and fixed two traps: signing keys outside the data folder, and pruning after a full-disk crash destroying the database.
 - 2026-11-22: Moved out of OneDrive to `C:\Users\andre\Restaurant Game` (copy verified, builds + server compile + local start pass, pushed, old copy deleted). 4676c71, 44381f4
 - 2026-11-22: State check — site up, backend DNS name gone (game down); recorded here, no code changed.

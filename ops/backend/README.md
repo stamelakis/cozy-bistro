@@ -53,6 +53,12 @@ Databases on the server: `dunnin` (live game) and `dunnin-staging`.
   history. In the lab this lost the whole test database. So the nightly job
   (a) does nothing unless the database answers first, and (b) counts a
   snapshot only when a later log piece exists. Keep both rules.
+- **The nightly job and the uptime check must never start in the same
+  second.** The uptime check takes the nightly lock for an instant to see
+  whether the job is running. So the nightly job waits for the lock
+  (never `flock -n`), runs at 03:32 and not on a 5-minute mark, and the
+  uptime check asks for the lock again before it restarts anything. In
+  the log, "another run is still going" means a night without a backup.
 - **The admin is whoever owns the username `dunnin`** (`ADMIN_USERNAME` in
   `v2/spacetime/src/reducers/auth.rs`). On a fresh database Andreas must sign
   up that name before the public site points at the server.
@@ -80,6 +86,9 @@ On the box itself (install day, 2026-11-22):
 | From outside: publish, SQL, logs, schema, call, other databases, 17 path tricks (`..`, `%2e`, `%2f`, `//`, capitals) | all 404; ports 3000/3100 closed |
 | Every other vhost on the box before and after the Caddy reload | same answers (12 addresses) |
 | Nightly job by hand | 2 s of downtime, 1.9 MB encrypted backup, restaurant and login intact |
+| First scheduled nightly run (23 Nov, 03:30:01) | **skipped**: it lost its lock to the uptime check, which started in the same second |
+| After the lock fix (23 Nov): 8 cases in a container, old scripts against new; then the nightly job by hand on the box | passed; 2 s of downtime, 2.3 MB backup, restaurant and login intact |
+| First backup off-site | seen in Backblaze after the 03:40 push |
 
 Not tested yet: the owner mails (no incident so far), growth with real players.
 
