@@ -7,6 +7,10 @@ own server: SpacetimeDB 2.3.0 on the shared Hetzner box, players' address
 `wss://db.cozy-bistro.com`. cozy-bistro.com was redeployed from `main` and
 connects (seen in a browser). Staging connects too since 23 Nov 11:25 UTC.
 `dunnin` (the admin) is signed up on LIVE and on STAGING.
+**Guest wishes are LIVE since 23 Nov 16:17 UTC** (server on both databases,
+page pushed one minute later, commit `98dd26f`, tag `deploy-2026-11-23-1`);
+only Andreas's in-game check is left. LIVE has a second account with a
+restaurant (id 4097, last played 23 Nov 10:01 UTC); who it is, is not known.
 Runbook, design and all test results: `ops/backend/README.md`. Testers have
 NOT been told yet; the message for them is drafted
 (`docs/decisions/discord-back.md`) and waits for Andreas's yes. Note: `cozybistro.gr` does not exist; the only live
@@ -34,14 +38,14 @@ address is cozy-bistro.com.
   staging push changed nothing for 4 hours: Pages deploys a commit only
   once, see CLAUDE.md "Deploy pipeline" step 5.)
 
-- **Guest wishes: server AND page built, run on a local server only.**
-  NOT published, NOT pushed; local `main` is ahead of GitHub and must
-  stay unpushed until Next #3 (a push rebuilds the live page). Seen
-  locally on PC and phone size: both badges show and pay ($6, $10), one
-  hurry promise missed at 60 s paid nothing. The regenerated bindings
-  (`v2/src/cloud/generated`) are NOT committed on purpose; the page
-  builds without them. Results, screenshots and the go-live steps:
-  `docs/decisions/guest-requests.md` ("Build log", both parts).
+- **Guest wishes: PUBLISHED 23 Nov, waiting for Andreas's in-game check.**
+  Backup first (`cozybistro-20261123-161550`, 24 MB), then the server to
+  `dunnin-staging` (16:16 UTC) and `dunnin` (16:17): every row kept on
+  both, new fields 0. Bindings regenerated and committed (`98dd26f`),
+  `main` + `staging` pushed together at 16:18, Pages run green at 16:20.
+  Both pages serve a build with the new bindings and connect, no "Tried
+  to read" error. NOT seen on live: a wish itself (I cannot log in).
+  Details: `docs/decisions/guest-requests.md` ("Go-live, 23 Nov").
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -53,6 +57,13 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
 - 22 Nov 21:36 UTC: 13 MB used of 7.8 GB (fresh, two empty databases).
 - 23 Nov 06:29 UTC: 26 MB used. The live database's log grew 12 MB in 8.8 h
   with one idle restaurant: about 33 MB a day, the same as in the lab (36).
+- 23 Nov 16:15 UTC: 170 MB used; live log 138 MB in three pieces, staging
+  17 MB. That is 144 MB in 9.8 h, about ten times the idle rate. Why was
+  not looked into; a connected player alone writes about 7 MB an hour
+  (README), and restaurant 4097 was played until 10:01 UTC. The
+  by-hand nightly run of 16:15 did its first real prune step (dropped the
+  oldest snapshot, "removed 0 old log piece(s)"), database fine after.
+  Backups are now 24 MB each (were 2.3 MB).
 - Next reading: `df -m /opt/cozy-bistro/data` and
   `du -sm /opt/cozy-bistro/data/replicas/*/clog` on the box. Pruning starts
   only after the log passes 64 MB twice (about day 4 when idle); check then
@@ -80,24 +91,25 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: OK GIVEN 23 Nov ("Yes, publish"); after it, grant one wish of
-   each kind in the live game] Guest wishes, part 3 of 3 (parts 1 and 2 are
-   done, see "In progress"): publish the server to staging and live,
-   then regenerate the bindings and push the page right after (the live
-   page cannot read the upgraded server: a few minutes' break, players
-   reload; pick a quiet hour), health check, then Andreas grants one wish
-   of each kind in the live game (Dev tools has a button for each).
-   Steps: "Go-live steps" in `docs/decisions/guest-requests.md`. Done
-   when: the "Done when" section of that page.
+3. [you: grant one wish of each kind in the live game] Guest wishes,
+   part 3 of 3: PUBLISHED 23 Nov (see "In progress"). Left: Andreas's
+   check in the live game (steps under "Waiting on Andreas"). Done when:
+   he has seen $6 and $10 arrive and "Guest wish" in the Ledger. After
+   his check, two small follow-ups, both need his yes: tidy the "may be
+   missing" wish types in `SpacetimeClient.ts` (CLAUDE.md "Decisions"),
+   and add the wishes to the patch notes (draft:
+   `docs/patch-notes-13.md`).
 4. [you: pick later] Still parked, compared in
    `docs/decisions/next-feature.md`: A button grouping (cheap; fits the
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
-- **Guest wishes: after the publish (Next #3, your yes of 23 Nov),**
-  grant one wish of each kind in the live game: log in as `dunnin`,
-  Dev tools → "⚡ Hurry wish" / "🎂 Birthday wish" while a guest is
-  seated / eating, tap the badge, check the Ledger shows "Guest wish".
+- **Guest wishes are live (23 Nov 16:17 UTC): try one of each kind.**
+  Reload cozy-bistro.com, log in as `dunnin`, wait for guests. Dev tools
+  → "⚡ Hurry wish" right after a guest sits down, tap the ⚡ badge: +$10
+  when the plate lands within 60 s. Dev tools → "🎂 Birthday wish" while
+  a guest is eating, tap the 🎂 badge: +$6 at once. Then 📓 Ledger shows
+  "Guest wish". Reply "έτοιμο" or what you saw instead.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
@@ -143,6 +155,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-23: Guest wishes PUBLISHED. Backup by the nightly job run by hand (2 s of downtime), server module to `dunnin-staging` then `dunnin` (four fields added with defaults, row counts of 13 tables the same before and after on both), bindings regenerated, page pushed to `main` + `staging` in one command one minute after the live publish, Pages run green. Both pages connect with the new build. Found on the way: the file name of the page built by GitHub does not match a local build's (CLAUDE.md deploy step 3 corrected); LIVE has a second account. Not done: a wish seen in the live game (Andreas). 98dd26f
 - 2026-11-23: Guest wishes, the page: ⚡/🎂 badge with a countdown (one more `TapBadges` layer, hidden while visiting), "+$" pop, Ledger line, Help section, two admin buttons to force a wish. Build and 29 rule tests pass; on a local server both wishes paid on PC and phone size and one hurry promise was missed at 60 s. The page reads the new fields as "may be missing", so it is committed without the regenerated bindings. Not published, not pushed.
 - 2026-11-23: Prep for the guest-requests build: the plan on one page (`docs/decisions/guest-requests.md`), with wishes, reward sizes taken from today's tip and goal numbers, limits, staffing rules and a "done when" line. No game code changed. Found on the way: the project has no automated tests at all; the hurry time limit could not be measured without a running local server. Andreas approved the plan the same day ("yes, as written").
 - 2026-11-23: Prep for the next-feature pick: the four parked ideas compared on one page (`docs/decisions/next-feature.md`), recommendation C. No game code changed. The ideas' original wording was not on file; the page says so. Andreas picked C the same day.

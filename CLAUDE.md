@@ -22,7 +22,10 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
    --out-dir ../src/cloud/generated --module-path .` then rebuild the client.
 3. Client: `$env:CB_BASE='/'; npm run build` in v2 (tsc must pass), commit,
    `git push origin main main:staging`; GitHub Actions deploys. Verify with
-   `gh run watch` + compare the live `index-*.js` hash to `v2/dist/assets/`.
+   `gh run watch`, then the served `index-*.js`: its `Last-Modified` is
+   the run's time and it contains a string that is new in this change.
+   Its NAME does not match a local build's (GitHub builds on Linux with
+   Node 20; seen 2026-11-23), so do not compare names with `v2/dist`.
 4. Pages builds BOTH branches on any push; concurrent pushes cancel the first
    run — watch the LATEST run.
 5. Pages deploys a commit only ONCE. Pushing `main` and later `main:staging`

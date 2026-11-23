@@ -229,7 +229,7 @@ tidy those optional types away before go-live.
 Screenshots of the local run: `docs/decisions/guest-wishes-shots/`
 (1–5 PC, 6–9 phone size).
 
-### Go-live steps (Next #4, needs Andreas's OK)
+### Go-live steps (done 23 Nov, see "Go-live, 23 Nov" at the end)
 
 1. Tunnel, publish the server to `dunnin-staging`, then to `dunnin`.
 2. Right after: `spacetime generate` (see `CLAUDE.md`), `npm run build`,
@@ -273,3 +273,48 @@ no frames and the badges lag.
   `cozy-bistro-3d-local-db`. Furniture through `cloud.placeFurniture`
   then reload; menu through `game.cooking.addToMenu` (a reload resets a
   menu set only on the server); staff through `game.hireStaff`.
+
+## Go-live, 23 Nov (Andreas: "Yes, publish")
+
+All times UTC. Before anything: git clean, 29 rule tests pass, the page
+builds with the old bindings.
+
+| When | What | Result |
+|---|---|---|
+| 16:15:50 | Backup: `/opt/cozybistro-nightly.sh` by hand on the box | 2 s of downtime, `/opt/backups/cozybistro-20261123-161550.tar.gz.age`, 24 MB, starts with the age header; database up after |
+| 16:16:50 | `spacetime publish --server cozybox -p . dunnin-staging --yes` | "Created columns" for the four fields, no data question; row counts of 13 tables the same before and after; restaurant 1 has `last_wish_micros` 0, its 4 guests have wish fields 0 |
+| 16:17:23 | The same publish to `dunnin` | same plan; 13 row counts the same (2 accounts, 2 restaurants, 7 guests, 16 furniture, 140 prices, 44 ledger lines); new fields 0 |
+| 16:18:24 | `spacetime generate`, build (`tsc` passes), commit `98dd26f`, `git push origin main main:staging` | pushed 61 s after the live publish |
+| 16:20:00 | GitHub Pages run 45214998886 (`main`; the `staging` run was cancelled by it, as usual) | green |
+
+Checked after:
+
+- Both served page files are new (`Last-Modified` 16:19:44) and contain
+  `answer_guest_wish`, `wish_deadline_micros` and `last_wish_micros`:
+  live `index-DiMN5X4m.js`, staging `index-OzVbefV_.js`. The local
+  build is named `index-C4AVxVSf.js`: a build on GitHub (Linux, Node 20)
+  and one on this PC (Node 24) do not get the same file name, so the
+  name cannot be compared; the content was.
+- In a browser: cozy-bistro.com and /staging/cozy-bistro-3d/?env=staging
+  load to the login screen (staging with its STAGING badge), the console
+  says "[SpacetimeDB] connected", and "Tried to read" does not appear.
+  The only errors are the known "catalog changes are admin-only" ones.
+- Server: `https://db.cozy-bistro.com/v1/ping` 200, the module logs of
+  both databases show "Database updated" and no error after it, the data
+  space is 3% full.
+- Tag `deploy-2026-11-23-1` on `98dd26f`.
+
+Not checked, because I cannot log in on live: a wish in the live game.
+The restaurants were frozen during all of this (a restaurant only runs
+while its owner is in the game), so the new tick step has not run on
+live yet; its first run is Andreas's check. If a wish misbehaves there,
+the module log (`spacetime logs --server cozybox dunnin -n 100`) has one
+line per wish event.
+
+Found on the way: LIVE has a second account with a restaurant (id 4097,
+last played 23 Nov 10:01); the hand-over said `dunnin` was the only one.
+Its rows are intact like the rest.
+
+Still to do after Andreas's check: tidy the "may be missing" wish types
+in `SpacetimeClient.ts`, and post the wishes in the patch notes
+(`docs/patch-notes-13.md`, a draft).
