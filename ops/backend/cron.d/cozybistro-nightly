@@ -1,7 +1,8 @@
 # Cozy Bistro: nightly stop -> prune the commit log -> encrypted backup -> start (about 10 s of downtime).
 # Installed as /etc/cron.d/cozybistro-nightly (root:root 0644). Script: /opt/cozybistro-nightly.sh
 # (repo: ops/backend/cozybistro-nightly.sh). Runs after webstudio (03:25), before offsite-push (03:40).
-# 03:30 UTC is 05:30 in Greece.
+# 03:32 UTC is 05:32 in Greece. Never on a 5-minute mark: the uptime check starts then, and the two
+# must not start in the same second (2026-11-23: the nightly run lost the lock to it and skipped).
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-30 3 * * * root /opt/cozybistro-nightly.sh >> /var/log/cozybistro-nightly.log 2>&1
+32 3 * * * root /opt/cozybistro-nightly.sh >> /var/log/cozybistro-nightly.log 2>&1

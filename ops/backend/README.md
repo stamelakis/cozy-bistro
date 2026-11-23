@@ -13,7 +13,7 @@ and the education repo's `ops/BOX.md`. **Touch only what is listed here.**
 | Data | `/opt/cozy-bistro/data`, a fixed 8 GB filesystem inside `data.img` |
 | Players' address | `wss://db.cozy-bistro.com` (block in `/opt/edu-admin/Caddyfile`, text in `caddy-block.txt`) |
 | Admin address | `127.0.0.1:3100` on the box only (use an SSH tunnel) |
-| Nightly job | `/opt/cozybistro-nightly.sh`, `/etc/cron.d/cozybistro-nightly`, 03:30 UTC |
+| Nightly job | `/opt/cozybistro-nightly.sh`, `/etc/cron.d/cozybistro-nightly`, 03:32 UTC |
 | Uptime check | `/opt/cozybistro-uptime.sh`, `/etc/cron.d/cozybistro-uptime`, every 5 min |
 | Backups | `/opt/backups/cozybistro-*.tar.gz.age` (7 kept, pushed off-site at 03:40) |
 | Backup key | public half `/opt/cozybistro-backup.pub`; private half only in Andreas's password manager |

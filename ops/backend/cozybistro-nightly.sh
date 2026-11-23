@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Nightly job for Cozy Bistro's database. On the box at /opt/cozybistro-nightly.sh,
-# run by /etc/cron.d/cozybistro-nightly at 03:30 UTC (before the off-site push,
-# 03:40). About 10 seconds of downtime: players see "Lost connection" and the
+# run by /etc/cron.d/cozybistro-nightly at 03:32 UTC (before the off-site push,
+# 03:40; never on a 5-minute mark, where the uptime check runs). About 10 seconds of downtime: players see "Lost connection" and the
 # game reconnects.
 #
 #   1. STOP the database (a cold copy is the only backup we know is consistent).
@@ -32,6 +32,7 @@ DOCKER=${DOCKER:-docker}
 OWNER_MAIL=${OWNER_MAIL:-/opt/owner-mail.py}
 KEEP_SNAPSHOTS=${KEEP_SNAPSHOTS:-2}
 KEEP_BACKUPS=${KEEP_BACKUPS:-7}
+LOCK_WAIT=${LOCK_WAIT:-60}
 WARN_PCT=${WARN_PCT:-60}
 STAMP=${STAMP:-$(date -u +%Y%m%d-%H%M%S)}
 OUT="$DEST/cozybistro-$STAMP.tar.gz.age"
@@ -71,7 +72,10 @@ finish(){
 mkdir -p "$DEST"
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$DEST/.cozybistro-nightly.lock"
-  flock -n 9 || { log "another run is still going -- leaving"; exit 1; }
+  # Wait, do not give up at once: the uptime check takes this lock for an
+  # instant to see whether we are running. With "-n" the first scheduled run
+  # (2026-11-23, both started at 03:30:01) lost to it and skipped the night.
+  flock -w "$LOCK_WAIT" 9 || { log "another run is still going -- leaving"; exit 1; }
 fi
 for f in "$DEST"/cozybistro-*.age.part; do [ -e "$f" ] && rm -f "$f"; done
 

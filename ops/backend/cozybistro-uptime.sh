@@ -29,9 +29,8 @@ mail(){ # tag cap subject body -> owner-mail's exit code
 mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR"
 
 # the nightly job is in its planned stop: not an incident
-if [ -e "$NIGHTLY_LOCK" ] && command -v flock >/dev/null 2>&1; then
-  flock -n "$NIGHTLY_LOCK" true || exit 0
-fi
+nightly_running(){ [ -e "$NIGHTLY_LOCK" ] && command -v flock >/dev/null 2>&1 && ! flock -n "$NIGHTLY_LOCK" true; }
+nightly_running && exit 0
 
 S=$(health)
 if [ "$S" = "200" ]; then
@@ -45,6 +44,10 @@ if [ "$S" = "200" ]; then
   exit 0
 fi
 
+# Ask again: the nightly job may have begun its stop while we were asking the
+# database. Restarting the container then would start a database whose files
+# are being pruned and copied.
+nightly_running && exit 0
 echo "$(date -Is) DOWN: $HOST=$S -> restarting $APP"
 docker restart "$APP" >/dev/null 2>&1
 sleep 20
