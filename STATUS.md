@@ -17,11 +17,16 @@ address is cozy-bistro.com.
   backup made. Check once that the run of 24 Nov 03:32 is in
   `/var/log/cozybistro-nightly.log`. The old scripts are in
   `/root/cozybistro-fix/old` on the box; delete that folder after it.)
-- **Restore test.** The first backup (22 Nov 21:50 UTC, also seen off-site
-  in Backblaze) is downloaded but not yet restored: it needs the private key
-  from Andreas's password manager in a temporary file, deleted right after.
-  Recipe: decrypt in a throwaway container into a throwaway volume, start
-  `cozybistro-stdb:2.3.0` on a spare local port, see `dunnin` and restaurant 1.
+- **THE BACKUP KEY IS LOST: the backups so far cannot be opened.** The
+  private half was deleted from the PC on 22 Nov after Andreas clicked
+  "Stored", but it was never stored (he has no password manager; found
+  23 Nov). The live data is fine. To do, after his decision on where the
+  key lives: new key pair, new public half to `/opt/cozybistro-backup.pub`
+  (server step, needs his OK), nightly job once by hand, restore that
+  backup on the PC as the test, then delete the two old unreadable
+  backups (`cozybistro-20261122-215020`, `-20261123-063649`) on the box
+  and in Backblaze with his OK. Never delete the only copy of the key
+  until a restore from the kept copy has passed.
 - **Staging.** `dunnin-staging` is published but has NO `dunnin` account,
   and the `staging` branch is not pushed: /staging/ still points at the dead
   old server. Order: Andreas signs up `dunnin` on staging (local build with
@@ -43,7 +48,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   that `/var/log/cozybistro-nightly.log` says "removed N old log piece(s)".
 
 **Next:**
-0. [you: paste the key, sign up on staging] Finish the install:
+0. [you: decide where the backup key lives, sign up on staging] Finish the install:
    the two things under "In progress".
    Done when: the scheduled nightly run of 24 Nov made a backup,
    the first backup restores on a test, `dunnin` exists on staging and
@@ -61,8 +66,9 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- The private backup key pasted into `C:\Users\andre\cozybistro-restore-key.txt`
-  for the restore test (deleted right after).
+- Where the new backup key is kept: a git-ignored `ACCESS.local.md` in this
+  folder (as TakeaSeat does) or a password manager he sets up. Then an OK
+  for the new public half on the server.
 - Sign up `dunnin` on staging.
 - Other projects, his call: (a) the live `/opt/offsite-push.sh` is newer than
   its copies in the TakeaSeat repo (`server/offsite-push.sh`) and the
