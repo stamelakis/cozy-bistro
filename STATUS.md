@@ -34,6 +34,16 @@ address is cozy-bistro.com.
   staging push changed nothing for 4 hours: Pages deploys a commit only
   once, see CLAUDE.md "Deploy pipeline" step 5.)
 
+- **Guest wishes (Next #3): server part built, page part not started.**
+  Rules + 28 automated tests (`npm run test:server` in `v2/`), the server
+  fields, tick step and `answer_guest_wish` are committed (`de040c1`,
+  `bfc4f35`, `0177f14`) and were run on a throwaway local server: both
+  wishes granted and missed, upgrade of a database with data kept every
+  row. NOT published, NOT pushed. Left: the page (badge, "+$" pop, Ledger
+  line, Help), the hurry-time answer below, then publish with Andreas's
+  OK. Results, measurements and how to continue:
+  `docs/decisions/guest-requests.md` ("Build log").
+
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
 Its deletion is approved: a later session removes it (only if still empty)
@@ -71,21 +81,35 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [auto] Build special guest requests (plan approved by Andreas on 23 Nov,
-   "yes, as written") as planned in `docs/decisions/guest-requests.md`: two wishes,
-   ⚡ hurry (+$10) and 🎂 birthday (+$6), at most 6 a game day. It changes
-   the server and pays money, and the project has no automated tests yet:
-   the build sets them up first, runs on a local server first, and
-   measures the hurry time (45 s is a starting guess). Publishing to
-   staging and live needs Andreas's OK. Done when: the "Done when" section
-   of that page (tests listed there pass, both wishes granted and missed
-   locally, then published with OK and one wish of each kind granted by
-   Andreas in the live game).
-4. [you: pick later] Still parked, compared in
+3. [auto] Guest wishes, part 2 of 3: the game page (plan approved 23 Nov;
+   server part done, see "In progress"). Follow "For the next session" in
+   `docs/decisions/guest-requests.md`: regenerate the bindings, add the
+   wish badge (⚡ / 🎂) as one more `TapBadges` layer hidden while
+   visiting, the "+$" pop, the "wish" line in the Ledger and a Help entry;
+   apply the hurry-time answer if Andreas has given it. Test against a
+   local server. No publish, no push. Done when: `tsc` builds, the rule
+   tests pass, and on a local server both badges show and pay on PC and
+   on phone size (screenshots).
+4. [you: OK to publish] (after #3) Guest wishes, part 3: publish the
+   server to staging and live and push the page right after (the live
+   page cannot read the upgraded server: a few minutes' break, players
+   reload; pick a quiet hour), health check, then Andreas grants one wish
+   of each kind in the live game. Done when: the "Done when" section of
+   the plan page.
+5. [you: pick later] Still parked, compared in
    `docs/decisions/next-feature.md`: A button grouping (cheap; fits the
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
+- **Hurry wish, how to count the time: A, B or C?** Measured: a first
+  plate takes about 28 s in a small kitchen and about 58 s in a busy one
+  (table in `docs/decisions/guest-requests.md`, "Build log"). "45 s after
+  the tap" is always made in the first and almost never in the second,
+  unless the player waits before tapping. **A (recommended):** 60 s,
+  counted from the moment the wish appears; tapping late buys nothing.
+  **B:** leave it as written (45 s from the tap). **C:** a time that
+  adapts to each kitchen: fairest, about one more session, better later.
+  Not needed to build the page; needed before publishing.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how

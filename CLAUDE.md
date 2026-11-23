@@ -54,7 +54,24 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
   javascript_tool, but it registers as MOBILE (zero viewport) — simulate
   desktop by removing body.cb-mobile before measuring; it can't log in.
 
+- The server module cannot run `cargo test` (it only links inside
+  SpacetimeDB). Tests live in `v2/spacetime/rules-tests/`, which includes
+  database-free rule files by path: `npm run test:server` in `v2/`.
+- A page built before a schema change cannot read the upgraded server
+  (empty restaurant, "Tried to read 65536 byte(s)"). Publish the server
+  and push the regenerated page back to back; never commit regenerated
+  bindings to `main` before the server is published.
+- `spacetime` CLI: its default server is NOT the local one. For a local
+  test always pass `--server http://127.0.0.1:3000`.
+
 ## Decisions (do not undo casually)
+- **Money rules are pure functions with tests (guest wishes, 2026-11-23):**
+  `wish_rules.rs` decides and returns "what to write"; `restaurant_sim.rs`
+  only reads rows and applies it. The $60-a-game-day ceiling comes from
+  the pause (min 120 s) stamped on EVERY wish event in
+  `restaurant.last_wish_micros`; change a number there and a test fails.
+  Rejected: rules inline in the reducers (untestable on the PC), a
+  per-day counter (a second thing to reset).
 - **Lives at `C:\Users\andre\Restaurant Game`, outside OneDrive, since
   2026-11-22.** OneDrive couldn't sync code projects (3,607 sync problems on
   2026-11-19). Backup is git + GitHub. Don't move it back into OneDrive.
@@ -99,6 +116,9 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
   older one after an update. Local test containers, volumes and the 3.5 GB
   official `clockworklabs/spacetime` image are removed when a test ends.
 - `v2/dist` (build output, gitignored): overwritten by every build.
+- `v2/spacetime/target` (~1.2 GB) and `v2/spacetime/rules-tests/target`
+  (~25 MB): Rust build caches, gitignored, safe to delete (the next build
+  takes a few minutes longer).
 
 ## Memory
 Deep per-feature history (dishware audit, resets, retention features, stats)

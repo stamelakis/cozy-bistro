@@ -132,3 +132,68 @@ than $60. The client builds (`tsc`), the badge works on PC and phone.
 Then, with Andreas's OK: published to staging and live, a health check
 after, and Andreas has granted one wish of each kind in the live game
 (I cannot log in there).
+
+## Build log, 23 Nov: server part built and run locally
+
+Done (commits `de040c1`, `bfc4f35`, `0177f14`; nothing published, nothing
+pushed):
+
+- **Rules and tests.** All decisions (who gets a wish, when, how much)
+  are in one file with no database in it, `v2/spacetime/src/wish_rules.rs`.
+  28 tests (`npm run test:server` in `v2/`, 1 second) cover every case
+  listed under "Done when", plus a search for the worst 12 minutes: never
+  more than $60. I broke the rules on purpose five times (pause off, late
+  tap accepted, stranger accepted, late plate paid, pause halved): each
+  time tests failed.
+- **Server.** The four new fields, the step in the sim tick,
+  `answer_guest_wish` and the admin trigger `admin_force_guest_wish`.
+- **Local run** (throwaway server on this PC, a test restaurant with a
+  waiter and a chef). Seen with real guests: birthday paid $6 (three
+  times, one of them a wish that appeared by itself), hurry paid $10 when
+  the plate landed (twice); a second tap, a late tap and an untapped wish
+  paid nothing; a hurry promise the kitchen could not keep paid nothing
+  and cost nothing; a tap from another login was refused. Every payment
+  is in the Ledger table as "wish". Wishes that came by themselves were
+  3.5 and 4 minutes apart.
+- **Upgrade test.** The new server version was put over a database with
+  furniture, staff, money and guests in it: every row kept, new fields 0.
+
+### The hurry time, measured (first plate after the guest sits down)
+
+| Test kitchen | Guests | Fastest | Middle | Slowest |
+|---|---|---|---|---|
+| 4 seats, toast and salad only | 13 | 24 s | 28 s | 38 s |
+| 8 seats, one chef, pasta and chicken-rice on the menu | 20 | 44 s | 58 s | 86 s |
+
+So "45 seconds after the tap" is always made in the small kitchen and
+almost never in the busy one, unless the player waits the full 20
+seconds before tapping: then about 3 in 4. Tapping late buys time, and
+that is not a skill worth rewarding. The question is in `STATUS.md`
+("Waiting on Andreas"). Not measured: how much a stir (🥄) saves; it
+needs a hand on the pot and the test ran by script.
+
+Also seen: the three wishes that came by themselves were all birthdays.
+A guest starts eating once per course but sits down once, and guests
+with a toilet trip get no hurry, so birthdays come about 2 to 3 times as
+often. That keeps a real day well under the $60 ceiling.
+
+### For the next session (the page)
+
+- `spacetime generate` (see `CLAUDE.md`), then the badge layer, the "+$"
+  pop, the Ledger line and the Help entry. The page calls
+  `answerGuestWish({ guestId })`; guest fields `wishKind` (1 hurry, 2
+  birthday), `wishState` (1 badge showing, 2 promised, 3 granted, 4
+  missed), `wishDeadlineMicros`.
+- The generated files are NOT committed on purpose: with them, a push of
+  `main` would give the live page bindings the live server does not have.
+- **Go-live order.** The page that is live today cannot read a server
+  with the new fields (tested locally: "Tried to read 65536 byte(s)",
+  empty restaurant). Publish the server and push the new page one right
+  after the other, at a quiet hour; players online must reload.
+- Local test setup that worked: container from image
+  `cozybistro-stdb:2.3.0` on port 3000, `spacetime publish --server
+  http://127.0.0.1:3000` (always the full address: the CLI's default
+  server is not the local one), page via launch config
+  `cozy-bistro-3d-local-db`. Furniture through `cloud.placeFurniture`
+  then reload; menu through `game.cooking.addToMenu` (a reload resets a
+  menu set only on the server); staff through `game.hireStaff`.
