@@ -1,5 +1,9 @@
 # Special guest requests: the plan for the first version
 
+**Decided 2026-11-23: Andreas said "yes, as written".** Two wishes, fixed
+rewards ($6 and $10), a broken hurry promise costs nothing. Publishing to
+staging and live still needs his OK when the build is ready.
+
 Written 2026-11-23 as prep for the build (Next "Build special guest
 requests" in `STATUS.md`). No game code was changed for this page. The
 numbers come from the code as it is today; where I could not measure

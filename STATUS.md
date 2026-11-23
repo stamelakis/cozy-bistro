@@ -71,8 +71,8 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: approve the plan] Build special guest requests (Andreas's pick of
-   23 Nov) as planned in `docs/decisions/guest-requests.md`: two wishes,
+3. [auto] Build special guest requests (plan approved by Andreas on 23 Nov,
+   "yes, as written") as planned in `docs/decisions/guest-requests.md`: two wishes,
    ⚡ hurry (+$10) and 🎂 birthday (+$6), at most 6 a game day. It changes
    the server and pays money, and the project has no automated tests yet:
    the build sets them up first, runs on a local server first, and
@@ -86,13 +86,6 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
-- **Guest requests plan: yes / change X?** The plan is one page,
-  `docs/decisions/guest-requests.md`. Its three choices, with what it
-  recommends: (1) two wishes in the first version, not three (the third,
-  "Something special", would change the guest's order and cost about one
-  more session); (2) fixed rewards, $6 and $10, not a share of the bill;
-  (3) a broken "hurry" promise costs nothing. A yes starts the build
-  (Next #3); nothing reaches players without a second OK at publish time.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
@@ -135,7 +128,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
-- 2026-11-23: Prep for the guest-requests build: the plan on one page (`docs/decisions/guest-requests.md`), with wishes, reward sizes taken from today's tip and goal numbers, limits, staffing rules and a "done when" line. No game code changed. Found on the way: the project has no automated tests at all; the hurry time limit could not be measured without a running local server.
+- 2026-11-23: Prep for the guest-requests build: the plan on one page (`docs/decisions/guest-requests.md`), with wishes, reward sizes taken from today's tip and goal numbers, limits, staffing rules and a "done when" line. No game code changed. Found on the way: the project has no automated tests at all; the hurry time limit could not be measured without a running local server. Andreas approved the plan the same day ("yes, as written").
 - 2026-11-23: Prep for the next-feature pick: the four parked ideas compared on one page (`docs/decisions/next-feature.md`), recommendation C. No game code changed. The ideas' original wording was not on file; the page says so. Andreas picked C the same day.
 - 2026-11-23: Drafted the Discord message "the game is back, from zero, and why" (`docs/decisions/discord-back.md`), nothing posted. Found on the way: the Patch 12 notes are over Discord's 2,000-character limit (post as two messages) and their "never reset / refund" line needs new wording after the restart.
 - 2026-11-23: Staging is on the new server too: `dunnin` signed up there, `main` + `staging` pushed together, /staging/ seen connecting. Found on the way: Pages deploys a commit once, so `main` then `main:staging` at the same commit left staging on the old build (CLAUDE.md deploy step 5). e4d8b7e
