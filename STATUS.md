@@ -17,16 +17,18 @@ address is cozy-bistro.com.
   backup made. Check once that the run of 24 Nov 03:32 is in
   `/var/log/cozybistro-nightly.log`. The old scripts are in
   `/root/cozybistro-fix/old` on the box; delete that folder after it.)
-- **THE BACKUP KEY IS LOST: the backups so far cannot be opened.** The
-  private half was deleted from the PC on 22 Nov after Andreas clicked
-  "Stored", but it was never stored (he has no password manager; found
-  23 Nov). The live data is fine. To do, after his decision on where the
-  key lives: new key pair, new public half to `/opt/cozybistro-backup.pub`
-  (server step, needs his OK), nightly job once by hand, restore that
-  backup on the PC as the test, then delete the two old unreadable
-  backups (`cozybistro-20261122-215020`, `-20261123-063649`) on the box
-  and in Backblaze with his OK. Never delete the only copy of the key
-  until a restore from the kept copy has passed.
+- **Backup key: new pair made 23 Nov, restore test PASSED, storing it is
+  open.** The first key was deleted before it was stored anywhere (Andreas
+  has no password manager), so the backups `cozybistro-20261122-215020` and
+  `-20261123-063649` cannot be opened; they rotate out by themselves (7
+  kept). New public half is on the box (old one: `/opt/cozybistro-backup.pub.old`).
+  Backup `-20261123-065155` was restored on the PC: `dunnin`, restaurant 1,
+  same signing keys. The private half is in ONE place:
+  `C:\Users\andre\cozybistro-backup-key.txt` (one line, outside every repo).
+  Andreas chose a password manager and still has to set one up and paste
+  the key in. Do NOT delete the file until his stored copy has been
+  compared with it (he pastes it back into an empty file; compare, then
+  delete both).
 - **Staging.** `dunnin-staging` is published but has NO `dunnin` account,
   and the `staging` branch is not pushed: /staging/ still points at the dead
   old server. Order: Andreas signs up `dunnin` on staging (local build with
@@ -48,10 +50,10 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   that `/var/log/cozybistro-nightly.log` says "removed N old log piece(s)".
 
 **Next:**
-0. [you: decide where the backup key lives, sign up on staging] Finish the install:
+0. [you: store the backup key in a password manager, sign up on staging] Finish the install:
    the two things under "In progress".
    Done when: the scheduled nightly run of 24 Nov made a backup,
-   the first backup restores on a test, `dunnin` exists on staging and
+   the backup key is stored and checked (the restore test passed 23 Nov), `dunnin` exists on staging and
    /staging/ connects, and a second growth reading is written above.
 1. [you: post in Discord] (after #0, and after a few days of growth
    readings) Tell the testers the game is back and starts from zero, then
@@ -66,9 +68,9 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    leftover), first seasonal event (explicitly saved for later).
 
 **Waiting on Andreas:**
-- Where the new backup key is kept: a git-ignored `ACCESS.local.md` in this
-  folder (as TakeaSeat does) or a password manager he sets up. Then an OK
-  for the new public half on the server.
+- Set up a password manager and store the backup key from
+  `C:\Users\andre\cozybistro-backup-key.txt`, then paste it back once so the
+  copy can be checked.
 - Sign up `dunnin` on staging.
 - Other projects, his call: (a) the live `/opt/offsite-push.sh` is newer than
   its copies in the TakeaSeat repo (`server/offsite-push.sh`) and the

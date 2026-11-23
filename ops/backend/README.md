@@ -89,8 +89,15 @@ On the box itself (install day, 2026-11-22):
 | First scheduled nightly run (23 Nov, 03:30:01) | **skipped**: it lost its lock to the uptime check, which started in the same second |
 | After the lock fix (23 Nov): 8 cases in a container, old scripts against new; then the nightly job by hand on the box | passed; 2 s of downtime, 2.3 MB backup, restaurant and login intact |
 | First backup off-site | seen in Backblaze after the 03:40 push |
+| Restore (23 Nov): backup `cozybistro-20261123-065155` downloaded to the PC, decrypted with the private key, started as a throwaway server | passed: `dunnin` and restaurant 1 present, same database identity, same signing keys as the box |
 
 Not tested yet: the owner mails (no incident so far), growth with real players.
+
+**Backups older than `cozybistro-20261123-065155` cannot be opened.** The
+first key pair's private half was deleted before it had been stored
+anywhere. A new pair was made on 2026-11-23 (public half ends in
+`…duqsrcdrzu`). Rule since then: the private key is deleted from a place
+only after a restore, or a comparison of the kept copy, has passed.
 
 **Who owns the databases.** `dunnin` and `dunnin-staging` were published with
 the SpacetimeDB CLI's normal login on Andreas's PC (`spacetime login`, his
