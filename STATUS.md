@@ -71,15 +71,20 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [auto] Prep for #4: one page in `docs/decisions/next-feature.md` on the
-   four parked ideas: what each one is for a player, rough effort, risk,
-   and a recommendation. Changes no game code. Done when: "Waiting on
-   Andreas" asks "Next feature: A, B, C or D?".
-4. [you: pick one] Parked ideas, in rough order: sidebar button grouping (#3 of GUI ideas),
-   edge-docked layout long-term (#4), special guest requests (Patch D
-   leftover), first seasonal event (explicitly saved for later).
+3. [you: pick one, A–D] The next feature, compared on one page
+   (`docs/decisions/next-feature.md`): A button grouping, B edge-docked
+   layout, C special guest requests, D first seasonal event. After the
+   pick, the chosen one becomes its own item with a "done when" line.
 
 **Waiting on Andreas:**
+- **Next feature: A, B, C or D?** A = group the small buttons of the bar
+  (1 session, nothing new to play), B = panels docked on the screen edges
+  (3–5 sessions, reverses part of the August top bar), C = special guest
+  requests (2–3 sessions, server change), D = first seasonal event (2
+  sessions small, 4–6 full, fixed date). Recommended: C, the only one that
+  gives players something new to do. If a Christmas event is wanted, it
+  must be D in its small version, decided by 1 December. Details:
+  `docs/decisions/next-feature.md`.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
@@ -122,6 +127,7 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
+- 2026-11-23: Prep for the next-feature pick: the four parked ideas compared on one page (`docs/decisions/next-feature.md`), recommendation C. No game code changed. The ideas' original wording was not on file; the page says so.
 - 2026-11-23: Drafted the Discord message "the game is back, from zero, and why" (`docs/decisions/discord-back.md`), nothing posted. Found on the way: the Patch 12 notes are over Discord's 2,000-character limit (post as two messages) and their "never reset / refund" line needs new wording after the restart.
 - 2026-11-23: Staging is on the new server too: `dunnin` signed up there, `main` + `staging` pushed together, /staging/ seen connecting. Found on the way: Pages deploys a commit once, so `main` then `main:staging` at the same commit left staging on the old build (CLAUDE.md deploy step 5). e4d8b7e
 - 2026-11-23: Backend INSTALLED on the shared Hetzner box and the site switched to it (`main` pushed 06:29 UTC, seen connecting in a browser). Image shipped, 8 GB capped data space (cap proven with a 64 MB test image), age backup key, Caddy block with four paths, both databases published, cron jobs, off-site line; the 12 other addresses on the box answered as before; security review found nothing. Found next morning: the scheduled nightly run lost its lock to the uptime check and skipped (fix f301d63, installed the same morning). 90b543b
