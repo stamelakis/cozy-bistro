@@ -1,5 +1,9 @@
 # Next feature: A, B, C or D?
 
+**Decided 2026-11-23: Andreas picked C, special guest requests.** A, B and
+D stay parked. The plan for C gets its own page,
+`docs/decisions/guest-requests.md`.
+
 Written 2026-11-23 as prep for the "pick one" item in `STATUS.md`. No game
 code was changed for this page.
 
