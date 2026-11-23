@@ -10,8 +10,9 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
   vite.config.ts). Runbook, design and tests: `ops/backend/README.md`.
   Installed 2026-11-22. (Jercy's ownsun.de box is gone.)
 - STAGING: /staging/cozy-bistro-3d/ + `?env=staging` → DB `dunnin-staging`,
-  built from the `staging` BRANCH. Keep it synced: `git push origin main:staging`
-  and publish the module to dunnin-staging too — do both on every server change.
+  built from the `staging` BRANCH. Keep it synced: push both branches in ONE
+  command, `git push origin main main:staging` (step 5 below says why), and
+  publish the module to dunnin-staging too — do both on every server change.
 
 ## Deploy pipeline (what actually works)
 1. Server: open the SSH tunnel (`ops/backend/README.md`), then
@@ -20,10 +21,15 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
 2. After any schema change: `spacetime generate --lang typescript
    --out-dir ../src/cloud/generated --module-path .` then rebuild the client.
 3. Client: `$env:CB_BASE='/'; npm run build` in v2 (tsc must pass), commit,
-   push main (+ main:staging); GitHub Actions deploys. Verify with
+   `git push origin main main:staging`; GitHub Actions deploys. Verify with
    `gh run watch` + compare the live `index-*.js` hash to `v2/dist/assets/`.
 4. Pages builds BOTH branches on any push; concurrent pushes cancel the first
    run — watch the LATEST run.
+5. Pages deploys a commit only ONCE. Pushing `main` and later `main:staging`
+   at the same commit makes a second run that reports success and changes
+   nothing: /staging/ keeps the build from the first run (seen 2026-11-23).
+   So push both in one command, and check the staging page's `index-*.js`
+   name changed. If it did not, a new commit pushed to both fixes it.
 
 ## Gotchas (each one cost real time)
 - 🚨 `spacetime sql` (CLI v2.3) **UPDATE ignores the WHERE clause** — it
