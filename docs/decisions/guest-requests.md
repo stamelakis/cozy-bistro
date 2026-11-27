@@ -318,3 +318,21 @@ Its rows are intact like the rest.
 Still to do after Andreas's check: tidy the "may be missing" wish types
 in `SpacetimeClient.ts`, and post the wishes in the patch notes
 (`docs/patch-notes-13.md`, a draft).
+
+## Checked on live, 27 Nov (Andreas, restaurant 1)
+
+Times UTC, from the live module log and the `money_event` table (read
+only), next to Andreas's Ledger screenshot.
+
+| Wish | What happened | Paid |
+|---|---|---|
+| ⚡ hurry, offered by the tick itself at 16:52:11 | tapped at 16:52:19, plate landed 16:52:33 (22 s after the wish) | +$10, ledger line "wish" 1000 cents, balance $8,445 → $8,455; in his screenshot as "Guest wish ⚡🎂 +$10" |
+| 🎂 birthday, forced from Dev tools at 16:54:53 | tapped at 16:54:58 | +$6 at once, ledger line "wish" 600 cents |
+
+`restaurant.last_wish_micros` of restaurant 1 carries the time of the
+birthday payment; restaurant 4097 still has 0. The module log has no
+error from the wish code. Not seen on live: a missed hurry promise and a
+badge nobody taps (both seen locally and covered by the tests).
+
+This closes "Done when": published, health-checked, and one wish of
+each kind granted in the live game.
