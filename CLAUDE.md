@@ -25,7 +25,7 @@ index.html is the legacy 2D game, served at /classic/. Design docs: `docs/`.
    `gh run watch` + compare the live `index-*.js` name to `v2/dist/assets/`.
    The names match only for a build made in PowerShell: in Git Bash
    `CB_BASE='/'` reaches the build as `C:/Program Files/Git/` and the
-   name differs (cost an hour on 2026-11-23). Then check by content:
+   name differs (led to a wrong note here on 2026-11-23). Also check by content:
    the served file's `Last-Modified` and a string new in the change.
 4. Pages builds BOTH branches on any push; concurrent pushes cancel the first
    run — watch the LATEST run.
