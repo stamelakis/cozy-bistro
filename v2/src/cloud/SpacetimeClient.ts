@@ -131,10 +131,6 @@ export interface StaffActorRow {
   cleanSeatUid: string | null;
 }
 
-/** The guest-wish columns of active_guest, optional so this file builds
- * against bindings from before the wishes too (see "Guest wishes" below). */
-type WishColumns = { wishKind?: number; wishState?: number; wishDeadlineMicros?: bigint };
-
 /** How long a wish badge waits for the tap. DISPLAY ONLY (the countdown);
  * mirrors TAP_WINDOW_MICROS in v2/spacetime/src/wish_rules.rs. */
 const WISH_TAP_WINDOW_MS = 20_000;
@@ -1557,23 +1553,13 @@ export class SpacetimeClient {
   // Plan: docs/decisions/guest-requests.md. The server decides everything
   // (who gets a wish, whether the tap was in time, the amount); the page
   // shows the badge and sends "I tapped this guest".
-  //
-  // The wish columns and the reducer are read through OPTIONAL types on
-  // purpose: this file must also build against bindings generated BEFORE
-  // the server had wishes (then every guest simply has no wish). That is
-  // what lets the page code sit in `main` while the regenerated bindings
-  // wait for the server publish (CLAUDE.md, "A page built before a schema
-  // change…"). After go-live the optional types are merely redundant.
 
   /** Answer a guest's wish badge. Silent no-op on the server for a second
    * tap, a late tap or a guest who left. */
   answerGuestWish(guestId: bigint): void {
     if (!this.conn) return;
     try {
-      const reducers = this.conn.reducers as unknown as {
-        answerGuestWish?: (args: { guestId: bigint }) => void;
-      };
-      reducers.answerGuestWish?.({ guestId });
+      this.conn.reducers.answerGuestWish({ guestId });
     } catch (e) { console.warn("[Cloud] answerGuestWish failed:", e); }
   }
 
@@ -1581,10 +1567,7 @@ export class SpacetimeClient {
   adminForceGuestWish(kind: 1 | 2): void {
     if (!this.conn || this.restaurantId == null) return;
     try {
-      const reducers = this.conn.reducers as unknown as {
-        adminForceGuestWish?: (args: { restaurantId: bigint; kind: number }) => void;
-      };
-      reducers.adminForceGuestWish?.({ restaurantId: this.restaurantId, kind });
+      this.conn.reducers.adminForceGuestWish({ restaurantId: this.restaurantId, kind });
     } catch (e) { console.warn("[Cloud] adminForceGuestWish failed:", e); }
   }
 
@@ -1598,15 +1581,14 @@ export class SpacetimeClient {
     const out: GuestWish[] = [];
     const rid = this.restaurantId;
     try {
-      for (const row of this.conn.db.active_guest.iter()) {
-        if (row.restaurantId !== rid) continue;
-        const g = row as typeof row & WishColumns;
+      for (const g of this.conn.db.active_guest.iter()) {
+        if (g.restaurantId !== rid) continue;
         if (!g.wishKind) continue;
         out.push({
           guestId: g.id,
           kind: g.wishKind,
-          state: g.wishState ?? 0,
-          deadlineMs: Number(g.wishDeadlineMicros ?? 0n) / 1000 + this.wishClockSkewMs,
+          state: g.wishState,
+          deadlineMs: Number(g.wishDeadlineMicros) / 1000 + this.wishClockSkewMs,
           x: g.x, z: g.z, floor: g.floor,
         });
       }
@@ -1630,10 +1612,8 @@ export class SpacetimeClient {
     try {
       this.conn.db.active_guest.onUpdate((_ctx, oldRow, newRow) => {
         if (newRow.restaurantId !== rid) return;
-        const before = oldRow as typeof oldRow & WishColumns;
-        const after = newRow as typeof newRow & WishColumns;
-        if ((before.wishState ?? 0) !== 0 || after.wishState !== 1) return;
-        const offeredAtServerMs = Number(after.wishDeadlineMicros ?? 0n) / 1000 - WISH_TAP_WINDOW_MS;
+        if (oldRow.wishState !== 0 || newRow.wishState !== 1) return;
+        const offeredAtServerMs = Number(newRow.wishDeadlineMicros) / 1000 - WISH_TAP_WINDOW_MS;
         this.wishClockSkewMs = Date.now() - offeredAtServerMs;
       });
       this.wishClockHooked = true;
