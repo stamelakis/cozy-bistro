@@ -1,6 +1,6 @@
 # STATUS — Cozy Bistro 3D
 
-Updated: 2026-11-27
+Updated: 2026-11-28
 
 **Status:** ✅ THE GAME IS BACK since 2026-11-23 06:30 UTC, from zero, on our
 own server: SpacetimeDB 2.3.0 on the shared Hetzner box, players' address
@@ -42,7 +42,7 @@ address is cozy-bistro.com.
 - (Done 27 Nov: guest wishes, all three parts. Published 23 Nov, both
   wishes seen paying on live on 27 Nov. Record:
   `docs/decisions/guest-requests.md`, "Go-live, 23 Nov" and "Checked on
-  live, 27 Nov". Two small follow-ups are Next #3.)
+  live, 27 Nov". The code tidy-up after go-live is done too, 28 Nov.)
 
 Leftover from the OneDrive move: the old folder
 `C:\Users\andre\OneDrive\Documents\Restaurant Game` is EMPTY but was locked.
@@ -82,27 +82,25 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
    and the three server checks that must be green first:
    `docs/decisions/discord-back.md`), then post Patch 12 notes
    (`docs/patch-notes-12.md`: bump the date, post as two messages, swap the
-   "never reset / refund" line as that file proposes). Done when: posted
+   "never reset / refund" line as that file proposes), then the guest
+   wishes notes (`docs/patch-notes-13.md`, a draft). Done when: posted
    with @Tester ping.
 2. [you: tester feedback] (after #1) Collect tester reactions to the new command bar + manual litter + staffing
    gates (the in-game 💬 Feedback button feeds the admin inbox: Dev tools →
    💬 FEEDBACK INBOX). Tune tile sizes/order per feedback — one-liners in
    `v2/src/ui/CommandDock.ts`.
-3. [you: approve] Guest wishes, tidy-up after go-live: make the wish
-   fields and the two reducers ordinary (not "may be missing") in
-   `SpacetimeClient.ts`, now that server and bindings match (CLAUDE.md
-   "Decisions"). No change the player sees; needs one page push. Done
-   when: `tsc` and the 29 tests pass, the page is pushed to both
-   branches and connects, the CLAUDE.md decision is updated. The wishes'
-   patch notes are drafted (`docs/patch-notes-13.md`) and go out with
-   Next #1, after Patch 12.
-4. [you: pick later] Still parked, compared in
+3. [you: pick later] Still parked, compared in
    `docs/decisions/next-feature.md`: A button grouping (cheap; fits the
    feedback tuning in #2), B edge-docked layout, D first seasonal event.
 
 **Waiting on Andreas:**
-- **Tidy the wish code now? yes / later.** A small clean-up with no
-  change for players (Next #3); it means one more page push.
+- **This PC, your call (not this project):** the Claude app's PATH
+  carries about 70 old build folders of "Humanity At War 2" and is 9,295
+  characters long. Windows' command shell stops finding programs above
+  8,191, so `npm run build` failed here with "'tsc' is not recognized"
+  until I used a short PATH for my own commands. The PATH saved in
+  Windows is short (2,580), so restarting the Claude app may be all it
+  needs; if it comes back, that project's tools are adding the folders.
 - **Post this text? yes / change X.** The Discord message "the game is
   back, everyone starts from zero and why" is drafted in
   `docs/decisions/discord-back.md`, with the four choices made in it (how
@@ -148,7 +146,8 @@ and drops its old lines from `~/.claude/skills/start/groups.txt` and
   in-game flows there are verified by Andreas, not me.
 
 ## History
-- 2026-11-27: Guest wishes CHECKED ON LIVE by Andreas (restaurant 1). A ⚡ wish that came by itself: tapped after 8 s, plate 22 s after the wish, +$10, "Guest wish ⚡🎂" in his Ledger screenshot. A 🎂 wish forced from Dev tools: tapped after 5 s, +$6 (server log and ledger table; it came after his screenshot). No error from the wish code in the module log. The feature is done; the optional-types tidy-up is Next #3.
+- 2026-11-28: Guest wishes, tidy-up: the page reads the wish fields and the two reducers through the generated types (the "may be missing" types are gone). `tsc`, build and the 29 tests pass; pushed to both branches, both pages serve the new build and connect, no read error. Not seen: a wish in the live game after this change (needs a login). Found on the way: the "file names never match" note of 23 Nov was wrong, the cause was building in Git Bash (CLAUDE.md step 3 corrected again); and the PATH problem under "Waiting on Andreas". 571386c
+- 2026-11-27: Guest wishes CHECKED ON LIVE by Andreas (restaurant 1). A ⚡ wish that came by itself: tapped after 8 s, plate 22 s after the wish, +$10, "Guest wish ⚡🎂" in his Ledger screenshot. A 🎂 wish forced from Dev tools: tapped after 5 s, +$6 (server log and ledger table; it came after his screenshot). No error from the wish code in the module log. The feature is done.
 - 2026-11-23: Guest wishes PUBLISHED. Backup by the nightly job run by hand (2 s of downtime), server module to `dunnin-staging` then `dunnin` (four fields added with defaults, row counts of 13 tables the same before and after on both), bindings regenerated, page pushed to `main` + `staging` in one command one minute after the live publish, Pages run green. Both pages connect with the new build. Found on the way: the file name of the page built by GitHub does not match a local build's (CLAUDE.md deploy step 3 corrected); LIVE has a second account. Not done: a wish seen in the live game (Andreas). 98dd26f
 - 2026-11-23: Guest wishes, the page: ⚡/🎂 badge with a countdown (one more `TapBadges` layer, hidden while visiting), "+$" pop, Ledger line, Help section, two admin buttons to force a wish. Build and 29 rule tests pass; on a local server both wishes paid on PC and phone size and one hurry promise was missed at 60 s. The page reads the new fields as "may be missing", so it is committed without the regenerated bindings. Not published, not pushed.
 - 2026-11-23: Prep for the guest-requests build: the plan on one page (`docs/decisions/guest-requests.md`), with wishes, reward sizes taken from today's tip and goal numbers, limits, staffing rules and a "done when" line. No game code changed. Found on the way: the project has no automated tests at all; the hurry time limit could not be measured without a running local server. Andreas approved the plan the same day ("yes, as written").

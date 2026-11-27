@@ -292,9 +292,11 @@ Checked after:
 - Both served page files are new (`Last-Modified` 16:19:44) and contain
   `answer_guest_wish`, `wish_deadline_micros` and `last_wish_micros`:
   live `index-DiMN5X4m.js`, staging `index-OzVbefV_.js`. The local
-  build is named `index-C4AVxVSf.js`: a build on GitHub (Linux, Node 20)
-  and one on this PC (Node 24) do not get the same file name, so the
-  name cannot be compared; the content was.
+  build was named `index-C4AVxVSf.js`, so the name could not be
+  compared; the content was. (Corrected 28 Nov: the names differed
+  because that build ran in Git Bash, which turns `CB_BASE='/'` into
+  `C:/Program Files/Git/`. A PowerShell build gets the same name as
+  GitHub's: seen on 28 Nov, `index-V96OYRGd.js` on both.)
 - In a browser: cozy-bistro.com and /staging/cozy-bistro-3d/?env=staging
   load to the login screen (staging with its STAGING badge), the console
   says "[SpacetimeDB] connected", and "Tried to read" does not appear.
@@ -336,3 +338,13 @@ badge nobody taps (both seen locally and covered by the tests).
 
 This closes "Done when": published, health-checked, and one wish of
 each kind granted in the live game.
+
+## Tidy-up, 28 Nov
+
+The "may be missing" wish types in `SpacetimeClient.ts` are gone
+(commit `571386c`): the page reads `wishKind`, `wishState`,
+`wishDeadlineMicros` and calls the two reducers through the generated
+types. `tsc`, the build and the 29 tests pass. Pushed to both branches;
+live serves `index-V96OYRGd.js` (the same name as the local build),
+staging `index-D9U10v1T.js`; both connect, no "Tried to read". Not seen:
+a wish in the live game after this change.
